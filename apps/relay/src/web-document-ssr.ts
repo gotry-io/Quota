@@ -1,9 +1,44 @@
 import type { WebDocumentPort, WebDocumentViewer } from "../../web/src/lib/server/document-port.ts";
 
+/**
+ * What a document may load, for every document response that does not state it itself.
+ *
+ * A rendered page states its own: `apps/web/svelte.config.js` declares these directives and
+ * SvelteKit stamps each response with the nonce that lets its bootstrap script and the theme
+ * script in `app.html` run. Everything else a document request produces — a `__data.json`
+ * payload, a redirect, the failure page below — carries no inline script at all, so the same
+ * policy without a nonce is the whole answer for those.
+ */
+const DOCUMENT_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "form-action 'self'",
+].join("; ");
+
+/**
+ * The one place every document response passes, so it is where a document's headers are decided.
+ *
+ * Documents are per-viewer and never cacheable, and the three headers beside the policy are the
+ * ones a browser needs stated rather than guessed: no content sniffing, no cross-origin framing,
+ * and no referrer leaving this origin.
+ */
 export function withPrivateNoStore(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("Cache-Control", "private, no-store");
   headers.delete("ETag");
+  if (!headers.has("Content-Security-Policy")) {
+    headers.set("Content-Security-Policy", DOCUMENT_CONTENT_SECURITY_POLICY);
+  }
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "same-origin");
+  headers.set("X-Frame-Options", "DENY");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -16,22 +51,11 @@ export function memoizeWebDocumentPort(inner: WebDocumentPort): {
   hasViewer(): Promise<boolean>;
 } {
   let viewer: Promise<WebDocumentViewer | null> | undefined;
-  const getAccountSummary = inner.getAccountSummary;
   return {
     port: {
       getViewer(headers) {
         viewer ??= inner.getViewer(headers);
         return viewer;
-      },
-      ...(getAccountSummary
-        ? {
-            getAccountSummary(headers: Headers) {
-              return getAccountSummary(headers);
-            },
-          }
-        : {}),
-      lookupPublicProfile(username) {
-        return inner.lookupPublicProfile(username);
       },
     },
     async hasViewer() {

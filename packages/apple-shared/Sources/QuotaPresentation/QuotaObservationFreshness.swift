@@ -20,7 +20,7 @@ public enum QuotaObservationState: Sendable, Equatable {
   public var label: String {
     switch self {
     case .available: "Available"
-    case .stale: "Stale"
+    case .stale: "Not current"
     case .signInNeeded: "Sign-in needed"
     case .unavailable: "Unavailable"
     case .unsupported: "Unsupported"

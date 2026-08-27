@@ -1,4 +1,4 @@
-import { MODEL_CATALOG, type ModelCatalog, type UsageHourlyFact } from "@gotry-io/quota-protocol";
+import { type DatedUsageRow, MODEL_CATALOG, type ModelCatalog } from "@gotry-io/quota-protocol";
 import { resolveModel, validateModelCatalog } from "../src/index.ts";
 import { describe, expect, it } from "vitest";
 
@@ -26,7 +26,7 @@ describe("report-time model catalog", () => {
     expect(
       resolveModel(MODEL_CATALOG, {
         ...alias,
-        bucket_start_utc: "2026-01-01T00:00:00Z",
+        date: "2026-01-01",
       }),
     ).toBeUndefined();
   });
@@ -57,11 +57,9 @@ describe("report-time model catalog", () => {
   });
 });
 
-function row(model: string): UsageHourlyFact {
+function row(model: string): DatedUsageRow {
   return {
-    bucket_start_utc: "2026-08-10T00:00:00Z",
-    usage_date: "2026-08-10",
-    usage_hour: 0,
+    date: "2026-08-10",
     agent: "codex",
     billing_channel: "openai_direct",
     channel_source: "explicit",

@@ -68,8 +68,9 @@ enum OverviewWidgetContent {
     RemainingQuotaFormat.percent(item.remainingPercent)
   }
 
-  static func updatedAge(fetchedAt: Date, now: Date = Date()) -> String {
-    CompactAgeFormat.string(since: fetchedAt, now: now)
+  /// The whole phrase, so a widget says how old its reading is exactly the way the app does.
+  static func updated(fetchedAt: Date, now: Date = Date()) -> String {
+    FreshnessCopy.updated(since: fetchedAt, now: now)
   }
 
   /// Relative time until reset, or `resetDueCopy` once the reset instant has passed.
@@ -118,7 +119,7 @@ enum OverviewWidgetContent {
       parts.append("Resets \(resetAge(resetsAt: resetsAt, now: now))")
     }
     if let fetchedAt {
-      parts.append("Updated \(updatedAge(fetchedAt: fetchedAt, now: now))")
+      parts.append(updated(fetchedAt: fetchedAt, now: now))
     }
     return parts.joined(separator: ", ")
   }

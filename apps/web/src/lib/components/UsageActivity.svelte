@@ -1,26 +1,21 @@
 <script lang="ts">
-import type { AccountSummary, UsageBreakdown } from "@gotry-io/quota-protocol";
+import type { UsageActivityDayRead } from "@gotry-io/quota-protocol";
 import {
   ACTIVITY_WEEKDAY_LABELS,
+  type ActivityRange,
   buildUsageActivityModel,
   placeActivityTooltip,
 } from "$lib/usage-activity";
 
 let {
-  breakdowns,
+  days,
   range,
-  selectedDate = null,
-  onSelectDate,
 }: {
-  breakdowns: UsageBreakdown[];
-  range: AccountSummary["usage"]["range"];
-  selectedDate?: string | null;
-  onSelectDate: (date: string) => void;
+  days: UsageActivityDayRead[];
+  range: ActivityRange;
 } = $props();
 
-const model = $derived(
-  buildUsageActivityModel(breakdowns, range, new Date().toISOString().slice(0, 10)),
-);
+const model = $derived(buildUsageActivityModel(days, range, range.to));
 
 let tooltipText = $state<string | null>(null);
 let tooltipAnchor = $state<HTMLElement | null>(null);
@@ -140,9 +135,6 @@ $effect(() => {
                   type="button"
                   data-date={day.date}
                   aria-label={day.tooltip}
-                  aria-pressed={selectedDate === day.date}
-                  aria-controls={selectedDate === day.date ? "usage-day-details" : undefined}
-                  onclick={() => onSelectDate(day.date)}
                 ></button>
               {/if}
             {/each}

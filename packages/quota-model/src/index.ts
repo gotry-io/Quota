@@ -3,7 +3,8 @@ import {
   type BillingChannel,
   type ChannelSource,
   type ContextBucket,
-  IanaTimezoneSchema,
+  type DatedUsageRow,
+  DatedUsageRowSchema,
   type InferenceProvider,
   PROTOCOL_VERSION,
   type PricingCatalog,
@@ -13,18 +14,14 @@ import {
   MAXIMUM_MODEL_CATALOG_ALIASES,
   type ModelCatalog,
   ModelCatalogSchema,
-  type FingerprintScope,
-  type QuotaSnapshot,
-  type QuotaStatus,
+  type QuotaSnapshotRead,
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
-  type UsageHourlyFact,
-  UsageHourlyFactSchema,
-  type UsageTokenTotals,
-  UsageTokenTotalsSchema,
+  type UsageRow,
+  UsageRowSchema,
   type UsageUnpricedItem,
   type UsageUnpricedReason,
 } from "@gotry-io/quota-protocol";
@@ -51,7 +48,7 @@ export const MAX_SNAPSHOT_VALIDITY_SECONDS = 86_400;
  * stamp presented pre-stamp readings as current forever, which is the failure this
  * derivation removes rather than patches.
  */
-export function snapshotValidUntil(snapshot: QuotaSnapshot): number {
+export function snapshotValidUntil(snapshot: QuotaSnapshotRead): number {
   const observed = Date.parse(snapshot.observed_at);
   const limit = observed + MAX_SNAPSHOT_VALIDITY_SECONDS * 1_000;
   const resets: number[] = [];
@@ -69,7 +66,7 @@ export function snapshotValidUntil(snapshot: QuotaSnapshot): number {
   return Math.min(boundary, limit);
 }
 
-export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): boolean {
+export function isSnapshotStale(snapshot: QuotaSnapshotRead, now = new Date()): boolean {
   // Negated rather than `<=` so a reading this cannot place in time reads as stale: an
   // observation whose boundary is unknown is not one a person should be shown as current.
   return snapshot.status === "stale" || !(snapshotValidUntil(snapshot) > now.getTime());
@@ -82,7 +79,7 @@ export function isSnapshotStale(snapshot: QuotaSnapshot, now = new Date()): bool
  * a device that stopped collecting reads as stale instead of staying available forever. A
  * status the device already reported stands as reported.
  */
-export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()): QuotaStatus {
+export function observedSnapshotStatus(snapshot: QuotaSnapshotRead, now = new Date()): string {
   return snapshot.status === "available" && isSnapshotStale(snapshot, now)
     ? "stale"
     : snapshot.status;
@@ -98,7 +95,7 @@ export function observedSnapshotStatus(snapshot: QuotaSnapshot, now = new Date()
 export interface QuotaSubscriptionIdentity {
   provider: string;
   fingerprint: string;
-  scope: FingerprintScope;
+  scope: string;
   source_id: string | null;
 }
 
@@ -111,21 +108,28 @@ export interface QuotaObservationSource {
 
 export interface QuotaObservationInput {
   device_id: string;
-  snapshot: QuotaSnapshot;
+  snapshot: QuotaSnapshotRead;
 }
 
 export interface MergedQuotaObservation {
   identity: QuotaSubscriptionIdentity;
   /** The one reading shown for this subscription; the others stay in {@link sources}. */
-  snapshot: QuotaSnapshot;
+  snapshot: QuotaSnapshotRead;
   sources: QuotaObservationSource[];
   selected_device_id: string;
   is_stale: boolean;
 }
 
+/**
+ * The stable name of a subscription.
+ *
+ * Relay sends this to every reader, so it is printable text rather than a delimiter nothing
+ * outside one process would accept. None of the four parts can contain `|`: a provider and a
+ * scope are enum members, and a fingerprint and a device id are opaque ids.
+ */
 export function quotaSubscriptionKey(identity: QuotaSubscriptionIdentity): string {
   return [identity.provider, identity.fingerprint, identity.scope, identity.source_id ?? ""].join(
-    "\u001f",
+    "|",
   );
 }
 
@@ -247,32 +251,24 @@ export interface NormalizedUsageEvent {
   source_cost_covered_requests: number;
 }
 
-/** Aggregate validated request facts into deterministic sparse local-hour rows. */
-export function aggregateUsageEvents(
-  events: readonly NormalizedUsageEvent[],
-  aggregationTimezone: string,
-): UsageHourlyFact[] {
-  const timezone = IanaTimezoneSchema.parse(aggregationTimezone);
-  const dateParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  });
+/** One aggregated hour of one device's own collection, before it is uploaded. */
+export interface BucketedUsageRow extends UsageRow {
+  bucket_start_utc: string;
+}
+
+/** Aggregate validated request facts into deterministic sparse UTC-hour rows. */
+export function aggregateUsageEvents(events: readonly NormalizedUsageEvent[]): BucketedUsageRow[] {
   const rows = new Map<string, MutableUsageFact>();
 
   for (const event of events) {
     const instant = Date.parse(Rfc3339InstantSchema.parse(event.occurred_at));
+    if (!Number.isFinite(instant)) {
+      throw new RangeError("Usage event carries an instant that cannot be placed in time.");
+    }
     const bucketStart = new Date(Math.floor(instant / 3_600_000) * 3_600_000)
       .toISOString()
       .replace(".000Z", "Z");
-    const local = localDateAndHour(dateParts, new Date(instant));
-    const fact = UsageHourlyFactSchema.parse({
-      bucket_start_utc: bucketStart,
-      usage_date: local.date,
-      usage_hour: local.hour,
+    const row = UsageRowSchema.parse({
       agent: event.agent,
       billing_channel: event.billing_channel,
       channel_source: event.channel_source,
@@ -296,19 +292,8 @@ export function aggregateUsageEvents(
         : { source_cost_microusd: event.source_cost_microusd.toString() }),
       source_cost_covered_requests: event.source_cost_covered_requests,
     });
-    const key = JSON.stringify([
-      fact.bucket_start_utc,
-      fact.usage_date,
-      fact.usage_hour,
-      fact.agent,
-      fact.billing_channel,
-      fact.channel_source,
-      fact.model,
-      fact.context_bucket,
-      fact.service_tier,
-      fact.speed,
-      fact.inference_geo,
-    ]);
+    const fact = { bucket_start_utc: bucketStart, ...row };
+    const key = usageFactSortKey(fact);
     const existing = rows.get(key);
     if (existing) {
       addFact(existing, fact);
@@ -317,36 +302,7 @@ export function aggregateUsageEvents(
     }
   }
 
-  return [...rows.values()]
-    .sort(compareUsageFacts)
-    .map((row) => UsageHourlyFactSchema.parse(serializedFact(row)));
-}
-
-/** Fold facts without losing token subsets or source-cost coverage. */
-export function foldUsageFacts(rows: readonly UsageHourlyFact[]): UsageTokenTotals {
-  const totals: MutableUsageTotals = {
-    input_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_5m_tokens: 0,
-    cache_write_1h_tokens: 0,
-    cache_write_inferred_tokens: 0,
-    output_tokens: 0,
-    reasoning_tokens: 0,
-    requests: 0,
-    web_search_requests: 0,
-    web_fetch_requests: 0,
-    source_cost_microusd: 0n,
-    source_cost_covered_requests: 0,
-  };
-  for (const input of rows) {
-    const row = UsageHourlyFactSchema.parse(input);
-    addCounts(totals, row);
-  }
-  return UsageTokenTotalsSchema.parse({
-    ...totals,
-    source_cost_microusd:
-      totals.source_cost_covered_requests === 0 ? null : totals.source_cost_microusd.toString(),
-  });
+  return [...rows.values()].sort(compareUsageFacts).map((row) => serializedFact(row));
 }
 
 export type PricingCatalogValidationIssue =
@@ -472,11 +428,11 @@ export function validateModelCatalog(input: unknown): ModelCatalogValidationResu
 /** Resolve an exact canonical ID or explicitly scoped alias. */
 export function resolveModel(
   catalog: ModelCatalog,
-  row: Pick<UsageHourlyFact, "model" | "billing_channel" | "agent" | "bucket_start_utc">,
+  row: Pick<DatedUsageRow, "model" | "billing_channel" | "agent" | "date">,
 ): string | undefined {
   const canonical = catalog.models.find((model) => model.canonical_id === row.model);
   if (canonical) return canonical.canonical_id;
-  const date = row.bucket_start_utc.slice(0, 10);
+  const date = row.date;
   const provider = inferenceProvider(row.billing_channel);
   const matches = catalog.models.flatMap((model) =>
     model.aliases
@@ -543,7 +499,7 @@ export type PricingResolution =
 /** Resolve only an exact channel/model/date/dimension entry or an explicit catalog wildcard. */
 export function resolvePricingEntry(
   catalog: PricingCatalog,
-  row: UsageHourlyFact,
+  row: DatedUsageRow,
 ): PricingResolution {
   if (row.billing_channel === "unknown") {
     return { status: "unpriced", reason: "unknown_channel" };
@@ -557,7 +513,7 @@ export function resolvePricingEntry(
   if (byModel.length === 0) {
     return { status: "unpriced", reason: "unknown_model" };
   }
-  const pricingDate = row.bucket_start_utc.slice(0, 10);
+  const pricingDate = row.date;
   const byDate = byModel.filter(
     (entry) =>
       entry.effective_from <= pricingDate &&
@@ -595,7 +551,7 @@ export function resolvePricingEntry(
 
 /** Calculate each stored row exactly, half-up once per row, then add integer micro-USD. */
 export function calculateUsageCost(
-  inputRows: readonly UsageHourlyFact[],
+  inputRows: readonly DatedUsageRow[],
   catalogInput: unknown,
   mode: UsageCostMode = "calculate",
 ): UsageCostOutcome {
@@ -644,11 +600,11 @@ function validatePricingCatalogOnce(catalogInput: unknown): PricingCatalogValida
 
 /** Resolve and round every row once so callers can cheaply fold overlapping breakdown groups. */
 export function prepareUsageCosts(
-  inputRows: readonly UsageHourlyFact[],
+  inputRows: readonly DatedUsageRow[],
   catalogInput: unknown,
   mode: UsageCostMode = "calculate",
 ): PreparedUsageCosts {
-  const rows = inputRows.map((row) => UsageHourlyFactSchema.parse(row));
+  const rows = inputRows.map((row) => DatedUsageRowSchema.parse(row));
   const validation = mode === "reported" ? null : validatePricingCatalogOnce(catalogInput);
   const catalog = validation?.valid === true ? validation.catalog : null;
   const prepared = rows.map((row): PreparedUsageCostRow => {
@@ -673,7 +629,7 @@ export function prepareUsageCosts(
     }
 
     const canUseReported =
-      (mode === "reported" || (mode === "auto" && calculated?.reason !== "invalid_catalog")) &&
+      (mode === "reported" || mode === "auto") &&
       row.source_cost_microusd !== undefined &&
       row.source_cost_covered_requests === row.requests;
     if (canUseReported) {
@@ -781,9 +737,9 @@ export type CalculatedUsageRowCost =
 
 export function calculateUsageRowCost(
   catalog: PricingCatalog,
-  input: UsageHourlyFact,
+  input: DatedUsageRow,
 ): CalculatedUsageRowCost {
-  return calculateRowFromCatalog(catalog, UsageHourlyFactSchema.parse(input));
+  return calculateRowFromCatalog(catalog, DatedUsageRowSchema.parse(input));
 }
 
 interface MutableUsageTotals {
@@ -802,17 +758,17 @@ interface MutableUsageTotals {
 }
 
 interface MutableUsageFact
-  extends Omit<UsageHourlyFact, "source_cost_microusd">,
+  extends Omit<BucketedUsageRow, "source_cost_microusd">,
     MutableUsageTotals {}
 
-function mutableFact(fact: UsageHourlyFact): MutableUsageFact {
+function mutableFact(fact: BucketedUsageRow): MutableUsageFact {
   return {
     ...fact,
     source_cost_microusd: BigInt(fact.source_cost_microusd ?? "0"),
   };
 }
 
-function serializedFact(fact: MutableUsageFact): UsageHourlyFact {
+function serializedFact(fact: MutableUsageFact): BucketedUsageRow {
   const { source_cost_microusd, ...rest } = fact;
   return {
     ...rest,
@@ -836,12 +792,13 @@ const COUNT_KEYS = [
   "source_cost_covered_requests",
 ] as const;
 
-function addFact(target: MutableUsageFact, source: UsageHourlyFact): void {
+function addFact(target: MutableUsageFact, source: BucketedUsageRow): void {
   addCounts(target, source);
-  UsageHourlyFactSchema.parse(serializedFact(target));
+  const { bucket_start_utc: _bucket, ...row } = serializedFact(target);
+  UsageRowSchema.parse(row);
 }
 
-function addCounts(target: MutableUsageTotals, source: UsageHourlyFact): void {
+function addCounts(target: MutableUsageTotals, source: BucketedUsageRow): void {
   for (const key of COUNT_KEYS) {
     target[key] = addSafeIntegers(target[key], source[key]);
   }
@@ -856,31 +813,13 @@ function addSafeIntegers(left: number, right: number): number {
   return result;
 }
 
-function localDateAndHour(
-  formatter: Intl.DateTimeFormat,
-  instant: Date,
-): { date: string; hour: number } {
-  const parts = Object.fromEntries(
-    formatter
-      .formatToParts(instant)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  return {
-    date: `${parts.year}-${parts.month}-${parts.day}`,
-    hour: Number(parts.hour),
-  };
-}
-
 function compareUsageFacts(left: MutableUsageFact, right: MutableUsageFact): number {
   return usageFactSortKey(left).localeCompare(usageFactSortKey(right));
 }
 
-function usageFactSortKey(fact: MutableUsageFact): string {
+function usageFactSortKey(fact: Omit<BucketedUsageRow, "source_cost_microusd">): string {
   return JSON.stringify([
     fact.bucket_start_utc,
-    fact.usage_date,
-    fact.usage_hour,
     fact.agent,
     fact.billing_channel,
     fact.channel_source,
@@ -950,7 +889,7 @@ function pricingSpecificity(entry: PricingCatalogEntry, model: string): number {
 
 function calculateRowFromCatalog(
   catalog: PricingCatalog,
-  row: UsageHourlyFact,
+  row: DatedUsageRow,
 ): CalculatedUsageRowCost {
   const resolution = resolvePricingEntry(catalog, row);
   if (resolution.status === "unpriced") return resolution;
@@ -1032,5 +971,5 @@ function compareUnpricedItems(left: UsageUnpricedItem, right: UsageUnpricedItem)
   );
 }
 
-export type { PricingCatalog, PricingCatalogEntry, PricingRates, UsageHourlyFact };
+export type { DatedUsageRow, PricingCatalog, PricingCatalogEntry, PricingRates, UsageRow };
 export { PROTOCOL_VERSION };

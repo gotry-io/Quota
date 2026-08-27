@@ -1,10 +1,9 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { memoizeWebAccountAuthSession } from "../src/account/better-auth.ts";
-import { createWebDocumentPort, hasWebSessionCookie } from "../src/account/web-document-port.ts";
+import { createWebDocumentPort } from "../src/account/web-document-port.ts";
+import { memoizeWebSessionAuthorization } from "../src/account/web-session.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
-import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import {
   documentSsrFailureResponse,
@@ -12,6 +11,7 @@ import {
   runDocumentSsr,
   withPrivateNoStore,
 } from "../src/web-document-ssr.ts";
+import { SignedInWebSessionStub, signedOutWebSessions } from "./web-session-stub.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -19,7 +19,6 @@ declare module "vitest" {
   }
 }
 
-const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const now = new Date("2026-08-10T00:00:00.000Z");
 
 beforeEach(async () => {
@@ -36,7 +35,6 @@ describe("document routing helpers", () => {
     expect(isRelayApiPath("/readyz")).toBe(true);
     expect(isRelayApiPath("/")).toBe(false);
     expect(isRelayApiPath("/my")).toBe(false);
-    expect(isRelayApiPath("/u/octocat")).toBe(false);
   });
 
   it("clones cache headers onto a new response", () => {
@@ -48,17 +46,30 @@ describe("document routing helpers", () => {
     expect(rewritten.headers.get("ETag")).toBeNull();
     expect(rewritten).not.toBe(source);
   });
+
+  it("stamps the document headers and keeps a rendered page's own policy", () => {
+    const plain = withPrivateNoStore(new Response("ok"));
+    expect(plain.headers.get("Content-Security-Policy")).toBe(
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; " +
+        "base-uri 'none'; object-src 'none'; form-action 'self'",
+    );
+    expect(plain.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(plain.headers.get("Referrer-Policy")).toBe("same-origin");
+    expect(plain.headers.get("X-Frame-Options")).toBe("DENY");
+
+    // A rendered page carries the nonce that lets its own inline scripts run; overwriting it
+    // with the static policy would leave a page whose scripts the browser refuses.
+    const rendered = withPrivateNoStore(
+      new Response("<html></html>", {
+        headers: { "Content-Security-Policy": "script-src 'self' 'nonce-abc'" },
+      }),
+    );
+    expect(rendered.headers.get("Content-Security-Policy")).toBe("script-src 'self' 'nonce-abc'");
+  });
 });
 
 describe("web document port", () => {
-  it("detects the Better Auth session cookie without reading its value", () => {
-    expect(hasWebSessionCookie(null)).toBe(false);
-    expect(hasWebSessionCookie("theme=dark")).toBe(false);
-    expect(hasWebSessionCookie("quota.session_token=secret")).toBe(true);
-    expect(hasWebSessionCookie("__Secure-quota.session_token=secret")).toBe(true);
-    expect(hasWebSessionCookie("quota.session_token_backup=secret")).toBe(false);
-  });
-
   it("returns a viewer only when the session and domain account both exist", async () => {
     const state = new D1AccountState(env.DB);
     await env.DB.prepare(
@@ -66,80 +77,45 @@ describe("web document port", () => {
     )
       .bind("account_1", "octocat", now.toISOString())
       .run();
-    const port = createWebDocumentPort({
-      state,
-      hasher: new SecretHasher(secret),
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => ({
-          user: { id: "account_1", name: "octocat" },
-          session: { id: "session_1", createdAt: now, expiresAt: now },
-        }),
-      },
-      now: () => now,
-    });
-    expect(await port.getViewer(new Headers())).toBeNull();
-    const viewer = await port.getViewer(
-      new Headers({ Cookie: "__Secure-quota.session_token=secret" }),
-    );
-    expect(viewer).toEqual({ displayLabel: "octocat" });
-  });
+    expect(
+      await createWebDocumentPort({ state, webSessions: signedOutWebSessions }).getViewer(
+        new Headers(),
+      ),
+    ).toBeNull();
 
-  it("does not consume the public-profile limiter for slugs normalizePublicSlug rejects", async () => {
-    const state = new D1AccountState(env.DB);
     const port = createWebDocumentPort({
       state,
-      hasher: new SecretHasher(secret),
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => null,
-      },
+      webSessions: new SignedInWebSessionStub("account_1", now),
       now: () => now,
     });
-    expect(await port.lookupPublicProfile("***")).toEqual({ status: "missing" });
-    expect(await port.lookupPublicProfile("---")).toEqual({ status: "missing" });
-  });
+    expect(await port.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" }))).toEqual({
+      displayLabel: "octocat",
+    });
 
-  it("shares the public-profile bucket across document lookups", async () => {
-    const state = new D1AccountState(env.DB);
-    const port = createWebDocumentPort({
+    const orphaned = createWebDocumentPort({
       state,
-      hasher: new SecretHasher(secret),
-      webAuth: {
-        handler: async () => new Response(null, { status: 404 }),
-        beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-        getSession: async () => null,
-      },
+      webSessions: new SignedInWebSessionStub("account_gone", now),
       now: () => now,
     });
-    for (let index = 0; index < 120; index += 1) {
-      const result = await port.lookupPublicProfile("not a slug");
-      expect(result.status).toBe("missing");
-    }
-    const limited = await port.lookupPublicProfile("not a slug");
-    expect(limited.status).toBe("rate_limited");
+    expect(
+      await orphaned.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" })),
+    ).toBeNull();
   });
 });
 
 describe("web document session", () => {
-  it("reuses one Better Auth session read across document and streamed data", async () => {
+  it("reuses one session read across document and streamed data", async () => {
     let calls = 0;
-    const auth = memoizeWebAccountAuthSession({
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 404 }),
-      getSession: async () => {
+    const sessions = memoizeWebSessionAuthorization({
+      ...signedOutWebSessions,
+      async authorize() {
         calls += 1;
-        return {
-          user: { id: "account_1", name: "octocat" },
-          session: { id: "session_1", createdAt: now, expiresAt: now },
-        };
+        return null;
       },
     });
 
-    const first = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
-    const second = auth.getSession(new Headers({ Cookie: "quota.session_token=one" }));
+    const first = sessions.authorize(new Headers({ Cookie: "__Host-quota_session=one" }), now);
+    const second = sessions.authorize(new Headers({ Cookie: "__Host-quota_session=one" }), now);
     expect(await first).toEqual(await second);
     expect(calls).toBe(1);
   });
@@ -153,14 +129,11 @@ describe("document SSR observability", () => {
         calls += 1;
         return { displayLabel: "octocat" };
       },
-      async lookupPublicProfile() {
-        return { status: "missing" };
-      },
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
     expect(
-      await memoized.port.getViewer(new Headers({ Cookie: "quota.session_token=secret" })),
+      await memoized.port.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" })),
     ).toEqual({
       displayLabel: "octocat",
     });
@@ -174,9 +147,6 @@ describe("document SSR observability", () => {
       async getViewer() {
         calls += 1;
         throw new Error("session store unavailable");
-      },
-      async lookupPublicProfile() {
-        return { status: "missing" };
       },
     });
     await expect(memoized.port.getViewer(new Headers())).rejects.toThrow(
@@ -201,9 +171,6 @@ describe("document SSR observability", () => {
           async getViewer() {
             calls += 1;
             throw new Error("session store unavailable");
-          },
-          async lookupPublicProfile() {
-            return { status: "missing" };
           },
         },
         async (document) => {
@@ -242,9 +209,6 @@ describe("document SSR observability", () => {
         {
           async getViewer() {
             return { displayLabel: "octocat" };
-          },
-          async lookupPublicProfile() {
-            return { status: "missing" };
           },
         },
         async (document) => {

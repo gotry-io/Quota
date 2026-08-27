@@ -1,75 +1,55 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
-  AccountDevicesResponseSchema,
-  AccountQuotaResponseSchema,
   AccountResponseSchema,
   AccountSummarySchema,
-  AccountUsageResponseSchema,
-  AccountUsageSummarySchema,
+  AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
-  DeviceAuthorizationDecisionRequestSchema,
-  DeviceAuthorizationRequestSchema,
-  DeviceAuthorizationResponseSchema,
-  DeviceHealthUploadRequestSchema,
-  DeviceHealthUploadResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
+  IosSessionRefreshResponseSchema,
   LocalUsageReportSchema,
   LogoutResponseSchema,
   ModelCatalogSchema,
-  OAuthTokenRequestSchema,
   OAuthTokenResponseSchema,
   PricingCatalogSchema,
-  PublicProfileSchema,
-  PublicProfileSettingsSchema,
-  PublicProfileUpdateRequestSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   RelayErrorEnvelopeSchema,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
-  UsageSubmissionSchema,
+  UsagePeriodSchema,
   UsageUploadResponseSchema,
+  UsageUploadSchema,
 } from "../src/index.ts";
 
 const directory = join(dirname(fileURLToPath(import.meta.url)), "../schema");
 
 const AccountHttpPayloadSchema = z.union([
   AccountResponseSchema,
-  AccountDevicesResponseSchema,
-  AccountQuotaResponseSchema,
   AccountSummarySchema,
-  PublicProfileSchema,
-  PublicProfileSettingsSchema,
-  PublicProfileUpdateRequestSchema,
-  AccountUsageResponseSchema,
+  AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
-  DeviceAuthorizationRequestSchema,
-  DeviceAuthorizationResponseSchema,
-  DeviceAuthorizationDecisionRequestSchema,
-  OAuthTokenRequestSchema,
+  IosSessionRefreshResponseSchema,
   OAuthTokenResponseSchema,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
   DeviceSyncResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
-  DeviceHealthUploadRequestSchema,
-  DeviceHealthUploadResponseSchema,
   LogoutResponseSchema,
   DeleteDeviceResponseSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -77,9 +57,9 @@ const AccountHttpPayloadSchema = z.union([
 ]);
 
 const UsagePayloadSchema = z.union([
-  UsageSubmissionSchema,
+  UsageUploadSchema,
   UsageUploadResponseSchema,
-  AccountUsageSummarySchema,
+  UsagePeriodSchema,
 ]);
 
 const outputs = [
@@ -106,7 +86,7 @@ const outputs = [
     title: "Quota Usage payloads",
     schema: UsagePayloadSchema,
     comment:
-      "Runtime validation additionally enforces token subset conservation, source-cost coverage, unique same-agent contained rows, and bounded ordered UTC-hour coverage.",
+      "Runtime validation additionally enforces token subset conservation, source-cost coverage, unique row identities within an hour, and one entry per hour within an upload.",
   },
   {
     filename: "local-usage.json",
@@ -136,10 +116,12 @@ if (process.argv.slice(2).some((argument) => argument !== "--check")) {
   throw new Error("Usage: generate-json-schemas.ts [--check]");
 }
 
-// The published documents are formatted after generation, so --check reproduces the whole
-// pipeline into a scratch directory and compares. A schema that has drifted from the runtime
-// definition it is generated from is not a document anyone can validate against.
+// The published documents are formatted, so generation formats what it writes and --check
+// reproduces the whole pipeline into a scratch directory and compares. A schema that has
+// drifted from the runtime definition it is generated from is not a document anyone can
+// validate against, and one the repository formatter would rewrite is not one either.
 const target = checkOnly ? mkdtempSync(join(tmpdir(), "quota-schema-")) : directory;
+const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 mkdirSync(target, { recursive: true });
 for (const output of outputs) {
@@ -155,18 +137,27 @@ for (const output of outputs) {
     $comment: output.comment,
     ...generated,
   };
-  writeFileSync(join(target, output.filename), `${JSON.stringify(document, null, 2)}\n`);
+  // Biome only formats paths inside the repository, so a scratch directory under the system
+  // temp root is refused on Linux. Each document is formatted through stdin under the name
+  // of the published file it will become, which applies the repository's JSON settings.
+  const formatted = spawnSync(
+    "pnpm",
+    [
+      "exec",
+      "biome",
+      "format",
+      `--stdin-file-path=${relative(repositoryRoot, join(directory, output.filename))}`,
+    ],
+    { cwd: repositoryRoot, encoding: "utf8", input: `${JSON.stringify(document, null, 2)}\n` },
+  );
+  if (formatted.status !== 0) {
+    if (checkOnly) rmSync(target, { recursive: true, force: true });
+    throw new Error(`Could not format ${output.filename}: ${formatted.stderr}`);
+  }
+  writeFileSync(join(target, output.filename), formatted.stdout);
 }
 
 if (checkOnly) {
-  const formatted = spawnSync("pnpm", ["exec", "biome", "format", "--write", target], {
-    cwd: join(dirname(fileURLToPath(import.meta.url)), "../../.."),
-    encoding: "utf8",
-  });
-  if (formatted.status !== 0) {
-    rmSync(target, { recursive: true, force: true });
-    throw new Error(`Could not format the generated schemas: ${formatted.stderr}`);
-  }
   const stale = outputs.filter(
     (output) =>
       readFileSync(join(target, output.filename), "utf8") !==

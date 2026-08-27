@@ -75,7 +75,7 @@ struct QuotaStatePresentationTests {
 
   @Test
   func aRejectedSignInExplainsItselfWhileMissingSetupKeepsTheGenericCopy() {
-    let expired = "The saved sign-in expired or was rejected. Sign in again."
+    let expired = "The saved sign-in expired or was rejected. Open Codex to refresh the sign-in."
     let rejected = ProviderStatusCopy.from(
       result: QuotaCollectionResult(
         provider: .codex,
@@ -83,13 +83,37 @@ struct QuotaStatePresentationTests {
         snapshots: [],
         source: nil,
         message: expired,
-        sources: 1,
-              accessDenied: nil
+        sources: [
+          QuotaCollectionSource(
+            sourceID: "chatgpt_usage_api", outcome: .authRequired, category: .authRequired)
+        ],
+        accessDenied: nil
       )
     )
     #expect(rejected?.kind == .needsSignIn)
     #expect(rejected?.detail == expired)
-    #expect(rejected?.accessibilityLabel == expired)
+    // The rung that was rejected is named: an expired OAuth grant and a stale saved
+    // browser session are fixed in different places.
+    #expect(rejected?.title == "OAuth")
+    #expect(rejected?.accessibilityLabel == "OAuth. \(expired)")
+
+    let staleSession = ProviderStatusCopy.from(
+      result: QuotaCollectionResult(
+        provider: .codex,
+        outcome: .authRequired,
+        snapshots: [],
+        source: nil,
+        message: "The saved browser session expired or was rejected. Add it again in Settings.",
+        sources: [
+          QuotaCollectionSource(
+            sourceID: "chatgpt_usage_api", outcome: .authRequired, category: .authRequired),
+          QuotaCollectionSource(
+            sourceID: "browser_session", outcome: .authRequired, category: .authRequired),
+        ],
+        accessDenied: nil
+      )
+    )
+    #expect(staleSession?.title == "Browser session")
 
     let neverConfigured = ProviderStatusCopy.from(
       result: QuotaCollectionResult(
@@ -98,11 +122,12 @@ struct QuotaStatePresentationTests {
         snapshots: [],
         source: nil,
         message: nil,
-        sources: 0,
-              accessDenied: nil
+        sources: [],
+        accessDenied: nil
       )
     )
     #expect(neverConfigured?.kind == .needsSignIn)
+    #expect(neverConfigured?.title == nil)
     #expect(neverConfigured?.detail == "Account setup required.")
   }
 

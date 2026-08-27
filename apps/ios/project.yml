@@ -53,6 +53,7 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+      - sdk: BackgroundTasks.framework
       - target: QuotaWidgets
         embed: true
     scheme:

@@ -16,7 +16,6 @@ export default defineConfig({
           GITHUB_SUBJECT_KEY: testSecret,
           QUOTA_INSTALLATION_KEY: testSecret,
           QUOTA_SESSION_HASH_KEY: testSecret,
-          BETTER_AUTH_SECRET: testSecret,
         },
       },
     }),

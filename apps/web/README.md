@@ -8,8 +8,8 @@ from `dist/` through Cloudflare Workers Static Assets. Production builds also pu
 protocol files from `packages/protocol/schema` under `/schema/`; the website does not keep a
 duplicate source copy.
 
-SvelteKit owns documents, routes, components, and the document-scoped viewer. Relay owns Better
-Auth, OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
+SvelteKit owns documents, routes, components, and the document-scoped viewer. Relay owns sessions,
+OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
 See [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 
 Managed production publishes through the Relay deploy path (`pnpm deploy:cloudflare` / CI workflow
@@ -26,21 +26,28 @@ pnpm --filter @gotry-io/quota-web build
 `pnpm dev:web` is fast HMR and is not a real GitHub login. `pnpm dev:relay` is the composed
 Worker. Browser GitHub login on localhost is not available.
 
-`/my` is the GitHub-backed account dashboard and `/activate` approves or denies a native-client
-device authorization grant. Unsigned `/my` visits are a server redirect home. Public pages are
-`/u/{github-username}`. A successful public-page view consumes two `public-profile` limiter
-tokens (HTML existence + JSON payload); after 60 views / 10 minutes the HTML can remain 200
-while the JSON returns 429. `/app` shipped in 0.0.4, so it remains a single bookmark redirect to
-`/my`; new links and OAuth callbacks use `/my`. Better Auth owns GitHub sign-in, browser sessions,
-sign-out, OAuth state/PKCE, account deletion, and standard auth-route origin validation. Quota's
-authorization decision and Device deletion routes additionally require a recent session and an
-exact same-origin request.
+`/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
+Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in
+0.0.4, so it and anything under it stay a redirect to `/my`; new links and OAuth callbacks name
+`/my` directly.
+Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
+a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
+`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
+all require an exact same-origin request, and the destructive ones a session authenticated within
+ten minutes.
 
-The signed-in dashboard opts into managed-data v3 Device Health and strictly shows each Device's app
-version, platform, server-authoritative last report/refresh/sync, and health/staleness presentation.
-It is read-only: remediation points to Diagnostics on that Device, and absent or expired reports do
-not imply the Device is broken. The default non-opted-in Account summary remains compatible with
-released strict clients.
+The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
+bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
+the trailing windows start and end — and a document request has no clock, so rendering one on the
+server would answer in UTC and be thrown away by every browser keeping another calendar. The client
+makes it once, sending its own IANA timezone as `tz`.
+
+It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
+Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from
+`GET /api/v6/account/usage/activity`, on UTC dates. All time is the last 730 days. Each Device shows
+its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
+or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
+rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, and `schema/`
 need a matching `!/filename` negation in `apps/relay/wrangler.jsonc`.

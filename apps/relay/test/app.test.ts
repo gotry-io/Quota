@@ -1,18 +1,14 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import {
-  type DeviceAuthorizationResponse,
-  type OAuthTokenResponse,
-} from "@gotry-io/quota-protocol";
-import type { DevicePrincipal, UsageSubmission } from "@gotry-io/relay-core";
+import { MAXIMUM_USAGE_PERIOD_LEAVES, type OAuthTokenResponse } from "@gotry-io/quota-protocol";
+import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { createWebAccountAuth, type WebAccountAuth } from "../src/account/better-auth.ts";
-import { D1EncryptedAuthStorage } from "../src/account/better-auth-storage.ts";
 import { AccountService } from "../src/account/service.ts";
 import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
   namespace Cloudflare {
@@ -36,7 +32,7 @@ beforeEach(async () => {
 });
 
 describe("managed Relay on real Workers and D1", () => {
-  it("floors RFC3339 deletion watermarks with SQLite before accepting Usage", async () => {
+  it("refuses to rebuild an hour this device's deletion watermark covers", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_watermark', 'subject_watermark', ?1, ?1)",
@@ -49,437 +45,130 @@ describe("managed Relay on real Workers and D1", () => {
              '2026-08-10T10:05:00Z', ?1, ?1)`,
       ).bind(now.toISOString()),
     ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_test",
-      family_id: "family_test",
-      account_id: "account_watermark",
-      device_id: "device_watermark",
-      generation: 2,
-      scopes: ["usage:write:self"],
-    };
-    const submission: UsageSubmission = {
-      protocol_version: 5,
-      submission_id: "submission_old",
-      device_id: "device_watermark",
-      generation: 2,
-      sequence: 0,
-      parser_revision: "parser_test",
-      aggregation_timezone: "UTC",
-      coverage: {
-        agent: "codex",
-        start_at: "2026-08-10T09:00:00.000Z",
-        end_at: "2026-08-10T10:00:00.000Z",
-        status: "complete",
-      },
-      rows: [],
-    };
     const usage = new D1UsageState(env.DB);
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toEqual({
-      outcome: "deleted_range",
+    const written = await usage.recordUsage(
+      devicePrincipal("watermark", 2),
+      usageUpload(
+        [
+          usageHour("2026-08-10T09:00:00Z", 1),
+          // The watermark falls inside this hour, so a new generation may rebuild it.
+          usageHour("2026-08-10T10:00:00Z", 1),
+        ],
+        2,
+      ),
+      now.toISOString(),
+    );
+
+    expect(written).toEqual({
+      outcome: "written",
+      accepted: ["2026-08-10T10:00:00Z"],
+      ignored: ["2026-08-10T09:00:00Z"],
     });
+    expect(
+      await env.DB.prepare(
+        "SELECT bucket_start_utc FROM usage_hourly WHERE device_id = 'device_watermark'",
+      ).all<{ bucket_start_utc: string }>(),
+    ).toMatchObject({ results: [{ bucket_start_utc: "2026-08-10T10:00:00Z" }] });
+  });
+
+  it("replaces an hour only for a scan that read it more recently", async () => {
+    await seedDevice("replace");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("replace", 1);
+    const hour = "2026-08-10T10:00:00Z";
+    const models = async () =>
+      (
+        await env.DB.prepare(
+          "SELECT model FROM usage_hourly WHERE device_id = 'device_replace' ORDER BY model",
+        ).all<{ model: string }>()
+      ).results.map((row) => row.model);
+
     expect(
       await usage.recordUsage(
         principal,
-        {
-          ...submission,
-          submission_id: "submission_current",
-          coverage: {
-            ...submission.coverage,
-            start_at: "2026-08-10T10:00:00.000Z",
-            end_at: "2026-08-10T11:00:00.000Z",
-          },
-        },
+        usageUpload([usageHour(hour, 3, ["first-model"])]),
         now.toISOString(),
       ),
-    ).toMatchObject({ outcome: "accepted", next_sequence: 1 });
-  });
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+    expect(await models()).toEqual(["first-model"]);
 
-  it("decides one coverage verdict over every window the range spans", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_test', 'subject_test', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-             id, account_id, installation_id_hash, generation, created_at, last_login_at
-           ) VALUES ('device_test', 'account_test', 'installation_test', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const state = new D1UsageState(env.DB);
-    const query = {
-      start_at: "2026-06-01T00:00:00Z",
-      end_at: "2026-08-03T00:00:00Z",
-      limit: 1_000,
-    };
-
-    // A range no window covers is not silently complete.
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("none");
-
-    const window = (start: string, end: string, status: string, submission: string) =>
-      env.DB.prepare(
-        `INSERT INTO usage_coverage (
-             device_id, agent, start_at, end_at, status, parser_revision, submission_id, accepted_at
-           ) VALUES ('device_test', 'codex', ?1, ?2, ?3, 'parser_test', ?4, ?5)`,
-      ).bind(start, end, status, submission, now.toISOString());
-
-    await env.DB.batch([
-      window("2026-06-01T00:00:00Z", "2026-07-02T00:00:00Z", "complete", "submission_1"),
-      window("2026-07-02T00:00:00Z", "2026-08-02T00:00:00Z", "complete", "submission_2"),
-    ]);
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("complete");
-
-    // One incompletely scanned window anywhere in the range decides the whole answer.
-    await env.DB.batch([
-      window("2026-08-02T00:00:00Z", "2026-08-03T00:00:00Z", "partial", "submission_3"),
-    ]);
-    expect((await state.queryAccountUsage("account_test", query)).coverage).toBe("partial");
-
-    // A window outside the asked-for range does not.
+    // A newer scan of the same hour replaces every row it found before.
     expect(
-      (
-        await state.queryAccountUsage("account_test", {
-          ...query,
-          end_at: "2026-08-02T00:00:00Z",
-        })
-      ).coverage,
-    ).toBe("complete");
-  });
-
-  it("stores unknown as an explicit opaque model", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_legacy', 'subject_legacy', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_legacy', 'account_legacy', 'installation_legacy', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_legacy",
-      family_id: "family_legacy",
-      account_id: "account_legacy",
-      device_id: "device_legacy",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const submission = unknownModelSubmission();
-    const usage = new D1UsageState(env.DB);
-
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    expect(await usage.recordUsage(principal, submission, now.toISOString())).toMatchObject({
-      outcome: "duplicate",
-      next_sequence: 1,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT model FROM usage_hourly WHERE device_id = 'device_legacy'",
-      ).first("model"),
-    ).toBe("unknown");
-  });
-
-  it("merges explicit partial Usage without deleting facts and replaces it later", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_partial', 'subject_partial', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_partial', 'account_partial', 'installation_partial', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_partial",
-      family_id: "family_partial",
-      account_id: "account_partial",
-      device_id: "device_partial",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const usage = new D1UsageState(env.DB);
-    const first = usageSubmission(
-      "partial_first",
-      0,
-      "2026-08-10T10:00:00Z",
-      "2026-08-10T14:00:00Z",
-      [usageFact("gpt-5.5[1m]", "2026-08-10T10:00:00Z")],
-    );
-    expect(await usage.recordUsage(principal, first, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    const partial = {
-      ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [
-        usageFact("openrouter-3o[1m]", "2026-08-10T11:00:00Z"),
-      ]),
-      write_mode: "merge_partial" as const,
-      coverage: {
-        ...usageSubmission("partial_merge", 1, "2026-08-10T11:00:00Z", "2026-08-10T13:00:00Z", [])
-          .coverage,
-        status: "partial" as const,
-      },
-    };
-    expect(await usage.recordUsage(principal, partial, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 2,
-    });
-    let result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]", "openrouter-3o[1m]"]);
-    expect(result.coverage).toBe("partial");
-
-    const complete = {
-      ...partial,
-      submission_id: "partial_complete",
-      sequence: 2,
-      write_mode: undefined,
-      coverage: { ...partial.coverage, status: "complete" as const },
-      rows: [],
-    };
-    expect(await usage.recordUsage(principal, complete, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 3,
-    });
-    result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.rows.map((row) => row.model)).toEqual(["gpt-5.5[1m]"]);
-    expect(result.coverage).toBe("complete");
-
-    const exactPartial = {
-      ...partial,
-      submission_id: "partial_exact",
-      sequence: 3,
-      rows: [usageFact("exact-partial", "2026-08-10T11:00:00Z")],
-    };
-    expect(await usage.recordUsage(principal, exactPartial, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 4,
-    });
-    result = await usage.queryAccountUsage("account_partial", {
-      device_id: "device_partial",
-      limit: 100,
-    });
-    expect(result.coverage).toBe("partial");
-  });
-
-  it("keeps multipart Usage invisible until all parts commit", async () => {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_multipart', 'subject_multipart', ?1, ?1)",
-      ).bind(now.toISOString()),
-      env.DB.prepare(
-        `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_multipart', 'account_multipart', 'installation_multipart', 1, ?1, ?1)`,
-      ).bind(now.toISOString()),
-    ]);
-    const principal: DevicePrincipal = {
-      kind: "device",
-      session_id: "session_multipart",
-      family_id: "family_multipart",
-      account_id: "account_multipart",
-      device_id: "device_multipart",
-      generation: 1,
-      scopes: ["usage:write:self"],
-    };
-    const usage = new D1UsageState(env.DB);
-    const common = {
-      protocol_version: 5 as const,
-      device_id: "device_multipart",
-      generation: 1,
-      parser_revision: "parser_multipart",
-      aggregation_timezone: "UTC",
-      coverage: {
-        agent: "codex" as const,
-        start_at: "2026-08-10T12:00:00Z",
-        end_at: "2026-08-10T13:00:00Z",
-        status: "complete" as const,
-      },
-    };
-    const partRows = Array.from({ length: 256 }, (_, index) =>
-      usageFact(`model-${index}`, "2026-08-10T12:00:00Z"),
-    );
-    const part0: UsageSubmission = {
-      ...common,
-      submission_id: "multipart_0",
-      sequence: 0,
-      rows: partRows.slice(0, 128),
-      multipart: { batch_id: "multipart_batch", part_index: 0, part_count: 2 },
-    };
-    const part1: UsageSubmission = {
-      ...common,
-      submission_id: "multipart_1",
-      sequence: 1,
-      rows: partRows.slice(128),
-      multipart: { batch_id: "multipart_batch", part_index: 1, part_count: 2 },
-    };
-    expect(await usage.recordUsage(principal, part0, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 1,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(0);
-    const finalResults = await Promise.all(
-      Array.from({ length: 4 }, () => usage.recordUsage(principal, part1, now.toISOString())),
-    );
-    expect(finalResults.some((result) => result.outcome === "accepted")).toBe(true);
-    expect(
-      finalResults.every(
-        (result) =>
-          (result.outcome === "accepted" || result.outcome === "duplicate") &&
-          result.next_sequence === 2,
+      await usage.recordUsage(
+        principal,
+        usageUpload([usageHour(hour, 4, ["second-model"])]),
+        now.toISOString(),
       ),
-    ).toBe(true);
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(256);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_submission_parts").first("count"),
-    ).toBe(0);
-    expect(await usage.recordUsage(principal, part1, now.toISOString())).toMatchObject({
-      outcome: "duplicate",
-    });
+    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
+    expect(await models()).toEqual(["second-model"]);
 
-    const conflictPart0: UsageSubmission = {
-      ...part0,
-      submission_id: "multipart_conflict_0",
-      sequence: 2,
-      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: { batch_id: "multipart_conflict", part_index: 0, part_count: 2 },
-    };
-    const conflictPart1: UsageSubmission = {
-      ...part1,
-      submission_id: "multipart_conflict_1",
-      sequence: 3,
-      rows: [usageFact("duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: { batch_id: "multipart_conflict", part_index: 1, part_count: 2 },
-    };
-    expect(await usage.recordUsage(principal, conflictPart0, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 3,
-    });
-    const rejectedResults = await Promise.all(
-      Array.from({ length: 4 }, () =>
-        usage.recordUsage(principal, conflictPart1, now.toISOString()),
-      ),
-    );
-    expect(rejectedResults).toHaveLength(4);
-    for (const result of rejectedResults) {
-      expect(result).toMatchObject({
-        outcome: "rejected",
-        rejection_reason: "duplicate_fact_identity",
-        next_sequence: 4,
-      });
+    // An older or repeated scan is a comparison, not a write.
+    for (const version of [3, 4]) {
+      expect(
+        await usage.recordUsage(
+          principal,
+          usageUpload([usageHour(hour, version, ["third-model"])]),
+          now.toISOString(),
+        ),
+      ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
     }
+    expect(await models()).toEqual(["second-model"]);
+  });
+
+  it("keeps the daily rollup equal to the hours behind it", async () => {
+    await seedDevice("rollup");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("rollup", 1);
+    await usage.recordUsage(
+      principal,
+      usageUpload([
+        usageHour("2026-08-09T23:00:00Z", 1, ["gpt-5.6-sol"]),
+        usageHour("2026-08-10T00:00:00Z", 1, ["gpt-5.6-sol"]),
+        usageHour("2026-08-10T01:00:00Z", 1, ["gpt-5.6-sol", "claude-opus-5"], true),
+      ]),
+      now.toISOString(),
+    );
+
+    expect(await dailyMismatch()).toEqual([]);
+    const daily = await env.DB.prepare(
+      `SELECT utc_date, model, requests, partial_hours FROM usage_daily
+       WHERE device_id = 'device_rollup' ORDER BY utc_date, model`,
+    ).all<{ utc_date: string; model: string; requests: number; partial_hours: number }>();
+    expect(daily.results).toEqual([
+      { utc_date: "2026-08-09", model: "gpt-5.6-sol", requests: 1, partial_hours: 0 },
+      { utc_date: "2026-08-10", model: "claude-opus-5", requests: 1, partial_hours: 1 },
+      { utc_date: "2026-08-10", model: "gpt-5.6-sol", requests: 2, partial_hours: 1 },
+    ]);
+
+    // Rescanning one hour rewrites only the dates that hour touches.
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T01:00:00Z", 2, ["gpt-5.6-sol"])]),
+      now.toISOString(),
+    );
+    expect(await dailyMismatch()).toEqual([]);
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
+        "SELECT COUNT(*) AS count FROM usage_daily WHERE device_id = 'device_rollup'",
       ).first("count"),
-    ).toBe(256);
+    ).toBe(2);
+  });
+
+  it("refuses an upload from a generation the device has moved past", async () => {
+    await seedDevice("stale");
+    const usage = new D1UsageState(env.DB);
+    expect(
+      await usage.recordUsage(
+        devicePrincipal("stale", 2),
+        usageUpload([usageHour("2026-08-10T10:00:00Z", 1)]),
+        now.toISOString(),
+      ),
+    ).toEqual({ outcome: "stale_device" });
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_conflict'",
+        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_stale'",
       ).first("count"),
     ).toBe(0);
-    expect(await usage.recordUsage(principal, conflictPart1, now.toISOString())).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 4,
-    });
-
-    const partialCommon = {
-      ...common,
-      write_mode: "merge_partial" as const,
-      coverage: {
-        ...common.coverage,
-        status: "partial" as const,
-      },
-    };
-    const partialConflictPart0: UsageSubmission = {
-      ...partialCommon,
-      submission_id: "multipart_partial_conflict_0",
-      sequence: 4,
-      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: {
-        batch_id: "multipart_partial_conflict",
-        part_index: 0,
-        part_count: 2,
-      },
-    };
-    const partialConflictPart1: UsageSubmission = {
-      ...partialCommon,
-      submission_id: "multipart_partial_conflict_1",
-      sequence: 5,
-      rows: [usageFact("partial-duplicate-model", "2026-08-10T12:00:00Z")],
-      multipart: {
-        batch_id: "multipart_partial_conflict",
-        part_index: 1,
-        part_count: 2,
-      },
-    };
-    expect(
-      await usage.recordUsage(principal, partialConflictPart0, now.toISOString()),
-    ).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 5,
-    });
-    expect(
-      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
-    ).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 6,
-    });
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_hourly WHERE device_id = 'device_multipart'",
-      ).first("count"),
-    ).toBe(256);
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM usage_submission_parts WHERE device_id = 'device_multipart' AND batch_id = 'multipart_partial_conflict'",
-      ).first("count"),
-    ).toBe(0);
-    expect(
-      await usage.recordUsage(principal, partialConflictPart1, now.toISOString()),
-    ).toMatchObject({
-      outcome: "rejected",
-      rejection_reason: "duplicate_fact_identity",
-      next_sequence: 6,
-    });
-
-    const afterConflict: UsageSubmission = {
-      ...common,
-      submission_id: "after_multipart_conflict",
-      sequence: 6,
-      coverage: {
-        ...common.coverage,
-        start_at: "2026-08-10T13:00:00Z",
-        end_at: "2026-08-10T14:00:00Z",
-      },
-      rows: [usageFact("after-conflict", "2026-08-10T13:00:00Z")],
-    };
-    expect(await usage.recordUsage(principal, afterConflict, now.toISOString())).toMatchObject({
-      outcome: "accepted",
-      next_sequence: 7,
-    });
   });
 
   it("serves every managed provider and agent from the one summary contract", async () => {
@@ -500,14 +189,13 @@ describe("managed Relay on real Workers and D1", () => {
            id, account_id, installation_id_hash, generation, created_at, last_login_at
          ) VALUES ('device_agents', 'account_agents', 'installation_agents', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      usageFactInsert("codex", "openai_direct", "gpt-5.6-sol"),
-      usageFactInsert("grok", "xai_direct", "grok-4.5"),
-      usageFactInsert("cursor", "openai_direct", "cursor-small"),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol"),
+      usageDailyInsert("grok", "xai_direct", "grok-4.5"),
+      usageDailyInsert("cursor", "openai_direct", "cursor-small"),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
-             snapshot_json, updated_at
-           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, ?3, ?4, ?3)`,
       ).bind(
         "codex",
         "codex_fingerprint",
@@ -516,9 +204,8 @@ describe("managed Relay on real Workers and D1", () => {
       ),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence, captured_at, observed_at,
-             snapshot_json, updated_at
-           ) VALUES ('device_agents', ?1, ?2, 0, ?3, ?3, ?4, ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_agents', ?1, ?2, ?3, ?4, ?3)`,
       ).bind(
         "cursor",
         "cursor_fingerprint",
@@ -527,78 +214,139 @@ describe("managed Relay on real Workers and D1", () => {
       ),
     ]);
 
-    const usageState = new D1UsageState(env.DB);
-    const filtered = await usageState.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code"],
-      limit: 100,
-    });
-    const all = await usageState.queryAccountUsage("account_agents", {
-      agents: ["codex", "claude_code", "grok", "opencode", "pi", "cursor"],
-      limit: 100,
-    });
-
-    expect(filtered.rows.map((row) => row.agent)).toEqual(["codex"]);
-    expect(all.rows.map((row) => row.agent)).toEqual(["codex", "cursor", "grok"]);
-
-    const accountState = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_agents", name: "Quota Tester" },
-        session: {
-          id: "web_agents",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
-    const app = createRelayApp({
-      state: accountState,
-      usageState,
-      accountService: new AccountService(accountState, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+    const app = appFor("account_agents");
     const summary = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v6/account/summary")
     ).json()) as {
       protocol_version: number;
-      quota: Array<{ snapshot: { provider: string } }>;
-      usage: { totals: { requests: number } };
+      subscriptions: Array<{ provider: string }>;
+      usage: { all: { totals: { messages: number }; agents: Array<{ agent: string }> } };
     };
 
-    expect(summary).toMatchObject({ protocol_version: 5, usage: { totals: { requests: 3 } } });
-    expect(summary.quota.map((observation) => observation.snapshot.provider)).toEqual([
+    expect(summary).toMatchObject({ protocol_version: 6 });
+    expect(summary.usage.all.totals.messages).toBe(3);
+    expect(summary.usage.all.agents.map((agent) => agent.agent)).toEqual([
+      "codex",
+      "cursor",
+      "grok",
+    ]);
+    expect(summary.subscriptions.map((subscription) => subscription.provider)).toEqual([
       "codex",
       "cursor",
     ]);
+
     // The retired data routes are gone rather than kept answering an older shape, and they say
     // so as the one thing a caller on them can do: a version this deployment no longer serves
     // cannot be retried back into existence.
-    const retired = await app.request(
-      "https://quota.gotry.io/api/v3/account/summary?usage_agents=all",
-    );
-    expect(retired.status).toBe(404);
-    expect(await retired.json()).toMatchObject({ error: { code: "client_upgrade_required" } });
+    for (const retired of ["/api/v3/account/summary", "/api/v5/account/summary"]) {
+      const response = await app.request(`https://quota.gotry.io${retired}`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: "client_upgrade_required" },
+      });
+    }
 
     // A version this deployment does serve, spelled wrong, is a wrong path and stays one, so a
     // routing mistake of our own cannot hide behind an upgrade prompt.
     const wrong = await app.request("https://quota.gotry.io/api/v2/account/snapshots");
     expect(wrong.status).toBe(404);
     expect(await wrong.json()).toMatchObject({ error: { code: "not_found" } });
-    const mistyped = await app.request("https://quota.gotry.io/api/v5/account/sumary");
+    const mistyped = await app.request("https://quota.gotry.io/api/v6/account/sumary");
     expect(await mistyped.json()).toMatchObject({ error: { code: "not_found" } });
+  });
+
+  it("answers an unchanged Account read from its validator instead of folding Usage again", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_etag', 'subject_etag', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at, last_seen_at
+         ) VALUES ('device_etag', 'account_etag', 'installation_etag', 1, ?1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_etag",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_etag");
+
+    const summaryPath = "https://quota.gotry.io/api/v6/account/summary";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    // `no-cache` is what makes the second request conditional at all: the browser may keep the
+    // body as long as it revalidates before showing it.
+    expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
+    const etag = first.headers.get("ETag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    const unchanged = await app.request(summaryPath, { headers: { "If-None-Match": etag ?? "" } });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get("ETag")).toBe(etag);
+    expect(await unchanged.text()).toBe("");
+
+    // Two routes answer with different bodies, and a different calendar puts a period around
+    // different instants, so neither may reuse the other's validator.
+    const activity = await app.request(
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
+    );
+    expect(activity.status).toBe(200);
+    expect(activity.headers.get("ETag")).not.toBe(etag);
+    const elsewhere = await app.request(`${summaryPath}?tz=Asia/Singapore`);
+    expect(elsewhere.headers.get("ETag")).not.toBe(etag);
+
+    // A new observation is a new answer even though no Usage fact moved.
+    await env.DB.prepare(
+      `INSERT INTO quota_snapshots (
+         device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+       ) VALUES ('device_etag', 'codex', 'fingerprint_etag', ?1, ?2, ?1)`,
+    )
+      .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
+      .run();
+    const afterUpload = await app.request(summaryPath, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(afterUpload.status).toBe(200);
+    expect(afterUpload.headers.get("ETag")).not.toBe(etag);
+
+    // The response carries the Account's display label, which a later sign-in rewrites without
+    // touching a device or an observation.
+    const afterObservation = afterUpload.headers.get("ETag") ?? "";
+    await env.DB.prepare(
+      "UPDATE accounts SET display_label = 'octocat', updated_at = ?2 WHERE id = ?1",
+    )
+      .bind("account_etag", new Date(now.getTime() + 1_000).toISOString())
+      .run();
+    const renamed = await app.request(summaryPath, {
+      headers: { "If-None-Match": afterObservation },
+    });
+    expect(renamed.status).toBe(200);
+    expect(renamed.headers.get("ETag")).not.toBe(afterObservation);
+
+    // The reading that speaks for a subscription changes with the clock alone: past its own
+    // validity boundary it stops describing current quota. A held answer must not outlive that.
+    const later = appFor("account_etag", new Date(now.getTime() + 3_600_000));
+    const nextHour = await later.request(summaryPath, {
+      headers: { "If-None-Match": renamed.headers.get("ETag") ?? "" },
+    });
+    expect(nextHour.status).toBe(200);
+
+    // A query key this route does not serve is still refused rather than validated.
+    const bogus = await app.request(`${summaryPath}?nonsense=1`, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(bogus.status).toBe(400);
+    expect(bogus.headers.get("ETag")).toBeNull();
+    // So is a timezone that names no calendar.
+    expect((await app.request(`${summaryPath}?tz=Mars/Olympus_Mons`)).status).toBe(400);
   });
 
   it("reports every billing channel it stores without an opt-in", async () => {
     const channelFact = (channel: string, channelSource: string, model: string) =>
-      usageFactInsert("opencode", channel, model, {
+      usageDailyInsert("opencode", channel, model, {
         deviceID: "device_channels",
         channelSource,
-        timezone: "UTC",
       });
     await env.DB.batch([
       env.DB.prepare(
@@ -615,51 +363,19 @@ describe("managed Relay on real Workers and D1", () => {
       // producing a second `unknown` provider.
       channelFact("unknown", "unknown", "big-pickle"),
     ]);
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_channels", name: "Quota Tester" },
-        session: {
-          id: "web_channels",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
+    const app = appFor("account_channels");
+    const response = await app.request("https://quota.gotry.io/api/v6/account/summary");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      usage: { all: { agents: Array<{ providers: Array<{ provider: string }> }> } };
     };
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
-    const providersFor = async (query: string) => {
-      const response = await app.request(`https://quota.gotry.io${query}`);
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        usage: { agents?: Array<{ providers: Array<{ provider: string }> }> };
-      };
-      return (body.usage.agents ?? []).flatMap((agent) =>
-        agent.providers.map(({ provider }) => provider),
-      );
-    };
+    expect(
+      body.usage.all.agents.flatMap((agent) => agent.providers.map(({ provider }) => provider)),
+    ).toEqual(["deepseek", "moonshot", "unknown"]);
 
-    expect(await providersFor("/api/v5/account/summary?usage_agents=all")).toEqual([
-      "deepseek",
-      "moonshot",
-      "unknown",
-    ]);
     // The retired opt-in is not a query key any more.
     expect(
-      (
-        await app.request(
-          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&usage_channels=1",
-        )
-      ).status,
+      (await app.request("https://quota.gotry.io/api/v6/account/summary?usage_channels=1")).status,
     ).toBe(400);
   });
 
@@ -670,23 +386,16 @@ describe("managed Relay on real Workers and D1", () => {
       state,
       usageState: new D1UsageState(env.DB),
       accountService: new AccountService(state, hasher, secret),
-      webAuth: createWebAccountAuth({
-        database: env.DB,
-        githubClientId: "github-client",
-        githubClientSecret: "github-secret",
-        githubSubjectKey: secret,
-        authSecret: secret,
-        origin: "https://quota.gotry.io",
-      }),
+      webSessions: new SignedInWebSessionStub("account_catalogs", now),
       hasher,
       now: () => now,
     });
 
     const pricing = (await (
-      await app.request("https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all")
+      await app.request("https://quota.gotry.io/api/v2/pricing/catalog")
     ).json()) as { entries: Array<{ billing_channel: string }> };
     const invalid = await app.request(
-      "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=codex",
+      "https://quota.gotry.io/api/v2/pricing/catalog?usage_agents=all",
     );
 
     expect(pricing.entries.some((entry) => entry.billing_channel === "xai_direct")).toBe(true);
@@ -709,7 +418,7 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(400);
   });
 
-  it("serves retained account history with client groups", async () => {
+  it("answers every retained day and the trailing windows the caller's calendar names", async () => {
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
@@ -719,83 +428,96 @@ describe("managed Relay on real Workers and D1", () => {
            id, account_id, installation_id_hash, generation, created_at, last_login_at
          ) VALUES ('device_history', 'account_history', 'installation_history', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
-      usageFactInsertAt("device_history", "2025-01-01T00:00:00Z", "2025-01-01"),
-      usageFactInsertAt("device_history", "2026-08-09T00:00:00Z", "2026-08-09"),
-    ]);
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_history", name: "Quota Tester" },
-        session: {
-          id: "web_history",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_history",
+        date: "2025-01-01",
       }),
-    };
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-luna", {
+        deviceID: "device_history",
+        date: "2026-08-09",
+      }),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_history",
+        date: "2026-08-10",
+      }),
+      // The hours behind the two recent days, which is what a caller off UTC reads them from.
+      usageHourInsert("codex", "openai_direct", "gpt-5.6-luna", "2026-08-09T12:00:00Z"),
+      usageHourInsert("codex", "openai_direct", "gpt-5.6-sol", "2026-08-10T12:00:00Z"),
+    ]);
+    const app = appFor("account_history");
 
-    const current = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
+    const summary = (await (
+      await app.request("https://quota.gotry.io/api/v6/account/summary")
     ).json()) as {
-      usage: {
-        range: { from: string; to: string };
-        totals: { requests: number };
-        breakdowns: Array<{ dimension: string }>;
-        agents?: unknown;
-      };
-    };
-    const structured = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
-    ).json()) as {
-      usage: {
-        agents: Array<{
-          agent: string;
+      usage: Record<
+        string,
+        {
           totals: { messages: number };
-          providers: Array<{ provider: string; models: Array<{ model: string }> }>;
-        }>;
-      };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        }
+      >;
+      pricing_revision: string;
+      model_catalog_revision: string;
     };
 
-    expect(current.usage).toMatchObject({
-      range: { from: "2025-01-01", to: "2026-08-09" },
-      totals: { requests: 2 },
-    });
-    // Client groups are part of the contract, not something a caller asks for.
-    expect(current.usage.agents).toMatchObject([
+    expect(summary.usage.today?.totals.messages).toBe(1);
+    expect(summary.usage.last_7_days?.totals.messages).toBe(2);
+    expect(summary.usage.last_30_days?.totals.messages).toBe(2);
+    expect(summary.usage.all?.totals.messages).toBe(3);
+    // The agent tree is part of the contract, not something a caller asks for.
+    expect(summary.usage.all?.agents).toMatchObject([
       { agent: "codex", providers: [{ provider: "openai" }] },
     ]);
-    expect(structured.usage.agents).toMatchObject([
-      {
-        agent: "codex",
-        totals: { messages: 2 },
-        providers: [{ provider: "openai", models: [{ model: "gpt-5.6-sol" }] }],
-      },
-    ]);
-    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "usage_date")).toBe(true);
-    expect(current.usage.breakdowns.some(({ dimension }) => dimension === "bucket_start_utc")).toBe(
-      false,
-    );
+    expect(summary.pricing_revision).toEqual(expect.any(String));
+    expect(summary.model_catalog_revision).toEqual(expect.any(String));
+
+    const models = (
+      period:
+        | { agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }> }
+        | undefined,
+    ) =>
+      (period?.agents ?? []).flatMap((agent) =>
+        agent.providers.flatMap((provider) => provider.models.map((model) => model.model)),
+      );
+    expect(models(summary.usage.today)).toEqual(["gpt-5.6-sol"]);
+
+    // A calendar behind UTC moves where today begins without moving a stored day: seven hours
+    // of 9 August UTC are still yesterday in Los Angeles, and the rest of today is 10 August.
+    const behind = (await (
+      await app.request("https://quota.gotry.io/api/v6/account/summary?tz=America/Los_Angeles")
+    ).json()) as {
+      usage: Record<
+        string,
+        { agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }> }
+      >;
+    };
+    expect(models(behind.usage.today)).toEqual(["gpt-5.6-luna"]);
+
+    const activity = (await (
+      await app.request(
+        "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10",
+      )
+    ).json()) as { days: Array<{ date: string; totals: { messages: number } }> };
+    expect(activity.days.map((day) => day.date)).toEqual(["2026-08-09", "2026-08-10"]);
+
+    // A range longer than the read answers, and a reversed one, are refused rather than capped.
     expect(
       (
         await app.request(
-          "https://quota.gotry.io/api/v5/account/summary?usage_agents=all&from=2025-01-01&to=2026-08-10",
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2024-01-01&to=2026-08-10",
         )
       ).status,
-    ).toBe(200);
+    ).toBe(400);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-01",
+        )
+      ).status,
+    ).toBe(400);
   });
 
-  it("marks high-cardinality summaries as truncated", async () => {
+  it("bounds a high-cardinality period without losing what it totals", async () => {
     const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
     await env.DB.batch([
       env.DB.prepare(
@@ -807,104 +529,39 @@ describe("managed Relay on real Workers and D1", () => {
          ) VALUES ('device_cardinality', 'account_cardinality', 'installation_cardinality', 1, ?1, ?1)`,
       ).bind(now.toISOString()),
       env.DB.prepare(
-        `INSERT INTO usage_hourly (
-           device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-           agent, billing_channel, channel_source, model, context_bucket,
+        `INSERT INTO usage_daily (
+           device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
            service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
            cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
            output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-           source_cost_microusd, source_cost_covered_requests
+           source_cost_microusd, source_cost_covered_requests, partial_hours
          )
-         SELECT 'device_cardinality', '2026-08-09T00:00:00Z', '2026-08-09', 0, 'UTC',
-                'codex', 'openai_direct', 'agent_default', 'model-' || value, 'le_128k',
-                'unknown', 'unknown', 'unknown', 10, 0, 0, 0, 0, 2, 0, 1, 0, 0, '1', 1
+         SELECT 'device_cardinality', '2026-08-09', 'codex', 'openai_direct', 'agent_default',
+                'model-' || value, 'le_128k', 'unknown', 'unknown', 'unknown',
+                10, 0, 0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
          FROM json_each(?1)`,
       ).bind(models),
     ]);
-    const state = new D1AccountState(env.DB);
-    const usageState = new D1UsageState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "account_cardinality", name: "Quota Tester" },
-        session: {
-          id: "web_cardinality",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
-    const app = createRelayApp({
-      state,
-      usageState,
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => now,
-    });
+    const app = appFor("account_cardinality");
 
-    const summary = (await (
-      await app.request("https://quota.gotry.io/api/v5/account/summary?usage_agents=all")
-    ).json()) as {
-      usage: { breakdowns_truncated?: boolean; cost: { unpriced_truncated?: boolean } };
+    const response = await app.request("https://quota.gotry.io/api/v6/account/summary");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      usage: {
+        all: {
+          totals: { messages: number };
+          cost: { unpriced_truncated?: boolean };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        };
+      };
     };
-    expect(summary.usage.breakdowns_truncated).toBe(true);
-    expect(summary.usage.cost.unpriced_truncated).toBe(true);
-
-    const optedInResponse = await app.request(
-      "https://quota.gotry.io/api/v5/account/summary?usage_agents=all",
+    const leaves = body.usage.all.agents.flatMap((agent) =>
+      agent.providers.flatMap((provider) => provider.models),
     );
-    const optedIn = (await optedInResponse.json()) as {
-      usage: { model_catalog_revision?: string };
-    };
-    expect(optedInResponse.status).toBe(200);
-    expect(optedIn.usage.model_catalog_revision).toEqual(expect.any(String));
-    expect(
-      (await app.request("https://quota.gotry.io/api/v5/account/summary?model_catalog=0")).status,
-    ).toBe(400);
-    expect(
-      (
-        await app.request(
-          "https://quota.gotry.io/api/v5/account/usage/summary?usage_agents=all&from=2026-08-09&to=2026-08-09",
-        )
-      ).status,
-    ).toBe(200);
-  });
-
-  it("stores Better Auth sessions encrypted behind hashed keys", async () => {
-    const storage = new D1EncryptedAuthStorage(env.DB, secret);
-    await storage.set("raw-session-token", JSON.stringify({ token: "raw-session-token" }), 60);
-
-    const row = await env.DB.prepare(
-      "SELECT key_hash, value_ciphertext FROM auth_session_store",
-    ).first<{ key_hash: string; value_ciphertext: string }>();
-    expect(row?.key_hash).not.toContain("raw-session-token");
-    expect(row?.value_ciphertext).not.toContain("raw-session-token");
-    expect(await storage.get("raw-session-token")).toContain("raw-session-token");
-
-    const expiredKeyHash = await new SecretHasher(secret).hash(
-      "better-auth-storage",
-      "expired-session-token",
-    );
-    await env.DB.prepare(
-      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES (?1, 'expired', ?2)",
-    )
-      .bind(expiredKeyHash, "2026-08-09T00:00:00.000Z")
-      .run();
-    expect(await storage.getAndDelete("expired-session-token")).toBeNull();
-    await env.DB.prepare(
-      "INSERT INTO auth_session_store (key_hash, value_ciphertext, expires_at) VALUES ('expired', 'expired', ?1)",
-    )
-      .bind("2026-08-09T00:00:00.000Z")
-      .run();
-    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM auth_session_store WHERE key_hash = 'expired'",
-      ).first("count"),
-    ).toBe(0);
+    expect(body.usage.all.totals.messages).toBe(1_001);
+    expect(leaves.length).toBeLessThanOrEqual(MAXIMUM_USAGE_PERIOD_LEAVES);
+    expect(leaves.some((leaf) => leaf.model === "other")).toBe(true);
+    expect(body.usage.all.cost.unpriced_truncated).toBe(true);
   });
 
   it("answers an account whose stored reading this build cannot read", async () => {
@@ -920,9 +577,8 @@ describe("managed Relay on real Workers and D1", () => {
       // A row a retired build wrote, still carrying the fields this contract removed.
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_unreadable', 'codex', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'codex', 'fingerprint', ?1, ?2, ?1)`,
       ).bind(
         now.toISOString(),
         JSON.stringify({
@@ -937,9 +593,8 @@ describe("managed Relay on real Workers and D1", () => {
       ),
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_unreadable', 'cursor', 'fingerprint', 1, ?1, ?1, ?2, ?1)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_unreadable', 'cursor', 'fingerprint', ?1, ?2, ?1)`,
       ).bind(
         now.toISOString(),
         JSON.stringify({
@@ -958,13 +613,46 @@ describe("managed Relay on real Workers and D1", () => {
     expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
   });
 
+  it("keeps every session in one table", async () => {
+    // `d1_migrations` is the ladder itself, not storage this deployment designed.
+    const tables = await env.DB.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'
+         AND name <> 'd1_migrations'
+       ORDER BY name`,
+    ).all<{ name: string }>();
+    expect(tables.results.map((row) => row.name)).toEqual([
+      "accounts",
+      "devices",
+      "login_grants",
+      "quota_snapshots",
+      "rate_limit_counters",
+      "sessions",
+      "usage_daily",
+      "usage_hour_scans",
+      "usage_hourly",
+    ]);
+  });
+
+  it("no longer stores anything an unauthenticated reader could have asked for", async () => {
+    const columns = await env.DB.prepare("PRAGMA table_info(accounts)").all<{ name: string }>();
+    const names = columns.results.map((column) => column.name);
+    expect(names).not.toContain("public_profile_enabled");
+    expect(names).not.toContain("public_profile_slug");
+    const indexes = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'accounts'",
+    ).all<{ name: string }>();
+    expect(indexes.results.map((index) => index.name)).not.toContain(
+      "accounts_public_profile_slug",
+    );
+  });
+
   it("keeps a sleeping device's reading and deletes one nothing will read again", async () => {
     const snapshot = (provider: string, observedAt: string) =>
       env.DB.prepare(
         `INSERT INTO quota_snapshots (
-             device_id, provider, account_fingerprint, sequence,
-             captured_at, observed_at, snapshot_json, updated_at
-           ) VALUES ('device_retention', ?1, 'fingerprint', 1, ?2, ?2, '{}', ?3)`,
+             device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+           ) VALUES ('device_retention', ?1, 'fingerprint', ?2, '{}', ?3)`,
       ).bind(provider, observedAt, now.toISOString());
     await env.DB.batch([
       env.DB.prepare(
@@ -989,53 +677,118 @@ describe("managed Relay on real Workers and D1", () => {
     expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
   });
 
-  it("uses Better Auth's standard GitHub redirect and stores no provider token", async () => {
-    const auth = createWebAccountAuth({
-      database: env.DB,
-      githubClientId: "github-client",
-      githubClientSecret: "github-secret",
-      githubSubjectKey: secret,
-      authSecret: secret,
-      origin: "https://quota.gotry.io",
-    });
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth: auth,
-      hasher,
-      now: () => now,
-    });
-    const response = await app.request("https://quota.gotry.io/api/auth/v2/sign-in/social", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://quota.gotry.io",
-        "cf-connecting-ip": "203.0.113.10",
-      },
-      body: JSON.stringify({ provider: "github", callbackURL: "/app" }),
-    });
-    const body = (await response.json()) as { url?: string };
-    expect(body.url).toContain("github.com/login/oauth/authorize");
-    expect(body.url).toContain("scope=");
-    expect(response.headers.get("set-cookie")).toContain("quota");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    const nativeResponse = await auth.beginGitHubSignIn(
-      new Headers({ Origin: "https://quota.gotry.io" }),
-      "https://quota.gotry.io/oauth/v2/complete?login_token=synthetic",
+  it("reads all time as the window it names rather than as every retained day", async () => {
+    const oldest = utcDaysBefore(729);
+    const older = utcDaysBefore(730);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_window', 'subject_window', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_window', 'account_window', 'installation_window', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_window",
+        date: oldest,
+      }),
+      usageDailyInsert("codex", "openai_direct", "claude-opus-5", {
+        deviceID: "device_window",
+        date: older,
+      }),
+    ]);
+
+    const response = await appFor("account_window").request(
+      "https://quota.gotry.io/api/v6/account/summary",
     );
-    expect(nativeResponse.status).toBe(302);
-    expect(nativeResponse.headers.get("location")).toContain("github.com/login/oauth/authorize");
-    expect(nativeResponse.headers.get("set-cookie")).toContain("quota");
-    expect(nativeResponse.headers.get("cache-control")).toBe("no-store");
+    expect(response.status).toBe(200);
+    const summary = (await response.json()) as {
+      usage: {
+        all: {
+          totals: { messages: number };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        };
+      };
+    };
+    // The day one past the window is retained and not read; `all` is 730 days, not everything.
+    expect(summary.usage.all.totals.messages).toBe(1);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM auth_identities").first("count"),
-    ).toBe(0);
+      summary.usage.all.agents.flatMap((agent) =>
+        agent.providers.flatMap((provider) => provider.models.map((model) => model.model)),
+      ),
+    ).toEqual(["gpt-5.6-sol"]);
   });
 
-  it("completes browser PKCE through a Better Auth Web principal and issues device tokens", async () => {
+  it("sweeps Usage older than retention, a bounded batch at a time", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_sweep', 'subject_sweep', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, created_at, last_login_at
+           ) VALUES ('device_sweep', 'account_sweep', 'installation_sweep', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    // One hour and one day on each side of every bound, plus enough beyond it to prove the
+    // batch stops rather than running the table down in a single pass.
+    const expiredHours = Array.from({ length: 120 }, (_, index) =>
+      new Date(Date.parse("2024-01-01T00:00:00Z") + index * 3_600_000).toISOString().slice(0, 19),
+    ).map((instant) => `${instant}Z`);
+    await env.DB.batch([
+      ...[...expiredHours, "2026-08-09T00:00:00Z"].flatMap((bucket) => storedHour(bucket)),
+      ...["2023-01-01", "2023-01-02", "2026-08-09"].map((date) => storedDay(date)),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    expect(await sweptHours()).toHaveLength(expiredHours.length - 100 + 1);
+    expect(await sweptScans()).toHaveLength(expiredHours.length - 100 + 1);
+    expect(await sweptDays()).toEqual(["2026-08-09"]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+    expect(await sweptHours()).toEqual(["2026-08-09T00:00:00Z"]);
+    expect(await sweptScans()).toEqual(["2026-08-09T00:00:00Z"]);
+  });
+
+  it("expires one rate-limit window without resetting that subject's live one", async () => {
+    const state = new D1AccountState(env.DB);
+    const counter = (startedAt: string, expiresAt: string) =>
+      env.DB.prepare(
+        `INSERT INTO rate_limit_counters (key_hash, window_started_at, window_expires_at, request_count)
+         VALUES ('subject_hash', ?1, ?2, 5)`,
+      ).bind(startedAt, expiresAt);
+    await env.DB.batch([
+      counter("2026-08-09T23:00:00.000Z", "2026-08-09T23:10:00.000Z"),
+      counter("2026-08-10T00:00:00.000Z", "2026-08-10T00:10:00.000Z"),
+    ]);
+
+    // Consuming the live window also collects expired rows; the live counter must survive, or
+    // an exhausted subject buys a fresh allowance by making one more request.
+    const result = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 10,
+    });
+    expect(result.allowed).toBe(true);
+    const exhausted = await state.consumeRateLimit({
+      key_hash: "subject_hash",
+      window_started_at: "2026-08-10T00:00:00.000Z",
+      window_expires_at: "2026-08-10T00:10:00.000Z",
+      checked_at: now.toISOString(),
+      limit: 6,
+    });
+    expect(exhausted.allowed).toBe(false);
+    const rows = await env.DB.prepare(
+      "SELECT window_started_at FROM rate_limit_counters ORDER BY window_started_at",
+    ).all<{ window_started_at: string }>();
+    expect(rows.results.map((row) => row.window_started_at)).toEqual(["2026-08-10T00:00:00.000Z"]);
+  });
+
+  it("completes browser PKCE through a Web principal and issues one session", async () => {
     const state = new D1AccountState(env.DB);
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
@@ -1045,73 +798,16 @@ describe("managed Relay on real Workers and D1", () => {
     )
       .bind(now.toISOString())
       .run();
-    let callbackURL = "";
-    let sessionCreatedAt = now;
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async (_headers, callback) => {
-        callbackURL = callback;
-        return Response.redirect("https://github.com/login/oauth/authorize", 302);
-      },
-      getSession: async () => ({
-        user: { id: "identity_subject", name: "Quota Tester" },
-        session: {
-          id: "web_session",
-          createdAt: sessionCreatedAt,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
+    const webSessions = new SignedInWebSessionStub("identity_subject", now);
     const app = createRelayApp({
       state,
       usageState: new D1UsageState(env.DB),
       accountService: service,
-      webAuth,
+      webSessions,
       hasher,
       now: () => now,
     });
-    const decisionBody = JSON.stringify({
-      protocol_version: 2,
-      user_code: "ABCD-EFGH",
-      decision: "approve",
-    });
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(404);
-    sessionCreatedAt = new Date(now.getTime() - 10 * 60_000 - 1);
-    expect(
-      (
-        await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Origin: "https://quota.gotry.io",
-            "Sec-Fetch-Site": "same-origin",
-          },
-          body: decisionBody,
-        })
-      ).status,
-    ).toBe(403);
-    sessionCreatedAt = now;
+    const callbackURL = (): string => `https://quota.gotry.io${webSessions.returnTo}`;
 
     const verifier = "a".repeat(43);
     const challengeBuffer = await crypto.subtle.digest(
@@ -1125,7 +821,7 @@ describe("managed Relay on real Workers and D1", () => {
     const authorize = new URL("https://quota.gotry.io/oauth/v2/authorize");
     authorize.search = new URLSearchParams({
       response_type: "code",
-      client_id: "quotacli",
+      client_id: "quotabar",
       redirect_uri: "http://127.0.0.1:43210/callback",
       state: "client-state-123456789",
       code_challenge: challenge,
@@ -1133,7 +829,7 @@ describe("managed Relay on real Workers and D1", () => {
     }).toString();
     expect((await app.request(authorize)).status).toBe(302);
 
-    const complete = await app.request(callbackURL);
+    const complete = await app.request(callbackURL());
     expect(complete.status).toBe(302);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     expect(code).toBeTruthy();
@@ -1144,7 +840,7 @@ describe("managed Relay on real Workers and D1", () => {
       body: JSON.stringify({
         protocol_version: 2,
         grant_type: "authorization_code",
-        client_id: "quotacli",
+        client_id: "quotabar",
         code,
         code_verifier: verifier,
         redirect_uri: "http://127.0.0.1:43210/callback",
@@ -1156,24 +852,69 @@ describe("managed Relay on real Workers and D1", () => {
     expect(exchanged.status).toBe(200);
     const tokens = (await exchanged.json()) as OAuthTokenResponse;
     expect(tokens.account_id).toBe("identity_subject");
+    // Signing in names the Account, so QuotaBar says whose account it reached before it has
+    // read one.
+    expect(tokens.display_label).toBe("Quota Tester");
+    expect(
+      await env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+        .bind(tokens.account_id)
+        .first("display_label"),
+    ).toBe(tokens.display_label);
     expect(tokens.device_generation).toBe(1);
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
         .bind(tokens.device_id)
         .first("count"),
     ).toBe(1);
+    // One login, one row, and it carries both halves of what that login is for.
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE device_id = ?1")
+        .bind(tokens.device_id)
+        .first("count"),
+    ).toBe(1);
 
-    const oldAccessHash = await hasher.hash("device-access", tokens.device_session.access_token);
-    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toMatchObject({
+    const oldAccessHash = await hasher.hash("quotabar-access", tokens.session.access_token);
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString(), true)).toMatchObject({
       device_id: tokens.device_id,
-      generation: 1,
+      device_generation: 1,
+      client_kind: "quotabar",
+      scopes: ["account:read", "device:write"],
     });
+    // The one token reads the Account it was issued for, and writes only its own Device.
+    const lastSeen = () =>
+      env.DB.prepare("SELECT last_seen_at FROM devices WHERE id = ?1")
+        .bind(tokens.device_id)
+        .first("last_seen_at");
+    const before = "2026-08-09T00:00:00.000Z";
+    await env.DB.prepare("UPDATE devices SET last_seen_at = ?2 WHERE id = ?1")
+      .bind(tokens.device_id, before)
+      .run();
+    const summary = await app.request("https://quota.gotry.io/api/v6/account/summary", {
+      headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+    });
+    expect(summary.status).toBe(200);
+    // Reading must not move `last_seen_at`. The validator for this very read is derived from it,
+    // so a read that touched it could never be answered 304 — which is the whole point of a
+    // client polling this route.
+    expect(await lastSeen()).toBe(before);
+    const validator = summary.headers.get("ETag") ?? "";
+    expect(validator).not.toBe("");
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers: {
+            Authorization: `Bearer ${tokens.session.access_token}`,
+            "If-None-Match": validator,
+          },
+        })
+      ).status,
+    ).toBe(304);
     expect(
       (
         await app.request("https://quota.gotry.io/api/v2/device/profile", {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${tokens.device_session.access_token}`,
+            Authorization: `Bearer ${tokens.session.access_token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -1189,19 +930,78 @@ describe("managed Relay on real Workers and D1", () => {
         .bind(tokens.device_id)
         .first("display_name"),
     ).toBe("Kyle's Mac mini");
+    // A device route does move it: that is what "last seen" witnesses.
+    expect(await lastSeen()).toBe(now.toISOString());
+    // Reads are tolerant of a field this build cannot name; a write is not. (ADR 0023)
+    const deviceHeaders = {
+      Authorization: `Bearer ${tokens.session.access_token}`,
+      "Content-Type": "application/json",
+    };
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v2/device/profile", {
+          method: "PUT",
+          headers: deviceHeaders,
+          body: JSON.stringify({
+            protocol_version: 2,
+            display_name: "Kyle's Mac mini",
+            platform: "macos",
+            reported_at: now.toISOString(),
+          }),
+        })
+      ).status,
+    ).toBe(400);
+    const envelope = {
+      protocol_version: 6,
+      generation: tokens.device_generation,
+      snapshots: [
+        {
+          provider: "codex",
+          account: { fingerprint: "fingerprint_strict", fingerprint_scope: "global" },
+          windows: [{ id: "weekly", title: "Weekly", used_percent: 25 }],
+          status: "available",
+          observed_at: now.toISOString(),
+        },
+      ],
+    };
+    const uploaded = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers: deviceHeaders,
+      body: JSON.stringify(envelope),
+    });
+    expect(uploaded.status).toBe(200);
+    expect(await uploaded.json()).toMatchObject({ accepted: ["codex"], ignored: [] });
+    // The same reading again is a comparison, not a write, and says so.
+    const again = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers: deviceHeaders,
+      body: JSON.stringify(envelope),
+    });
+    expect(await again.json()).toMatchObject({ accepted: [], ignored: ["codex"] });
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+          method: "PUT",
+          headers: deviceHeaders,
+          body: JSON.stringify({ ...envelope, uploaded_at: now.toISOString() }),
+        })
+      ).status,
+    ).toBe(400);
     expect(
       (
         await app.request("https://quota.gotry.io/oauth/v2/revoke", {
           method: "POST",
-          headers: { Authorization: `Bearer ${tokens.device_session.refresh_token}` },
+          headers: { Authorization: `Bearer ${tokens.session.refresh_token}` },
         })
       ).status,
     ).toBe(204);
     await env.DB.prepare("UPDATE devices SET signed_out_at = NULL WHERE id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeDeviceSession(oldAccessHash, now.toISOString())).toBeNull();
+    expect(await state.authorizeSession(oldAccessHash, now.toISOString(), true)).toBeNull();
 
+    // Delete Device advances the generation, and a token issued at the old one is refused even
+    // with every other reason to refuse it removed.
     const deletedAt = new Date(now.getTime() + 1_000).toISOString();
     expect(
       await state.deleteDeviceData(tokens.account_id, tokens.device_id, deletedAt),
@@ -1209,7 +1009,10 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare("UPDATE devices SET signed_out_at = NULL, deleted_at = NULL WHERE id = ?1")
       .bind(tokens.device_id)
       .run();
-    expect(await state.authorizeDeviceSession(oldAccessHash, deletedAt)).toBeNull();
+    await env.DB.prepare("UPDATE sessions SET revoked_at = NULL WHERE device_id = ?1")
+      .bind(tokens.device_id)
+      .run();
+    expect(await state.authorizeSession(oldAccessHash, deletedAt, true)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 
@@ -1217,7 +1020,7 @@ describe("managed Relay on real Workers and D1", () => {
     await env.DB.prepare(
       "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
     ).run();
-    const unsafeRedirect = await app.request(callbackURL);
+    const unsafeRedirect = await app.request(callbackURL());
     expect(unsafeRedirect.status).toBe(400);
     expect(unsafeRedirect.headers.get("location")).toBeNull();
     expect(
@@ -1228,10 +1031,10 @@ describe("managed Relay on real Workers and D1", () => {
 
     expect((await app.request(authorize)).status).toBe(302);
     await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
-    expect((await app.request(callbackURL)).status).toBe(401);
+    expect((await app.request(callbackURL())).status).toBe(401);
     expect(
       (
-        await app.request("https://quota.gotry.io/api/v2/account/devices", {
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
           headers: { Origin: "https://quota.gotry.io" },
         })
       ).status,
@@ -1242,158 +1045,37 @@ describe("managed Relay on real Workers and D1", () => {
         .first("count"),
     ).toBe(0);
   });
-
-  it("completes the headless device authorization grant", async () => {
-    const state = new D1AccountState(env.DB);
-    const hasher = new SecretHasher(secret);
-    let checkedAt = now;
-    await env.DB.prepare(
-      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-       VALUES ('device_account', 'device_account', 'Device Tester', ?1, ?1)`,
-    )
-      .bind(now.toISOString())
-      .run();
-    const webAuth: WebAccountAuth = {
-      handler: async () => new Response(null, { status: 404 }),
-      beginGitHubSignIn: async () => new Response(null, { status: 302 }),
-      getSession: async () => ({
-        user: { id: "device_account", name: "Device Tester" },
-        session: {
-          id: "device_web_session",
-          createdAt: now,
-          expiresAt: new Date(now.getTime() + 60_000),
-        },
-      }),
-    };
-    const app = createRelayApp({
-      state,
-      usageState: new D1UsageState(env.DB),
-      accountService: new AccountService(state, hasher, secret),
-      webAuth,
-      hasher,
-      now: () => checkedAt,
-    });
-
-    const started = await app.request("https://quota.gotry.io/oauth/v2/device/code", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        client_id: "quotacli",
-        installation_id: "dd4e60c6-fd44-4ac4-ad1f-28f2eeb52ca1",
-        device_display_name: "Headless Linux",
-        platform: "linux",
-      }),
-    });
-    expect(started.status).toBe(201);
-    const grant = (await started.json()) as DeviceAuthorizationResponse;
-    expect(grant.verification_uri).toBe("https://quota.gotry.io/activate");
-    expect(grant.verification_uri_complete).toContain(encodeURIComponent(grant.user_code));
-
-    const tokenBody = JSON.stringify({
-      protocol_version: 2,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      client_id: "quotacli",
-      device_code: grant.device_code,
-    });
-    const pending = await app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: tokenBody,
-    });
-    expect(pending.status).toBe(400);
-    expect(pending.headers.get("Retry-After")).toBe(String(grant.interval));
-    expect(await pending.json()).toMatchObject({ error: { code: "authorization_pending" } });
-
-    const approved = await app.request("https://quota.gotry.io/oauth/v2/device/authorize", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://quota.gotry.io",
-        "Sec-Fetch-Site": "same-origin",
-      },
-      body: JSON.stringify({
-        protocol_version: 2,
-        user_code: grant.user_code,
-        decision: "approve",
-      }),
-    });
-    expect(approved.status).toBe(204);
-
-    checkedAt = new Date(now.getTime() + grant.interval * 1_000);
-    const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: tokenBody,
-    });
-    expect(exchanged.status).toBe(200);
-    const tokens = (await exchanged.json()) as OAuthTokenResponse;
-    expect(tokens.account_id).toBe("device_account");
-    expect(tokens.device_generation).toBe(1);
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
-        .bind(tokens.device_id)
-        .first("count"),
-    ).toBe(1);
-  });
 });
 
-function usageFactInsert(
-  agent: string,
-  channel: string,
-  model: string,
-  overrides: { deviceID?: string; channelSource?: string; timezone?: string } = {},
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_hourly (
-         device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-         agent, billing_channel, channel_source, model, context_bucket,
-         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
-         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
-         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-         source_cost_microusd, source_cost_covered_requests
-       ) VALUES (
-         ?4, '2026-08-10T00:00:00Z', '2026-08-10', 8, ?5,
-         ?1, ?2, ?6, ?3, 'le_128k',
-         'unknown', 'unknown', 'unknown', 10, 0,
-         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
-       )`,
-  ).bind(
-    agent,
-    channel,
-    model,
-    overrides.deviceID ?? "device_agents",
-    overrides.timezone ?? "Asia/Singapore",
-    overrides.channelSource ?? "agent_default",
-  );
+async function seedDevice(name: string, generation = 1): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO accounts (id, identity_subject, created_at, updated_at)
+       VALUES ('account_${name}', 'subject_${name}', ?1, ?1)`,
+    ).bind(now.toISOString()),
+    env.DB.prepare(
+      `INSERT INTO devices (
+         id, account_id, installation_id_hash, generation, created_at, last_login_at
+       ) VALUES ('device_${name}', 'account_${name}', 'installation_${name}', ${generation}, ?1, ?1)`,
+    ).bind(now.toISOString()),
+  ]);
 }
 
-function usageFactInsertAt(
-  deviceID: string,
-  bucketStart: string,
-  usageDate: string,
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_hourly (
-       device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
-       agent, billing_channel, channel_source, model, context_bucket,
-       service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
-       cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
-       output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-       source_cost_microusd, source_cost_covered_requests
-     ) VALUES (
-       ?1, ?2, ?3, 0, 'UTC', 'codex', 'openai_direct', 'agent_default',
-       'gpt-5.6-sol', 'le_128k', 'unknown', 'unknown', 'unknown', 10, 0,
-       0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
-     )`,
-  ).bind(deviceID, bucketStart, usageDate);
-}
-
-function usageFact(model: string, bucket: string) {
+function devicePrincipal(name: string, generation: number): DeviceWriterPrincipal {
   return {
-    bucket_start_utc: bucket,
-    usage_date: bucket.slice(0, 10),
-    usage_hour: Number(bucket.slice(11, 13)),
+    session_id: `session_${name}`,
+    family_id: `family_${name}`,
+    account_id: `account_${name}`,
+    device_id: `device_${name}`,
+    device_generation: generation,
+    client_kind: "quotabar",
+    scopes: ["account:read", "device:write"],
+    authenticated_at: now.toISOString(),
+  };
+}
+
+function usageRow(model: string) {
+  return {
     agent: "codex" as const,
     billing_channel: "openai_direct" as const,
     channel_source: "agent_default" as const,
@@ -1416,70 +1098,190 @@ function usageFact(model: string, bucket: string) {
   };
 }
 
-function usageSubmission(
-  submissionID: string,
-  sequence: number,
-  startAt: string,
-  endAt: string,
-  rows: ReturnType<typeof usageFact>[],
-): UsageSubmission {
+function usageHour(
+  bucket: string,
+  scanVersion: number,
+  models: readonly string[] = ["gpt-5.6-sol"],
+  partial = false,
+) {
   return {
-    protocol_version: 5,
-    submission_id: submissionID,
-    device_id: "device_partial",
-    generation: 1,
-    sequence,
-    parser_revision: "parser_partial",
-    aggregation_timezone: "UTC",
-    coverage: {
-      agent: "codex",
-      start_at: startAt,
-      end_at: endAt,
-      status: "complete",
-    },
-    rows,
+    bucket_start_utc: bucket,
+    scan_version: scanVersion,
+    partial,
+    rows: models.map(usageRow),
   };
 }
 
-function unknownModelSubmission(): UsageSubmission {
+function usageUpload(hours: ReturnType<typeof usageHour>[], generation = 1): UsageUpload {
+  return { protocol_version: 6, generation, agent: "codex", hours };
+}
+
+/**
+ * Every daily row that disagrees with the hours behind it.
+ *
+ * The read never opens `usage_hourly`, so the only thing keeping the two in step is the upload
+ * that maintains both. This is how a test says so.
+ */
+async function dailyMismatch(): Promise<unknown[]> {
+  const rolled = await env.DB.prepare(
+    `SELECT device_id, substr(bucket_start_utc, 1, 10) AS utc_date, agent, billing_channel,
+            channel_source, model, context_bucket, service_tier, speed, inference_geo,
+            SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+            SUM(requests) AS requests, SUM(partial) AS partial_hours
+     FROM usage_hourly
+     GROUP BY device_id, substr(bucket_start_utc, 1, 10), agent, billing_channel,
+              channel_source, model, context_bucket, service_tier, speed, inference_geo
+     ORDER BY device_id, utc_date, agent, model`,
+  ).all<Record<string, unknown>>();
+  const stored = await env.DB.prepare(
+    `SELECT device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, input_tokens, output_tokens, requests,
+            partial_hours
+     FROM usage_daily
+     ORDER BY device_id, utc_date, agent, model`,
+  ).all<Record<string, unknown>>();
+  const key = (row: Record<string, unknown>) => JSON.stringify(row);
+  const expected = rolled.results.map(key);
+  const actual = stored.results.map(key);
+  return [
+    ...expected.filter((row) => !actual.includes(row)),
+    ...actual.filter((row) => !expected.includes(row)),
+  ];
+}
+
+function utcDaysBefore(days: number): string {
+  return new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** One stored hour of the retention fixture, with the scan version that owns it. */
+function storedHour(bucket: string): D1PreparedStatement[] {
+  return [
+    env.DB.prepare(
+      `INSERT INTO usage_hourly (
+           device_id, agent, bucket_start_utc, scan_version, partial,
+           billing_channel, channel_source, model, context_bucket,
+           service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+           cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+           output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+           source_cost_microusd, source_cost_covered_requests
+         ) VALUES (
+           'device_sweep', 'codex', ?1, 1, 0,
+           'openai_direct', 'agent_default', 'gpt-5.6-sol', 'le_128k',
+           'unknown', 'unknown', 'unknown', 10, 0,
+           0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+         )`,
+    ).bind(bucket),
+    env.DB.prepare(
+      `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
+       VALUES ('device_sweep', 'codex', ?1, 1)`,
+    ).bind(bucket),
+  ];
+}
+
+function storedDay(date: string): D1PreparedStatement {
+  return usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+    deviceID: "device_sweep",
+    date,
+  });
+}
+
+function sweptHours(): Promise<string[]> {
+  return sweptColumn("usage_hourly", "bucket_start_utc");
+}
+
+function sweptScans(): Promise<string[]> {
+  return sweptColumn("usage_hour_scans", "bucket_start_utc");
+}
+
+function sweptDays(): Promise<string[]> {
+  return sweptColumn("usage_daily", "utc_date");
+}
+
+async function sweptColumn(table: string, column: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    `SELECT ${column} AS value FROM ${table} WHERE device_id = 'device_sweep' ORDER BY value`,
+  ).all<{ value: string }>();
+  return rows.results.map((row) => row.value);
+}
+
+/** One hour of the same fact `usageDailyInsert` rolls into a day, on the same device. */
+function usageHourInsert(
+  agent: string,
+  channel: string,
+  model: string,
+  bucket: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_hourly (
+         device_id, agent, bucket_start_utc, scan_version, partial,
+         billing_channel, channel_source, model, context_bucket,
+         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+         source_cost_microusd, source_cost_covered_requests
+       ) VALUES (
+         'device_history', ?1, ?4, 1, 0,
+         ?2, 'agent_default', ?3, 'le_128k',
+         'unknown', 'unknown', 'unknown', 10, 0,
+         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+       )`,
+  ).bind(agent, channel, model, bucket);
+}
+
+function usageDailyInsert(
+  agent: string,
+  channel: string,
+  model: string,
+  overrides: { deviceID?: string; channelSource?: string; date?: string } = {},
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO usage_daily (
+         device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
+         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+         source_cost_microusd, source_cost_covered_requests, partial_hours
+       ) VALUES (
+         ?4, ?5, ?1, ?2, ?6, ?3, 'le_128k',
+         'unknown', 'unknown', 'unknown', 10, 0,
+         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
+       )`,
+  ).bind(
+    agent,
+    channel,
+    model,
+    overrides.deviceID ?? "device_agents",
+    overrides.date ?? "2026-08-10",
+    overrides.channelSource ?? "agent_default",
+  );
+}
+
+/** An app answering as the signed-in owner of one account. */
+function appFor(accountId: string, readAt: Date = now) {
+  const state = new D1AccountState(env.DB);
+  const hasher = new SecretHasher(secret);
+  return createRelayApp({
+    state,
+    usageState: new D1UsageState(env.DB),
+    accountService: new AccountService(state, hasher, secret),
+    webSessions: new SignedInWebSessionStub(accountId, readAt),
+    hasher,
+    now: () => readAt,
+  });
+}
+
+function quotaSnapshotJson() {
   return {
-    protocol_version: 5,
-    submission_id: "submission_unknown_model",
-    device_id: "device_legacy",
-    generation: 1,
-    sequence: 0,
-    parser_revision: "parser_unknown_model",
-    aggregation_timezone: "UTC",
-    coverage: {
-      agent: "codex",
-      start_at: "2026-08-09T10:00:00Z",
-      end_at: "2026-08-09T11:00:00Z",
-      status: "complete",
-    },
-    rows: [
+    provider: "codex",
+    status: "available",
+    observed_at: now.toISOString(),
+    account: { fingerprint: "fingerprint_etag", fingerprint_scope: "global", plan: "Plus" },
+    windows: [
       {
-        bucket_start_utc: "2026-08-09T10:00:00Z",
-        usage_date: "2026-08-09",
-        usage_hour: 10,
-        agent: "codex",
-        billing_channel: "openai_direct",
-        channel_source: "agent_default",
-        model: "unknown",
-        context_bucket: "le_128k",
-        service_tier: "unknown",
-        speed: "unknown",
-        inference_geo: "unknown",
-        input_tokens: 10,
-        cache_read_tokens: 0,
-        cache_write_5m_tokens: 0,
-        cache_write_1h_tokens: 0,
-        cache_write_inferred_tokens: 0,
-        output_tokens: 2,
-        reasoning_tokens: 0,
-        requests: 1,
-        web_search_requests: 0,
-        web_fetch_requests: 0,
-        source_cost_covered_requests: 0,
+        id: "weekly",
+        title: "Weekly",
+        used_percent: 25,
+        resets_at: new Date(now.getTime() + 86_400_000).toISOString(),
       },
     ],
   };

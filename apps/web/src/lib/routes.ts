@@ -1,21 +1,12 @@
 export const DASHBOARD_PATH = "/my";
-export const PUBLIC_PROFILE_PATH = /^\/u\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)$/;
+/** Relay's GitHub sign-in. Following it is the whole flow; the browser never fetches it. */
+export const SIGN_IN_PATH = "/api/auth/github/start";
 
-export function publicProfileUsername(pathname: string): string | null {
-  const match = PUBLIC_PROFILE_PATH.exec(pathname);
-  return match?.[1]?.toLowerCase() ?? null;
-}
-
-export type AccountEntryAction = "dashboard" | "login" | "error";
-
-export function accountEntryAction(status: number): AccountEntryAction {
-  if (status >= 200 && status < 300) return "dashboard";
-  return status === 401 ? "login" : "error";
-}
-
-/** `/app` shipped in 0.0.4; keep one bookmark redirect while `/my` is canonical. */
-export function legacyDashboardRedirect(pathname: string): string | null {
-  return pathname === "/app" || pathname.startsWith("/app/") ? DASHBOARD_PATH : null;
+/** Where to send a signed-out visitor so they come back to the page they wanted. */
+export function signInHref(returnTo: string = DASHBOARD_PATH): string {
+  return returnTo === DASHBOARD_PATH
+    ? SIGN_IN_PATH
+    : `${SIGN_IN_PATH}?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 const KNOWN_PLANS: Readonly<Record<string, string>> = {

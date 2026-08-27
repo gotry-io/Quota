@@ -207,9 +207,7 @@
   },
   "rows": {
     "alias": {
-      "bucket_start_utc": "2026-08-02T12:00:00Z",
-      "usage_date": "2026-08-02",
-      "usage_hour": 12,
+      "date": "2026-08-02",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -231,9 +229,7 @@
       "source_cost_covered_requests": 0
     },
     "unknown_model": {
-      "bucket_start_utc": "2026-08-02T12:00:00Z",
-      "usage_date": "2026-08-02",
-      "usage_hour": 12,
+      "date": "2026-08-02",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -255,9 +251,7 @@
       "source_cost_covered_requests": 0
     },
     "outside_range": {
-      "bucket_start_utc": "2025-12-31T23:00:00Z",
-      "usage_date": "2025-12-31",
-      "usage_hour": 23,
+      "date": "2025-12-31",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -279,9 +273,7 @@
       "source_cost_covered_requests": 0
     },
     "unsupported_dimensions": {
-      "bucket_start_utc": "2026-08-02T12:00:00Z",
-      "usage_date": "2026-08-02",
-      "usage_hour": 12,
+      "date": "2026-08-02",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -303,9 +295,7 @@
       "source_cost_covered_requests": 0
     },
     "cost_calculated": {
-      "bucket_start_utc": "2026-08-02T12:00:00Z",
-      "usage_date": "2026-08-02",
-      "usage_hour": 12,
+      "date": "2026-08-02",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -327,9 +317,7 @@
       "source_cost_covered_requests": 0
     },
     "cost_reported": {
-      "bucket_start_utc": "2026-08-02T13:00:00Z",
-      "usage_date": "2026-08-02",
-      "usage_hour": 13,
+      "date": "2026-08-02",
       "agent": "codex",
       "billing_channel": "openai_direct",
       "channel_source": "explicit",
@@ -356,7 +344,10 @@
     {
       "name": "valid catalog",
       "catalog": "valid",
-      "expected": { "valid": true, "issue_codes": [] }
+      "expected": {
+        "valid": true,
+        "issue_codes": []
+      }
     },
     {
       "name": "duplicate entry id",
@@ -369,7 +360,10 @@
     {
       "name": "ambiguous entries",
       "catalog": "ambiguous",
-      "expected": { "valid": false, "issue_codes": ["ambiguous_entries"] }
+      "expected": {
+        "valid": false,
+        "issue_codes": ["ambiguous_entries"]
+      }
     }
   ],
   "resolution": [
@@ -387,19 +381,28 @@
       "name": "unknown model",
       "catalog": "exact",
       "row": "unknown_model",
-      "expected": { "status": "unpriced", "reason": "unknown_model" }
+      "expected": {
+        "status": "unpriced",
+        "reason": "unknown_model"
+      }
     },
     {
       "name": "outside effective range",
       "catalog": "exact",
       "row": "outside_range",
-      "expected": { "status": "unpriced", "reason": "outside_effective_range" }
+      "expected": {
+        "status": "unpriced",
+        "reason": "outside_effective_range"
+      }
     },
     {
       "name": "unsupported dimensions",
       "catalog": "exact",
       "row": "unsupported_dimensions",
-      "expected": { "status": "unpriced", "reason": "unsupported_dimensions" }
+      "expected": {
+        "status": "unpriced",
+        "reason": "unsupported_dimensions"
+      }
     }
   ],
   "cost": [
@@ -441,6 +444,31 @@
             "billing_channel": "openai_direct",
             "model": "unknown-model",
             "reason": "unknown_model",
+            "rows": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "no catalog falls back to the source's own cost",
+      "catalog": null,
+      "mode": "auto",
+      "rows": ["cost_calculated", "cost_reported"],
+      "expected": {
+        "mode": "auto",
+        "basis": "reported",
+        "status": "partial",
+        "amount_microusd": "1234",
+        "catalog_revision": null,
+        "calculated_rows": 0,
+        "reported_rows": 1,
+        "unpriced_rows": 1,
+        "assumptions": ["source_reported"],
+        "unpriced": [
+          {
+            "billing_channel": "openai_direct",
+            "model": "gpt-5",
+            "reason": "invalid_catalog",
             "rows": 1
           }
         ]

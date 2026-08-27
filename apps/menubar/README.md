@@ -6,16 +6,26 @@ and a private Rust child at `Contents/Helpers/quota-service`.
 ## Runtime boundary
 
 QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v1
-connection. Every request has a fixed fifteen-second deadline; a timed-out request closes the child and
-the next request starts a clean helper. If the helper cannot initialize its owner-only state, it
-stays on the IPC boundary and returns only a fixed, allowlisted error/recovery pair. It never
-resolves an executable from `PATH`, invokes a shell, reads provider/service files, receives
-account/provider tokens, or contacts Relay directly. Requests and responses are bounded to 1 MiB and
-use typed `snake_case` models; revisioned events tell Swift when to reload state.
+connection. The helper emits `{"type":"event","event":"ready","ipc_version":1}` once it has opened
+its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
+that stays silent for a minute, and reports the service unavailable after a second. Requests have no
+deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
+consecutive pings is terminated, killed if it will not exit, and replaced on the next request. If
+the helper cannot initialize its owner-only state, it stays on the IPC boundary and returns only a
+fixed, allowlisted error/recovery pair. It never resolves an executable from `PATH`, invokes a
+shell, reads provider/service files, receives account/provider tokens, or contacts Relay directly.
+Requests and responses are bounded to 1 MiB and use typed `snake_case` models; revisioned events
+tell Swift when to reload state.
 
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
-SQLite, outbox, and local/account observation merge. QuotaBar owns presentation, provider visibility
+its owner-only identity store and disposable cache, the hours it still owes an Account, and the
+two-way merge of a subscription Relay resolved against this Mac's own reading. Signing in is
+Authorization Code with PKCE over a loopback callback and issues one session, which reads the
+Account and writes this Mac's Device
+([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+When it has to rebuild that cache, `get_state.cache.rebuilding` says so and Overview shows one
+notice until the next complete Usage scan. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
 Launch at Login. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
 relative-age text come from [`packages/apple-shared`](../../packages/apple-shared), and the managed
@@ -23,16 +33,25 @@ wire types plus `ProviderID` from its `QuotaWire` module. Private IPC models, th
 local-report types, app-only provider behavior, and session/helper logic stay in this app; QuotaBar
 does not depend on QuotaRelay or QuotaAccount, because the local service owns Relay traffic here.
 The service persists the Usage upload preference so it applies before
-its startup refresh. Quitting the app closes stdin and stops the service and all synchronization.
+its startup refresh. Quitting sends the service a `shutdown` and waits up to two seconds for it, so
+a helper mid-write finishes before its pipe disappears and one that answers nothing costs the quit
+two seconds and no more; closing stdin says the same thing either way.
 
-For catalog browser-session providers, QuotaBar pins login and Cookie discovery to one supported
-browser application. SweetCookieKit 0.5.2 enumerates that browser's profiles with logging disabled
-and returns only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie
-header at a time to Rust for validation/commit; it never calls provider APIs or persists the header.
-Cursor prefers a signed-in Cursor.app session and uses the same allowlisted browser acquisition as
-a fallback; Codex, Claude, Grok, and Kimi reuse that browser path when their official credentials
-are missing or rejected. QuotaBar 0.0.13 uploads its quota and Usage through managed-data v3;
-released v2 clients remain isolated from Cursor. Browser cookies stay local.
+QuotaBar reads a browser session for the five providers whose catalog row declares one — Cursor,
+Codex, Claude, Grok, and Kimi — and always as the last rung, after every official credential that
+provider has. Before the first cookie read, a confirmation popup names the browser
+about to be read, the permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe
+Storage" Keychain item for a Chrome-family browser), the exact hosts and cookie names, the local
+service database the accepted session is kept in until disconnected, and that nothing is uploaded.
+Declining reads nothing. On confirmation, QuotaBar pins login and Cookie discovery to that one
+browser application; SweetCookieKit 0.5.2 enumerates its profiles with logging disabled and returns
+only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie header at a
+time to Rust for validation/commit; it never calls provider APIs or persists the header. A store
+macOS refuses ends the attempt and is shown as its own state — with the grant to change, not "no
+session found" — and reaches the Support page as the `browser_access_denied` source. Cursor prefers
+a signed-in Cursor.app session and uses the browser session as its fallback; Codex, Claude, Grok,
+and Kimi reach theirs only when their own credential is missing or has been rejected. Browser
+cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
@@ -42,23 +61,24 @@ Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Spa
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
 check for updates.
 
-Settings includes a **Diagnostics** action backed by the private `diagnose` IPC operation. It copies
-the same bounded, redacted v2 report consumed by Linux `quotacli doctor`. The service evaluates
-Quota/Usage surfaces and supplies source-scoped checks and root-cause findings; Swift strictly
-decodes and renders that policy. **Show in Overview** remains presentation-only and never requests
-local collection. Account provider data remains healthy without a matching local login, while an
-explicitly saved local provider setup is a required source. Recheck requests the real single-flight
-refresh and waits for a newer completed diagnostic revision; if it is still running after the UI
-wait, the last completed report stays visible with that phase. Raw paths, filenames, model lists,
-prompts, completions, session or device identifiers, credentials, tokens, raw responses, and parser
-excerpts are excluded from both text and JSON copies.
+Settings' **Support** page is backed by the private `diagnose` IPC operation and renders one
+bounded, redacted report. The service evaluates the four Quota/Usage
+surfaces and the sources behind them and writes one sentence per row; Swift strictly decodes and
+renders it, and never maps a code to copy of its own. **Show in Overview** remains
+presentation-only and never requests local collection. Account provider data remains healthy without
+a matching local login, while an explicitly saved local provider setup is a required source. Recheck
+requests the real single-flight refresh and waits for a newer evaluation; if the refresh is still
+running after the UI wait, the last completed report stays visible. **Copy report** puts the whole
+report on the pasteboard, including the recent work the page does not list. **Reset local data**
+asks first, then deletes this Mac's cache — collected quota and Usage history — and refreshes; the
+session, the upload queue, and saved browser sessions live in a different file and are untouched.
+Raw paths, filenames, model lists, prompts, completions, session or device identifiers, credentials,
+tokens, raw responses, and parser excerpts never appear in the copied report.
 
-The report's folded Recent Activity comes from the service's seven-day, 50,000-row structured
-attempt journal; the copied support projection is capped independently. After an authenticated
-completed refresh, the service also uploads a sanitized latest Device Health snapshot on change or
-heartbeat. Account Devices opt into that strict managed-data v3 shape and show app version,
-platform, server-authoritative last report/refresh/sync, and honest Healthy/Needs attention/Not
-recently active states. QuotaBar cannot alter another Device or request credentials for it.
+The recent work in that report comes from the service's seven-day, 5,000-row structured attempt
+journal, capped at 100 entries. Account Devices show their platform, when each was last seen, and
+when its newest reading was taken, labelled Active, Idle, or Not reporting. No Device asserts
+anything about another, and QuotaBar cannot alter another Device or request credentials for it.
 
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
@@ -92,8 +112,8 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 
 ```text
 --data-source fixture|live
---fixture loading|content|cached-refresh-error|empty|unavailable|repairing-durable|repairing-derived|stuck|failed
---route overview|settings|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|support|diagnostics|repair
+--fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
+--route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|menu-bar-style|menu-bar-provider|support
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

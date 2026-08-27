@@ -20,7 +20,6 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     observedAt: now
   )
   let report = QuotaCollectionReport(
-    protocolVersion: 2,
     capturedAt: now,
     results: [
       QuotaCollectionResult(
@@ -29,8 +28,11 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         snapshots: [snapshot],
         source: "test",
         message: nil,
-        sources: 1,
-              accessDenied: nil
+        sources: [
+          QuotaCollectionSource(
+            sourceID: "chatgpt_usage_api", outcome: .success, category: .success)
+        ],
+        accessDenied: nil
       )
     ]
   )
@@ -54,6 +56,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
       value: LocalServiceAccountState(
         authStatus: .signedOut,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil
@@ -96,7 +99,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         isStale: false
       )
     ],
-    repair: .idle
+    cache: .settled
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
 
@@ -108,7 +111,11 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     return
   }
   #expect(warning == nil)
-  #expect(providers.first?.accounts.first?.sourceSummary == "Local")
+  // Overview no longer prints where the reading came from or how old it is; VoiceOver still says it.
+  #expect(
+    providers.first?.accounts.first?.accessibilityLabel(accountIndex: 0, now: now)
+      == "Account 1. This Mac. Updated just now"
+  )
   #expect(providers.first?.accounts.first?.snapshot == snapshot)
   #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
   #expect(model.lastCheckedAt == now)
@@ -138,6 +145,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
       value: LocalServiceAccountState(
         authStatus: .signedOut,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil
@@ -150,7 +158,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
   let model = MenuBarViewModel(client: StubLocalService(state: state))
   await model.refreshIfNeeded()
@@ -160,50 +168,33 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
 }
 
 @Test @MainActor
-func idleRepairStaysOnOverviewAndDurableRepairBlocksQuit() async throws {
-  let idle = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
-  await idle.refreshIfNeeded()
-  #expect(idle.repairPresentation == .overview)
-  #expect(!idle.showsFullRepairPage)
-  #expect(!idle.repairBlocksQuit)
+func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
+  let settled = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
+  await settled.refreshIfNeeded()
+  #expect(!settled.showsCacheRebuildNotice)
 
-  var repairing = loggingInState()
-  repairing = LocalServiceState(
-    ipcVersion: repairing.ipcVersion,
-    revision: repairing.revision,
-    usageUploadEnabled: repairing.usageUploadEnabled,
-    usagePeriods: repairing.usagePeriods,
-    quota: repairing.quota,
-    usage: repairing.usage,
-    account: repairing.account,
-    pricing: repairing.pricing,
-    providers: repairing.providers,
-    providerBrowserSessions: repairing.providerBrowserSessions,
-    overview: repairing.overview,
-    repair: LocalServiceRepairSession(
-      status: .repairing,
-      severity: .durable,
-      phase: .preservingAccount,
-      title: "Repairing local data",
-      guidance: "Keep QuotaBar open. You can close this menu.",
-      activity: "Copying account",
-      startedAt: Date(timeIntervalSince1970: 1_786_300_000),
-      heartbeatAt: Date(timeIntervalSince1970: 1_786_300_014),
-      progressCurrent: 1,
-      progressTotal: 7,
-      stuck: false,
-      blocksQuit: true,
-      recoveryAction: nil
+  let base = loggingInState()
+  let rebuilding = LocalServiceState(
+    ipcVersion: base.ipcVersion,
+    revision: base.revision,
+    usageUploadEnabled: base.usageUploadEnabled,
+    usagePeriods: base.usagePeriods,
+    quota: base.quota,
+    usage: base.usage,
+    account: base.account,
+    pricing: base.pricing,
+    providers: base.providers,
+    providerBrowserSessions: base.providerBrowserSessions,
+    overview: base.overview,
+    cache: LocalServiceCacheState(
+      rebuilding: true,
+      resetAt: Date(timeIntervalSince1970: 1_786_300_000)
     )
   )
-  let model = MenuBarViewModel(client: StubLocalService(state: repairing))
+  let model = MenuBarViewModel(client: StubLocalService(state: rebuilding))
   await model.refreshIfNeeded()
-  #expect(model.repairPresentation == .fullPage)
-  #expect(model.showsFullRepairPage)
-  #expect(model.repairBlocksQuit)
-  #expect(model.repairHeaderTitle == "Repairing")
-  model.presentRepairPageFromQuitAttempt()
-  #expect(model.showsFullRepairPage)
+  #expect(model.showsCacheRebuildNotice)
+  #expect(model.cache.resetAt == Date(timeIntervalSince1970: 1_786_300_000))
 }
 
 @Test @MainActor
@@ -224,6 +215,36 @@ func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws
   #expect(!model.isLoggingIn)
 }
 
+/// The row keeps its Cancel until the service says the flow is over, so it is easy to press
+/// twice. Two presses are one request, and a press after that one finished is a new one.
+@Test @MainActor
+func repeatedCancelTapsSendOneCancelLogin() async throws {
+  let record = CallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      loginDelayNanoseconds: 30_000_000_000,
+      cancelDelayNanoseconds: 50_000_000,
+      cancelRecord: record
+    )
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  model.cancelLogin()
+  model.cancelLogin()
+  model.cancelLogin()
+
+  try await Task.sleep(for: .milliseconds(200))
+  var cancels = await record.count
+  #expect(cancels == 1, "three presses of one Cancel are one cancel_login")
+
+  model.cancelLogin()
+  try await Task.sleep(for: .milliseconds(200))
+  cancels = await record.count
+  #expect(cancels == 2, "a press after the first request finished is a request of its own")
+}
+
 @Test @MainActor
 func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
   let model = MenuBarViewModel(
@@ -237,9 +258,76 @@ func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
 
   model.startLogin()
   model.cancelLogin()
-  try await Task.sleep(nanoseconds: 20_000_000)
+  await settle { model.accountErrorMessage != nil }
 
   #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
+}
+
+/// Signing in says what the account is called. The window says it too, from that moment, rather
+/// than calling it "Quota account" until a whole account read has finished.
+@Test @MainActor
+func namesTheAccountFromTheSignInBeforeAnyAccountReadArrives() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: "octocat")))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.accountSummary == nil)
+  #expect(model.accountDisplayLabel == "octocat")
+  #expect(model.accountState == .signedIn)
+}
+
+/// With neither a read nor a name, the window says what it honestly knows.
+@Test @MainActor
+func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: nil)))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.accountDisplayLabel == "Quota account")
+}
+
+/// A device signed in, with the first account read still running.
+private func justSignedInState(label: String?) -> LocalServiceState {
+  LocalServiceState(
+    ipcVersion: 1,
+    revision: 2,
+    usageUploadEnabled: true,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .ready,
+      value: LocalServiceAccountState(
+        authStatus: .signedIn,
+        accountID: "account_1",
+        displayLabel: label,
+        deviceID: "device_1",
+        deviceGeneration: 1,
+        accountSummary: nil
+      ),
+      updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
+      lastError: nil,
+      refreshing: true
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: [],
+    cache: .settled
+  )
+}
+
+/// Waits for something the model reaches on its own. A fixed sleep asserts how fast the machine
+/// is as much as what the code does; this asserts only the latter.
+@MainActor
+private func settle(
+  within timeout: Duration = .seconds(5),
+  until condition: () -> Bool
+) async {
+  let deadline = ContinuousClock.now + timeout
+  while !condition(), ContinuousClock.now < deadline {
+    try? await Task.sleep(for: .milliseconds(5))
+  }
 }
 
 @Test @MainActor
@@ -265,7 +353,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     observedAt: now,
     isStale: false
   )
-  func state(sources: Int) -> LocalServiceState {
+  func state(sources: [QuotaCollectionSource]) -> LocalServiceState {
     LocalServiceState(
       ipcVersion: 1,
       revision: 3,
@@ -273,7 +361,6 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
       usagePeriods: emptyUsagePeriods(),
       quota: component(
         value: QuotaCollectionReport(
-          protocolVersion: 2,
           capturedAt: now,
           results: [
             QuotaCollectionResult(
@@ -309,11 +396,11 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
           isStale: false
         )
       ],
-      repair: .idle
+      cache: .settled
     )
   }
 
-  func codexRow(sources: Int) async -> ProviderQuotaPresentation? {
+  func codexRow(sources: [QuotaCollectionSource]) async -> ProviderQuotaPresentation? {
     let model = MenuBarViewModel(client: StubLocalService(state: state(sources: sources)))
     await model.refreshIfNeeded()
     guard case .content(let providers, _) = model.overviewState(enabledProviders: [.codex]) else {
@@ -324,15 +411,127 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
   }
 
   // This Mac holds a Codex sign-in and could not read it. The MacBook Air's reading fills
-  // the row; it does not mean anything about this Mac.
-  let tried = await codexRow(sources: 1)
+  // the row; it does not mean anything about this Mac.  The status names the rung that
+  // failed, so the reader knows which of Codex's readings to go fix.
+  let tried = await codexRow(sources: [
+    QuotaCollectionSource(
+      sourceID: "chatgpt_usage_api", outcome: .unavailable, category: .unavailable)
+  ])
   #expect(tried?.accounts.count == 1)
   #expect(tried?.status?.kind == .unavailable)
+  #expect(tried?.status?.title == "OAuth · Unavailable")
 
   // A Mac that never had Codex has nothing to recover, so the account keeps the row quiet.
-  let neverConfigured = await codexRow(sources: 0)
+  let neverConfigured = await codexRow(sources: [])
   #expect(neverConfigured?.accounts.count == 1)
   #expect(neverConfigured?.status == nil)
+}
+
+@Test @MainActor
+func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let state = LocalServiceState(
+    ipcVersion: 1,
+    revision: 2,
+    usageUploadEnabled: true,
+    usagePeriods: LocalServiceUsagePeriodCache(
+      local: todayOnly(tokens: 1_234_567),
+      account: todayOnly(tokens: 9_876_543)
+    ),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    // No account summary, so Account cannot answer and This Mac's numbers are the honest ones.
+    account: emptyComponent(),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: [],
+    cache: .settled
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: state))
+
+  await model.refreshIfNeeded()
+
+  #expect(model.effectiveUsageSource(.account) == .local)
+  #expect(model.todayUsageSummary(source: .account)?.text == "Today · 1.23M tokens")
+  #expect(model.todayUsageSummary(source: .local)?.text == "Today · 1.23M tokens")
+}
+
+@Test @MainActor
+func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
+  let record = CallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState(), shutdownRecord: record)
+  )
+  model.start()
+
+  await model.shutdown()
+
+  let shutdowns = await record.count
+  #expect(shutdowns == 1, "the app's termination path sends the service its shutdown")
+}
+
+/// The other half of that promise: a quit is a decision the person already made, so a service
+/// that never answers costs the deadline and nothing more. The injected value stands in for the
+/// two seconds production waits, which the first expectation pins.
+@Test @MainActor
+func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
+  #expect(MenuBarViewModel.shutdownDeadline == .seconds(2))
+  let record = CallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      shutdownRecord: record,
+      shutdownAnswerDelayNanoseconds: 60_000_000_000
+    ),
+    shutdownDeadline: .milliseconds(120)
+  )
+  model.start()
+
+  let started = ContinuousClock.now
+  await model.shutdown()
+  let waited = ContinuousClock.now - started
+
+  #expect(waited < .seconds(2), "the quit waited on a helper that was never going to answer")
+  let shutdowns = await record.count
+  #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
+}
+
+private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
+  LocalServiceUsagePeriodValues(
+    today: LocalServiceUsageDetail(
+      range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
+      usage: LocalUsagePeriodSummary(
+        totals: UsageSummaryTotals(
+          totalTokens: tokens,
+          inputTokens: tokens,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          reasoningTokens: 0,
+          messages: 1
+        ),
+        cost: UsageCostOutcome(
+          mode: .calculate,
+          basis: .none,
+          status: .unavailable,
+          amountMicrousd: nil,
+          catalogRevision: nil,
+          calculatedRows: 0,
+          reportedRows: 0,
+          unpricedRows: 1,
+          assumptions: [],
+          unpriced: []
+        ),
+        agents: []
+      ),
+      incomplete: false,
+      detailsTruncated: false
+    ),
+    last7Days: nil,
+    last30Days: nil,
+    all: nil
+  )
 }
 
 private func loggingInState() -> LocalServiceState {
@@ -348,6 +547,7 @@ private func loggingInState() -> LocalServiceState {
       value: LocalServiceAccountState(
         authStatus: .loggingIn,
         accountID: nil,
+        displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
         accountSummary: nil
@@ -360,7 +560,7 @@ private func loggingInState() -> LocalServiceState {
     providers: [],
     providerBrowserSessions: [],
     overview: [],
-    repair: .idle
+    cache: .settled
   )
 }
 
@@ -407,24 +607,43 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
+/// Counts the calls a stub was asked for, which is all a fire-and-forget operation leaves behind
+/// once the service it spoke to is gone.
+private actor CallRecord {
+  private(set) var count = 0
+
+  func record() {
+    count += 1
+  }
+}
+
 private struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
   let loginDelayNanoseconds: UInt64
   let cancelDelayNanoseconds: UInt64
   let cancelFails: Bool
+  let cancelRecord: CallRecord?
+  let shutdownRecord: CallRecord?
+  let shutdownAnswerDelayNanoseconds: UInt64
 
   init(
     state: LocalServiceState,
     loginDelayNanoseconds: UInt64 = 0,
     cancelDelayNanoseconds: UInt64 = 0,
-    cancelFails: Bool = false
+    cancelFails: Bool = false,
+    cancelRecord: CallRecord? = nil,
+    shutdownRecord: CallRecord? = nil,
+    shutdownAnswerDelayNanoseconds: UInt64 = 0
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
     self.loginDelayNanoseconds = loginDelayNanoseconds
     self.cancelDelayNanoseconds = cancelDelayNanoseconds
     self.cancelFails = cancelFails
+    self.cancelRecord = cancelRecord
+    self.shutdownRecord = shutdownRecord
+    self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -432,28 +651,26 @@ private struct StubLocalService: LocalServiceServing {
   func diagnose() async throws -> LocalServiceDiagnosticReport {
     let date = Date()
     return LocalServiceDiagnosticReport(
-      schemaVersion: 2,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .empty, attention: .none),
-      refresh: LocalServiceDiagnosticRefresh(
-        phase: .idle, asOf: date, startedAt: nil, nextDueAt: nil),
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "test", version: "1"),
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .none),
       surfaces: [
         LocalServiceDiagnosticSurface(
-          name: "quota_overview", operation: .healthy, data: .empty, source: nil, metrics: [:]),
+          id: "quota_overview", status: .ok, data: .empty, lastSuccessAt: nil,
+          message: "No quota has been read yet.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_this_device", operation: .healthy, data: .empty,
-          source: .thisDevice, metrics: [:]),
+          id: "usage_this_device", status: .ok, data: .empty, lastSuccessAt: nil,
+          message: "No Usage records have been found on this Mac yet.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
+          id: "usage_account", status: .inactive, data: .empty, lastSuccessAt: nil,
+          message: "Sign in to send Usage to your account.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "account", operation: .healthy, data: .empty, source: .account, metrics: [:]),
-      ],
-      checks: [],
-      findings: []
+          id: "account", status: .inactive, data: .empty, lastSuccessAt: nil,
+          message: "This Mac is not signed in to a Quota account.", recovery: .none),
+      ]
     )
   }
+  func resetCache() async throws {}
   func refresh() async throws -> LocalServiceRefreshResult {
     LocalServiceRefreshResult(accepted: true, pending: false, revision: stateValue.revision)
   }
@@ -469,6 +686,7 @@ private struct StubLocalService: LocalServiceServing {
     )
   }
   func cancelLogin() async throws {
+    await cancelRecord?.record()
     if cancelDelayNanoseconds > 0 {
       try await Task.sleep(nanoseconds: cancelDelayNanoseconds)
     }
@@ -516,10 +734,21 @@ private struct StubLocalService: LocalServiceServing {
     throw LocalServiceClientError.serviceMissing
   }
 
+  func reportProviderBrowserAccessDenied(
+    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
+  ) async throws -> LocalServiceProviderBrowserSession {
+    throw LocalServiceClientError.serviceMissing
+  }
+
   func removeProviderBrowserSession(
     _ provider: ProviderID
   ) async throws -> LocalServiceProviderBrowserSession {
     throw LocalServiceClientError.serviceMissing
   }
-  func shutdown() async {}
+  func shutdown() async {
+    if shutdownAnswerDelayNanoseconds > 0 {
+      try? await Task.sleep(nanoseconds: shutdownAnswerDelayNanoseconds)
+    }
+    await shutdownRecord?.record()
+  }
 }

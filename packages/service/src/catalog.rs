@@ -236,12 +236,8 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             ],
             cookie_names: &[
                 "WorkosCursorSessionToken",
-                "__Secure-next-auth.session-token",
-                "next-auth.session-token",
                 "wos-session",
                 "__Secure-wos-session",
-                "authjs.session-token",
-                "__Secure-authjs.session-token",
             ],
             browser_priority: &[
                 "safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox",

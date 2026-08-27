@@ -8,45 +8,108 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use chrono::{DateTime, Days, Duration, SecondsFormat, Timelike, Utc};
+use chrono::{
+    DateTime, Days, Duration, LocalResult, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc,
+};
 use chrono_tz::Tz;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::catalog::ProviderId;
 use crate::observation::snapshot_is_current;
 use crate::pricing;
 use crate::protocol::{
-    DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
-    DiagnosticAttemptTrigger, DiagnosticAttention, DiagnosticCheck, DiagnosticClient,
-    DiagnosticDataState, DiagnosticFinding, DiagnosticImpact, DiagnosticMode, DiagnosticOperation,
-    DiagnosticRecovery, DiagnosticRefresh, DiagnosticRefreshPhase, DiagnosticReport,
-    DiagnosticSeverity, DiagnosticSource, DiagnosticSummary, DiagnosticSurface, ErrorCode,
-    IpcError, LOCAL_COLLECTION_PROTOCOL, LOCAL_USAGE_PROTOCOL, MANAGED_DATA_PROTOCOL,
+    BrowserAccessDenialReason, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAttemptCode,
+    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention,
+    DiagnosticClient, DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery,
+    DiagnosticReport, DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary,
+    DiagnosticSurface, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES,
     QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
     UsageSource,
 };
-use crate::providers::common::{ErrorCategory, ProviderSession};
+use crate::providers::claude;
+use crate::providers::codex;
+use crate::providers::common::{
+    CliTool, ErrorCategory, ProbeCache, ProbeEnvironment, ProviderError, ProviderSession,
+    RenewalAttempts, resolve_cli_versions,
+};
+use crate::providers::grok;
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
-use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome};
+use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, HealthEvidenceTrust, RepairSite,
-    StateStore, UsageDirtyRange, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
-    self, CoverageReasonCode, CoverageStatus, UsageAgent, UsageHourlyFact, UsageScanOptions,
+    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, UsageAgent, UsageScanOptions,
 };
 
-const PARSER_REVISION: &str = "quota-usage-rust-4";
-const MAX_USAGE_OUTBOX_ENTRIES: usize = 64;
-const MAX_USAGE_MULTIPART_PARTS: usize = 64;
+/// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
+/// keep a steady device empty, small enough that a first sign-in does not stage a year at once.
+const MAX_STAGED_HOURS_PER_REFRESH: usize = usage::MAX_USAGE_HOURS_PER_UPLOAD * 4;
+/// The widest lower bound there is, for a count that could not read a narrower one.
+const EPOCH_HOUR: &str = "1970-01-01T00:00:00Z";
 
-fn metrics<const N: usize>(values: [(&str, i64); N]) -> BTreeMap<String, i64> {
-    values
+fn plural(value: i64, singular: &str) -> String {
+    format!("{value} {singular}{}", if value == 1 { "" } else { "s" })
+}
+
+/// The reason a scan gives that a person can act on, out of the bounded reason counts.
+///
+/// Access and malformed input are worth naming; a file that grew while it was being read is
+/// ordinary and is only mentioned when nothing worse happened.
+fn worst_usage_scan_reason(value: &Value) -> Option<&'static str> {
+    const ORDER: [&str; 12] = [
+        "permission_denied",
+        "source_unreadable",
+        "malformed_json",
+        "unknown_record",
+        "invalid_timestamp",
+        "invalid_model",
+        "invalid_usage",
+        "line_too_large",
+        "record_limit",
+        "discovery_limit",
+        "truncated_tail",
+        "source_changed",
+    ];
+    let counts = value.get("reason_counts").and_then(Value::as_object)?;
+    ORDER
         .into_iter()
-        .map(|(key, value)| (key.to_owned(), value.clamp(0, 1_000_000)))
-        .collect()
+        .chain(["scan_cancelled"])
+        .find(|code| counts.get(*code).and_then(Value::as_i64).unwrap_or(0) > 0)
+}
+
+const fn operation_for(status: DiagnosticStatus) -> DiagnosticOperation {
+    match status {
+        DiagnosticStatus::Ok | DiagnosticStatus::Inactive => DiagnosticOperation::Healthy,
+        DiagnosticStatus::Degraded => DiagnosticOperation::Degraded,
+        DiagnosticStatus::Blocked => DiagnosticOperation::Blocked,
+    }
+}
+
+/// Who has to act. Work QuotaBar will redo on its own is `automatic`; anything whose fix is in
+/// someone's hands is `required`.
+const fn attention_for(recovery: DiagnosticRecovery) -> DiagnosticAttention {
+    match recovery {
+        DiagnosticRecovery::None => DiagnosticAttention::None,
+        DiagnosticRecovery::Automatic | DiagnosticRecovery::Retry => DiagnosticAttention::Automatic,
+        _ => DiagnosticAttention::Required,
+    }
+}
+
+const fn worst_attention(
+    left: DiagnosticAttention,
+    right: DiagnosticAttention,
+) -> DiagnosticAttention {
+    match (left, right) {
+        (DiagnosticAttention::Required, _) | (_, DiagnosticAttention::Required) => {
+            DiagnosticAttention::Required
+        }
+        (DiagnosticAttention::Automatic, _) | (_, DiagnosticAttention::Automatic) => {
+            DiagnosticAttention::Automatic
+        }
+        _ => DiagnosticAttention::None,
+    }
 }
 
 fn array_len(value: Option<&Value>, key: &str) -> i64 {
@@ -58,21 +121,6 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn uploadable_dirty_range_count(ranges: &[UsageDirtyRange], now: DateTime<Utc>) -> i64 {
-    let Ok(complete_until) = DateTime::parse_from_rfc3339(&floor_utc_hour(&now)) else {
-        return ranges.len().min(i64::MAX as usize) as i64;
-    };
-    ranges
-        .iter()
-        .filter(|range| {
-            DateTime::parse_from_rfc3339(&range.start_at)
-                .map(|start| start < complete_until)
-                .unwrap_or(true)
-        })
-        .count()
-        .min(i64::MAX as usize) as i64
-}
-
 fn error_code_wire(code: ErrorCode) -> String {
     serde_json::to_value(code)
         .ok()
@@ -80,18 +128,11 @@ fn error_code_wire(code: ErrorCode) -> String {
         .unwrap_or_else(|| "unknown_error".to_owned())
 }
 
-fn backend_attempt_error(
-    error: &IpcError,
-) -> (
-    DiagnosticAttemptOutcome,
-    DiagnosticAttemptCode,
-    DiagnosticRecovery,
-) {
+fn backend_attempt_error(error: &IpcError) -> (DiagnosticAttemptOutcome, DiagnosticAttemptCode) {
     if error.code == ErrorCode::Cancelled {
         return (
             DiagnosticAttemptOutcome::Cancelled,
             DiagnosticAttemptCode::Cancelled,
-            DiagnosticRecovery::None,
         );
     }
     let code = match error.code {
@@ -111,15 +152,7 @@ fn backend_attempt_error(
         | ErrorCode::Unavailable
         | ErrorCode::Internal => DiagnosticAttemptCode::Unavailable,
     };
-    let recovery = match error.recovery_action {
-        RecoveryAction::None => DiagnosticRecovery::None,
-        RecoveryAction::Retry => DiagnosticRecovery::Retry,
-        RecoveryAction::Login => DiagnosticRecovery::Login,
-        RecoveryAction::ConfigureProvider => DiagnosticRecovery::ConfigureProvider,
-        RecoveryAction::Upgrade => DiagnosticRecovery::Upgrade,
-        RecoveryAction::Reinstall => DiagnosticRecovery::Reinstall,
-    };
-    (DiagnosticAttemptOutcome::Failed, code, recovery)
+    (DiagnosticAttemptOutcome::Failed, code)
 }
 
 fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
@@ -138,86 +171,8 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
-        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
-        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
-}
-
-fn device_health_code_for_attempt(attempt: &crate::protocol::DiagnosticAttempt) -> &'static str {
-    if attempt.outcome == DiagnosticAttemptOutcome::Interrupted
-        || attempt.code == Some(DiagnosticAttemptCode::ProcessInterrupted)
-    {
-        return "process_interrupted";
-    }
-    if attempt.code == Some(DiagnosticAttemptCode::InvalidState) {
-        return "local_state_invalid";
-    }
-    match attempt.kind {
-        DiagnosticAttemptKind::Refresh => "refresh_failed",
-        DiagnosticAttemptKind::QuotaCollection => "quota_collection_failed",
-        DiagnosticAttemptKind::UsageScan => "usage_scan_partial",
-        DiagnosticAttemptKind::UsageUpload => "usage_upload_failed",
-        DiagnosticAttemptKind::AccountSync => "account_sync_failed",
-        DiagnosticAttemptKind::PricingRefresh => "pricing_refresh_failed",
-        DiagnosticAttemptKind::DeviceHealthUpload => "refresh_failed",
-    }
-}
-
-fn diagnostic_attempt_timestamp(attempt: &crate::protocol::DiagnosticAttempt) -> String {
-    attempt
-        .completed_at
-        .clone()
-        .unwrap_or_else(|| attempt.started_at.clone())
-}
-
-fn pricing_diagnostic_metrics(value: Option<&Value>) -> BTreeMap<String, i64> {
-    let valid = value.is_some_and(|value| pricing::validate_pricing_catalog(value).valid);
-    metrics([
-        ("catalog_present", i64::from(value.is_some())),
-        ("catalog_valid", i64::from(valid)),
-        ("entries", array_len(value, "entries")),
-    ])
-}
-
-fn account_diagnostic_metrics(
-    value: Option<&Value>,
-    session: Option<&Value>,
-) -> BTreeMap<String, i64> {
-    let auth_status = value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("auth_status"))
-        .and_then(Value::as_str);
-    let summary = value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("account_summary"));
-    metrics([
-        ("signed_in", i64::from(auth_status == Some("signed_in"))),
-        (
-            "session_active",
-            i64::from(
-                session
-                    .and_then(Value::as_object)
-                    .and_then(|object| object.get("status"))
-                    .and_then(Value::as_str)
-                    == Some("active"),
-            ),
-        ),
-        (
-            "session_logout_pending",
-            i64::from(
-                session
-                    .and_then(Value::as_object)
-                    .and_then(|object| object.get("status"))
-                    .and_then(Value::as_str)
-                    == Some("logout_pending"),
-            ),
-        ),
-        ("devices", array_len(summary, "devices")),
-        ("observations", array_len(summary, "quota")),
-    ])
 }
 
 pub struct NativeBackend {
@@ -228,6 +183,79 @@ pub struct NativeBackend {
     environment: HashMap<String, String>,
     client_name: String,
     client_version: String,
+    /// Held closed by a test in front of provider collection, so a refresh can be observed
+    /// while collection is provably still running.
+    #[cfg(test)]
+    collection_gate: Option<Arc<RefreshGate>>,
+    /// Held closed by a test just after the refresh's own Account read has decided, so a test
+    /// can act on what that read found before anything else in the refresh moves.
+    #[cfg(test)]
+    account_read_gate: Option<Arc<RefreshGate>>,
+}
+
+/// A latch a test closes inside a refresh.
+///
+/// It reports when the refresh reached it, waits to be opened, and remembers whether it timed
+/// out rather than blocking forever — so ordering is proven by what actually released it rather
+/// than by how long a test slept.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct RefreshGate {
+    state: std::sync::Mutex<RefreshGateState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct RefreshGateState {
+    arrived: bool,
+    open: bool,
+    timed_out: bool,
+}
+
+#[cfg(test)]
+impl RefreshGate {
+    fn hold(&self) {
+        let mut state = self.state.lock().expect("refresh gate");
+        state.arrived = true;
+        self.changed.notify_all();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.open {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                state.timed_out = true;
+                return;
+            }
+            let (guard, _) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .expect("refresh gate wait");
+            state = guard;
+        }
+    }
+
+    pub(crate) fn wait_arrived(&self) {
+        let mut state = self.state.lock().expect("refresh gate");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.arrived {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(), "the refresh never reached the gate");
+            let (guard, _) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .expect("refresh gate wait");
+            state = guard;
+        }
+    }
+
+    pub(crate) fn open(&self) {
+        self.state.lock().expect("refresh gate").open = true;
+        self.changed.notify_all();
+    }
+
+    pub(crate) fn timed_out(&self) -> bool {
+        self.state.lock().expect("refresh gate").timed_out
+    }
 }
 
 impl NativeBackend {
@@ -250,73 +278,53 @@ impl NativeBackend {
             environment: std::env::vars().collect(),
             client_name: client_name.to_owned(),
             client_version: client_version.to_owned(),
+            #[cfg(test)]
+            collection_gate: None,
+            #[cfg(test)]
+            account_read_gate: None,
         }
     }
 
+    /// Opens a journal row for work that is about to run.
+    ///
+    /// A cache that cannot take the row answers `None`, and the work runs anyway: the journal is
+    /// evidence about collection, not a permit to collect.
     fn begin_attempt(
         &self,
         kind: DiagnosticAttemptKind,
-        source: DiagnosticSource,
         subject: Option<&str>,
-        mode: DiagnosticMode,
-    ) -> Result<DiagnosticAttemptHandle, BackendError> {
-        let parent = self
-            .state
-            .running_refresh_attempt()
-            .map_err(|_| BackendError::unavailable())?;
-        self.state
-            .begin_diagnostic_attempt(
-                kind,
-                parent
-                    .map(|(_, trigger)| trigger)
-                    .unwrap_or(DiagnosticAttemptTrigger::Manual),
-                source,
-                subject,
-                mode,
-                parent.map(|(handle, _)| handle),
-            )
-            .map_err(|_| BackendError::unavailable())
+    ) -> Option<DiagnosticAttemptHandle> {
+        let parent = self.state.running_refresh_attempt().ok().flatten();
+        self.state.begin_diagnostic_attempt(
+            kind,
+            parent
+                .map(|(_, trigger)| trigger)
+                .unwrap_or(DiagnosticAttemptTrigger::Manual),
+            subject,
+            parent.map(|(handle, _)| handle),
+        )
     }
 
     fn finish_attempt(
         &self,
-        handle: DiagnosticAttemptHandle,
+        handle: Option<DiagnosticAttemptHandle>,
         outcome: DiagnosticAttemptOutcome,
         code: Option<DiagnosticAttemptCode>,
-        recovery: DiagnosticRecovery,
-        metrics: BTreeMap<String, i64>,
-    ) -> Result<(), BackendError> {
+    ) {
         self.state
-            .finish_diagnostic_attempt(
-                handle,
-                &DiagnosticAttemptCompletion {
-                    outcome,
-                    code,
-                    recovery,
-                    metrics,
-                },
-            )
-            .map_err(|_| BackendError::unavailable())?;
-        Ok(())
+            .finish_diagnostic_attempt(handle, &DiagnosticAttemptCompletion::new(outcome, code));
     }
 
     fn finish_backend_result_attempt<T>(
         &self,
-        handle: DiagnosticAttemptHandle,
+        handle: Option<DiagnosticAttemptHandle>,
         result: &Result<T, BackendError>,
-        metrics: BTreeMap<String, i64>,
-    ) -> Result<(), BackendError> {
+    ) {
         match result {
-            Ok(_) => self.finish_attempt(
-                handle,
-                DiagnosticAttemptOutcome::Success,
-                None,
-                DiagnosticRecovery::None,
-                metrics,
-            ),
+            Ok(_) => self.finish_attempt(handle, DiagnosticAttemptOutcome::Success, None),
             Err(error) => {
-                let (outcome, code, recovery) = backend_attempt_error(&error.error);
-                self.finish_attempt(handle, outcome, Some(code), recovery, metrics)
+                let (outcome, code) = backend_attempt_error(&error.error);
+                self.finish_attempt(handle, outcome, Some(code));
             }
         }
     }
@@ -331,6 +339,7 @@ impl NativeBackend {
 
     /// Discover providers through the same provider-owned credential paths used for collection.
     /// No account or Relay state is read or changed.
+    #[cfg(test)]
     pub fn configured_providers(&self) -> Result<Vec<ProviderId>, BackendError> {
         let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
         Ok(ProviderId::ALL
@@ -340,124 +349,30 @@ impl NativeBackend {
             .collect())
     }
 
+    /// The last completed report, or a fresh one if this device has never finished a refresh.
+    ///
+    /// `generated_at` is when the evaluation happened, not when it was asked for, so a caller
+    /// waiting on a recheck can tell a new report from the one it already has.
     pub fn diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
-        match self.state.health_evidence_trust() {
-            HealthEvidenceTrust::FailClosed => Ok(self.fail_closed_report()),
-            HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
-            HealthEvidenceTrust::TrustedSnapshot => {
-                let mut report = self
-                    .state
-                    .diagnostic_snapshot()
-                    .map_err(|_| BackendError::unavailable())?
-                    .ok_or_else(BackendError::unavailable)?;
-                report.generated_at = now_rfc3339();
-                report.client = self.diagnostic_client();
-                report.recent_activity = self
-                    .state
-                    .diagnostic_recent_activity()
-                    .map_err(|_| BackendError::unavailable())?;
-                Ok(report)
-            }
-            HealthEvidenceTrust::EvaluateLive => self.evaluate_diagnostic_report(false),
-        }
+        let Some(mut report) = self
+            .state
+            .diagnostic_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+        else {
+            return self.evaluate_diagnostic_report(false);
+        };
+        report.client = self.diagnostic_client();
+        report.recent = self
+            .state
+            .diagnostic_recent_attempts()
+            .map_err(|_| BackendError::unavailable())?;
+        Ok(report)
     }
 
     pub fn complete_diagnostic_report(&self) -> Result<DiagnosticReport, BackendError> {
-        match self.state.health_evidence_trust() {
-            HealthEvidenceTrust::FailClosed => Ok(self.fail_closed_report()),
-            HealthEvidenceTrust::PersistRetry => Err(BackendError::unavailable()),
-            HealthEvidenceTrust::TrustedSnapshot | HealthEvidenceTrust::EvaluateLive => {
-                let report = self.evaluate_diagnostic_report(true)?;
-                if self.state.write_diagnostic_snapshot(&report).is_err() {
-                    let _ = self.state.run_repair(RepairSite::WriteFailure);
-                    let _ = self.state.write_diagnostic_snapshot(&report);
-                }
-                Ok(report)
-            }
-        }
-    }
-
-    fn fail_closed_report(&self) -> DiagnosticReport {
-        let now = now_rfc3339();
-        let revision = self.state.current_revision().unwrap_or(0);
-        let recent_activity = self.state.diagnostic_recent_activity().unwrap_or(
-            crate::protocol::DiagnosticRecentActivity {
-                attempts: Vec::new(),
-                history_truncated: false,
-            },
-        );
-        DiagnosticReport {
-            schema_version: 2,
-            summary: DiagnosticSummary {
-                operation: DiagnosticOperation::Blocked,
-                data: DiagnosticDataState::Unknown,
-                attention: DiagnosticAttention::Required,
-            },
-            refresh: DiagnosticRefresh {
-                phase: DiagnosticRefreshPhase::Idle,
-                revision,
-                as_of: now.clone(),
-                started_at: None,
-                next_due_at: None,
-            },
-            generated_at: now.clone(),
-            client: self.diagnostic_client(),
-            surfaces: vec![
-                DiagnosticSurface {
-                    name: "quota_overview".into(),
-                    operation: DiagnosticOperation::Blocked,
-                    data: DiagnosticDataState::Unknown,
-                    source: None,
-                    metrics: BTreeMap::new(),
-                },
-                DiagnosticSurface {
-                    name: "usage_this_device".into(),
-                    operation: DiagnosticOperation::Blocked,
-                    data: DiagnosticDataState::Unknown,
-                    source: Some(DiagnosticSource::ThisDevice),
-                    metrics: BTreeMap::new(),
-                },
-                DiagnosticSurface {
-                    name: "usage_account".into(),
-                    operation: DiagnosticOperation::Blocked,
-                    data: DiagnosticDataState::Unknown,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: BTreeMap::new(),
-                },
-                DiagnosticSurface {
-                    name: "account".into(),
-                    operation: DiagnosticOperation::Blocked,
-                    data: DiagnosticDataState::Unknown,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: BTreeMap::new(),
-                },
-            ],
-            checks: vec![DiagnosticCheck {
-                name: "local_state".into(),
-                source: DiagnosticSource::System,
-                subject: None,
-                mode: DiagnosticMode::Required,
-                operation: DiagnosticOperation::Blocked,
-                data: DiagnosticDataState::Unknown,
-                last_attempt_at: Some(now.clone()),
-                last_success_at: None,
-                metrics: metrics([("repaired", 0)]),
-            }],
-            findings: vec![DiagnosticFinding {
-                component: "local_state".into(),
-                source: DiagnosticSource::System,
-                subject: None,
-                code: "invalid_state".into(),
-                severity: DiagnosticSeverity::Error,
-                impact: DiagnosticImpact::System,
-                recovery: DiagnosticRecovery::Reinstall,
-                count: 1,
-                observed_at: now,
-                message: "Local state cannot be written and could not be repaired automatically."
-                    .into(),
-            }],
-            recent_activity,
-        }
+        let report = self.evaluate_diagnostic_report(true)?;
+        let _ = self.state.write_diagnostic_snapshot(&report);
+        Ok(report)
     }
 
     fn diagnostic_client(&self) -> DiagnosticClient {
@@ -476,9 +391,9 @@ impl NativeBackend {
             .state
             .snapshot_for_diagnostics()
             .map_err(|_| BackendError::unavailable())?;
-        let recent_activity = self
+        let recent = self
             .state
-            .diagnostic_recent_activity()
+            .diagnostic_recent_attempts()
             .map_err(|_| BackendError::unavailable())?;
         let quota = self
             .state
@@ -526,28 +441,13 @@ impl NativeBackend {
                     .map(|value| value.provider.as_str()),
             )
             .collect::<HashSet<_>>();
-        let mut surfaces = Vec::with_capacity(4);
-        let mut checks = Vec::new();
-        let mut findings = Vec::new();
+        let mut sources = Vec::new();
 
-        let mut local_quota_sources = 0i64;
-        let mut account_quota_sources = 0i64;
+        // Quota Overview.
         let mut current_quota = 0i64;
-        let mut account_provider_states = BTreeMap::<String, bool>::new();
         for item in &snapshot.overview {
             if !item.is_stale {
                 current_quota = current_quota.saturating_add(1);
-            }
-            for source in &item.sources {
-                if source.kind == "local" {
-                    local_quota_sources = local_quota_sources.saturating_add(1);
-                } else if source.kind == "device" {
-                    account_quota_sources = account_quota_sources.saturating_add(1);
-                    account_provider_states
-                        .entry(item.identity.provider.clone())
-                        .and_modify(|current| *current |= !source.is_stale)
-                        .or_insert(!source.is_stale);
-                }
             }
         }
         let quota_data = if snapshot.overview.is_empty() {
@@ -557,36 +457,8 @@ impl NativeBackend {
         } else {
             DiagnosticDataState::Stale
         };
-        surfaces.push(DiagnosticSurface {
-            name: "quota_overview".into(),
-            operation: DiagnosticOperation::Healthy,
-            data: quota_data,
-            source: None,
-            metrics: metrics([
-                ("items", snapshot.overview.len() as i64),
-                ("current_items", current_quota),
-                ("this_device_sources", local_quota_sources),
-                ("account_sources", account_quota_sources),
-            ]),
-        });
-        for (provider, current) in account_provider_states {
-            checks.push(DiagnosticCheck {
-                name: "quota_collection".into(),
-                source: DiagnosticSource::Account,
-                subject: Some(format!("provider:{provider}")),
-                mode: DiagnosticMode::Required,
-                operation: DiagnosticOperation::Healthy,
-                data: if current {
-                    DiagnosticDataState::Current
-                } else {
-                    DiagnosticDataState::Stale
-                },
-                last_attempt_at: account.as_ref().and_then(|value| value.updated_at.clone()),
-                last_success_at: account.as_ref().and_then(|value| value.updated_at.clone()),
-                metrics: metrics([("sources", 1)]),
-            });
-        }
 
+        let mut configured_quota_source_failed = false;
         if let Some(results) = quota
             .as_ref()
             .and_then(|record| record.value.as_ref())
@@ -599,143 +471,154 @@ impl NativeBackend {
                 };
                 let explicit = explicit_providers.contains(provider);
                 let subject = format!("provider:{provider}");
-                let attempt_facts = self
+                // The journal answers when the collection ran; the report in hand answers what
+                // it found.
+                let facts = self
                     .state
                     .diagnostic_attempt_facts(
                         DiagnosticAttemptKind::QuotaCollection,
-                        DiagnosticSource::ThisDevice,
                         Some(&subject),
                     )
                     .map_err(|_| BackendError::unavailable())?;
-                // From the report in hand, which is the collection this check explains. The
-                // journal answers when it ran, not what it found.
-                let discovered = result.get("sources").and_then(Value::as_u64).unwrap_or(0) > 0;
-                if !explicit && !discovered {
+                let report_sources = result
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                if !explicit && report_sources.is_empty() {
                     continue;
                 }
-                let mode = if explicit {
-                    DiagnosticMode::Required
-                } else {
-                    DiagnosticMode::Opportunistic
-                };
                 let outcome = result
                     .get("outcome")
                     .and_then(Value::as_str)
                     .unwrap_or("error");
                 let snapshots = array_len(Some(result), "snapshots");
-                let success = outcome == "success" && snapshots > 0;
-                checks.push(DiagnosticCheck {
-                    name: "quota_collection".into(),
-                    source: DiagnosticSource::ThisDevice,
-                    subject: Some(subject.clone()),
-                    mode,
-                    operation: if success {
-                        DiagnosticOperation::Healthy
-                    } else {
-                        DiagnosticOperation::Degraded
-                    },
-                    data: if success {
-                        DiagnosticDataState::Current
-                    } else {
-                        DiagnosticDataState::Empty
-                    },
-                    last_attempt_at: attempt_facts
-                        .latest_completed
-                        .as_ref()
-                        .map(diagnostic_attempt_timestamp),
-                    last_success_at: attempt_facts
-                        .latest_success
-                        .as_ref()
-                        .map(diagnostic_attempt_timestamp),
-                    metrics: metrics([
-                        ("sources", i64::from(discovered)),
-                        ("snapshots", snapshots),
-                    ]),
-                });
-                if !success {
-                    let access_denied =
-                        result.get("access_denied").and_then(Value::as_bool) == Some(true);
-                    let code = match outcome {
-                        _ if access_denied => "access_denied",
-                        "auth_required" => "auth_required",
-                        "unsupported" => "unsupported",
-                        "unavailable" => "unavailable",
-                        _ => "provider_error",
-                    };
-                    // A source this device holds and cannot use is actionable however it
-                    // was set up. Only absent setup is quiet, and it never reaches here.
-                    findings.push(DiagnosticFinding {
-                        component: "quota_collection".into(),
-                        source: DiagnosticSource::ThisDevice,
-                        subject: Some(subject),
-                        code: code.into(),
-                        severity: DiagnosticSeverity::Warning,
-                        impact: DiagnosticImpact::Source,
-                        recovery: match code {
-                            "auth_required" => DiagnosticRecovery::ConfigureProvider,
-                            // Signing in again rewrites a secret this Mac still would not be
-                            // handed, and retrying asks for it once more every five minutes.
-                            "access_denied" => DiagnosticRecovery::CheckAccess,
-                            _ => DiagnosticRecovery::Retry,
-                        },
-                        count: 1,
-                        observed_at: attempt_facts
-                            .latest_completed
-                            .as_ref()
-                            .map(diagnostic_attempt_timestamp)
-                            .unwrap_or_else(|| now.clone()),
-                        message: if explicit {
-                            "Configured collection on this device did not produce quota data."
-                        } else {
-                            "A local source this device discovered could not be collected."
-                        }
-                        .into(),
+                if outcome == "success" && snapshots > 0 {
+                    sources.push(DiagnosticSourceState {
+                        subject,
+                        source_id: report_sources
+                            .iter()
+                            .rev()
+                            .find(|source| {
+                                source.get("outcome").and_then(Value::as_str) == Some("success")
+                            })
+                            .and_then(|source| source.get("source_id"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        status: DiagnosticStatus::Ok,
+                        last_attempt_at: facts.last_attempt_at,
+                        last_success_at: facts.last_success_at,
+                        code: None,
+                        message: "Quota was read on this Mac.".into(),
+                        recovery: DiagnosticRecovery::None,
                     });
+                    continue;
                 }
+                // The row names the rung that failed, because "Claude could not be read" and
+                // "the browser session saved for Claude went stale" are different problems with
+                // different fixes.
+                let failing_source = report_sources
+                    .iter()
+                    .rev()
+                    .find(|source| source.get("outcome").and_then(Value::as_str) != Some("success"))
+                    .and_then(|source| source.get("source_id"))
+                    .and_then(Value::as_str);
+                let access_denied =
+                    result.get("access_denied").and_then(Value::as_bool) == Some(true);
+                let code = match outcome {
+                    _ if access_denied => "access_denied",
+                    "auth_required" => "auth_required",
+                    "unsupported" => "unsupported",
+                    "unavailable" => "unavailable",
+                    _ => "provider_error",
+                };
+                let recovery = match code {
+                    "auth_required" => DiagnosticRecovery::ConfigureProvider,
+                    // Signing in again rewrites a secret this Mac still would not be handed, and
+                    // retrying asks for it once more every five minutes.
+                    "access_denied" => DiagnosticRecovery::CheckAccess,
+                    "unsupported" => DiagnosticRecovery::None,
+                    _ => DiagnosticRecovery::Retry,
+                };
+                let status = match code {
+                    "unsupported" => DiagnosticStatus::Inactive,
+                    _ => DiagnosticStatus::Degraded,
+                };
+                configured_quota_source_failed |= explicit && status != DiagnosticStatus::Inactive;
+                let message = match code {
+                    "auth_required" => ProviderId::parse(provider)
+                        .map(|id| auth_required_message(id, failing_source.unwrap_or("")))
+                        .unwrap_or("The saved sign-in expired or was rejected. Sign in again."),
+                    "access_denied" => {
+                        "macOS did not release the saved sign-in for this source. Allow QuotaBar \
+                         access in System Settings, then recheck."
+                    }
+                    "unsupported" => "This source cannot be read on this Mac.",
+                    "unavailable" => {
+                        "This source could not be reached. QuotaBar will try again at the next \
+                         refresh."
+                    }
+                    _ if explicit => {
+                        "Configured collection on this Mac returned no quota. QuotaBar will try \
+                         again at the next refresh."
+                    }
+                    _ => {
+                        "A source this Mac found could not be read. QuotaBar will try again at \
+                         the next refresh."
+                    }
+                };
+                sources.push(DiagnosticSourceState {
+                    subject,
+                    source_id: failing_source.map(str::to_owned),
+                    status,
+                    last_attempt_at: facts.last_attempt_at,
+                    last_success_at: facts.last_success_at,
+                    code: Some(code.to_owned()),
+                    message: message.into(),
+                    recovery,
+                });
             }
         }
 
-        let (config_present, config_readable) = self.state.provider_config_status();
-        if config_present {
-            checks.push(DiagnosticCheck {
-                name: "provider_configuration".into(),
-                source: DiagnosticSource::ThisDevice,
-                subject: None,
-                mode: DiagnosticMode::Required,
-                operation: if config_readable {
-                    DiagnosticOperation::Healthy
-                } else {
-                    DiagnosticOperation::Degraded
-                },
-                data: if config_readable {
-                    DiagnosticDataState::Current
-                } else {
-                    DiagnosticDataState::Unknown
-                },
-                last_attempt_at: Some(now.clone()),
-                last_success_at: config_readable.then(|| now.clone()),
-                metrics: metrics([("present", 1), ("valid", i64::from(config_readable))]),
-            });
-        }
-        if config_present && !config_readable {
-            findings.push(DiagnosticFinding {
-                component: "provider_configuration".into(),
-                source: DiagnosticSource::ThisDevice,
-                subject: None,
-                code: "config_unreadable".into(),
-                severity: DiagnosticSeverity::Error,
-                impact: DiagnosticImpact::Source,
-                recovery: DiagnosticRecovery::ConfigureProvider,
-                count: 1,
-                observed_at: now.clone(),
-                message: "Saved provider configuration cannot be read safely.".into(),
+        // A browser cookie store macOS refused this Mac. It is not a provider failure and no
+        // refresh will clear it: it stands until a permission is granted, so it gets its own
+        // row rather than being folded into the provider's collection outcome.
+        for (provider, denial) in self
+            .state
+            .browser_access_denials()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            sources.push(DiagnosticSourceState {
+                subject: format!("provider:{provider}"),
+                source_id: Some(providers::BROWSER_SESSION_SOURCE.to_owned()),
+                status: DiagnosticStatus::Blocked,
+                last_attempt_at: Some(denial.denied_at.clone()),
+                last_success_at: None,
+                code: Some("browser_access_denied".into()),
+                message: browser_access_denied_message(&denial),
+                recovery: DiagnosticRecovery::CheckAccess,
             });
         }
 
-        let force_usage_partial = self
-            .state
-            .diagnose_forces_usage_partial()
-            .map_err(|_| BackendError::unavailable())?;
+        let (config_present, config_readable) = self.state.provider_config_status();
+        if config_present && !config_readable {
+            sources.push(DiagnosticSourceState {
+                subject: "provider_configuration".into(),
+                source_id: None,
+                status: DiagnosticStatus::Blocked,
+                last_attempt_at: Some(now.clone()),
+                last_success_at: None,
+                code: Some("config_unreadable".into()),
+                message: "Saved provider settings cannot be read safely. Open Agents and set the \
+                          provider up again, then recheck."
+                    .into(),
+                recovery: DiagnosticRecovery::ConfigureProvider,
+            });
+        }
+
+        // Usage on this device. A cache that was thrown away has no local history yet, so every
+        // Usage answer it can give is partial until one complete scan has run.
+        let force_usage_partial = snapshot.cache.rebuilding;
         let last_good_local_usage = [
             &snapshot.usage_periods.local.today,
             &snapshot.usage_periods.local.last_7_days,
@@ -745,597 +628,460 @@ impl NativeBackend {
         .into_iter()
         .any(Option::is_some)
             || usage.as_ref().is_some_and(|record| record.value.is_some());
-        let (file_count, record_count, partial_hours, scan_diagnostics) = if allow_usage_index_reads
-        {
-            let mut file_count = 0i64;
-            for agent in UsageAgent::ALL {
-                file_count = file_count.saturating_add(
-                    self.state
-                        .usage_file_index(agent)
-                        .map_err(|_| BackendError::unavailable())?
-                        .len() as i64,
-                );
-            }
-            let record_count = self
-                .state
-                .usage_event_count()
-                .map_err(|_| BackendError::unavailable())?
-                .min(i64::MAX as u64) as i64;
-            let partial_hours = self
-                .state
-                .partial_usage_hours()
-                .map_err(|_| BackendError::unavailable())?;
-            let scan_diagnostics = self
-                .state
-                .usage_scan_diagnostics()
-                .map_err(|_| BackendError::unavailable())?;
-            (file_count, record_count, partial_hours, scan_diagnostics)
+        let (record_count, partial_hours, scan_diagnostics) = if allow_usage_index_reads {
+            (
+                self.state
+                    .usage_event_count()
+                    .map_err(|_| BackendError::unavailable())?
+                    .min(i64::MAX as u64) as i64,
+                self.state
+                    .partial_usage_hours()
+                    .map_err(|_| BackendError::unavailable())?,
+                self.state
+                    .usage_scan_diagnostics()
+                    .map_err(|_| BackendError::unavailable())?,
+            )
         } else {
-            (0, 0, HashSet::new(), Vec::new())
+            (0, HashSet::new(), Vec::new())
         };
         let mut usage_partial = force_usage_partial || !partial_hours.is_empty();
-        let mut usage_requires_attention = false;
+        let mut usage_scan_blocked = false;
         for (agent, value, observed_at) in &scan_diagnostics {
             let subject = format!("agent:{}", agent.as_str());
-            let attempt_facts = self
+            let facts = self
                 .state
-                .diagnostic_attempt_facts(
-                    DiagnosticAttemptKind::UsageScan,
-                    DiagnosticSource::ThisDevice,
-                    Some(&subject),
-                )
+                .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageScan, Some(&subject))
                 .map_err(|_| BackendError::unavailable())?;
-            let attempt_observed_at = attempt_facts
-                .latest_completed
-                .as_ref()
-                .map(diagnostic_attempt_timestamp)
-                .unwrap_or_else(|| observed_at.clone());
             let status = value.get("status").and_then(Value::as_str);
             let partial = status == Some("partial") || status == Some("blocked");
             usage_partial |= partial;
-            let partial_for_agent = partial_hours
-                .iter()
-                .filter(|(candidate, _)| candidate == agent)
-                .count() as i64;
-            checks.push(DiagnosticCheck {
-                name: "usage_scan".into(),
-                source: DiagnosticSource::ThisDevice,
-                subject: Some(subject.clone()),
-                mode: DiagnosticMode::Required,
-                operation: if status == Some("blocked") {
-                    DiagnosticOperation::Degraded
+            let reason = worst_usage_scan_reason(value);
+            let blocked = status == Some("blocked");
+            usage_scan_blocked |= blocked;
+            let (status, code, message, recovery) = match (blocked, reason) {
+                (true, _) => (
+                    DiagnosticStatus::Blocked,
+                    Some("scan_unavailable"),
+                    "This Usage source could not be read. Check that QuotaBar can reach this \
+                     agent's data, then recheck.",
+                    DiagnosticRecovery::CheckAccess,
+                ),
+                (false, Some(reason @ ("permission_denied" | "source_unreadable"))) => (
+                    DiagnosticStatus::Degraded,
+                    Some(reason),
+                    "Part of this Usage source could not be read. Check that QuotaBar can reach \
+                     this agent's data, then recheck.",
+                    DiagnosticRecovery::CheckAccess,
+                ),
+                (
+                    false,
+                    Some(reason @ ("truncated_tail" | "source_changed" | "scan_cancelled")),
+                ) => (
+                    DiagnosticStatus::Ok,
+                    Some(reason),
+                    "The source changed while it was being scanned. The next refresh picks up \
+                     the rest.",
+                    DiagnosticRecovery::Automatic,
+                ),
+                (false, Some(reason)) => (
+                    DiagnosticStatus::Degraded,
+                    Some(reason),
+                    "Invalid Usage records were skipped and the valid ones were kept. Update the \
+                     app or CLI that wrote them, then recheck.",
+                    DiagnosticRecovery::UpdateSource,
+                ),
+                (false, None) => (
+                    DiagnosticStatus::Ok,
+                    None,
+                    "Usage records were read on this Mac.",
+                    DiagnosticRecovery::None,
+                ),
+            };
+            sources.push(DiagnosticSourceState {
+                subject,
+                source_id: None,
+                status,
+                last_attempt_at: facts
+                    .last_attempt_at
+                    .clone()
+                    .or_else(|| Some(observed_at.clone())),
+                last_success_at: facts.last_success_at,
+                code: code.map(str::to_owned),
+                message: message.into(),
+                recovery,
+            });
+        }
+
+        // Account.
+        let account_facts = self
+            .state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
+            .map_err(|_| BackendError::unavailable())?;
+        let account_attempt_failed = account_active
+            && matches!(
+                account_facts.last_outcome,
+                Some(DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted)
+            );
+        let account_degraded = match account.as_ref().map(|value| value.status) {
+            Some(
+                crate::protocol::ComponentStatus::Stale
+                | crate::protocol::ComponentStatus::AuthRequired
+                | crate::protocol::ComponentStatus::Error,
+            ) if account_signed_in || account_active => true,
+            _ => account_attempt_failed,
+        };
+        let account_error = account.as_ref().and_then(|value| value.last_error.as_ref());
+        let account_needs_login = account_error.is_some_and(|value| value.code.requires_login());
+        if account_active || account_signed_in {
+            sources.push(DiagnosticSourceState {
+                subject: "account".into(),
+                source_id: None,
+                status: if account_degraded {
+                    DiagnosticStatus::Degraded
                 } else {
-                    DiagnosticOperation::Healthy
+                    DiagnosticStatus::Ok
                 },
-                data: if partial {
+                last_attempt_at: account_facts.last_attempt_at.clone(),
+                last_success_at: account_facts.last_success_at.clone(),
+                code: account_degraded
+                    .then(|| {
+                        account_error
+                            .map(|value| error_code_wire(value.code))
+                            .unwrap_or_else(|| "account_unavailable".into())
+                    })
+                    .clone(),
+                message: match (account_degraded, account_needs_login) {
+                    (false, _) => "Account data is up to date.",
+                    (true, true) => {
+                        "This Mac is no longer signed in to the account. Reconnect Account in \
+                         Settings, then recheck."
+                    }
+                    (true, false) => {
+                        "Account data could not be refreshed. QuotaBar will try again at the next \
+                         refresh."
+                    }
+                }
+                .into(),
+                recovery: match (account_degraded, account_needs_login) {
+                    (false, _) => DiagnosticRecovery::None,
+                    (true, true) => DiagnosticRecovery::Login,
+                    (true, false) => DiagnosticRecovery::Retry,
+                },
+            });
+        }
+
+        // Usage upload.
+        let outbox_count = self
+            .state
+            .outbox_len()
+            .map_err(|_| BackendError::unavailable())?;
+        let uploadable_dirty_count = self.uploadable_dirty_hour_count()?;
+        let upload_facts = self
+            .state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
+            .map_err(|_| BackendError::unavailable())?;
+        let upload_waiting = outbox_count + uploadable_dirty_count > 0;
+        // A closed range waiting for the next scheduler pass is normal automatic work. Only a
+        // completed attempt that did not make progress is a problem, and while work remains a
+        // later `no_work` does not retire it.
+        let upload_problem = match upload_facts.last_outcome {
+            Some(
+                DiagnosticAttemptOutcome::Failed
+                | DiagnosticAttemptOutcome::Interrupted
+                | DiagnosticAttemptOutcome::Partial,
+            ) => upload_facts
+                .unresolved_code
+                .or(Some(crate::protocol::DiagnosticAttemptCode::Unavailable)),
+            _ if upload_waiting => upload_facts.unresolved_code,
+            _ => None,
+        };
+        let upload_active = account_active && usage_upload_enabled;
+        let upload_failed = upload_active && upload_problem.is_some();
+        let upload_blocked =
+            upload_failed && upload_problem == Some(DiagnosticAttemptCode::InvalidState);
+        if upload_active {
+            sources.push(DiagnosticSourceState {
+                subject: "usage_upload".into(),
+                source_id: None,
+                status: match (upload_blocked, upload_failed) {
+                    (true, _) => DiagnosticStatus::Blocked,
+                    (false, true) => DiagnosticStatus::Degraded,
+                    _ => DiagnosticStatus::Ok,
+                },
+                last_attempt_at: upload_facts.last_attempt_at.clone(),
+                last_success_at: upload_facts.last_success_at.clone(),
+                code: upload_problem.map(|code| diagnostic_attempt_code_wire(code).to_owned()),
+                message: match (upload_blocked, upload_failed, upload_waiting) {
+                    (true, _, _) => {
+                        "Usage upload cannot continue with the local state as it is. Reset local \
+                         data from Support, then recheck."
+                    }
+                    (false, true, _) => {
+                        "The last Usage upload did not go through. QuotaBar will try again at the \
+                         next refresh."
+                    }
+                    (false, false, true) => {
+                        "Usage is waiting for the next upload. QuotaBar sends it at the next \
+                         refresh."
+                    }
+                    _ => "Usage is uploaded to the account.",
+                }
+                .into(),
+                recovery: match (upload_blocked, upload_failed, upload_waiting) {
+                    (true, _, _) => DiagnosticRecovery::Reinstall,
+                    (false, true, _) => DiagnosticRecovery::Retry,
+                    (false, false, true) => DiagnosticRecovery::Automatic,
+                    _ => DiagnosticRecovery::None,
+                },
+            });
+        }
+
+        // Pricing catalog.
+        let pricing_value = pricing.as_ref().and_then(|value| value.value.as_ref());
+        let pricing_valid =
+            pricing_value.is_some_and(|value| pricing::validate_pricing_catalog(value).valid);
+        let pricing_required = record_count > 0;
+        let pricing_facts = self
+            .state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::PricingRefresh, None)
+            .map_err(|_| BackendError::unavailable())?;
+        let pricing_failed = pricing_required
+            && ((pricing_value.is_some() && !pricing_valid)
+                || matches!(
+                    pricing_facts.last_outcome,
+                    Some(DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted)
+                ));
+        sources.push(DiagnosticSourceState {
+            subject: "pricing_catalog".into(),
+            source_id: None,
+            status: match (pricing_required, pricing_failed) {
+                (false, _) => DiagnosticStatus::Inactive,
+                (true, true) => DiagnosticStatus::Degraded,
+                (true, false) => DiagnosticStatus::Ok,
+            },
+            last_attempt_at: pricing_facts.last_attempt_at.clone(),
+            last_success_at: pricing_facts.last_success_at.clone(),
+            code: pricing_failed.then(|| "invalid_catalog".to_owned()),
+            message: match (pricing_required, pricing_failed) {
+                (false, _) => "No Usage records need prices yet.",
+                (true, true) => {
+                    "Prices could not be loaded, so costs may be missing. Token totals are still \
+                     exact."
+                }
+                (true, false) => "Prices are loaded.",
+            }
+            .into(),
+            recovery: if pricing_failed {
+                DiagnosticRecovery::Retry
+            } else {
+                DiagnosticRecovery::None
+            },
+        });
+
+        // An identity this device could not read is the one loss a refresh cannot undo, so the
+        // person in front of the app is told what happened and what to do about it.
+        let identity_reset = self
+            .state
+            .identity_reset_at()
+            .map_err(|_| BackendError::unavailable())?
+            .filter(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .is_ok_and(|value| Utc::now() - value.with_timezone(&Utc) < Duration::hours(24))
+            });
+        if let Some(reset_at) = identity_reset {
+            sources.push(DiagnosticSourceState {
+                subject: "local_state".into(),
+                source_id: None,
+                status: DiagnosticStatus::Degraded,
+                last_attempt_at: Some(reset_at.clone()),
+                last_success_at: None,
+                code: Some("local_identity_reset".into()),
+                message: "Local identity could not be read and was reset. Sign in again.".into(),
+                recovery: DiagnosticRecovery::Login,
+            });
+        }
+
+        // Surfaces.
+        let quota_status = if configured_quota_source_failed {
+            DiagnosticStatus::Degraded
+        } else {
+            DiagnosticStatus::Ok
+        };
+        let surfaces = vec![
+            DiagnosticSurface {
+                id: "quota_overview".into(),
+                status: quota_status,
+                data: quota_data,
+                last_success_at: quota.as_ref().and_then(|value| value.updated_at.clone()),
+                // What a person needs here is whether the numbers on Overview still describe
+                // their account, not how many machines each one came from.
+                message: match (snapshot.overview.len(), quota_data) {
+                    (0, _) => "No quota has been read yet.".to_owned(),
+                    (total, DiagnosticDataState::Stale) => format!(
+                        "{} shown, none of them current.",
+                        plural(total as i64, "subscription")
+                    ),
+                    (total, _) if current_quota == total as i64 => {
+                        format!(
+                            "{} shown, all current.",
+                            plural(total as i64, "subscription")
+                        )
+                    }
+                    (total, _) => format!(
+                        "{} shown, {} not current.",
+                        plural(total as i64, "subscription"),
+                        total as i64 - current_quota
+                    ),
+                },
+                recovery: if configured_quota_source_failed {
+                    DiagnosticRecovery::ConfigureProvider
+                } else {
+                    DiagnosticRecovery::None
+                },
+            },
+            DiagnosticSurface {
+                id: "usage_this_device".into(),
+                status: match (usage_scan_blocked, usage.as_ref().map(|value| value.status)) {
+                    (true, _) => DiagnosticStatus::Blocked,
+                    (false, Some(crate::protocol::ComponentStatus::Error)) => {
+                        DiagnosticStatus::Degraded
+                    }
+                    _ => DiagnosticStatus::Ok,
+                },
+                data: if usage_partial {
                     DiagnosticDataState::Partial
-                } else if value
-                    .get("valid_records")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-                    > 0
+                } else if record_count > 0 || (!allow_usage_index_reads && last_good_local_usage) {
+                    DiagnosticDataState::Current
+                } else {
+                    DiagnosticDataState::Empty
+                },
+                last_success_at: usage.as_ref().and_then(|value| value.updated_at.clone()),
+                message: if force_usage_partial {
+                    "Local Usage history is being rebuilt and is incomplete until the next full \
+                     scan finishes."
+                        .to_owned()
+                } else if record_count > 0 {
+                    format!(
+                        "{} read from {}.",
+                        plural(record_count, "record"),
+                        plural(scan_diagnostics.len() as i64, "agent")
+                    )
+                } else {
+                    "No Usage records have been found on this Mac yet.".to_owned()
+                },
+                recovery: if usage_scan_blocked {
+                    DiagnosticRecovery::CheckAccess
+                } else if force_usage_partial {
+                    DiagnosticRecovery::Automatic
+                } else {
+                    DiagnosticRecovery::None
+                },
+            },
+            DiagnosticSurface {
+                id: "usage_account".into(),
+                status: match (usage_upload_enabled && account_signed_in, upload_blocked) {
+                    (false, _) => DiagnosticStatus::Inactive,
+                    (true, true) => DiagnosticStatus::Blocked,
+                    (true, false) if upload_failed => DiagnosticStatus::Degraded,
+                    _ => DiagnosticStatus::Ok,
+                },
+                data: if !usage_upload_enabled || !account_signed_in {
+                    DiagnosticDataState::Empty
+                } else if [
+                    &snapshot.usage_periods.account.today,
+                    &snapshot.usage_periods.account.last_7_days,
+                    &snapshot.usage_periods.account.last_30_days,
+                    &snapshot.usage_periods.account.all,
+                ]
+                .into_iter()
+                .any(Option::is_some)
                 {
                     DiagnosticDataState::Current
                 } else {
                     DiagnosticDataState::Empty
                 },
-                last_attempt_at: attempt_facts
-                    .latest_completed
-                    .as_ref()
-                    .map(diagnostic_attempt_timestamp),
-                last_success_at: attempt_facts
-                    .latest_success
-                    .as_ref()
-                    .map(diagnostic_attempt_timestamp),
-                metrics: metrics([
-                    (
-                        "scanned_files",
-                        value
-                            .get("scanned_files")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0),
-                    ),
-                    (
-                        "partial_files",
-                        value
-                            .get("partial_files")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0),
-                    ),
-                    (
-                        "valid_records",
-                        value
-                            .get("valid_records")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0),
-                    ),
-                    ("partial_hours", partial_for_agent),
-                ]),
-            });
-            if status == Some("blocked") {
-                usage_requires_attention = true;
-                findings.push(DiagnosticFinding {
-                    component: "usage_scan".into(),
-                    source: DiagnosticSource::ThisDevice,
-                    subject: Some(subject.clone()),
-                    code: "scan_unavailable".into(),
-                    severity: DiagnosticSeverity::Warning,
-                    impact: DiagnosticImpact::Surface,
-                    recovery: DiagnosticRecovery::Retry,
-                    count: 1,
-                    observed_at: attempt_observed_at.clone(),
-                    message: "This Usage source could not be scanned.".into(),
-                });
-            }
-            for (code, count) in value
-                .get("reason_counts")
-                .and_then(Value::as_object)
-                .into_iter()
-                .flatten()
-            {
-                let count = count.as_i64().unwrap_or(0).clamp(0, 1_000_000);
-                if count == 0 {
-                    continue;
-                }
-                let transient = matches!(
-                    code.as_str(),
-                    "truncated_tail" | "source_changed" | "scan_cancelled"
-                );
-                let access = matches!(code.as_str(), "permission_denied" | "source_unreadable");
-                usage_requires_attention |= !transient;
-                findings.push(DiagnosticFinding {
-                    component: "usage_scan".into(),
-                    source: DiagnosticSource::ThisDevice,
-                    subject: Some(format!("agent:{}", agent.as_str())),
-                    code: code.clone(),
-                    severity: if transient {
-                        DiagnosticSeverity::Info
-                    } else {
-                        DiagnosticSeverity::Warning
-                    },
-                    impact: DiagnosticImpact::Surface,
-                    recovery: if transient {
-                        DiagnosticRecovery::Automatic
-                    } else if access {
-                        DiagnosticRecovery::CheckAccess
-                    } else {
-                        DiagnosticRecovery::UpdateSource
-                    },
-                    count,
-                    observed_at: attempt_observed_at.clone(),
-                    message: if transient {
-                        "The source changed while it was being scanned; the next refresh will retry."
-                    } else {
-                        "Invalid Usage input was isolated while valid records were retained."
+                last_success_at: upload_facts.last_success_at.clone(),
+                message: match (usage_upload_enabled, account_signed_in) {
+                    (false, _) => "Usage sync is off, so nothing leaves this Mac.".to_owned(),
+                    (true, false) => "Sign in to send Usage to your account.".to_owned(),
+                    (true, true) => {
+                        "Usage from this Mac is part of your account totals.".to_owned()
                     }
-                    .into(),
-                });
-            }
-        }
-        let usage_operation = match usage.as_ref().map(|value| value.status) {
-            Some(crate::protocol::ComponentStatus::Error) => DiagnosticOperation::Degraded,
-            _ => DiagnosticOperation::Healthy,
-        };
-        let local_usage_data = if usage_partial {
-            DiagnosticDataState::Partial
-        } else if record_count > 0 || (!allow_usage_index_reads && last_good_local_usage) {
-            DiagnosticDataState::Current
-        } else {
-            DiagnosticDataState::Empty
-        };
-        surfaces.push(DiagnosticSurface {
-            name: "usage_this_device".into(),
-            operation: usage_operation,
-            data: local_usage_data,
-            source: Some(DiagnosticSource::ThisDevice),
-            metrics: metrics([
-                ("files", file_count),
-                ("records", record_count),
-                ("partial_hours", partial_hours.len() as i64),
-                ("agents", scan_diagnostics.len() as i64),
-            ]),
-        });
-
-        let account_usage_available = [
-            &snapshot.usage_periods.account.today,
-            &snapshot.usage_periods.account.last_7_days,
-            &snapshot.usage_periods.account.last_30_days,
-            &snapshot.usage_periods.account.all,
-        ]
-        .into_iter()
-        .filter(|value| value.is_some())
-        .count() as i64;
-        surfaces.push(DiagnosticSurface {
-            name: "usage_account".into(),
-            operation: DiagnosticOperation::Healthy,
-            data: if !usage_upload_enabled || !account_signed_in {
-                DiagnosticDataState::Empty
-            } else if account_usage_available > 0 {
-                DiagnosticDataState::Current
-            } else {
-                DiagnosticDataState::Empty
+                },
+                recovery: DiagnosticRecovery::None,
             },
-            source: Some(DiagnosticSource::Account),
-            metrics: metrics([
-                ("enabled", i64::from(usage_upload_enabled)),
-                ("periods", account_usage_available),
-            ]),
-        });
-
-        let account_sync_facts = self
-            .state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::AccountSync,
-                DiagnosticSource::Account,
-                None,
-            )
-            .map_err(|_| BackendError::unavailable())?;
-        let account_attempt_failed = account_active
-            && account_sync_facts
-                .latest_completed
-                .as_ref()
-                .is_some_and(|attempt| {
-                    matches!(
-                        attempt.outcome,
-                        DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted
-                    )
-                });
-        let account_operation = match account.as_ref().map(|value| value.status) {
-            Some(crate::protocol::ComponentStatus::Stale)
-            | Some(crate::protocol::ComponentStatus::AuthRequired)
-            | Some(crate::protocol::ComponentStatus::Error)
-                if account_signed_in || account_active =>
-            {
-                DiagnosticOperation::Degraded
-            }
-            _ if account_attempt_failed => DiagnosticOperation::Degraded,
-            _ => DiagnosticOperation::Healthy,
-        };
-        let account_data = if !account_signed_in && !account_active {
-            DiagnosticDataState::Empty
-        } else if account_operation == DiagnosticOperation::Degraded {
-            DiagnosticDataState::Stale
-        } else {
-            DiagnosticDataState::Current
-        };
-        let account_metrics = account_diagnostic_metrics(
-            account.as_ref().and_then(|value| value.value.as_ref()),
-            session.as_ref(),
-        );
-        surfaces.push(DiagnosticSurface {
-            name: "account".into(),
-            operation: account_operation,
-            data: account_data,
-            source: Some(DiagnosticSource::Account),
-            metrics: account_metrics,
-        });
-        if account_operation != DiagnosticOperation::Healthy {
-            let error = account.as_ref().and_then(|value| value.last_error.as_ref());
-            let code = error
-                .map(|value| error_code_wire(value.code))
-                .unwrap_or_else(|| "account_unavailable".into());
-            findings.push(DiagnosticFinding {
-                component: "account".into(),
-                source: DiagnosticSource::Account,
-                subject: None,
-                code,
-                severity: DiagnosticSeverity::Warning,
-                impact: DiagnosticImpact::Surface,
-                recovery: if error.is_some_and(|value| value.code.requires_login()) {
+            DiagnosticSurface {
+                id: "account".into(),
+                status: match (account_signed_in || account_active, account_degraded) {
+                    (false, _) => DiagnosticStatus::Inactive,
+                    (true, true) => DiagnosticStatus::Degraded,
+                    (true, false) => DiagnosticStatus::Ok,
+                },
+                data: if !account_signed_in && !account_active {
+                    DiagnosticDataState::Empty
+                } else if account_degraded {
+                    DiagnosticDataState::Stale
+                } else {
+                    DiagnosticDataState::Current
+                },
+                last_success_at: account_facts.last_success_at.clone(),
+                message: match (account_signed_in || account_active, account_degraded) {
+                    (false, _) => "This Mac is not signed in to a Quota account.".to_owned(),
+                    (true, true) => {
+                        "Account data on screen is the last copy this Mac read.".to_owned()
+                    }
+                    (true, false) => format!(
+                        "Signed in · {}.",
+                        plural(
+                            array_len(
+                                account
+                                    .as_ref()
+                                    .and_then(|value| value.value.as_ref())
+                                    .and_then(|value| value.get("account_summary")),
+                                "devices",
+                            ),
+                            "device",
+                        )
+                    ),
+                },
+                recovery: if account_needs_login && account_degraded {
                     DiagnosticRecovery::Login
-                } else {
+                } else if account_degraded {
                     DiagnosticRecovery::Retry
-                },
-                count: 1,
-                observed_at: account
-                    .as_ref()
-                    .and_then(|_| {
-                        account_sync_facts
-                            .latest_completed
-                            .as_ref()
-                            .map(diagnostic_attempt_timestamp)
-                    })
-                    .unwrap_or_else(|| now.clone()),
-                message: "Signed-in Account data could not be refreshed.".into(),
-            });
-        }
-
-        let dirty_ranges = self
-            .state
-            .dirty_usage_ranges()
-            .map_err(|_| BackendError::unavailable())?;
-        let outbox_count = self
-            .state
-            .outbox_entries()
-            .map_err(|_| BackendError::unavailable())?
-            .len() as i64;
-        let uploadable_dirty_count = uploadable_dirty_range_count(&dirty_ranges, Utc::now());
-        let upload_facts = self
-            .state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::UsageUpload,
-                DiagnosticSource::Account,
-                None,
-            )
-            .map_err(|_| BackendError::unavailable())?;
-        let latest_upload = upload_facts.latest_completed.as_ref();
-        let upload_waiting = outbox_count + uploadable_dirty_count > 0;
-        let unresolved_upload_problem = latest_upload
-            .filter(|attempt| {
-                matches!(
-                    attempt.outcome,
-                    DiagnosticAttemptOutcome::Failed
-                        | DiagnosticAttemptOutcome::Interrupted
-                        | DiagnosticAttemptOutcome::Partial
-                )
-            })
-            .or_else(|| {
-                upload_waiting.then_some(())?;
-                upload_facts.latest_problem_after_success.as_ref()
-            });
-        let sync_failed =
-            account_active && usage_upload_enabled && unresolved_upload_problem.is_some();
-        let sync_blocked = sync_failed
-            && unresolved_upload_problem
-                .is_some_and(|attempt| attempt.code == Some(DiagnosticAttemptCode::InvalidState));
-        let sync_mode = if account_active && usage_upload_enabled {
-            DiagnosticMode::Required
-        } else {
-            DiagnosticMode::Inactive
-        };
-        checks.push(DiagnosticCheck {
-            name: "usage_upload".into(),
-            source: DiagnosticSource::Account,
-            subject: None,
-            mode: sync_mode,
-            operation: if sync_blocked {
-                DiagnosticOperation::Blocked
-            } else if sync_failed {
-                DiagnosticOperation::Degraded
-            } else {
-                DiagnosticOperation::Healthy
-            },
-            data: if upload_waiting {
-                DiagnosticDataState::Partial
-            } else {
-                DiagnosticDataState::Current
-            },
-            last_attempt_at: latest_upload.map(|attempt| {
-                attempt
-                    .completed_at
-                    .clone()
-                    .unwrap_or_else(|| attempt.started_at.clone())
-            }),
-            last_success_at: upload_facts
-                .latest_success
-                .as_ref()
-                .map(diagnostic_attempt_timestamp),
-            metrics: metrics([
-                ("enabled", i64::from(usage_upload_enabled)),
-                ("dirty_ranges", dirty_ranges.len() as i64),
-                ("uploadable_dirty_ranges", uploadable_dirty_count),
-                ("outbox", outbox_count),
-                ("waiting", i64::from(upload_waiting)),
-            ]),
-        });
-        if sync_failed {
-            let code = unresolved_upload_problem
-                .and_then(|attempt| attempt.code)
-                .map(diagnostic_attempt_code_wire)
-                .unwrap_or("unavailable");
-            findings.push(DiagnosticFinding {
-                component: "usage_upload".into(),
-                source: DiagnosticSource::Account,
-                subject: None,
-                code: code.into(),
-                severity: if sync_blocked {
-                    DiagnosticSeverity::Error
                 } else {
-                    DiagnosticSeverity::Warning
+                    DiagnosticRecovery::None
                 },
-                impact: if sync_blocked {
-                    DiagnosticImpact::System
-                } else {
-                    DiagnosticImpact::Source
-                },
-                recovery: unresolved_upload_problem
-                    .map(|attempt| attempt.recovery)
-                    .unwrap_or(DiagnosticRecovery::Retry),
-                count: 1,
-                observed_at: unresolved_upload_problem
-                    .and_then(|attempt| attempt.completed_at.clone())
-                    .unwrap_or_else(|| now.clone()),
-                message: "A completed Usage upload attempt did not make progress.".into(),
+            },
+        ];
+
+        let operation = surfaces
+            .iter()
+            .map(|surface| surface.status)
+            .fold(DiagnosticOperation::Healthy, |worst, status| {
+                worst_operation(worst, operation_for(status))
             });
-        }
-
-        let pricing_value = pricing.as_ref().and_then(|value| value.value.as_ref());
-        let pricing_metrics = pricing_diagnostic_metrics(pricing_value);
-        let pricing_valid = pricing_metrics.get("catalog_valid") == Some(&1);
-        let pricing_required = record_count > 0;
-        let pricing_facts = self
-            .state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::PricingRefresh,
-                DiagnosticSource::System,
-                None,
-            )
-            .map_err(|_| BackendError::unavailable())?;
-        let pricing_attempt_failed =
-            pricing_facts
-                .latest_completed
-                .as_ref()
-                .is_some_and(|attempt| {
-                    matches!(
-                        attempt.outcome,
-                        DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted
-                    )
-                });
-        checks.push(DiagnosticCheck {
-            name: "pricing_catalog".into(),
-            source: DiagnosticSource::System,
-            subject: None,
-            mode: if pricing_required {
-                DiagnosticMode::Required
-            } else {
-                DiagnosticMode::Inactive
-            },
-            operation: if pricing_required
-                && ((pricing_value.is_some() && !pricing_valid) || pricing_attempt_failed)
-            {
-                DiagnosticOperation::Degraded
-            } else {
-                DiagnosticOperation::Healthy
-            },
-            data: if pricing_valid {
-                DiagnosticDataState::Current
-            } else {
-                DiagnosticDataState::Empty
-            },
-            last_attempt_at: pricing_facts
-                .latest_completed
-                .as_ref()
-                .map(diagnostic_attempt_timestamp),
-            last_success_at: pricing_facts
-                .latest_success
-                .as_ref()
-                .map(diagnostic_attempt_timestamp),
-            metrics: pricing_metrics,
-        });
-        if pricing_required
-            && ((pricing_value.is_some() && !pricing_valid) || pricing_attempt_failed)
-        {
-            findings.push(DiagnosticFinding {
-                component: "pricing_catalog".into(),
-                source: DiagnosticSource::System,
-                subject: None,
-                code: "invalid_catalog".into(),
-                severity: DiagnosticSeverity::Warning,
-                impact: DiagnosticImpact::Surface,
-                recovery: DiagnosticRecovery::Retry,
-                count: 1,
-                observed_at: pricing_facts
-                    .latest_completed
-                    .as_ref()
-                    .map(diagnostic_attempt_timestamp)
-                    .unwrap_or_else(|| now.clone()),
-                message: "The pricing catalog is invalid; Usage totals remain available.".into(),
+        let attention = surfaces
+            .iter()
+            .map(|surface| surface.recovery)
+            .chain(sources.iter().map(|source| source.recovery))
+            .fold(DiagnosticAttention::None, |worst, recovery| {
+                worst_attention(worst, attention_for(recovery))
             });
-        }
+        // Folded before the cap, so a report never says everything is fine because the row
+        // that needed acting on fell off the end of a long list.
+        sources.truncate(MAXIMUM_DIAGNOSTIC_SOURCES);
 
-        if let Some(salvaged_at) = self
-            .state
-            .state_salvaged_at()
-            .map_err(|_| BackendError::unavailable())?
-        {
-            let within_window = DateTime::parse_from_rfc3339(&salvaged_at)
-                .ok()
-                .is_some_and(|value| Utc::now() - value.with_timezone(&Utc) < Duration::hours(24));
-            if within_window {
-                checks.push(DiagnosticCheck {
-                    name: "local_state".into(),
-                    source: DiagnosticSource::System,
-                    subject: None,
-                    mode: DiagnosticMode::Required,
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Current,
-                    last_attempt_at: Some(salvaged_at.clone()),
-                    last_success_at: Some(salvaged_at.clone()),
-                    metrics: metrics([("repaired", 1)]),
-                });
-                findings.push(DiagnosticFinding {
-                    component: "local_state".into(),
-                    source: DiagnosticSource::System,
-                    subject: None,
-                    code: "state_repaired".into(),
-                    severity: DiagnosticSeverity::Info,
-                    impact: DiagnosticImpact::None,
-                    recovery: DiagnosticRecovery::None,
-                    count: 1,
-                    observed_at: salvaged_at,
-                    message: "Local storage was rebuilt. Quota and Account were preserved.".into(),
-                });
-            }
-        }
-
-        let mut operation = DiagnosticOperation::Healthy;
-        for surface in &surfaces {
-            operation = worst_operation(operation, surface.operation);
-        }
-        for check in &checks {
-            if check.mode == DiagnosticMode::Required {
-                operation = worst_operation(operation, check.operation);
-            }
-        }
-        let data = if usage_partial {
-            DiagnosticDataState::Partial
-        } else if quota_data == DiagnosticDataState::Stale
-            || account_data == DiagnosticDataState::Stale
-        {
-            DiagnosticDataState::Stale
-        } else if quota_data == DiagnosticDataState::Current
-            || local_usage_data == DiagnosticDataState::Current
-            || account_data == DiagnosticDataState::Current
-        {
-            DiagnosticDataState::Current
-        } else {
-            DiagnosticDataState::Empty
-        };
-        let attention_findings = findings
-            .iter()
-            .filter(|finding| finding.code != "state_repaired")
-            .collect::<Vec<_>>();
-        let mut attention = if attention_findings.iter().any(|finding| {
-            finding.severity == DiagnosticSeverity::Error
-                || (finding.severity == DiagnosticSeverity::Warning
-                    && finding.recovery != DiagnosticRecovery::Retry)
-        }) || usage_requires_attention
-        {
-            DiagnosticAttention::Required
-        } else if attention_findings
-            .iter()
-            .any(|finding| finding.severity == DiagnosticSeverity::Warning)
-        {
-            DiagnosticAttention::Automatic
-        } else if attention_findings
-            .iter()
-            .any(|finding| finding.severity == DiagnosticSeverity::Info)
-        {
-            DiagnosticAttention::Optional
-        } else if account_active
-            && usage_upload_enabled
-            && outbox_count + uploadable_dirty_count > 0
-        {
-            DiagnosticAttention::Automatic
-        } else {
-            DiagnosticAttention::None
-        };
-        if force_usage_partial && attention != DiagnosticAttention::Required {
-            attention = DiagnosticAttention::Automatic;
-        };
-        let next_due_at = DateTime::parse_from_rfc3339(&now)
-            .ok()
-            .map(|value| (value + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true));
         Ok(DiagnosticReport {
-            schema_version: 2,
-            summary: DiagnosticSummary {
-                operation,
-                data,
-                attention,
-            },
-            refresh: DiagnosticRefresh {
-                phase: DiagnosticRefreshPhase::Idle,
-                revision: snapshot.revision,
-                as_of: now.clone(),
-                started_at: None,
-                next_due_at,
-            },
+            schema_version: DIAGNOSTIC_SCHEMA_VERSION,
             generated_at: now,
             client: self.diagnostic_client(),
+            summary: DiagnosticSummary {
+                operation,
+                attention,
+            },
             surfaces,
-            checks: checks.into_iter().take(128).collect(),
-            findings: findings.into_iter().take(256).collect(),
-            recent_activity,
+            sources,
+            recent,
         })
     }
 
@@ -1346,7 +1092,11 @@ impl NativeBackend {
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
     ) -> Result<Value, BackendError> {
-        let context = self.collection_context(cancel.clone())?;
+        #[cfg(test)]
+        if let Some(gate) = &self.collection_gate {
+            gate.hold();
+        }
+        let mut context = self.collection_context(cancel.clone())?;
         let captured_at = context.observed_at();
         let diagnostic_snapshot = self
             .state
@@ -1365,97 +1115,87 @@ impl NativeBackend {
                     .map(|value| value.provider),
             )
             .collect::<HashSet<_>>();
+        // Discovery first, then the CLI version probe, then collection: a collector must be
+        // handed the version it presents rather than reach for it, so that nothing running on
+        // the five-minute timer can start a process of its own.
+        let discovered = provider_ids
+            .iter()
+            .copied()
+            .map(|provider| {
+                let sessions = providers::discover(provider, &context);
+                (provider, sessions)
+            })
+            .collect::<Vec<_>>();
+        context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
+        self.renew_provider_sign_ins(&discovered, &mut context);
         let attempts =
             thread::scope(|scope| {
                 let mut jobs = Vec::with_capacity(provider_ids.len());
-                for provider in provider_ids.iter().copied() {
+                for (provider, sessions) in discovered {
                     let context = context.clone();
-                    let mode = if configured.contains(provider.as_str()) {
-                        DiagnosticMode::Required
-                    } else {
-                        DiagnosticMode::Opportunistic
-                    };
-                    let sessions = providers::discover(provider, &context);
-                    let source_count = sessions.len() as i64;
-                    if sessions.is_empty() && mode == DiagnosticMode::Opportunistic {
-                        jobs.push((provider, mode, None, source_count, None));
+                    let explicit = configured.contains(provider.as_str());
+                    if sessions.is_empty() && !explicit {
+                        jobs.push((provider, explicit, None, None));
                         continue;
                     }
                     let subject = format!("provider:{}", provider.as_str());
-                    let handle = self.begin_attempt(
-                        DiagnosticAttemptKind::QuotaCollection,
-                        DiagnosticSource::ThisDevice,
-                        Some(&subject),
-                        mode,
-                    )?;
+                    let handle =
+                        self.begin_attempt(DiagnosticAttemptKind::QuotaCollection, Some(&subject));
                     jobs.push((
                         provider,
-                        mode,
-                        Some(handle),
-                        source_count,
+                        explicit,
+                        handle,
                         Some(scope.spawn(move || {
                             collect_discovered_provider(provider, sessions, &context)
                         })),
                     ));
                 }
-                let joined = jobs
-                    .into_iter()
-                    .map(|(provider, mode, handle, source_count, job)| match job {
+                jobs.into_iter()
+                    .map(|(provider, explicit, handle, job)| match job {
                         Some(job) => match job.join() {
-                            Ok(result) => (provider, mode, handle, source_count, result, false),
+                            Ok(result) => (explicit, handle, result, false),
                             Err(_) => (
-                                provider,
-                                mode,
+                                explicit,
                                 handle,
-                                source_count,
                                 json!({
                                     "provider": provider,
                                     "outcome": "error",
-                                    "snapshots": []
+                                    "snapshots": [],
+                                    "sources": []
                                 }),
                                 true,
                             ),
                         },
                         None => (
-                            provider,
-                            mode,
+                            explicit,
                             None,
-                            source_count,
                             json!({
                                 "provider": provider,
                                 "outcome": "auth_required",
-                                "snapshots": []
+                                "snapshots": [],
+                                "sources": []
                             }),
                             false,
                         ),
                     })
-                    .collect::<Vec<_>>();
-                Ok::<_, BackendError>(joined)
+                    .collect::<Vec<_>>()
             });
-        let attempts = attempts?;
         let cancelled = cancel.load(Ordering::Acquire);
         let mut results = Vec::with_capacity(attempts.len());
-        for (_, mode, handle, source_count, mut result, panicked) in attempts {
-            let snapshot_count = result
-                .get("snapshots")
-                .and_then(Value::as_array)
-                .map(|values| values.len() as i64)
-                .unwrap_or(0);
+        for (explicit, handle, mut result, panicked) in attempts {
             let result_outcome = result
                 .get("outcome")
                 .and_then(Value::as_str)
                 .unwrap_or("error");
-            let (outcome, code, recovery) = if cancelled {
+            let (outcome, code) = if cancelled {
                 (
                     DiagnosticAttemptOutcome::Cancelled,
                     Some(DiagnosticAttemptCode::Cancelled),
-                    DiagnosticRecovery::None,
                 )
             } else if panicked {
                 (
                     DiagnosticAttemptOutcome::Failed,
                     Some(DiagnosticAttemptCode::Unavailable),
-                    DiagnosticRecovery::Retry,
                 )
             } else {
                 let access_denied =
@@ -1466,52 +1206,178 @@ impl NativeBackend {
                     _ if access_denied => (
                         DiagnosticAttemptOutcome::Failed,
                         Some(DiagnosticAttemptCode::AccessDenied),
-                        DiagnosticRecovery::CheckAccess,
                     ),
-                    "success" => (
-                        DiagnosticAttemptOutcome::Success,
-                        None,
-                        DiagnosticRecovery::None,
-                    ),
-                    "auth_required" if mode == DiagnosticMode::Opportunistic => (
+                    "success" => (DiagnosticAttemptOutcome::Success, None),
+                    "auth_required" if !explicit => (
                         DiagnosticAttemptOutcome::NoWork,
                         Some(DiagnosticAttemptCode::AuthenticationRequired),
-                        DiagnosticRecovery::None,
                     ),
                     "auth_required" => (
                         DiagnosticAttemptOutcome::Failed,
                         Some(DiagnosticAttemptCode::AuthenticationRequired),
-                        DiagnosticRecovery::ConfigureProvider,
                     ),
                     _ => (
                         DiagnosticAttemptOutcome::Failed,
                         Some(DiagnosticAttemptCode::ProviderError),
-                        DiagnosticRecovery::Retry,
                     ),
                 }
             };
-            if let Some(handle) = handle {
-                self.finish_attempt(
-                    handle,
-                    outcome,
-                    code,
-                    recovery,
-                    metrics([("sources", source_count), ("snapshots", snapshot_count)]),
-                )?;
+            self.finish_attempt(handle, outcome, code);
+            // A collector that panicked reported nothing at all, so the sources it was
+            // handed are stated here rather than lost with it.
+            if !result["sources"].is_array() {
+                result["sources"] = json!([]);
             }
-            // Stamped here, with the count this loop already journals, so no collector
-            // return path can forget it — a panicked one included.
-            result["sources"] = json!(source_count);
             results.push(result);
         }
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
+        self.record_proven_credentials(&results, &context);
         Ok(json!({
-            "protocol_version": LOCAL_COLLECTION_PROTOCOL,
             "captured_at": captured_at,
             "results": results
         }))
+    }
+
+    /// The installed version of every provider CLI this refresh will identify as.
+    ///
+    /// Only CLIs whose provider actually holds a sign-in here are asked, so a Mac without
+    /// Codex never runs `codex --version`.  The answer is a property of the binary, kept in
+    /// the cache against its real path, size, and mtime: an unchanged install costs a `stat`,
+    /// and `--version` runs at most once per installed binary and at most once an hour.  A
+    /// probe that fails or is absent leaves the collector on its own fallback constant, and
+    /// nothing about collection waits on it.
+    fn provider_cli_versions(
+        &self,
+        discovered: &[(ProviderId, Vec<ProviderSession>)],
+        context: &CollectionContext,
+        cancel: &Arc<AtomicBool>,
+    ) -> BTreeMap<CliTool, String> {
+        let wanted = discovered
+            .iter()
+            .filter(|(_, sessions)| !sessions.is_empty())
+            .filter_map(|(provider, _)| match provider {
+                ProviderId::Claude => Some(CliTool::Claude),
+                ProviderId::Codex => Some(CliTool::Codex),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if wanted.is_empty() {
+            return BTreeMap::new();
+        }
+        let cached = self
+            .state
+            .provider_cli_versions()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<ProbeCache>(&raw).ok())
+            .unwrap_or_default();
+        let resolution = resolve_cli_versions(
+            &wanted,
+            &cached,
+            &ProbeEnvironment::new(
+                context.home_directory.clone(),
+                context.env("PATH").map(str::to_owned),
+            ),
+            crate::providers::common::unix_now(),
+            Some(cancel),
+        );
+        if resolution.changed
+            && let Ok(encoded) = serde_json::to_string(&resolution.cache)
+        {
+            let _ = self.state.write_provider_cli_versions(&encoded);
+        }
+        resolution.versions
+    }
+
+    /// Asks the CLI that owns a provider's sign-in to renew it, when that sign-in is the only
+    /// thing standing between the refresh and a reading.
+    ///
+    /// Three providers hold a token only their own program can renew. Grok's lives about six
+    /// hours, Claude Code's about eight, Codex's about ten days, so a Mac that has not opened
+    /// one of them lately would otherwise report an expired sign-in until someone does. An
+    /// expired grant — and nothing else — earns one bounded run of that CLI, at most once an
+    /// hour whatever it produced. Each provider states which program and which conversation;
+    /// [`crate::providers::common`] owns every bound the three share.
+    ///
+    /// Runs here, beside the version probe and before collection, so no collector gains the
+    /// ability to start a process. Collection reads the credential afterwards and neither
+    /// knows nor waits for any of this beyond the renewals' own deadlines.
+    fn renew_provider_sign_ins(
+        &self,
+        discovered: &[(ProviderId, Vec<ProviderSession>)],
+        context: &mut CollectionContext,
+    ) {
+        let signed_in = |wanted: ProviderId| {
+            discovered
+                .iter()
+                .any(|(provider, sessions)| *provider == wanted && !sessions.is_empty())
+        };
+        let wanted = [ProviderId::Claude, ProviderId::Codex, ProviderId::Grok]
+            .into_iter()
+            .filter(|provider| signed_in(*provider))
+            .collect::<Vec<_>>();
+        if wanted.is_empty() {
+            return;
+        }
+        // One read and one write for every provider that asks: the record only exists to hold
+        // the hour, and splitting it per provider would split those too.
+        let mut attempts = self
+            .state
+            .provider_refresh_attempts()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<RenewalAttempts>(&raw).ok())
+            .unwrap_or_default();
+        let now = crate::providers::common::unix_now();
+        let home = context.home_directory.clone();
+        let path = context.env("PATH").map(str::to_owned);
+        let mut recorded = false;
+        for provider in wanted {
+            let attempted = attempts.get(provider.as_str()).cloned();
+            let mut environment = ProbeEnvironment::new(home.clone(), path.clone());
+            // A renewal waits on the provider's own network round trip, so it is not bounded
+            // like a `--version` read; each CLI states how long its own takes.
+            let attempt = match provider {
+                ProviderId::Claude => {
+                    environment.timeout = claude::refresh::RENEWAL_TIMEOUT;
+                    claude::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
+                ProviderId::Codex => {
+                    environment.timeout = codex::refresh::RENEWAL_TIMEOUT;
+                    codex::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
+                _ => {
+                    environment.timeout = grok::refresh::RENEWAL_TIMEOUT;
+                    grok::refresh::renew_expired_sign_in(
+                        context,
+                        &environment,
+                        attempted.as_ref(),
+                        now,
+                    )
+                }
+            };
+            if let Some(attempt) = attempt {
+                attempts.insert(provider.as_str().to_owned(), attempt);
+                recorded = true;
+            }
+        }
+        // An attempt that cannot be recorded must not become an attempt every five minutes,
+        // but a cache that cannot be written is already reporting itself elsewhere.
+        if recorded && let Ok(encoded) = serde_json::to_string(&attempts) {
+            let _ = self.state.write_provider_refresh_attempts(&encoded);
+        }
     }
 
     fn collection_context(
@@ -1534,7 +1400,57 @@ impl NativeBackend {
             client_version: self.client_version.clone(),
             now: Some(now_rfc3339()),
             cancel: Some(cancel),
+            keychain: Default::default(),
+            cli_versions: BTreeMap::new(),
+            proven_credentials: self
+                .state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default(),
         })
+    }
+
+    /// Remembers the credential a provider was just read with.
+    ///
+    /// Only a rung that spends this device's own credential counts, and only when it answered:
+    /// that is the one thing that says an access token this build cannot date is a token that
+    /// works. Everything else — a browser session, a rung that failed — leaves the record
+    /// alone, so a sign-in that stops working goes back to earning a renewal.
+    fn record_proven_credentials(&self, results: &[Value], context: &CollectionContext) {
+        let succeeded = |provider: ProviderId, source_id: &str| {
+            results.iter().any(|result| {
+                result.get("provider").and_then(Value::as_str) == Some(provider.as_str())
+                    && result
+                        .get("sources")
+                        .and_then(Value::as_array)
+                        .is_some_and(|sources| {
+                            sources.iter().any(|source| {
+                                source.get("source_id").and_then(Value::as_str) == Some(source_id)
+                                    && source.get("outcome").and_then(Value::as_str)
+                                        == Some("success")
+                            })
+                        })
+            })
+        };
+        let mut proven = context.proven_credentials.clone();
+        let before = proven.clone();
+        match codex::proven_credential(context)
+            .filter(|_| succeeded(ProviderId::Codex, codex::SOURCE))
+        {
+            Some(fingerprint) => {
+                proven.insert(ProviderId::Codex.as_str().to_owned(), fingerprint);
+            }
+            None => {
+                proven.remove(ProviderId::Codex.as_str());
+            }
+        }
+        if proven != before
+            && let Ok(encoded) = serde_json::to_string(&proven)
+        {
+            let _ = self.state.write_proven_provider_credentials(&encoded);
+        }
     }
 
     fn collect_usage(&self, cancel: Arc<AtomicBool>) -> Result<UsageCollection, BackendError> {
@@ -1546,24 +1462,22 @@ impl NativeBackend {
             })
             .unwrap_or(completed_hour);
         let mut agents = Vec::new();
+        // One revision for the whole pass: every hour this scan recomputes is stamped with it,
+        // and Relay replaces a stored hour only for a strictly newer one.
+        let scan_version = self
+            .state
+            .next_usage_scan_version()
+            .map_err(|_| BackendError::unavailable())?;
         for agent in UsageAgent::ALL {
             if cancel.load(Ordering::Acquire) {
                 return Err(BackendError::cancelled());
-            }
-            if self.state.last_persistence_requires_abort() {
-                return Err(BackendError::unavailable());
             }
             let file_index = self
                 .state
                 .usage_file_index(agent)
                 .map_err(|_| BackendError::unavailable())?;
             let subject = format!("agent:{}", agent.as_str());
-            let attempt = self.begin_attempt(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticSource::ThisDevice,
-                Some(&subject),
-                DiagnosticMode::Required,
-            )?;
+            let attempt = self.begin_attempt(DiagnosticAttemptKind::UsageScan, Some(&subject));
             let options = UsageScanOptions {
                 home_directory: Some(self.home.clone()),
                 environment: self.environment.clone(),
@@ -1582,21 +1496,13 @@ impl NativeBackend {
                 Err(_) => {
                     let _ = self.state.write_usage_scan_diagnostics(
                         agent,
-                        &json!({
-                            "status": "blocked",
-                            "scanned_files": 0,
-                            "skipped_files": 0,
-                            "indexed_records": 0,
-                            "reason_counts": {"scan_failed": 1}
-                        }),
+                        &json!({"status": "blocked", "reason_counts": {"scan_failed": 1}}),
                     );
                     self.finish_attempt(
                         attempt,
                         DiagnosticAttemptOutcome::Failed,
                         Some(DiagnosticAttemptCode::Unavailable),
-                        DiagnosticRecovery::Retry,
-                        metrics([("scanned_sources", 0), ("indexed_records", 0)]),
-                    )?;
+                    );
                     return Err(BackendError {
                         error: IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
                     });
@@ -1608,39 +1514,29 @@ impl NativeBackend {
             // Apply complete source files even when another file for the same agent is partial.
             // The state layer keeps the last-good rows for partial sources, so one malformed or
             // unreadable file cannot roll back unrelated complete sources.
-            if self.state.apply_usage_scan(agent, &scan).is_err() {
+            if self
+                .state
+                .apply_usage_scan(agent, &scan, scan_version)
+                .is_err()
+            {
                 let _ = self.state.write_usage_scan_diagnostics(
                     agent,
-                    &json!({
-                        "status": "blocked",
-                        "scanned_files": scan.scanned_source_count,
-                        "skipped_files": scan.skipped_source_count,
-                        "indexed_records": scan.records.len(),
-                        "valid_records": scan.records.len(),
-                        "ignored_empty_records": scan.ignored_empty_records,
-                        "reason_counts": {"state_apply_failed": 1}
-                    }),
+                    &json!({"status": "blocked", "reason_counts": {"state_apply_failed": 1}}),
                 );
                 self.finish_attempt(
                     attempt,
                     DiagnosticAttemptOutcome::Failed,
                     Some(DiagnosticAttemptCode::InvalidState),
-                    DiagnosticRecovery::Retry,
-                    metrics([
-                        ("scanned_sources", scan.scanned_source_count as i64),
-                        ("indexed_records", scan.records.len() as i64),
-                    ]),
-                )?;
+                );
                 return Err(BackendError::unavailable());
             }
-            let (outcome, code, recovery) = if scan.scanned_source_count == 0
+            let (outcome, code) = if scan.scanned_source_count == 0
                 && scan.skipped_source_count == 0
                 && scan.deleted_source_file_ids.is_empty()
             {
                 (
                     DiagnosticAttemptOutcome::NoWork,
                     Some(DiagnosticAttemptCode::NoWork),
-                    DiagnosticRecovery::None,
                 )
             } else if scan.coverage.status == CoverageStatus::Partial {
                 let transient = scan.coverage.reasons.iter().all(|reason| {
@@ -1668,49 +1564,19 @@ impl NativeBackend {
                     } else {
                         DiagnosticAttemptCode::PartialSource
                     }),
-                    if transient {
-                        DiagnosticRecovery::Automatic
-                    } else if malformed {
-                        DiagnosticRecovery::UpdateSource
-                    } else {
-                        DiagnosticRecovery::CheckAccess
-                    },
                 )
             } else {
-                (
-                    DiagnosticAttemptOutcome::Success,
-                    None,
-                    DiagnosticRecovery::None,
-                )
+                (DiagnosticAttemptOutcome::Success, None)
             };
-            self.finish_attempt(
-                attempt,
-                outcome,
-                code,
-                recovery,
-                metrics([
-                    ("scanned_sources", scan.scanned_source_count as i64),
-                    ("skipped_sources", scan.skipped_source_count as i64),
-                    ("indexed_records", scan.records.len() as i64),
-                    ("reason_count", scan.coverage.reasons.len() as i64),
-                ]),
-            )?;
+            self.finish_attempt(attempt, outcome, code);
             agents.push(AgentUsage {
                 coverage: scan.coverage.clone(),
             });
         }
-        let events = self
-            .state
-            .usage_events()
-            .map_err(|_| BackendError::unavailable())?;
-        let rows = usage::aggregate_usage_events(&events, &timezone).map_err(|_| BackendError {
-            error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-        })?;
         Ok(UsageCollection {
             timezone,
             generated_at: now_rfc3339(),
             agents,
-            rows,
         })
     }
 
@@ -1720,7 +1586,6 @@ impl NativeBackend {
         catalog: Option<&pricing::PricingCatalog>,
         model_catalog: Option<&crate::model_catalog::ModelCatalog>,
     ) -> Result<Value, BackendError> {
-        let rows = &usage.rows;
         let coverage: Vec<Value> = usage
             .agents
             .iter()
@@ -1759,9 +1624,8 @@ impl NativeBackend {
         .map(|period| {
             Ok((
                 period,
-                local_usage_detail(
+                self.local_usage_detail(
                     period,
-                    rows,
                     &usage.timezone,
                     generated_at,
                     catalog,
@@ -1774,10 +1638,18 @@ impl NativeBackend {
         self.state
             .replace_usage_periods(UsageSource::Local, &periods)
             .map_err(|_| BackendError::unavailable())?;
-        let today = usage_period_range(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
-        let (from, to) = usage_date_range(rows, &today);
+        let today = usage_period_window(UsagePeriod::Today, &usage.timezone, generated_at)?.0;
+        let (from, to) = periods
+            .last()
+            .and_then(|(_, detail)| detail.get("range"))
+            .and_then(|range| {
+                Some((
+                    range.get("from")?.as_str()?.to_owned(),
+                    range.get("to")?.as_str()?.to_owned(),
+                ))
+            })
+            .unwrap_or_else(|| (today.clone(), today.clone()));
         Ok(json!({
-            "protocol_version": LOCAL_USAGE_PROTOCOL,
             "generated_at": usage.generated_at,
             "aggregation_timezone": usage.timezone,
             "range": {"from": from, "to": to},
@@ -1787,26 +1659,46 @@ impl NativeBackend {
         }))
     }
 
+    /// One period, folded from the hours this device has stored.
+    ///
+    /// A local day begins at local midnight, so a period bounds the hours it folds by instant
+    /// rather than by UTC date — the same rule the Account read follows, so the two sides of the
+    /// panel agree for a Mac keeping the calendar the caller asked about.
+    fn local_usage_detail(
+        &self,
+        period: UsagePeriod,
+        timezone: &str,
+        generated_at: DateTime<Utc>,
+        pricing_catalog: Option<&pricing::PricingCatalog>,
+        model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+        incomplete: bool,
+    ) -> Result<Value, BackendError> {
+        let (today, span) = usage_period_window(period, timezone, generated_at)?;
+        let (rows, partial) = self
+            .state
+            .usage_period_rows(
+                span.as_ref()
+                    .map(|span| (span.start.as_str(), span.end.as_str())),
+            )
+            .map_err(|_| BackendError::unavailable())?;
+        let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
+            .map_err(|_| BackendError::unavailable())?;
+        let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
+        let (from, to) = span
+            .map(|span| span.dates)
+            .unwrap_or_else(|| usage_date_range(&rows, &today));
+        Ok(json!({
+            "range": {"from": from, "to": to},
+            "usage": summary,
+            "incomplete": incomplete || partial,
+            "details_truncated": details_truncated
+        }))
+    }
+
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
-        let attempt = self.begin_attempt(
-            DiagnosticAttemptKind::PricingRefresh,
-            DiagnosticSource::System,
-            None,
-            DiagnosticMode::Required,
-        )?;
+        let attempt = self.begin_attempt(DiagnosticAttemptKind::PricingRefresh, None);
         let result = self.refresh_pricing_inner();
-        let entry_count = result
-            .as_ref()
-            .ok()
-            .and_then(|value| value.get("entries"))
-            .and_then(Value::as_array)
-            .map(|values| values.len() as i64)
-            .unwrap_or(0);
-        self.finish_backend_result_attempt(
-            attempt,
-            &result,
-            metrics([("pricing_catalog", 1), ("entries", entry_count)]),
-        )?;
+        self.finish_backend_result_attempt(attempt, &result);
         result
     }
 
@@ -1824,8 +1716,11 @@ impl NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         match self.relay.pricing_catalog(etag.as_deref()) {
             Ok((next_etag, Some(value))) if pricing::validate_pricing_catalog(&value).valid => {
+                // A new body under the validator that described the old one would answer the
+                // next conditional request with a 304 for a document this device no longer
+                // holds. A response with no ETag is stored with none.
                 self.state
-                    .commit_pricing_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_pricing_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -1864,8 +1759,10 @@ impl NativeBackend {
             Ok((next_etag, Some(value)))
                 if crate::model_catalog::validate_model_catalog_value(&value).valid =>
             {
+                // As above: a body this device just received is not described by the validator
+                // for the one it replaced.
                 self.state
-                    .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_model_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -1894,7 +1791,33 @@ impl NativeBackend {
         }
     }
 
-    fn stage_outbox(&self, timezone: &str) -> Result<bool, BackendError> {
+    /// How many recomputed hours are ready to leave, under the same two bounds staging
+    /// applies: at or after this device's privacy watermark, and before the hour still being
+    /// written to.
+    ///
+    /// A session this build cannot read a watermark out of is counted from the epoch. This is
+    /// a number for one diagnostic line, and refusing to produce it would take the whole
+    /// report with it.
+    fn uploadable_dirty_hour_count(&self) -> Result<i64, BackendError> {
+        let lower_bound = self
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .and_then(|session| effective_usage_lower_bound(&session).ok())
+            .and_then(|value| ceil_utc_hour(&value).ok())
+            .unwrap_or_else(|| EPOCH_HOUR.to_owned());
+        self.state
+            .uploadable_dirty_hour_count(&lower_bound, &floor_utc_hour(&Utc::now()))
+            .map_err(|_| BackendError::unavailable())
+    }
+
+    /// Hands every hour this device has recomputed to the outbox, newest scan wins.
+    ///
+    /// An hour is the unit and its version decides, so staging is a copy rather than a
+    /// reservation: there is no sequence to allocate, no submission id to remember, and a
+    /// re-staged hour replaces the entry that was already there.
+    fn stage_outbox(&self) -> Result<bool, BackendError> {
         if !self
             .state
             .usage_upload_enabled()
@@ -1924,220 +1847,30 @@ impl NativeBackend {
             .get("device_generation")
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
-        let lower_bound = DateTime::parse_from_rfc3339(&effective_usage_lower_bound(&session)?)
-            .map_err(|_| invalid_local_state())?;
-        let existing = self
+        let lower_bound = ceil_utc_hour(&effective_usage_lower_bound(&session)?)?;
+        // The hour in progress is still being written to, so it is left for the next refresh.
+        let complete_until = floor_utc_hour(&Utc::now());
+        // An hour before the watermark will never be staged, so its mark is not work owed.
+        let _ = self.state.forget_dirty_usage_hours_before(&lower_bound);
+        // Identity is the file this device cannot rebuild, so it holds a bounded queue rather
+        // than a year of history at once. What is left over stays dirty and is staged by the
+        // next refresh, oldest hour first.
+        let entries = self
             .state
-            .outbox_entries_for(account_id, device_id, generation)
+            .dirty_usage_hour_batch(&lower_bound, &complete_until, MAX_STAGED_HOURS_PER_REFRESH)
             .map_err(|_| BackendError::unavailable())?;
-        let mut stage_slots = usage_stage_slots(existing.len());
-        if stage_slots == 0 {
+        if entries.is_empty() {
             return Ok(false);
         }
-        let mut blocked_unrepresentable = false;
-        let mut sequence = session
-            .get("next_usage_sequence")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        for entry in &existing {
-            if let Some(value) = entry.get("sequence").and_then(Value::as_u64) {
-                sequence = sequence.max(value.saturating_add(1));
-            }
-        }
-        let dirty_ranges = self
+        if !self
             .state
-            .dirty_usage_ranges()
-            .map_err(|_| BackendError::unavailable())?;
-        let partial_hours = self
-            .state
-            .partial_usage_hours()
-            .map_err(|_| BackendError::unavailable())?;
-        let events = self
-            .state
-            .usage_events()
-            .map_err(|_| BackendError::unavailable())?;
-        // Aggregate the retained event history once. Re-scanning and re-parsing every event for
-        // each candidate hour made a long history quadratic during staging.
-        let aggregate_events = events
-            .iter()
-            .filter(|event| {
-                DateTime::parse_from_rfc3339(&event.occurred_at)
-                    .ok()
-                    .is_some_and(|occurred| occurred >= lower_bound)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let aggregated_rows = usage::aggregate_usage_events(&aggregate_events, timezone)
-            .map_err(|_| BackendError::unavailable())?;
-        let mut rows_by_hour = HashMap::<(UsageAgent, String), Vec<UsageHourlyFact>>::new();
-        for row in aggregated_rows {
-            rows_by_hour
-                .entry((row.agent, row.bucket_start_utc.clone()))
-                .or_default()
-                .push(row);
+            .active_session_at_epoch(session_epoch)
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Err(BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            });
         }
-        let complete_until = DateTime::parse_from_rfc3339(&floor_utc_hour(&Utc::now()))
-            .map_err(|_| BackendError::unavailable())?;
-        for range in &dirty_ranges {
-            if !self
-                .state
-                .usage_upload_enabled()
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Ok(false);
-            }
-            if !self
-                .state
-                .active_session_at_epoch(session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Err(BackendError {
-                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-                });
-            }
-            let mut start = DateTime::parse_from_rfc3339(&range.start_at)
-                .map_err(|_| BackendError::unavailable())?;
-            let end = DateTime::parse_from_rfc3339(&range.end_at)
-                .map_err(|_| BackendError::unavailable())?;
-            let eligible_end = end.min(complete_until);
-            while start < eligible_end {
-                // Usage is immutable at UTC-hour granularity. Grow the largest deterministic
-                // contiguous chunk that fits every released boundary; never truncate rows.
-                let first_end = (start + chrono::Duration::hours(1)).min(eligible_end);
-                let first_partial = partial_hours.contains(&(
-                    range.agent,
-                    start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                ));
-                let mut chunk_rows =
-                    usage_rows_for_range(&rows_by_hour, range.agent, &start, &first_end);
-                let first_context = UsageSubmissionContext {
-                    agent: range.agent,
-                    start: &start,
-                    end: &first_end,
-                    timezone,
-                    account_id,
-                    device_id,
-                    generation,
-                    partial: first_partial,
-                };
-                if !usage_submission_fits(&first_context, sequence, &chunk_rows) {
-                    let consumed = UsageDirtyRange {
-                        agent: range.agent,
-                        start_at: start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                        end_at: first_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    };
-                    if let Some((batch_id, submissions)) =
-                        usage_multipart_submissions(&first_context, sequence, &chunk_rows)
-                    {
-                        if !self
-                            .state
-                            .usage_upload_enabled()
-                            .map_err(|_| BackendError::unavailable())?
-                        {
-                            return Ok(false);
-                        }
-                        if submissions.len() > stage_slots {
-                            // Durable outbox capacity is separate from this refresh's drain
-                            // budget. Wait for enough capacity to stage the complete batch.
-                            return Ok(blocked_unrepresentable);
-                        }
-                        if self
-                            .state
-                            .stage_multipart_outbox_entries(
-                                account_id,
-                                device_id,
-                                generation,
-                                &batch_id,
-                                &consumed,
-                                &submissions,
-                            )
-                            .map_err(|_| BackendError::unavailable())?
-                        {
-                            sequence = sequence.saturating_add(submissions.len() as u64);
-                            stage_slots -= submissions.len();
-                            if stage_slots == 0 {
-                                return Ok(blocked_unrepresentable);
-                            }
-                        }
-                        start = first_end;
-                        continue;
-                    }
-                    blocked_unrepresentable = true;
-                    start = first_end;
-                    continue;
-                }
-                let mut chunk_end = first_end;
-                while chunk_end < eligible_end
-                    && chunk_end - start < chrono::Duration::hours(usage::MAX_USAGE_COVERAGE_HOURS)
-                {
-                    let next_end = (chunk_end + chrono::Duration::hours(1)).min(eligible_end);
-                    let next_partial = partial_hours.contains(&(
-                        range.agent,
-                        chunk_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    ));
-                    if next_partial != first_partial {
-                        break;
-                    }
-                    let next_rows =
-                        usage_rows_for_range(&rows_by_hour, range.agent, &start, &next_end);
-                    let next_context = UsageSubmissionContext {
-                        agent: range.agent,
-                        start: &start,
-                        end: &next_end,
-                        timezone,
-                        account_id,
-                        device_id,
-                        generation,
-                        partial: first_partial,
-                    };
-                    if !usage_submission_fits(&next_context, sequence, &next_rows) {
-                        break;
-                    }
-                    chunk_end = next_end;
-                    chunk_rows = next_rows;
-                }
-                let context = UsageSubmissionContext {
-                    agent: range.agent,
-                    start: &start,
-                    end: &chunk_end,
-                    timezone,
-                    account_id,
-                    device_id,
-                    generation,
-                    partial: first_partial,
-                };
-                let submission = usage_submission(&context, sequence, &chunk_rows)
-                    .ok_or_else(BackendError::unavailable)?;
-                let consumed = UsageDirtyRange {
-                    agent: range.agent,
-                    start_at: start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    end_at: chunk_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                };
-                if !self
-                    .state
-                    .usage_upload_enabled()
-                    .map_err(|_| BackendError::unavailable())?
-                {
-                    return Ok(false);
-                }
-                if self
-                    .state
-                    .stage_outbox_entry(account_id, &submission, &consumed)
-                    .map_err(|_| BackendError::unavailable())?
-                {
-                    sequence = sequence.saturating_add(1);
-                    stage_slots -= 1;
-                    if stage_slots == 0 {
-                        return Ok(blocked_unrepresentable);
-                    }
-                }
-                start = chunk_end;
-            }
-        }
-        Ok(blocked_unrepresentable)
-    }
-
-    fn drain_outbox(&self) -> Result<bool, BackendError> {
         if !self
             .state
             .usage_upload_enabled()
@@ -2145,12 +1878,31 @@ impl NativeBackend {
         {
             return Ok(false);
         }
+        self.state
+            .stage_outbox_entries(account_id, device_id, generation, &entries)
+            .map_err(|_| BackendError::unavailable())
+    }
+
+    /// Sends the staged hours, at most one agent and one request's worth at a time.
+    /// Sends the hours this device still owes its Account.
+    ///
+    /// Answers whether Relay took an hour it did not already have. An ignored hour left the
+    /// Account exactly as it was, so it is not a reason to read the Account again.
+    fn drain_outbox(&self) -> Result<bool, BackendError> {
+        let mut accepted_any = false;
+        if !self
+            .state
+            .usage_upload_enabled()
+            .map_err(|_| BackendError::unavailable())?
+        {
+            return Ok(accepted_any);
+        }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
         else {
-            return Ok(false);
+            return Ok(accepted_any);
         };
         if session.get("status").and_then(Value::as_str) != Some("active")
             || !self
@@ -2158,7 +1910,7 @@ impl NativeBackend {
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(false);
+            return Ok(accepted_any);
         }
         let account_id = session
             .get("account_id")
@@ -2176,86 +1928,61 @@ impl NativeBackend {
             .state
             .outbox_entries_for(account_id, device_id, generation)
             .map_err(|_| BackendError::unavailable())?;
-        let mut rejected = false;
-        for entry in entries.into_iter().take(MAX_USAGE_OUTBOX_ENTRIES) {
-            if !self
-                .state
-                .usage_upload_enabled()
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Ok(rejected);
-            }
-            let submission_id = entry
-                .get("submission_id")
-                .and_then(Value::as_str)
-                .ok_or_else(BackendError::unavailable)?;
-            let sequence = entry
-                .get("sequence")
-                .and_then(Value::as_u64)
-                .ok_or_else(BackendError::unavailable)?;
-            let response = self.account.upload_usage(&entry)?;
-            if response.get("device_id").and_then(Value::as_str) != Some(device_id)
-                || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
-            {
-                return Err(BackendError {
-                    error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                });
-            }
-            let outcome = response
-                .get("outcome")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match outcome {
-                "accepted" | "duplicate" => {
-                    if response.get("accepted_sequence").and_then(Value::as_u64) != Some(sequence) {
-                        return Err(BackendError {
-                            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                        });
-                    }
-                    self.account.record_usage_response(&response)?;
+        let mut by_agent: BTreeMap<UsageAgent, Vec<UsageOutboxEntry>> = BTreeMap::new();
+        for entry in entries {
+            by_agent.entry(entry.agent).or_default().push(entry);
+        }
+        for (agent, entries) in by_agent {
+            let mut remaining = entries.as_slice();
+            while !remaining.is_empty() {
+                if !self
+                    .state
+                    .usage_upload_enabled()
+                    .map_err(|_| BackendError::unavailable())?
+                {
+                    return Ok(accepted_any);
+                }
+                let taken = usage_upload_batch_size(agent, generation, remaining);
+                if taken == 0 {
+                    // One hour that cannot be represented at all would block every hour behind
+                    // it, so it is dropped from the queue and the drain carries on.
                     self.state
-                        .acknowledge_outbox_entry(submission_id)
+                        .forget_outbox_hours(agent, &[remaining[0].bucket_start_utc.clone()])
                         .map_err(|_| BackendError::unavailable())?;
+                    remaining = &remaining[1..];
+                    continue;
                 }
-                "rejected" => {
-                    if response
-                        .get("accepted_sequence")
-                        .is_none_or(|value| !value.is_null())
-                        || response.get("next_sequence").and_then(Value::as_u64)
-                            != Some(sequence.saturating_add(1))
-                        || response.get("rejection_reason").and_then(Value::as_str)
-                            != Some("duplicate_fact_identity")
-                    {
-                        return Err(BackendError {
-                            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                        });
-                    }
-                    self.account.record_usage_response(&response)?;
-                    self.state
-                        .acknowledge_outbox_entry(submission_id)
-                        .map_err(|_| BackendError::unavailable())?;
-                    rejected = true;
-                }
-                "partial" => break,
-                "stale_generation" => {
+                let batch = &remaining[..taken];
+                let upload =
+                    usage_upload(agent, generation, batch).ok_or_else(BackendError::unavailable)?;
+                let response = self.account.upload_usage(&upload)?;
+                if response.get("device_id").and_then(Value::as_str) != Some(device_id)
+                    || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
+                {
                     return Err(BackendError {
-                        error: IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login),
+                        error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
                     });
                 }
-                "deleted" => {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::DeviceDeleted, RecoveryAction::Login),
-                    });
-                }
-                "sequence_conflict" => {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-                    });
-                }
-                _ => return Err(BackendError::unavailable()),
+                // Accepted and ignored are the same move for this device: an ignored hour is one
+                // a newer scan already replaced or one before this device's deletion watermark,
+                // and either way it never needs sending again.
+                let answered = ["accepted", "ignored"]
+                    .into_iter()
+                    .filter_map(|key| response.get(key)?.as_array())
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                accepted_any |= response
+                    .get("accepted")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hours| !hours.is_empty());
+                self.state
+                    .forget_outbox_hours(agent, &answered)
+                    .map_err(|_| BackendError::unavailable())?;
+                remaining = &remaining[taken..];
             }
         }
-        Ok(rejected)
+        Ok(accepted_any)
     }
 
     fn timezone(&self) -> String {
@@ -2264,32 +1991,34 @@ impl NativeBackend {
             .to_owned()
     }
 
-    fn refresh_account_usage_periods(
-        &self,
-        account_value: &Value,
-        cancel: &AtomicBool,
-    ) -> Result<(), BackendError> {
-        let mut periods = Vec::new();
-        if let Some(all) = account_value
+    /// Files the four periods the Account read already answered.
+    ///
+    /// A managed read folds days once, on the server, so there is nothing left for this device
+    /// to ask for period by period.
+    fn refresh_account_usage_periods(&self, account_value: &Value) -> Result<(), BackendError> {
+        let usage = account_value
             .get("account_summary")
             .and_then(|summary| summary.get("usage"))
-            .cloned()
-        {
-            push_account_usage_period(&mut periods, UsagePeriod::All, all);
-        }
+            .and_then(Value::as_object)
+            .ok_or_else(BackendError::unavailable)?;
         let timezone = self.timezone();
-        for period in [
-            UsagePeriod::Today,
-            UsagePeriod::Last7Days,
-            UsagePeriod::Last30Days,
+        let now = Utc::now();
+        let mut periods = Vec::new();
+        for (period, key) in [
+            (UsagePeriod::Today, "today"),
+            (UsagePeriod::Last7Days, "last_7_days"),
+            (UsagePeriod::Last30Days, "last_30_days"),
+            (UsagePeriod::All, "all"),
         ] {
-            let (_, range) = usage_period_range(period, &timezone, Utc::now())?;
-            let (from, to) = range.ok_or_else(BackendError::unavailable)?;
-            let query = format!("cost_mode=auto&from={from}&to={to}");
-            match self.account.account_usage(&query, cancel) {
-                Ok(usage) => push_account_usage_period(&mut periods, period, usage),
-                Err(error) if error.error.code.requires_login() => return Err(error),
-                Err(_) => {}
+            let Some(value) = usage.get(key) else {
+                continue;
+            };
+            let (today, span) = usage_period_window(period, &timezone, now)?;
+            let range = span
+                .map(|span| span.dates)
+                .unwrap_or_else(|| (today.clone(), today.clone()));
+            if let Ok(detail) = account_usage_detail(value, &range) {
+                periods.push((period, detail));
             }
         }
         if periods.is_empty() {
@@ -2301,84 +2030,188 @@ impl NativeBackend {
         Ok(())
     }
 
-    fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
-        let mut items = Vec::new();
-        let now = Utc::now();
-        if let Some(results) = quota.get("results").and_then(Value::as_array) {
-            for result in results {
-                for snapshot in result
-                    .get("snapshots")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
-                        merge_overview_item(&mut items, item);
-                    }
-                }
-            }
+    /// Reads the whole Account, and publishes it before the rest of the refresh is done.
+    ///
+    /// `None` means there was no active session to read with, and the refresh's own session
+    /// handling decides what the Account is then — a signed-out or signed-out-pending device is
+    /// never given an Account read taken with a session it no longer has.
+    fn read_account(
+        &self,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> Option<Result<Value, BackendError>> {
+        let read = self.account_read(cancel);
+        // A test latch that opens only once this read has decided, so what it decided — and in
+        // particular that it found no session — is a fact rather than a race.
+        #[cfg(test)]
+        if let Some(gate) = &self.account_read_gate {
+            gate.hold();
         }
-        if let Some(summary) = account
-            .and_then(|value| value.get("account_summary"))
-            .and_then(Value::as_object)
+        let value = read?;
+        updates.account(value.clone());
+        Some(value)
+    }
+
+    /// Reads the Account once more, because this device's own upload just changed it.
+    ///
+    /// Without this, what a Mac uploaded would not appear in its own Account view until the
+    /// next refresh five minutes later. The read is conditional, so an Account that did not
+    /// actually move answers 304 and publishes nothing. A read that fails is not news — this
+    /// refresh already has an Account — so only a fresh answer, or one that says the session
+    /// has ended, replaces what was published.
+    fn reread_account(
+        &self,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> Option<Result<Value, BackendError>> {
+        let value = self.account_read(cancel)?;
+        if value
+            .as_ref()
+            .err()
+            .is_some_and(|error| !error.error.code.requires_login())
         {
-            // The account summary replays what this device uploaded. Local collection is
-            // the only authority for this device, so reading its own upload back would keep
-            // a rejected or removed local source on screen as another device's report.
-            let this_device = account
-                .and_then(|value| value.get("device_id"))
-                .and_then(Value::as_str);
-            let display_names = summary
-                .get("devices")
+            return None;
+        }
+        updates.account(value.clone());
+        Some(value)
+    }
+
+    /// One Account read, with the periods it derives and the journal row it earns.
+    fn account_read(&self, cancel: &AtomicBool) -> Option<Result<Value, BackendError>> {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+        let session = self.state.session_json().ok().flatten()?;
+        if session.get("status").and_then(Value::as_str) != Some("active") {
+            return None;
+        }
+        let attempt = self.begin_attempt(DiagnosticAttemptKind::AccountSync, None);
+        let mut value = self.account.refresh_account_state(&self.timezone(), cancel);
+        // Account periods are this account's Usage as Relay folded it, so they are kept only by
+        // a device that contributes to it.
+        if self.state.usage_upload_enabled().unwrap_or(false)
+            && let Ok(summary) = &value
+            && let Err(error) = self.refresh_account_usage_periods(summary)
+            && error.error.code.requires_login()
+        {
+            value = Err(error);
+        }
+        if value
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.error.code.requires_login())
+        {
+            self.clear_active_session();
+        }
+        self.finish_backend_result_attempt(attempt, &value);
+        Some(value)
+    }
+
+    /// Two readings of one subscription: this device's, and the one Relay resolved.
+    ///
+    /// Relay resolves the account's observations once, on the read, so there is no N-way merge
+    /// left here. What stays is the one comparison Relay cannot make: local collection is the
+    /// only authority for the machine in front of you, so the newer of the two wins and a tie
+    /// goes to the local reading.
+    fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
+        overview_items(quota, account, Utc::now())
+    }
+}
+
+/// See [`NativeBackend::build_overview`]; the instant is an argument so the rule can be tested
+/// against the shared cases at the instant they name.
+fn overview_items(
+    quota: &Value,
+    account: Option<&Value>,
+    now: DateTime<Utc>,
+) -> Vec<QuotaOverviewItem> {
+    let mut items = Vec::new();
+    if let Some(results) = quota.get("results").and_then(Value::as_array) {
+        for result in results {
+            for snapshot in result
+                .get("snapshots")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|device| {
-                    Some((
-                        device.get("device_id")?.as_str()?.to_owned(),
-                        device.get("display_name")?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect::<HashMap<_, _>>();
-            if let Some(observations) = summary.get("quota").and_then(Value::as_array) {
-                for observation in observations {
-                    let Some(device_id) = observation.get("device_id").and_then(Value::as_str)
-                    else {
-                        continue;
-                    };
-                    if Some(device_id) == this_device {
-                        continue;
-                    }
-                    let Some(snapshot) = observation.get("snapshot") else {
-                        continue;
-                    };
-                    if !snapshot
-                        .get("provider")
-                        .and_then(Value::as_str)
-                        .and_then(ProviderId::parse)
-                        .is_some_and(ProviderId::syncs_to_account)
-                    {
-                        continue;
-                    }
-                    let display_name = display_names
-                        .get(device_id)
-                        .map(String::as_str)
-                        .unwrap_or("Other device");
-                    if let Some(item) = overview_item(
-                        snapshot,
-                        &format!("device:{device_id}"),
-                        display_name,
-                        Some(device_id),
-                        now,
-                    ) {
-                        merge_overview_item(&mut items, item);
-                    }
+            {
+                if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
+                    merge_overview_item(&mut items, item);
                 }
             }
         }
-        sort_overview_items(&mut items);
-        items
     }
+    if let Some(summary) = account
+        .and_then(|value| value.get("account_summary"))
+        .and_then(Value::as_object)
+    {
+        let display_names = summary
+            .get("devices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|device| {
+                Some((
+                    device.get("id")?.as_str()?.to_owned(),
+                    device.get("display_name")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        for subscription in summary
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(snapshot) = subscription.get("snapshot") else {
+                continue;
+            };
+            if !snapshot
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(ProviderId::parse)
+                .is_some_and(ProviderId::syncs_to_account)
+            {
+                continue;
+            }
+            // The device whose reading Relay chose is the one to name, and the account
+            // says when each of its sources last read. Nothing else about the other
+            // devices is shown.
+            let device_id = subscription
+                .get("sources")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|source| {
+                    Some((
+                        source.get("device_id")?.as_str()?,
+                        source.get("observed_at")?.as_str()?,
+                    ))
+                })
+                .filter(|(_, observed_at)| {
+                    Some(*observed_at) == snapshot.get("observed_at").and_then(Value::as_str)
+                })
+                .map(|(device_id, _)| device_id)
+                .min();
+            let Some(device_id) = device_id else {
+                continue;
+            };
+            let display_name = display_names
+                .get(device_id)
+                .map(String::as_str)
+                .unwrap_or("Other device");
+            if let Some(item) = overview_item(
+                snapshot,
+                &format!("device:{device_id}"),
+                display_name,
+                Some(device_id),
+                now,
+            ) {
+                merge_overview_item(&mut items, item);
+            }
+        }
+    }
+    sort_overview_items(&mut items);
+    items
 }
 
 /// This device's own readings, restated with the status its latest collection found.
@@ -2390,16 +2223,14 @@ impl NativeBackend {
 /// other devices have to wait out. The reading itself is untouched, `observed_at`
 /// included: the numbers really are as old as they were.
 ///
-/// Only a reading that is still current is worth restating, and that is also what makes
-/// this terminate. A reading that already aged out says nothing new: every reader reached
-/// that verdict from the reading itself. A reading that is current is restated once,
-/// because the restatement is no longer `available` and so is no longer current. Whether
-/// the account this compares against was fetched a moment or an hour ago cannot turn that
-/// into a row rewritten on every refresh.
+/// What is restated is what this device last collected, not what it reads back from the
+/// account: an account read answers one resolved row per subscription, which may belong to
+/// another Mac. That is also what makes this terminate — the previous report is overwritten
+/// by this one, which carries no snapshot for the source that failed, so there is nothing
+/// left to restate on the next refresh.
 fn failure_status_snapshots(
     report: &Value,
-    account: Option<&Value>,
-    device_id: &str,
+    previous: Option<&Value>,
     now: DateTime<Utc>,
 ) -> Vec<Value> {
     let failed = report
@@ -2421,17 +2252,14 @@ fn failure_status_snapshots(
     if failed.is_empty() {
         return Vec::new();
     }
-    account
-        .and_then(|value| value.get("account_summary"))
-        .and_then(|value| value.get("quota"))
+    previous
+        .and_then(|value| value.get("results"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|observation| {
-            observation.get("device_id").and_then(Value::as_str) == Some(device_id)
-        })
-        .filter_map(|observation| {
-            let snapshot = observation.get("snapshot")?;
+        .filter_map(|result| result.get("snapshots")?.as_array())
+        .flatten()
+        .filter_map(|snapshot| {
             let provider = snapshot.get("provider")?.as_str()?;
             let (_, status) = failed.iter().find(|(failed, _)| *failed == provider)?;
             (snapshot_is_current(snapshot, now)
@@ -2454,30 +2282,54 @@ fn collect_discovered_provider(
         return json!({
             "provider": provider,
             "outcome": "auth_required",
-            "snapshots": []
+            "snapshots": [],
+            "sources": []
         });
     }
     let mut snapshots = Vec::new();
-    let mut failure = None;
+    let mut sources = Vec::new();
+    let mut failure: Option<ProviderError> = None;
     for session in sessions {
         match providers::collect(provider, &session, context) {
             // Expiry is derived from the reading itself by whoever reads it, so this
             // uploads the observation and nothing about how long it stays current.
-            Ok(snapshot) => snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null)),
-            Err(error) => failure = Some(error.category),
+            Ok(snapshot) => {
+                sources.push(json!({
+                    "source_id": providers::session_source_id(provider, &session),
+                    "outcome": "success",
+                    "category": "success"
+                }));
+                snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null));
+            }
+            // The rung that reached the verdict names itself, so a report distinguishes an
+            // OAuth endpoint that is unreachable from a stored browser session that went
+            // stale.  Losing that left every failure looking like the provider's.
+            Err(error) => {
+                sources.push(json!({
+                    "source_id": error.source_id,
+                    "outcome": error.category.as_str(),
+                    "category": error.category.name()
+                }));
+                failure = Some(error);
+            }
         }
     }
     if snapshots.is_empty() {
-        let category = failure.unwrap_or(ErrorCategory::Unavailable);
-        let mut result =
-            json!({"provider": provider, "outcome": category.as_str(), "snapshots": []});
+        let failure =
+            failure.unwrap_or_else(|| ProviderError::new(ErrorCategory::Unavailable, "provider"));
+        let mut result = json!({
+            "provider": provider,
+            "outcome": failure.category.as_str(),
+            "snapshots": [],
+            "sources": sources
+        });
         // A discovered source that answers `auth_required` is a sign-in this machine still
         // holds and the provider no longer accepts. That is a different recovery from a
         // provider that was never set up here, so it is reported as its own message.
-        if category == ErrorCategory::AuthRequired {
-            result["message"] = json!("The saved sign-in expired or was rejected. Sign in again.");
+        if failure.category == ErrorCategory::AuthRequired {
+            result["message"] = json!(auth_required_message(provider, failure.source_id));
         }
-        if category == ErrorCategory::AccessDenied {
+        if failure.category == ErrorCategory::AccessDenied {
             result["access_denied"] = json!(true);
             result["message"] =
                 json!("A saved sign-in is stored here but this Mac was refused it. Check access.");
@@ -2487,8 +2339,63 @@ fn collect_discovered_provider(
         json!({
             "provider": provider,
             "outcome": "success",
-            "snapshots": snapshots
+            "snapshots": snapshots,
+            "sources": sources
         })
+    }
+}
+
+/// What a refused cookie store means, and what releases it.
+///
+/// Naming the browser matters: the reader has several, and the grant is per browser, not per
+/// provider. The store's path is never part of this, only the browser's name.
+fn browser_access_denied_message(denial: &crate::state::BrowserAccessDenial) -> String {
+    let browser = &denial.browser;
+    match denial.reason {
+        BrowserAccessDenialReason::FullDiskAccess => format!(
+            "QuotaBar could not read {browser}'s cookies. Grant Full Disk Access in System \
+             Settings › Privacy & Security, then try again."
+        ),
+        BrowserAccessDenialReason::KeychainRefused => format!(
+            "QuotaBar could not read {browser}'s cookies. macOS did not release the \"Chrome \
+             Safe Storage\" Keychain item, so allow it when asked, then try again."
+        ),
+        BrowserAccessDenialReason::StoreUnreadable => format!(
+            "QuotaBar could not read {browser}'s cookies. Its cookie store could not be opened. \
+             Quit {browser} and try again, or choose another browser."
+        ),
+    }
+}
+
+/// What restores collection after a sign-in stops being accepted.
+///
+/// The source that failed decides it.  A stored browser session is re-added in this app,
+/// while a provider's own grant is renewed by the program that owns it — telling the reader
+/// to "sign in again" left them nowhere to do it.
+fn auth_required_message(provider: ProviderId, source_id: &str) -> &'static str {
+    if providers::is_browser_session_source(source_id) {
+        return "The saved browser session expired or was rejected. Add it again in Settings.";
+    }
+    // Claude Code empties its own credential when the refresh token it holds is rejected.
+    // Opening it would open onto that same emptied entry, so this is the one sign-in the
+    // reader has to restore at a terminal.
+    if source_id == claude::SIGNED_OUT_SOURCE {
+        return "Claude Code is signed out. Run `claude` and sign in again.";
+    }
+    match provider {
+        ProviderId::Claude => {
+            "The saved sign-in expired or was rejected. Open Claude Code to refresh the sign-in."
+        }
+        ProviderId::Codex => {
+            "The saved sign-in expired or was rejected. Open Codex to refresh the sign-in."
+        }
+        ProviderId::Grok => {
+            "The saved sign-in expired or was rejected. Open Grok to refresh the sign-in."
+        }
+        ProviderId::Cursor => {
+            "The saved sign-in expired or was rejected. Open Cursor to refresh the sign-in."
+        }
+        _ => "The saved sign-in expired or was rejected. Sign in again.",
     }
 }
 
@@ -2511,153 +2418,6 @@ impl LocalBackend for NativeBackend {
 
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.complete_diagnostic_report()
-    }
-
-    fn publish_device_health(&self, report: &DiagnosticReport) -> Result<(), BackendError> {
-        let session = self
-            .state
-            .session_json()
-            .map_err(|_| BackendError::unavailable())?;
-        if !session
-            .as_ref()
-            .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"))
-        {
-            return Ok(());
-        }
-        let usage_upload_enabled = self
-            .state
-            .usage_upload_enabled()
-            .map_err(|_| BackendError::unavailable())?;
-        let last_account_sync = self
-            .state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::AccountSync,
-                DiagnosticSource::Account,
-                None,
-            )
-            .map_err(|_| BackendError::unavailable())?
-            .latest_success
-            .as_ref()
-            .map(diagnostic_attempt_timestamp);
-        let relevant_attempt = self
-            .state
-            .latest_diagnostic_problem(usage_upload_enabled)
-            .map_err(|_| BackendError::unavailable())?;
-        let summary_is_healthy = report.summary.operation == DiagnosticOperation::Healthy
-            && matches!(
-                report.summary.data,
-                DiagnosticDataState::Current | DiagnosticDataState::Empty
-            )
-            && matches!(
-                report.summary.attention,
-                DiagnosticAttention::None | DiagnosticAttention::Automatic
-            );
-        let top_code = (!summary_is_healthy)
-            .then(|| {
-                relevant_attempt
-                    .as_ref()
-                    .map(device_health_code_for_attempt)
-            })
-            .flatten();
-        let consecutive_failures = self
-            .state
-            .consecutive_refresh_failures()
-            .map_err(|_| BackendError::unavailable())? as i64;
-        let client_product = match self.client_name.as_str() {
-            "QuotaBar" => "quotabar",
-            "QuotaCLI" => "quotacli",
-            _ => return Ok(()),
-        };
-        let platform = match std::env::consts::OS {
-            "macos" => "macos",
-            "linux" => "linux",
-            _ => return Ok(()),
-        };
-        let signal = json!({
-            "schema_version": 1,
-            "client_product": client_product,
-            "client_version": self.client_version,
-            "platform": platform,
-            "summary": report.summary,
-            "top_code": top_code,
-            "consecutive_failures": consecutive_failures,
-            "usage_upload_enabled": usage_upload_enabled,
-            "last_successful_account_sync_at": last_account_sync,
-        });
-        let digest = format!("{:x}", Sha256::digest(signal.to_string().as_bytes()));
-        let observed = Utc::now();
-        if !self
-            .state
-            .device_health_upload_due(&digest, observed)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Ok(());
-        }
-        let parent = self
-            .state
-            .latest_refresh_attempt()
-            .map_err(|_| BackendError::unavailable())?;
-        let attempt = self
-            .state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::DeviceHealthUpload,
-                parent
-                    .map(|(_, trigger)| trigger)
-                    .unwrap_or(DiagnosticAttemptTrigger::Scheduled),
-                DiagnosticSource::Account,
-                None,
-                DiagnosticMode::Required,
-                parent.map(|(handle, _)| handle),
-            )
-            .map_err(|_| BackendError::unavailable())?;
-        let observed_at = observed.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let payload = json!({
-            "protocol_version": MANAGED_DATA_PROTOCOL,
-            "schema_version": 1,
-            "client_product": client_product,
-            "client_version": self.client_version,
-            "platform": platform,
-            "observed_at": observed_at,
-            "refresh_revision": report.refresh.revision,
-            "last_completed_refresh_at": report.refresh.as_of,
-            "last_successful_account_sync_at": last_account_sync,
-            "summary": report.summary,
-            "top_code": top_code,
-            "consecutive_failures": consecutive_failures,
-            "usage_upload_enabled": usage_upload_enabled,
-        });
-        let result = self.account.upload_device_health(&payload);
-        match &result {
-            Ok(response) => {
-                let ignored =
-                    response.get("status").and_then(Value::as_str) == Some("ignored_stale");
-                if !ignored {
-                    let received_at = response
-                        .get("received_at")
-                        .and_then(Value::as_str)
-                        .ok_or_else(BackendError::unavailable)?;
-                    self.state
-                        .record_device_health_upload(report.refresh.revision, &digest, received_at)
-                        .map_err(|_| BackendError::unavailable())?;
-                }
-                self.finish_attempt(
-                    attempt,
-                    if ignored {
-                        DiagnosticAttemptOutcome::NoWork
-                    } else {
-                        DiagnosticAttemptOutcome::Success
-                    },
-                    ignored.then_some(DiagnosticAttemptCode::NoWork),
-                    DiagnosticRecovery::None,
-                    BTreeMap::new(),
-                )?;
-            }
-            Err(error) => {
-                let (outcome, code, recovery) = backend_attempt_error(&error.error);
-                self.finish_attempt(attempt, outcome, Some(code), recovery, BTreeMap::new())?;
-            }
-        }
-        result.map(|_| ())
     }
 
     fn validate_provider_browser_session(
@@ -2692,19 +2452,25 @@ impl LocalBackend for NativeBackend {
         })
     }
 
-    fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome {
+    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
         let quota_cancel = cancel.clone();
         let usage_cancel = cancel.clone();
-        let (quota, usage) = thread::scope(|scope| {
+        // Reading the Account needs the session and nothing else, so it does not queue behind a
+        // provider that answers in twenty seconds or a scan of every Usage file. It is published
+        // the moment it lands, which is what names the account and fills its totals while the
+        // rest of this refresh is still running.
+        let (quota, usage, read_account) = thread::scope(|scope| {
             let quota_job = scope.spawn(|| self.collect_quota(quota_cancel));
             let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
+            let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
             let quota_result = quota_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
             let usage_result = usage_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
-            (quota_result, usage_result)
+            let account_result = account_job.join().unwrap_or(None);
+            (quota_result, usage_result, account_result)
         });
         let cached_catalog = self
             .state
@@ -2719,23 +2485,6 @@ impl LocalBackend for NativeBackend {
                 .then(|| serde_json::from_value(value).ok())
                 .flatten()
         });
-        if self.state.last_persistence_requires_abort() {
-            let usage_value = match usage.as_ref().ok() {
-                Some(value) => self.usage_report(
-                    value,
-                    cached_catalog.as_ref(),
-                    cached_model_catalog.as_ref(),
-                ),
-                None => Err(BackendError::unavailable()),
-            };
-            return RefreshOutcome {
-                quota,
-                usage: usage_value,
-                account: Err(BackendError::unavailable()),
-                pricing: Err(BackendError::unavailable()),
-                overview: None,
-            };
-        }
         let (pricing, model_catalog_refresh) = thread::scope(|scope| {
             let pricing_job = scope.spawn(|| self.refresh_pricing());
             let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());
@@ -2764,17 +2513,8 @@ impl LocalBackend for NativeBackend {
             None => Err(BackendError::unavailable()),
         };
         let quota_value = quota;
-        if self.state.last_persistence_requires_abort() {
-            return RefreshOutcome {
-                quota: quota_value,
-                usage: usage_value,
-                account: Err(BackendError::unavailable()),
-                pricing: Err(BackendError::unavailable()),
-                overview: None,
-            };
-        }
-        // One read for the two things that need last refresh's account: restating this
-        // device's failed readings before the upload, and filling the Overview after it.
+        // Last refresh's account fills the Overview when this one cannot be read, and last
+        // refresh's own collection is what a failed source is restated from.
         let stored_account = quota_value
             .is_ok()
             .then(|| {
@@ -2785,240 +2525,148 @@ impl LocalBackend for NativeBackend {
                     .and_then(|component| component.value)
             })
             .flatten();
-        let mut account_value: Result<Value, BackendError> = Err(BackendError {
-            error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-        });
+        let previous_quota = quota_value
+            .is_ok()
+            .then(|| {
+                self.state
+                    .component(crate::protocol::ComponentName::Quota)
+                    .ok()
+                    .flatten()
+                    .and_then(|component| component.value)
+            })
+            .flatten();
+        // What the Account read already answered, or nothing when there was no session to read
+        // with at the time.
+        let mut account_value: Option<Result<Value, BackendError>> = read_account;
         let mut overview = None;
         match self.state.session_json() {
             _ if cancel.load(Ordering::Acquire) => {
-                account_value = Err(BackendError::cancelled());
+                if !matches!(account_value, Some(Ok(_))) {
+                    account_value = Some(Err(BackendError::cancelled()));
+                }
             }
             Ok(Some(session))
                 if session.get("status").and_then(Value::as_str) == Some("active") =>
             {
-                match self.begin_attempt(
-                    DiagnosticAttemptKind::AccountSync,
-                    DiagnosticSource::Account,
-                    None,
-                    DiagnosticMode::Required,
-                ) {
-                    Ok(account_attempt) => match self.account.sync_control_and_update() {
-                        Ok(_) if cancel.load(Ordering::Acquire) => {
-                            account_value = Err(BackendError::cancelled());
+                // The Account has answered for itself already. What is left here is the writing
+                // half of a sync, and only a failure that ends the session speaks for the
+                // Account: an upload this refresh could not deliver is not news about who is
+                // signed in.
+                match self.account.sync_control_and_update() {
+                    Ok(_) if cancel.load(Ordering::Acquire) => {
+                        if !matches!(account_value, Some(Ok(_))) {
+                            account_value = Some(Err(BackendError::cancelled()));
                         }
-                        Ok(_) => {
-                            let current_session =
-                                self.state.session_json().ok().flatten().unwrap_or(session);
-                            let mut account_sync_error = None;
-                            let mut attempt_journal_error = None;
-                            let mut stage_blocked = false;
-                            if let Ok(quota_payload) = &quota_value {
-                                let device_id = current_session
-                                    .get("device_id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default();
-                                let restated = failure_status_snapshots(
-                                    quota_payload,
-                                    stored_account.as_ref(),
-                                    device_id,
-                                    Utc::now(),
-                                );
-                                if let Err(error) =
-                                    self.account.upload_quota_report(quota_payload, &restated)
-                                {
+                    }
+                    Ok(_) => {
+                        let current_session =
+                            self.state.session_json().ok().flatten().unwrap_or(session);
+                        let mut account_sync_error = None;
+                        // Whether this refresh put something in the Account that was not there
+                        // when it read one.
+                        let mut uploaded = false;
+                        if let Ok(quota_payload) = &quota_value {
+                            let restated = failure_status_snapshots(
+                                quota_payload,
+                                previous_quota.as_ref(),
+                                Utc::now(),
+                            );
+                            match self.account.upload_quota_report(quota_payload, &restated) {
+                                Ok(response) => {
+                                    uploaded |= response
+                                        .get("accepted")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|providers| !providers.is_empty());
+                                }
+                                Err(error) => {
                                     record_account_sync_error(&mut account_sync_error, error);
                                 }
                             }
-                            let usage_upload_enabled = match self.state.usage_upload_enabled() {
-                                Ok(enabled) => enabled,
-                                Err(_) => {
-                                    record_account_sync_error(
-                                        &mut account_sync_error,
-                                        BackendError::unavailable(),
-                                    );
-                                    false
+                        }
+                        let usage_upload_enabled = match self.state.usage_upload_enabled() {
+                            Ok(enabled) => enabled,
+                            Err(_) => {
+                                record_account_sync_error(
+                                    &mut account_sync_error,
+                                    BackendError::unavailable(),
+                                );
+                                false
+                            }
+                        };
+                        if usage_upload_enabled && usage_collection.is_some() {
+                            let context_result = effective_usage_lower_bound(&current_session)
+                                .and_then(|lower_bound| {
+                                    self.state
+                                        .ensure_usage_context(
+                                            current_session
+                                                .get("account_id")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or_default(),
+                                            current_session
+                                                .get("device_id")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or_default(),
+                                            current_session
+                                                .get("device_generation")
+                                                .and_then(Value::as_u64)
+                                                .unwrap_or_default(),
+                                            &lower_bound,
+                                        )
+                                        .map_err(|_| BackendError::unavailable())
+                                });
+                            if let Err(error) = context_result {
+                                record_account_sync_error(&mut account_sync_error, error);
+                            } else if let Err(error) = self.stage_outbox() {
+                                record_account_sync_error(&mut account_sync_error, error);
+                            }
+                        }
+                        if usage_upload_enabled && account_sync_error.is_none() {
+                            let before = self.state.outbox_len().unwrap_or(0);
+                            let upload_attempt =
+                                self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
+                            match self.drain_outbox() {
+                                Ok(accepted) => {
+                                    uploaded |= accepted;
+                                    let pending = self.state.outbox_len().unwrap_or(0);
+                                    let (outcome, code) = if before == 0 {
+                                        (
+                                            DiagnosticAttemptOutcome::NoWork,
+                                            Some(DiagnosticAttemptCode::NoWork),
+                                        )
+                                    } else if pending > 0 {
+                                        (
+                                            DiagnosticAttemptOutcome::Partial,
+                                            Some(DiagnosticAttemptCode::Unavailable),
+                                        )
+                                    } else {
+                                        (DiagnosticAttemptOutcome::Success, None)
+                                    };
+                                    self.finish_attempt(upload_attempt, outcome, code);
                                 }
-                            };
-                            if usage_upload_enabled
-                                && let Some(usage_collection) = usage_collection.as_ref()
-                            {
-                                let context_result = effective_usage_lower_bound(&current_session)
-                                    .and_then(|lower_bound| {
-                                        self.state
-                                            .ensure_usage_context(
-                                                current_session
-                                                    .get("account_id")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or_default(),
-                                                current_session
-                                                    .get("device_id")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or_default(),
-                                                current_session
-                                                    .get("device_generation")
-                                                    .and_then(Value::as_u64)
-                                                    .unwrap_or_default(),
-                                                &usage_collection.timezone,
-                                                &lower_bound,
-                                            )
-                                            .map_err(|_| BackendError::unavailable())
-                                    });
-                                if let Err(error) = context_result {
+                                Err(error) => {
+                                    let (outcome, code) = backend_attempt_error(&error.error);
+                                    self.finish_attempt(upload_attempt, outcome, Some(code));
                                     record_account_sync_error(&mut account_sync_error, error);
-                                } else {
-                                    match self.stage_outbox(&usage_collection.timezone) {
-                                        Ok(blocked) => stage_blocked = blocked,
-                                        Err(error) => record_account_sync_error(
-                                            &mut account_sync_error,
-                                            error,
-                                        ),
-                                    }
                                 }
                             }
-                            if usage_upload_enabled && account_sync_error.is_none() {
-                                let before = self
-                                    .state
-                                    .outbox_entries()
-                                    .ok()
-                                    .map(|entries| entries.len() as i64)
-                                    .unwrap_or(0);
-                                match self.begin_attempt(
-                                    DiagnosticAttemptKind::UsageUpload,
-                                    DiagnosticSource::Account,
-                                    None,
-                                    DiagnosticMode::Required,
-                                ) {
-                                    Ok(upload_attempt) => match self.drain_outbox() {
-                                        Ok(rejected) => {
-                                            let pending = self
-                                                .state
-                                                .outbox_entries()
-                                                .ok()
-                                                .map(|entries| entries.len() as i64)
-                                                .unwrap_or(0);
-                                            let attempted = before.saturating_sub(pending);
-                                            let (outcome, code, recovery) = match (
-                                                stage_blocked,
-                                                rejected,
-                                                attempted,
-                                            ) {
-                                                (true, _, _) => (
-                                                    DiagnosticAttemptOutcome::Failed,
-                                                    Some(
-                                                        DiagnosticAttemptCode::UnrepresentableHour,
-                                                    ),
-                                                    DiagnosticRecovery::Feedback,
-                                                ),
-                                                (false, true, _) => (
-                                                    DiagnosticAttemptOutcome::Failed,
-                                                    Some(DiagnosticAttemptCode::InvalidUsageBatch),
-                                                    DiagnosticRecovery::UpdateSource,
-                                                ),
-                                                (false, false, 0) => (
-                                                    DiagnosticAttemptOutcome::NoWork,
-                                                    Some(DiagnosticAttemptCode::NoWork),
-                                                    DiagnosticRecovery::None,
-                                                ),
-                                                (false, false, _) => (
-                                                    DiagnosticAttemptOutcome::Success,
-                                                    None,
-                                                    DiagnosticRecovery::None,
-                                                ),
-                                            };
-                                            let _ = self.finish_attempt(
-                                                upload_attempt,
-                                                outcome,
-                                                code,
-                                                recovery,
-                                                metrics([
-                                                    ("attempted", attempted),
-                                                    ("pending", pending),
-                                                ]),
-                                            );
-                                        }
-                                        Err(error) => {
-                                            let (outcome, code, recovery) =
-                                                backend_attempt_error(&error.error);
-                                            let _ = self.finish_attempt(
-                                                upload_attempt,
-                                                outcome,
-                                                Some(code),
-                                                recovery,
-                                                metrics([("attempted", 0), ("pending", before)]),
-                                            );
-                                            record_account_sync_error(
-                                                &mut account_sync_error,
-                                                error,
-                                            );
-                                        }
-                                    },
-                                    Err(error) => {
-                                        attempt_journal_error = Some(error.clone());
-                                        record_account_sync_error(&mut account_sync_error, error)
-                                    }
-                                }
-                            }
-                            account_value = account_read_after_sync(
-                                account_sync_error,
-                                cancel.load(Ordering::Acquire),
-                                || self.account.refresh_account_state(cancel.as_ref()),
-                            );
-                            if usage_upload_enabled
-                                && let Ok(value) = &account_value
-                                && let Err(error) =
-                                    self.refresh_account_usage_periods(value, cancel.as_ref())
-                                && error.error.code.requires_login()
-                            {
-                                account_value = Err(error);
-                            }
-                            if account_value
-                                .as_ref()
-                                .err()
-                                .is_some_and(|error| error.error.code.requires_login())
-                            {
-                                self.clear_active_session();
-                            }
-                            let device_count = account_value
-                                .as_ref()
-                                .ok()
-                                .and_then(|value| value.get("account_summary"))
-                                .and_then(|value| value.get("devices"))
-                                .and_then(Value::as_array)
-                                .map(|values| values.len() as i64)
-                                .unwrap_or(0);
-                            if let Some(error) = attempt_journal_error {
-                                let (outcome, code, recovery) = backend_attempt_error(&error.error);
-                                let _ = self.finish_attempt(
-                                    account_attempt,
-                                    outcome,
-                                    Some(code),
-                                    recovery,
-                                    metrics([("devices", device_count)]),
-                                );
-                            } else {
-                                let _ = self.finish_backend_result_attempt(
-                                    account_attempt,
-                                    &account_value,
-                                    metrics([("devices", device_count)]),
-                                );
-                            }
                         }
-                        Err(error) => {
-                            let (outcome, code, recovery) = backend_attempt_error(&error.error);
-                            let _ = self.finish_attempt(
-                                account_attempt,
-                                outcome,
-                                Some(code),
-                                recovery,
-                                BTreeMap::new(),
-                            );
-                            if error.error.code.requires_login() {
-                                self.clear_active_session();
-                            }
-                            account_value = Err(error);
+                        if let Some(error) =
+                            account_sync_error.filter(|error| error.error.code.requires_login())
+                        {
+                            self.clear_active_session();
+                            account_value = Some(Err(error));
+                        } else if uploaded
+                            && let Some(reread) = self.reread_account(cancel.as_ref(), updates)
+                        {
+                            account_value = Some(reread);
                         }
-                    },
-                    Err(error) => account_value = Err(error),
+                    }
+                    Err(error) => {
+                        if error.error.code.requires_login() {
+                            self.clear_active_session();
+                            account_value = Some(Err(error));
+                        }
+                    }
                 }
             }
             Ok(Some(session))
@@ -3027,24 +2675,35 @@ impl LocalBackend for NativeBackend {
                 match self.account.logout(&session) {
                     Ok(()) => {
                         self.clear_pending_session();
-                        account_value = Err(BackendError {
+                        account_value = Some(Err(BackendError {
                             error: IpcError::new(
                                 ErrorCode::AuthenticationRequired,
                                 RecoveryAction::Login,
                             ),
-                        });
+                        }));
                     }
-                    Err(error) => account_value = Err(error),
+                    Err(error) => account_value = Some(Err(error)),
                 }
             }
             Ok(None) => {}
             Ok(Some(_)) => {
-                account_value = Err(BackendError {
+                account_value = Some(Err(BackendError {
                     error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-                });
+                }));
             }
-            Err(_) => account_value = Err(BackendError::unavailable()),
+            Err(_) => account_value = Some(Err(BackendError::unavailable())),
         }
+        // A sign-in that landed after this refresh began leaves it holding no Account read at
+        // all. Reading one now is what keeps a device that has just signed in from being
+        // reported as signed out until the next refresh.
+        if account_value.is_none() {
+            account_value = self.read_account(cancel.as_ref(), updates);
+        }
+        let account_value = account_value.unwrap_or_else(|| {
+            Err(BackendError {
+                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+            })
+        });
         if let Ok(ref quota_payload) = quota_value {
             let account_for_overview = account_value.as_ref().ok().cloned().or(stored_account);
             overview = Some(self.build_overview(quota_payload, account_for_overview.as_ref()));
@@ -3089,135 +2748,181 @@ struct UsageCollection {
     timezone: String,
     generated_at: String,
     agents: Vec<AgentUsage>,
-    rows: Vec<UsageHourlyFact>,
 }
 
 struct AgentUsage {
     coverage: usage::ScanCoverage,
 }
 
-fn usage_period_range(
+/// One period as this device's own calendar draws it.
+///
+/// A local day begins at local midnight, so a period is a half-open range of instants rather
+/// than a run of UTC dates: `start` is when its first local day begins and `end` is when the day
+/// after its last one does. An hour is the finest fact stored, so a zone offset by less than an
+/// hour reports the hour its midnight falls in with the day before — comparing a stored hour
+/// against these instants rounds the edge up, which is the rule the Account read follows too.
+pub(crate) struct LocalPeriodSpan {
+    dates: (String, String),
+    pub(crate) start: String,
+    pub(crate) end: String,
+}
+
+pub(crate) fn usage_period_window(
     period: UsagePeriod,
     timezone: &str,
     now: DateTime<Utc>,
-) -> Result<(String, Option<(String, String)>), BackendError> {
+) -> Result<(String, Option<LocalPeriodSpan>), BackendError> {
     let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
     let today = now.with_timezone(&timezone).date_naive();
     let today_text = today.format("%Y-%m-%d").to_string();
     let previous_days = match period {
-        UsagePeriod::Today => Some(0),
-        UsagePeriod::Last7Days => Some(6),
-        UsagePeriod::Last30Days => Some(29),
-        UsagePeriod::All => None,
+        UsagePeriod::Today => 0,
+        UsagePeriod::Last7Days => 6,
+        UsagePeriod::Last30Days => 29,
+        UsagePeriod::All => return Ok((today_text, None)),
     };
-    let Some(previous_days) = previous_days else {
-        return Ok((today_text, None));
-    };
-    let from = today
+    let first = today
         .checked_sub_days(Days::new(previous_days))
-        .ok_or_else(BackendError::unavailable)?
-        .format("%Y-%m-%d")
-        .to_string();
-    Ok((today_text.clone(), Some((from, today_text))))
+        .ok_or_else(BackendError::unavailable)?;
+    let after = today
+        .checked_add_days(Days::new(1))
+        .ok_or_else(BackendError::unavailable)?;
+    Ok((
+        today_text.clone(),
+        Some(LocalPeriodSpan {
+            dates: (first.format("%Y-%m-%d").to_string(), today_text),
+            start: local_day_start(&timezone, first)?,
+            end: local_day_start(&timezone, after)?,
+        }),
+    ))
 }
 
-fn local_usage_detail(
-    period: UsagePeriod,
-    rows: &[UsageHourlyFact],
-    timezone: &str,
-    generated_at: DateTime<Utc>,
-    pricing_catalog: Option<&pricing::PricingCatalog>,
-    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
-    incomplete: bool,
-) -> Result<Value, BackendError> {
-    let (today, range) = usage_period_range(period, timezone, generated_at)?;
-    let selected_rows = match &range {
-        Some((from, to)) => rows
-            .iter()
-            .filter(|row| {
-                row.usage_date.as_str() >= from.as_str() && row.usage_date.as_str() <= to.as_str()
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-        None => rows.to_vec(),
-    };
-    let summary = usage::build_local_usage_summary(&selected_rows, pricing_catalog, model_catalog)
-        .map_err(|_| BackendError::unavailable())?;
-    let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
-    let (from, to) = range.unwrap_or_else(|| usage_date_range(&selected_rows, &today));
-    Ok(json!({
-        "range": {"from": from, "to": to},
-        "usage": summary,
-        "incomplete": incomplete,
-        "details_truncated": details_truncated
-    }))
-}
-
-fn push_account_usage_period(
-    periods: &mut Vec<(UsagePeriod, Value)>,
-    period: UsagePeriod,
-    value: Value,
-) {
-    if let Ok(detail) = account_usage_detail(value) {
-        periods.push((period, detail));
+/// The instant a local date begins, as the hour comparison in `usage_period_rows` reads it.
+///
+/// A date whose midnight a daylight change repeated begins at the earlier of the two; one whose
+/// midnight a change skipped begins when the clocks land after it.
+fn local_day_start(timezone: &Tz, date: NaiveDate) -> Result<String, BackendError> {
+    let midnight = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(BackendError::unavailable)?;
+    for minutes in [0, 30, 60, 90, 120, 150, 180] {
+        let candidate = midnight + Duration::minutes(minutes);
+        let resolved = match timezone.from_local_datetime(&candidate) {
+            LocalResult::Single(value) => value,
+            LocalResult::Ambiguous(earliest, _) => earliest,
+            LocalResult::None => continue,
+        };
+        return Ok(resolved
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true));
     }
+    Err(BackendError::unavailable())
 }
 
-fn account_usage_detail(value: Value) -> Result<Value, BackendError> {
+/// One managed period as the panel reads it.
+///
+/// The managed tree carries totals and cost only at the model leaf, because that is the only
+/// place the rollup has to keep them. The panel shows a total per agent and per provider, so
+/// those are folded here rather than asked for on the wire.
+fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value, BackendError> {
     let object = value.as_object().ok_or_else(invalid_usage_detail)?;
-    let totals = account_summary_totals(object.get("totals").ok_or_else(invalid_usage_detail)?)?;
+    let totals = object
+        .get("totals")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
     let cost = object
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
+    let incomplete = object.get("partial").and_then(Value::as_bool) == Some(true);
+    let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
     let agents = object
         .get("agents")
-        .cloned()
-        .ok_or_else(invalid_usage_detail)?;
-    let incomplete = object.get("coverage").and_then(Value::as_str) == Some("partial");
-    let breakdowns_truncated =
-        object.get("breakdowns_truncated").and_then(Value::as_bool) == Some(true);
-    let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
-    let mut usage = json!({
-        "totals": totals,
-        "cost": cost,
-        "agents": agents
-    });
-    if breakdowns_truncated {
-        usage["models_truncated"] = Value::Bool(true);
-    }
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?
+        .iter()
+        .map(account_usage_agent)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
-        "range": object.get("range").cloned().ok_or_else(invalid_usage_detail)?,
-        "usage": usage,
+        "range": {"from": range.0, "to": range.1},
+        "usage": {
+            "totals": totals,
+            "cost": cost,
+            "agents": agents
+        },
         "incomplete": incomplete,
-        "details_truncated": breakdowns_truncated || unpriced_truncated
+        "details_truncated": unpriced_truncated
     }))
 }
 
-fn account_summary_totals(value: &Value) -> Result<Value, BackendError> {
+fn account_usage_agent(value: &Value) -> Result<Value, BackendError> {
     let object = value.as_object().ok_or_else(invalid_usage_detail)?;
-    let count = |name: &str| {
-        object
-            .get(name)
-            .and_then(Value::as_u64)
-            .ok_or_else(invalid_usage_detail)
-    };
-    let input = count("input_tokens")?;
-    let output = count("output_tokens")?;
-    let cache_write_inferred = count("cache_write_inferred_tokens")?;
-    let cache_write = count("cache_write_5m_tokens")?
-        .checked_add(count("cache_write_1h_tokens")?)
-        .and_then(|value| value.checked_add(cache_write_inferred))
-        .ok_or_else(invalid_usage_detail)?;
+    let providers = object
+        .get("providers")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?
+        .iter()
+        .map(account_usage_provider)
+        .collect::<Result<Vec<_>, _>>()?;
+    let (totals, cost) = fold_leaf_totals(&providers)?;
     Ok(json!({
-        "total_tokens": input.checked_add(output).ok_or_else(invalid_usage_detail)?,
-        "input_tokens": input,
-        "output_tokens": output,
-        "cache_read_input_tokens": count("cache_read_tokens")?,
-        "cache_write_input_tokens": cache_write,
-        "reasoning_tokens": count("reasoning_tokens")?,
-        "messages": count("requests")?
+        "agent": object.get("agent").cloned().ok_or_else(invalid_usage_detail)?,
+        "totals": totals,
+        "cost": cost,
+        "providers": providers
     }))
+}
+
+fn account_usage_provider(value: &Value) -> Result<Value, BackendError> {
+    let object = value.as_object().ok_or_else(invalid_usage_detail)?;
+    let models = object
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let (totals, cost) = fold_leaves(&models)?;
+    Ok(json!({
+        "provider": object.get("provider").cloned().ok_or_else(invalid_usage_detail)?,
+        "totals": totals,
+        "cost": cost,
+        "models": models
+    }))
+}
+
+fn fold_leaf_totals(providers: &[Value]) -> Result<(Value, Value), BackendError> {
+    let leaves = providers
+        .iter()
+        .filter_map(|provider| provider.get("models")?.as_array())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    fold_leaves(&leaves)
+}
+
+fn fold_leaves(leaves: &[Value]) -> Result<(Value, Value), BackendError> {
+    let mut totals = usage::UsageSummaryTotals::default();
+    let mut costs = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let leaf_totals: usage::UsageSummaryTotals = serde_json::from_value(
+            leaf.get("totals")
+                .cloned()
+                .ok_or_else(invalid_usage_detail)?,
+        )
+        .map_err(|_| invalid_usage_detail())?;
+        totals =
+            usage::add_summary_totals(&totals, &leaf_totals).map_err(|_| invalid_usage_detail())?;
+        costs.push(
+            serde_json::from_value::<pricing::UsageCostOutcome>(
+                leaf.get("cost").cloned().ok_or_else(invalid_usage_detail)?,
+            )
+            .map_err(|_| invalid_usage_detail())?,
+        );
+    }
+    let cost = pricing::fold_usage_cost_outcomes(&costs).map_err(|_| invalid_usage_detail())?;
+    Ok((
+        serde_json::to_value(totals).map_err(|_| invalid_usage_detail())?,
+        serde_json::to_value(cost).map_err(|_| invalid_usage_detail())?,
+    ))
 }
 
 fn invalid_usage_detail() -> BackendError {
@@ -3226,20 +2931,22 @@ fn invalid_usage_detail() -> BackendError {
     }
 }
 
-fn usage_date_range(rows: &[UsageHourlyFact], fallback_date: &str) -> (String, String) {
+fn usage_date_range(rows: &[DatedUsageRow], fallback_date: &str) -> (String, String) {
     let from = rows
         .iter()
-        .map(|row| row.usage_date.clone())
+        .map(|row| row.date.clone())
         .min()
         .unwrap_or_else(|| fallback_date.to_owned());
     let to = rows
         .iter()
-        .map(|row| row.usage_date.clone())
+        .map(|row| row.date.clone())
         .max()
         .unwrap_or_else(|| fallback_date.to_owned());
     (from, to)
 }
 
+/// What the last scan of one agent left behind, in the two facts the report reads: whether the
+/// scan covered everything it found, and the bounded count per reason it did not.
 fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
     let mut reason_counts = BTreeMap::<String, i64>::new();
     for reason in &scan.coverage.reasons {
@@ -3250,24 +2957,11 @@ fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
         let entry = reason_counts.entry(key).or_default();
         *entry = entry.saturating_add(reason.count.min(i64::MAX as u64) as i64);
     }
-    let complete_sources = scan
-        .sources
-        .iter()
-        .filter(|source| source.coverage.status == CoverageStatus::Complete)
-        .count();
-    let partial_sources = scan.sources.len().saturating_sub(complete_sources);
     json!({
         "status": match scan.coverage.status {
             CoverageStatus::Complete => "complete",
             CoverageStatus::Partial => "partial",
         },
-        "scanned_files": scan.scanned_source_count,
-        "skipped_files": scan.skipped_source_count,
-        "complete_files": complete_sources,
-        "partial_files": partial_sources,
-        "indexed_records": scan.records.len(),
-        "valid_records": scan.records.len(),
-        "ignored_empty_records": scan.ignored_empty_records,
         "reason_counts": reason_counts,
     })
 }
@@ -3309,288 +3003,88 @@ fn record_account_sync_error(slot: &mut Option<BackendError>, error: BackendErro
     *slot = Some(error);
 }
 
-/// After successful control sync, run the read-only account summary when allowed.
-///
-/// Non-authentication upload/staging/outbox failures stay in the sync diagnostic and must not
-/// block the account summary. Session-authority failures and cancellation skip the account read.
-fn account_read_after_sync<F>(
-    sync_error: Option<BackendError>,
-    cancelled: bool,
-    read: F,
-) -> Result<Value, BackendError>
-where
-    F: FnOnce() -> Result<Value, BackendError>,
-{
-    if cancelled {
-        return Err(BackendError::cancelled());
-    }
-    if let Some(error) = sync_error
-        && error.error.code.requires_login()
-    {
-        return Err(error);
-    }
-    read()
-}
-
-struct UsageSubmissionContext<'a> {
-    agent: UsageAgent,
-    start: &'a DateTime<chrono::FixedOffset>,
-    end: &'a DateTime<chrono::FixedOffset>,
-    timezone: &'a str,
-    account_id: &'a str,
-    device_id: &'a str,
-    generation: u64,
-    partial: bool,
-}
-
-fn usage_rows_for_range(
-    rows_by_hour: &HashMap<(UsageAgent, String), Vec<UsageHourlyFact>>,
-    agent: UsageAgent,
-    start: &DateTime<chrono::FixedOffset>,
-    end: &DateTime<chrono::FixedOffset>,
-) -> Vec<UsageHourlyFact> {
-    let mut rows = Vec::new();
-    let mut hour = *start;
-    while hour < *end {
-        let key = (agent, hour.to_rfc3339_opts(SecondsFormat::Secs, true));
-        if let Some(bucket_rows) = rows_by_hour.get(&key) {
-            rows.extend(bucket_rows.iter().cloned());
-        }
-        hour += chrono::Duration::hours(1);
-    }
-    rows
-}
-
-fn usage_submission_fits(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> bool {
-    if rows.len() > usage::MAX_USAGE_ROWS {
-        return false;
-    }
-    let Some(submission) = usage_submission(context, sequence, rows) else {
-        return false;
-    };
-    serde_json::to_vec(&submission)
-        .ok()
-        .is_some_and(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-        && crate::relay::validate_usage_submission(&submission).is_ok()
-}
-
-fn usage_submission(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<Value> {
-    let submission_id = stable_range_submission_id(context, sequence, rows);
-    let mut rows_value = serde_json::to_value(rows).ok()?;
-    if let Some(row_values) = rows_value.as_array_mut() {
-        for row in row_values {
-            if row.get("source_cost_microusd").is_some_and(Value::is_null)
-                && let Some(object) = row.as_object_mut()
-            {
-                object.remove("source_cost_microusd");
+/// One agent's rescanned hours, in the shape Relay accepts.
+fn usage_upload(agent: UsageAgent, generation: u64, hours: &[UsageOutboxEntry]) -> Option<Value> {
+    let mut values = Vec::with_capacity(hours.len());
+    for hour in hours {
+        let mut rows = serde_json::to_value(&hour.rows).ok()?;
+        if let Some(row_values) = rows.as_array_mut() {
+            for row in row_values {
+                if row.get("source_cost_microusd").is_some_and(Value::is_null)
+                    && let Some(object) = row.as_object_mut()
+                {
+                    object.remove("source_cost_microusd");
+                }
             }
         }
+        values.push(json!({
+            "bucket_start_utc": hour.bucket_start_utc,
+            "scan_version": hour.scan_version,
+            "partial": hour.partial,
+            "rows": rows
+        }));
     }
-    let mut submission = json!({
+    Some(json!({
         "protocol_version": MANAGED_DATA_PROTOCOL,
-        "submission_id": submission_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "sequence": sequence,
-        "parser_revision": PARSER_REVISION,
-        "aggregation_timezone": context.timezone,
-        "coverage": {
-            "agent": context.agent,
-            "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "status": if context.partial { "partial" } else { "complete" }
-        },
-        "rows": rows_value
-    });
-    if context.partial {
-        submission["write_mode"] = json!("merge_partial");
-    }
-    Some(submission)
+        "generation": generation,
+        "agent": agent,
+        "hours": values
+    }))
 }
 
-fn usage_multipart_submissions(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<(String, Vec<Value>)> {
-    if rows.is_empty()
-        || rows.len() > usage::MAX_USAGE_ROWS.saturating_mul(MAX_USAGE_MULTIPART_PARTS)
-    {
-        return None;
+/// How many of the staged hours fit one request, by hour count and by bytes.
+///
+/// Zero means the first hour alone does not fit, which is the only case the caller cannot
+/// make progress on.
+fn usage_upload_batch_size(
+    agent: UsageAgent,
+    generation: u64,
+    hours: &[UsageOutboxEntry],
+) -> usize {
+    let fits = |count: usize| {
+        usage_upload(agent, generation, &hours[..count])
+            .filter(|upload| crate::relay::validate_usage_submission(upload).is_ok())
+            .is_some()
+    };
+    let mut high = hours.len().min(usage::MAX_USAGE_HOURS_PER_UPLOAD);
+    if high == 0 || !fits(1) {
+        return 0;
     }
-    let mut identities = HashSet::with_capacity(rows.len());
-    for row in rows {
-        let identity = serde_json::to_string(&(
-            &row.bucket_start_utc,
-            &row.usage_date,
-            row.usage_hour,
-            row.agent,
-            row.billing_channel,
-            row.channel_source,
-            &row.model,
-            row.context_bucket,
-            &row.service_tier,
-            &row.speed,
-            &row.inference_geo,
-        ))
-        .ok()?;
-        if !identities.insert(identity) {
-            return None;
+    // Byte fit is monotonic over a prefix, so the largest count that fits is a binary search
+    // rather than a serialization per candidate.
+    let mut low = 1usize;
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if fits(middle) {
+            low = middle;
+        } else {
+            high = middle - 1;
         }
     }
-    let batch_id = stable_usage_batch_id(context, rows);
-    // Use the maximum part count while packing. The final count can only make the metadata
-    // smaller, so a part that fits this conservative envelope is safe at the final rebuild.
-    let provisional_count = MAX_USAGE_MULTIPART_PARTS as u64;
-    let mut ranges = Vec::<(usize, usize)>::new();
-    let mut offset = 0usize;
-    while offset < rows.len() {
-        let max_len = (rows.len() - offset).min(usage::MAX_USAGE_ROWS);
-        if !multipart_submission_fits(
-            context,
-            sequence.saturating_add(ranges.len() as u64),
-            &batch_id,
-            ranges.len() as u64,
-            provisional_count,
-            &rows[offset..offset + 1],
-        ) {
-            return None;
-        }
-        // Byte fit is monotonic over a prefix. Binary search keeps high-cardinality hours near
-        // O(parts * log(rows)) instead of serializing every growing prefix.
-        let mut low = 1usize;
-        let mut high = max_len;
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            if multipart_submission_fits(
-                context,
-                sequence.saturating_add(ranges.len() as u64),
-                &batch_id,
-                ranges.len() as u64,
-                provisional_count,
-                &rows[offset..offset + middle],
-            ) {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        let next = offset + low;
-        ranges.push((offset, next));
-        offset = next;
-        if ranges.len() >= MAX_USAGE_MULTIPART_PARTS && offset < rows.len() {
-            return None;
-        }
-    }
-    if ranges.len() < 2 || ranges.len() > MAX_USAGE_MULTIPART_PARTS {
-        return None;
-    }
-    let part_count = ranges.len() as u64;
-    let submissions = ranges
-        .iter()
-        .enumerate()
-        .map(|(part_index, (from, to))| {
-            usage_multipart_submission(
-                context,
-                sequence.saturating_add(part_index as u64),
-                &batch_id,
-                part_index as u64,
-                part_count,
-                &rows[*from..*to],
-            )
-        })
-        .collect::<Option<Vec<_>>>()?;
-    submissions
-        .iter()
-        .all(|submission| {
-            serde_json::to_vec(submission)
-                .ok()
-                .is_some_and(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-                && crate::relay::validate_usage_submission(submission).is_ok()
-        })
-        .then_some((batch_id, submissions))
+    low
 }
 
-fn multipart_submission_fits(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    batch_id: &str,
-    part_index: u64,
-    part_count: u64,
-    rows: &[UsageHourlyFact],
-) -> bool {
-    usage_multipart_submission(context, sequence, batch_id, part_index, part_count, rows)
-        .and_then(|submission| {
-            serde_json::to_vec(&submission)
-                .ok()
-                .filter(|bytes| bytes.len() <= crate::relay::MAXIMUM_REQUEST_BYTES)
-                .map(|_| submission)
-        })
-        .is_some_and(|submission| crate::relay::validate_usage_submission(&submission).is_ok())
-}
-
-fn usage_multipart_submission(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    batch_id: &str,
-    part_index: u64,
-    part_count: u64,
-    rows: &[UsageHourlyFact],
-) -> Option<Value> {
-    let mut submission = usage_submission(context, sequence, rows)?;
-    submission["multipart"] = json!({
-        "batch_id": batch_id,
-        "part_index": part_index,
-        "part_count": part_count
-    });
-    Some(submission)
-}
-
-fn stable_usage_batch_id(context: &UsageSubmissionContext<'_>, rows: &[UsageHourlyFact]) -> String {
-    let material = json!({
-        "parser_revision": PARSER_REVISION,
-        "agent": context.agent,
-        "aggregation_timezone": context.timezone,
-        "account_id": context.account_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "partial": context.partial,
-        "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "rows": rows,
-    });
-    let digest = Sha256::digest(serde_json::to_vec(&material).unwrap_or_default());
-    format!("usage_batch_{digest:x}")
-}
-
-fn stable_range_submission_id(
-    context: &UsageSubmissionContext<'_>,
-    sequence: u64,
-    rows: &[UsageHourlyFact],
-) -> String {
-    let material = json!({
-        "parser_revision": PARSER_REVISION,
-        "agent": context.agent,
-        "aggregation_timezone": context.timezone,
-        "account_id": context.account_id,
-        "device_id": context.device_id,
-        "generation": context.generation,
-        "sequence": sequence,
-        "partial": context.partial,
-        "start_at": context.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "end_at": context.end.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "rows": rows,
-    });
-    let digest = Sha256::digest(serde_json::to_vec(&material).unwrap_or_default());
-    format!("usage_{digest:x}")
+/// The first whole hour at or after an instant, in the canonical form `bucket_start_utc`
+/// holds.
+///
+/// An hour that starts before the watermark is not one this device may upload. Rounding the
+/// watermark up is what turns that into a comparison the stored column can answer directly,
+/// without re-parsing every row.
+fn ceil_utc_hour(value: &str) -> Result<String, BackendError> {
+    let instant = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| invalid_local_state())?
+        .with_timezone(&Utc);
+    let floored = instant
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .ok_or_else(invalid_local_state)?;
+    let hour = if floored == instant {
+        floored
+    } else {
+        floored + Duration::hours(1)
+    };
+    Ok(hour.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 fn floor_utc_hour(value: &DateTime<Utc>) -> String {
@@ -3600,10 +3094,6 @@ fn floor_utc_hour(value: &DateTime<Utc>) -> String {
         .and_then(|value| value.with_nanosecond(0))
         .unwrap_or(*value)
         .to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn usage_stage_slots(existing_entries: usize) -> usize {
-    MAX_USAGE_OUTBOX_ENTRIES.saturating_sub(existing_entries)
 }
 
 fn overview_item(
@@ -3710,64 +3200,560 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn non_auth_sync_error_still_reads_account_summary() {
-        let mut reads = 0;
-        let result = account_read_after_sync(Some(BackendError::unavailable()), false, || {
-            reads += 1;
-            Ok(json!({"status": "active"}))
-        });
-        assert_eq!(reads, 1);
-        assert_eq!(result.expect("account read"), json!({"status": "active"}));
+    /// A Relay that answers the given responses in order.
+    ///
+    /// It keeps listening until the test stops it, and a request the test did not plan for is
+    /// recorded and answered with a closed connection rather than ignored — so "this refresh
+    /// called the Account read twice" is something a test can see, not something it has to
+    /// infer from a call that hung.
+    struct MockRelay {
+        origin: String,
+        stop: Arc<AtomicBool>,
+        server: std::thread::JoinHandle<Vec<String>>,
     }
 
-    #[test]
-    fn requires_login_sync_error_skips_account_summary() {
-        for code in [
-            ErrorCode::AuthenticationRequired,
-            ErrorCode::DeviceDeleted,
-            ErrorCode::StaleGeneration,
-        ] {
-            let result = account_read_after_sync(
-                Some(BackendError {
-                    error: IpcError::new(code, RecoveryAction::Login),
-                }),
-                false,
-                || panic!("account read must not run for requires-login sync error"),
-            );
-            let error = result.expect_err("expected skip");
-            assert_eq!(error.error.code, code);
-            assert!(error.error.code.requires_login());
+    impl MockRelay {
+        /// Stops listening and answers with every request head it saw, in order.
+        fn finish(self) -> Vec<String> {
+            self.stop.store(true, Ordering::Release);
+            self.server.join().expect("relay server")
         }
     }
 
-    #[test]
-    fn cancellation_skips_account_summary_even_with_non_auth_sync_error() {
-        let result = account_read_after_sync(Some(BackendError::unavailable()), true, || {
-            panic!("account read must not run when cancelled")
+    fn spawn_relay(responses: Vec<String>) -> MockRelay {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("relay listener");
+        listener.set_nonblocking(true).expect("relay nonblocking");
+        let address = listener.local_addr().expect("relay address");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let server = std::thread::spawn(move || {
+            let mut recorded = Vec::new();
+            let mut responses = responses.into_iter();
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("relay stream");
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                            .expect("relay timeout");
+                        let mut request = [0_u8; 8_192];
+                        let read = stream.read(&mut request).unwrap_or(0);
+                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2))
+                    }
+                    Err(_) => break,
+                }
+            }
+            recorded
         });
-        assert_eq!(
-            result.expect_err("expected skip").error.code,
-            ErrorCode::Cancelled
-        );
-        let result = account_read_after_sync(None, true, || {
-            panic!("account read must not run when cancelled")
-        });
-        assert_eq!(
-            result.expect_err("expected skip").error.code,
-            ErrorCode::Cancelled
-        );
+        MockRelay {
+            origin: format!("http://{address}"),
+            stop,
+            server,
+        }
     }
 
-    #[test]
-    fn successful_sync_reads_account_summary() {
-        let mut reads = 0;
-        let result = account_read_after_sync(None, false, || {
-            reads += 1;
-            Ok(json!({"plan": "pro"}))
+    fn summary_requests(sent: &[String]) -> usize {
+        sent.iter()
+            .filter(|head| head.starts_with("GET /api/v6/account/summary"))
+            .count()
+    }
+
+    fn http_json_with_etag(value: &Value, etag: &str) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: {etag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
+    }
+
+    fn relay_json(value: &Value) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
+    }
+
+    fn account_summary(label: &str) -> Value {
+        let totals = json!({
+            "total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 0
         });
-        assert_eq!(reads, 1);
-        assert_eq!(result.expect("account read"), json!({"plan": "pro"}));
+        let period = json!({
+            "totals": totals,
+            "cost": {
+                "mode": "calculate",
+                "basis": "none",
+                "status": "complete",
+                "amount_microusd": null,
+                "catalog_revision": null,
+                "calculated_rows": 0,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": [],
+                "unpriced": []
+            },
+            "partial": false,
+            "agents": []
+        });
+        json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "account": {
+                "account_id": "account_1",
+                "display_label": label,
+                "created_at": "2026-08-09T00:00:00Z"
+            },
+            "devices": [],
+            "subscriptions": [],
+            "usage": {
+                "today": period.clone(),
+                "last_7_days": period.clone(),
+                "last_30_days": period.clone(),
+                "all": period
+            },
+            "pricing_revision": "2026-08-01",
+            "model_catalog_revision": "2026-08-01"
+        })
+    }
+
+    /// Records what a refresh publishes, and lets provider collection go the moment the Account
+    /// arrives — so the ordering is proven by what released collection, not by a clock.
+    struct GateOpeningUpdates {
+        gate: Arc<RefreshGate>,
+        account: std::sync::Mutex<Option<Value>>,
+    }
+
+    impl RefreshSink for GateOpeningUpdates {
+        fn account(&self, result: Result<Value, BackendError>) {
+            *self.account.lock().expect("published account") = result.ok();
+            self.gate.open();
+        }
+    }
+
+    /// The Account read waits on nothing but the session, so it lands and is published while
+    /// provider collection is still blocked.
+    #[test]
+    fn the_account_read_does_not_queue_behind_provider_collection() {
+        let summary = account_summary("octocat");
+        let relay_server = spawn_relay(vec![relay_json(&summary)]);
+        let origin = relay_server.origin.clone();
+        let root =
+            std::env::temp_dir().join(format!("quota-account-first-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "display_label": "octocat",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "session": {
+                    "access_token": "qb_access_token_synthetic",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qbr_refresh_token_synthetic",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                }
+            }))
+            .expect("session");
+        // A signed-in device, as the refresh before this one left it.
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let gate = Arc::new(RefreshGate::default());
+        let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        backend.collection_gate = Some(gate.clone());
+        let updates = GateOpeningUpdates {
+            gate: gate.clone(),
+            account: std::sync::Mutex::new(None),
+        };
+
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        // Collection was still waiting when the Account was published: opening the gate is what
+        // let it run at all.
+        assert!(!gate.timed_out(), "the account read waited for collection");
+        let published = updates
+            .account
+            .lock()
+            .expect("published account")
+            .clone()
+            .expect("the account was published during the refresh");
+        assert_eq!(published["auth_status"], "signed_in");
+        assert_eq!(published["account_summary"], summary);
+        assert_eq!(outcome.account.expect("account outcome"), published);
+        // The Account periods Relay folded are stored with it, not after the whole refresh.
+        assert!(
+            state
+                .snapshot()
+                .expect("state snapshot")
+                .usage_periods
+                .account
+                .today
+                .is_some()
+        );
+
+        let sent = relay_server.finish();
+        // The Account was the first thing this refresh asked Relay for, before pricing, before
+        // the control check, before anything collection could have needed.
+        assert!(
+            sent[0].starts_with("GET /api/v6/account/summary"),
+            "{sent:?}"
+        );
+        assert_eq!(summary_requests(&sent), 1, "{sent:?}");
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Signing in during a refresh is a race the refresh has to lose gracefully: it began with
+    /// no session to read, and it must not report the device signed out because of that.
+    #[test]
+    fn a_sign_in_that_lands_mid_refresh_is_still_read_before_the_refresh_ends() {
+        let summary = account_summary("octocat");
+        // Pricing, the model catalog and the control call are all answered by a closed
+        // connection — a network failure, not a session ending. The read that follows is the
+        // one under test.
+        let relay_server = spawn_relay(vec![
+            String::new(),
+            String::new(),
+            String::new(),
+            relay_json(&summary),
+        ]);
+        let origin = relay_server.origin.clone();
+        let root =
+            std::env::temp_dir().join(format!("quota-account-late-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let reading = Arc::new(RefreshGate::default());
+        let collecting = Arc::new(RefreshGate::default());
+        let relay = Arc::new(crate::relay::RelayClient::for_test(&origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        backend.account_read_gate = Some(reading.clone());
+        backend.collection_gate = Some(collecting.clone());
+        let updates = RecordingUpdates::default();
+
+        let outcome = std::thread::scope(|scope| {
+            let refreshing =
+                scope.spawn(|| backend.refresh(Arc::new(AtomicBool::new(false)), &updates));
+            // Both halves of the refresh are parked. The Account read has already decided — it
+            // found no session — and collection has not finished. The sign-in lands between the
+            // two, with nothing about the ordering left to a clock.
+            reading.wait_arrived();
+            collecting.wait_arrived();
+            state
+                .write_session_json(&active_session())
+                .expect("session");
+            reading.open();
+            collecting.open();
+            refreshing.join().expect("refresh")
+        });
+        assert!(!reading.timed_out(), "the account read was never released");
+        assert!(!collecting.timed_out(), "collection was never released");
+
+        let account = outcome
+            .account
+            .expect("the account this refresh signed in to");
+        assert_eq!(account["auth_status"], "signed_in");
+        assert_eq!(account["account_summary"], summary);
+        // One read, published once: the refresh began with nothing to read.
+        assert_eq!(updates.published(), vec![account.clone()]);
+
+        let sent = relay_server.finish();
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        assert!(
+            sent[3].starts_with("GET /api/v6/account/summary"),
+            "{}",
+            sent[3]
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Records everything a refresh publishes, in order.
+    #[derive(Default)]
+    struct RecordingUpdates {
+        account: std::sync::Mutex<Vec<Result<Value, BackendError>>>,
+    }
+
+    impl RecordingUpdates {
+        fn published(&self) -> Vec<Value> {
+            self.account
+                .lock()
+                .expect("published accounts")
+                .iter()
+                .filter_map(|result| result.as_ref().ok().cloned())
+                .collect()
+        }
+    }
+
+    impl RefreshSink for RecordingUpdates {
+        fn account(&self, result: Result<Value, BackendError>) {
+            self.account
+                .lock()
+                .expect("published accounts")
+                .push(result);
+        }
+    }
+
+    fn active_session() -> Value {
+        json!({
+            "schema_version": 1,
+            "status": "active",
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "usage_sync_revision": 0,
+            "usage_deleted_before": null,
+            "upload_not_before": "1970-01-01T00:00:00Z",
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        })
+    }
+
+    fn device_control() -> String {
+        relay_json(&json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "account_id": "account_1",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "usage_deleted_before": null,
+            "usage_sync_revision": 0
+        }))
+    }
+
+    fn device_profile() -> String {
+        relay_json(&json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "status": "updated",
+            "device_id": "device_1"
+        }))
+    }
+
+    fn snapshot_upload(accepted: Value, ignored: Value) -> String {
+        relay_json(&json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted": accepted,
+            "ignored": ignored
+        }))
+    }
+
+    /// A reading this device took a moment ago, still current, for a provider this refresh will
+    /// find no sign-in for — which is what makes the refresh restate and upload it.
+    fn previous_quota_report() -> Value {
+        json!({
+            "captured_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [{
+                    "provider": "codex",
+                    "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
+                    "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                    "status": "available",
+                    "observed_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+                }],
+                "sources": []
+            }]
+        })
+    }
+
+    fn signed_in_backend(root: &std::path::Path, origin: &str) -> (Arc<StateStore>, NativeBackend) {
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(root).expect("state"));
+        state
+            .write_session_json(&active_session())
+            .expect("session");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "account_summary": null
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let relay = Arc::new(crate::relay::RelayClient::for_test(origin).expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        (state, backend)
+    }
+
+    /// What this Mac just uploaded belongs in its own Account view now, not in five minutes.
+    ///
+    /// The refresh reads the Account first — that is what makes it feel instant — and reads it
+    /// once more after an upload Relay actually took, so the panel ends the refresh holding the
+    /// Account that includes this device's own reading.
+    #[test]
+    fn an_upload_the_account_took_is_read_back_in_the_same_refresh() {
+        let before = account_summary("octocat");
+        let mut after = account_summary("octocat");
+        after["devices"] = json!([{
+            "id": "device_1",
+            "display_name": "Test Mac",
+            "platform": "macos",
+            "last_seen_at": "2026-08-27T00:00:00Z",
+            "last_observed_at": "2026-08-27T00:00:00Z"
+        }]);
+        let relay_server = spawn_relay(vec![
+            http_json_with_etag(&before, "\"before\""),
+            String::new(),
+            String::new(),
+            device_control(),
+            device_profile(),
+            snapshot_upload(json!(["codex"]), json!([])),
+            http_json_with_etag(&after, "\"after\""),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-reread-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(previous_quota_report()),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("previous quota");
+        let updates = RecordingUpdates::default();
+
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        let account = outcome.account.expect("account outcome");
+        assert_eq!(account["account_summary"], after);
+        // Both reads were published, in the order they happened: the fast one, then the one that
+        // includes this device.
+        let published = updates.published();
+        assert_eq!(published.len(), 2, "{published:?}");
+        assert_eq!(published[0]["account_summary"], before);
+        assert_eq!(published[1]["account_summary"], after);
+
+        let sent = relay_server.finish();
+        assert!(
+            sent.iter()
+                .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
+            "{sent:?}"
+        );
+        assert_eq!(summary_requests(&sent), 2, "{sent:?}");
+        let reread = sent
+            .iter()
+            .filter(|head| head.starts_with("GET /api/v6/account/summary"))
+            .nth(1)
+            .expect("second account read");
+        // The second read is conditional on what the first one returned, so an Account that did
+        // not move costs a 304 and nothing else.
+        assert!(
+            reread
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"before\""),
+            "{reread}"
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An upload Relay took nothing new from left the Account exactly as this refresh read it,
+    /// so there is nothing to read again.
+    #[test]
+    fn an_upload_the_account_ignored_does_not_read_it_again() {
+        let summary = account_summary("octocat");
+        let relay_server = spawn_relay(vec![
+            http_json_with_etag(&summary, "\"only\""),
+            String::new(),
+            String::new(),
+            device_control(),
+            device_profile(),
+            snapshot_upload(json!([]), json!(["codex"])),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-account-once-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(previous_quota_report()),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("previous quota");
+        let updates = RecordingUpdates::default();
+
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+
+        assert_eq!(
+            outcome.account.expect("account outcome")["account_summary"],
+            summary
+        );
+        assert_eq!(updates.published().len(), 1);
+        let sent = relay_server.finish();
+        // The upload happened; Relay simply had nothing new to take from it.
+        assert!(
+            sent.iter()
+                .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
+            "{sent:?}"
+        );
+        assert_eq!(summary_requests(&sent), 1, "{sent:?}");
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -3805,130 +3791,484 @@ mod tests {
     }
 
     #[test]
-    fn usage_periods_are_inclusive_and_use_the_service_timezone() {
+    fn usage_periods_begin_at_local_midnight_in_the_service_timezone() {
         let now = DateTime::parse_from_rfc3339("2026-08-12T18:00:00Z")
             .expect("instant")
             .with_timezone(&Utc);
-        assert_eq!(
-            usage_period_range(UsagePeriod::Last7Days, "Asia/Singapore", now)
-                .expect("range")
-                .1,
-            Some(("2026-08-07".into(), "2026-08-13".into()))
-        );
+        let span = usage_period_window(UsagePeriod::Last7Days, "Asia/Singapore", now)
+            .expect("window")
+            .1
+            .expect("span");
+        // 18:00 UTC is already the 13th in Singapore, and its days begin at 16:00 UTC.
+        assert_eq!(span.dates, ("2026-08-07".into(), "2026-08-13".into()));
+        assert_eq!(span.start, "2026-08-06T16:00:00Z");
+        assert_eq!(span.end, "2026-08-13T16:00:00Z");
         assert!(
-            usage_period_range(UsagePeriod::All, "Asia/Singapore", now)
-                .expect("range")
+            usage_period_window(UsagePeriod::All, "Asia/Singapore", now)
+                .expect("window")
                 .1
                 .is_none()
         );
     }
 
+    /// A change that skips or repeats midnight still leaves the day one instant to begin at.
+    #[test]
+    fn a_local_day_begins_once_across_a_daylight_change() {
+        let santiago = Tz::from_str("America/Santiago").expect("zone");
+        let skipped = NaiveDate::from_ymd_opt(2026, 9, 6).expect("date");
+        assert_eq!(
+            local_day_start(&santiago, skipped).expect("start"),
+            "2026-09-06T04:00:00Z"
+        );
+
+        let havana = Tz::from_str("America/Havana").expect("zone");
+        let repeated = NaiveDate::from_ymd_opt(2026, 11, 1).expect("date");
+        assert_eq!(
+            local_day_start(&havana, repeated).expect("start"),
+            "2026-11-01T04:00:00Z"
+        );
+    }
+
     /// One statement per contract: the account read always carries its per-agent breakdown, so
     /// a summary without it is refused rather than rebuilt from the display breakdowns.
+    /// A managed period states cost at the leaf. What the panel shows above it — a total per
+    /// agent and per provider — is folded here, and folding must not invent or lose anything.
     #[test]
-    fn account_usage_detail_requires_the_agent_breakdown() {
-        let cost = json!({
-            "mode": "calculate",
-            "basis": "none",
-            "status": "unavailable",
-            "amount_microusd": null,
-            "catalog_revision": null,
-            "calculated_rows": 0,
-            "reported_rows": 0,
-            "unpriced_rows": 1,
-            "assumptions": [],
-            "unpriced": []
-        });
-        let totals = json!({
-            "input_tokens": 8,
-            "cache_read_tokens": 2,
-            "cache_write_5m_tokens": 1,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 5,
-            "reasoning_tokens": 3,
-            "requests": 2,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        assert!(
-            account_usage_detail(json!({
-                "range": {"from": "2026-08-06", "to": "2026-08-12"},
-                "totals": totals,
-                "cost": cost,
-                "coverage": "complete",
-                "breakdowns": [{
-                    "dimension": "model",
-                    "key": "gpt-test",
-                    "totals": totals,
-                    "cost": cost
+    fn a_managed_period_folds_its_leaves_into_the_totals_the_panel_shows() {
+        let cost = |amount: &str, calculated: u64| {
+            json!({
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": amount,
+                "catalog_revision": "official-2026-08-10-4",
+                "calculated_rows": calculated,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+            })
+        };
+        let totals = |input: u64, output: u64, messages: u64| {
+            json!({
+                "total_tokens": input + output,
+                "input_tokens": input,
+                "output_tokens": output,
+                "cache_read_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+                "reasoning_tokens": 0,
+                "messages": messages
+            })
+        };
+        let period = json!({
+            "totals": totals(30, 6, 3),
+            "cost": cost("300", 3),
+            "partial": true,
+            "agents": [{
+                "agent": "codex",
+                "providers": [{
+                    "provider": "openai",
+                    "models": [
+                        {"model": "gpt-5.4", "totals": totals(10, 2, 1), "cost": cost("100", 1)},
+                        {"model": "gpt-5.6", "totals": totals(20, 4, 2), "cost": cost("200", 2)}
+                    ]
                 }]
-            }))
+            }]
+        });
+        let detail =
+            account_usage_detail(&period, &("2026-08-13".to_owned(), "2026-08-13".to_owned()))
+                .expect("detail");
+
+        assert_eq!(
+            detail["range"],
+            json!({"from": "2026-08-13", "to": "2026-08-13"})
+        );
+        assert_eq!(detail["incomplete"], json!(true));
+        assert_eq!(detail["usage"]["totals"]["messages"], json!(3));
+        let agent = &detail["usage"]["agents"][0];
+        assert_eq!(agent["agent"], "codex");
+        assert_eq!(agent["totals"]["input_tokens"], json!(30));
+        assert_eq!(agent["totals"]["messages"], json!(3));
+        assert_eq!(agent["cost"]["amount_microusd"], json!("300"));
+        assert_eq!(agent["cost"]["calculated_rows"], json!(3));
+        assert_eq!(agent["cost"]["status"], json!("complete"));
+        assert_eq!(agent["providers"][0]["totals"]["output_tokens"], json!(6));
+        assert_eq!(
+            agent["providers"][0]["models"]
+                .as_array()
+                .expect("models")
+                .len(),
+            2
+        );
+    }
+
+    /// A period with no agents in it still answers, and its fold says there was no cost.
+    #[test]
+    fn a_managed_period_with_nothing_in_it_folds_to_no_cost() {
+        let detail = account_usage_detail(
+            &json!({
+                "totals": {
+                    "total_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "messages": 0
+                },
+                "cost": {
+                    "mode": "auto",
+                    "basis": "none",
+                    "status": "complete",
+                    "amount_microusd": null,
+                    "catalog_revision": null,
+                    "calculated_rows": 0,
+                    "reported_rows": 0,
+                    "unpriced_rows": 0,
+                    "assumptions": [],
+                    "unpriced": []
+                },
+                "partial": false,
+                "agents": []
+            }),
+            &("2026-08-13".to_owned(), "2026-08-13".to_owned()),
+        )
+        .expect("detail");
+        assert_eq!(detail["usage"]["agents"], json!([]));
+        assert_eq!(detail["incomplete"], json!(false));
+    }
+
+    /// A period that does not carry the tree is not a period this build can read.
+    #[test]
+    fn a_managed_period_without_its_agent_tree_is_refused() {
+        assert!(
+            account_usage_detail(
+                &json!({"totals": {}, "cost": {}, "partial": false}),
+                &("2026-08-13".to_owned(), "2026-08-13".to_owned()),
+            )
             .is_err()
         );
     }
 
+    /// The probe belongs to the binary, not to the refresh: it is stored in the cache and
+    /// re-read from it, so the second refresh presents the same version without starting
+    /// anything.  A CLI whose provider holds no sign-in here is never asked at all.
     #[test]
-    fn account_usage_detail_keeps_structured_clients() {
-        let cost = json!({
-            "mode": "calculate",
-            "basis": "calculated",
-            "status": "complete",
-            "amount_microusd": "1",
-            "catalog_revision": "official-2026-08-10-4",
-            "calculated_rows": 1,
-            "reported_rows": 0,
-            "unpriced_rows": 0,
-            "assumptions": [],
-            "unpriced": []
-        });
-        let summary_totals = json!({
-            "total_tokens": 13,
-            "input_tokens": 8,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 2,
-            "cache_write_input_tokens": 1,
-            "reasoning_tokens": 3,
-            "messages": 2
-        });
-        let relay_totals = json!({
-            "input_tokens": 8,
-            "cache_read_tokens": 2,
-            "cache_write_5m_tokens": 1,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 5,
-            "reasoning_tokens": 3,
-            "requests": 2,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": null,
-            "source_cost_covered_requests": 0
-        });
-        let detail = account_usage_detail(json!({
-            "range": {"from": "2026-08-13", "to": "2026-08-13"},
-            "totals": relay_totals,
-            "cost": cost,
-            "coverage": "partial",
-            "breakdowns": [],
-            "agents": [{
-                "agent": "codex",
-                "totals": summary_totals,
-                "cost": cost,
-                "providers": [{
-                    "provider": "openai",
-                    "totals": summary_totals,
-                    "cost": cost,
-                    "models": [{"model": "gpt-5.4", "totals": summary_totals, "cost": cost}]
-                }]
-            }]
-        }))
-        .expect("detail");
-        assert_eq!(detail["usage"]["agents"][0]["agent"], "codex");
-        assert_eq!(detail["usage"]["totals"]["messages"], 2);
-        assert_eq!(detail["incomplete"], json!(true));
+    fn a_second_refresh_reads_the_cli_version_from_the_cache_without_spawning() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root =
+                std::env::temp_dir().join(format!("quota-cli-version-{}", uuid::Uuid::new_v4()));
+            let home = root.join("home");
+            let bin = root.join("bin");
+            fs::create_dir_all(&home).expect("home");
+            fs::create_dir_all(&bin).expect("bin");
+            let log = root.join("spawns.log");
+            fs::write(
+                bin.join("claude"),
+                format!(
+                    "#!/bin/sh\necho ran >> {}\necho '2.4.7 (Claude Code)'\n",
+                    log.display()
+                ),
+            )
+            .expect("fake claude");
+            fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755))
+                .expect("mode");
+
+            let state = Arc::new(StateStore::open(&root).expect("state"));
+            let relay = Arc::new(RelayClient::new().expect("relay"));
+            let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+            backend.home = home.clone();
+            backend.environment.clear();
+            backend
+                .environment
+                .insert("PATH".to_owned(), bin.to_string_lossy().into_owned());
+            let cancel = Arc::new(AtomicBool::new(false));
+            let context = backend.collection_context(cancel.clone()).expect("context");
+            let signed_in = vec![(
+                ProviderId::Claude,
+                vec![ProviderSession {
+                    provider: ProviderId::Claude,
+                    credential_source: "fixture".to_owned(),
+                }],
+            )];
+
+            let first = backend.provider_cli_versions(&signed_in, &context, &cancel);
+            assert_eq!(
+                first.get(&CliTool::Claude).map(String::as_str),
+                Some("2.4.7")
+            );
+            let spawns = |log: &std::path::Path| {
+                fs::read_to_string(log)
+                    .map(|text| text.lines().count())
+                    .unwrap_or(0)
+            };
+            assert_eq!(spawns(&log), 1);
+
+            let second = backend.provider_cli_versions(&signed_in, &context, &cancel);
+            assert_eq!(second, first);
+            assert_eq!(spawns(&log), 1);
+
+            // Codex is not signed in here, so its binary is never looked for or run.
+            let none = backend.provider_cli_versions(
+                &[(ProviderId::Codex, Vec::new())],
+                &context,
+                &cancel,
+            );
+            assert!(none.is_empty());
+            assert_eq!(spawns(&log), 1);
+
+            drop(backend);
+            drop(state);
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    /// The renewal rung end to end: an expired Grok token, an expired Claude Code credential,
+    /// and an expired Codex token each buy exactly one run of the CLI that owns them, on the
+    /// refresh worker; all three attempts land in one cache record; and that record is what
+    /// stops the next five-minute refresh from starting any of them again.  The rest of the
+    /// refresh — here, the Claude version probe — is untouched by any of it.
+    #[test]
+    fn expired_sign_ins_are_renewed_once_each_and_one_record_outlives_the_refresh() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root = std::env::temp_dir().join(format!("quota-renew-{}", uuid::Uuid::new_v4()));
+            let home = root.join("home");
+            let bin = root.join("bin");
+            let grok_home = home.join(".grok");
+            let claude_home = home.join(".claude");
+            let codex_home = home.join(".codex");
+            fs::create_dir_all(&grok_home).expect("grok home");
+            fs::create_dir_all(&claude_home).expect("claude home");
+            fs::create_dir_all(&codex_home).expect("codex home");
+            fs::create_dir_all(&bin).expect("bin");
+            let log = root.join("spawns.log");
+            let auth = grok_home.join("auth.json");
+            let credential = claude_home.join(".credentials.json");
+            let codex_auth = codex_home.join("auth.json");
+            let grok_credentials = |expires_at: &str, token: &str| {
+                format!(
+                    "{{\"https://auth.x.ai::fixture\": {{\"key\": \"{token}\", \
+                     \"expires_at\": \"{expires_at}\"}}}}"
+                )
+            };
+            // Milliseconds, as Claude Code writes them: 2020, then 2099.
+            let claude_credentials = |expires_at_ms: i64, token: &str| {
+                format!(
+                    "{{\"claudeAiOauth\": {{\"accessToken\": \"{token}\", \
+                     \"refreshToken\": \"refresh\", \"expiresAt\": {expires_at_ms}}}}}"
+                )
+            };
+            // Codex writes the expiry inside the access token, so the fixture writes one too:
+            // a base64url payload carrying nothing but `exp`, in 2020 and then in 2099.
+            let codex_access_token = |expires_at: i64| {
+                use base64::Engine as _;
+                let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(format!("{{\"exp\":{expires_at}}}"));
+                format!("header.{payload}.signature")
+            };
+            let codex_credentials = |expires_at: i64| {
+                format!(
+                    "{{\"tokens\": {{\"access_token\": \"{token}\", \
+                     \"refresh_token\": \"refresh\"}}, \
+                     \"last_refresh\": \"2020-01-01T00:00:00Z\"}}",
+                    token = codex_access_token(expires_at),
+                )
+            };
+            fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
+                .expect("credential");
+            fs::write(&codex_auth, codex_credentials(1_577_836_800)).expect("codex auth");
+            fs::write(
+                bin.join("grok"),
+                format!(
+                    "#!/bin/sh\n\
+                     echo \"ran grok\" >> {log}\n\
+                     read -r first || exit 1\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
+                     read -r second || exit 1\n\
+                     case \"$second\" in *cached_token*) ;; *) exit 3 ;; esac\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{}}}}'\n\
+                     cat > {auth} <<'AUTHJSON'\n\
+                     {renewed}\n\
+                     AUTHJSON\n",
+                    log = log.display(),
+                    auth = auth.display(),
+                    renewed = grok_credentials("2099-01-01T00:00:00Z", "fresh"),
+                ),
+            )
+            .expect("fake grok");
+            // One binary answering both things this build ever asks a CLI for: the version
+            // the request headers claim, and the renewal an expired credential earns.
+            fs::write(
+                bin.join("claude"),
+                format!(
+                    "#!/bin/sh\n\
+                     case \"$1\" in\n\
+                       --version) echo '2.4.7 (Claude Code)'; exit 0 ;;\n\
+                     esac\n\
+                     echo \"ran claude $*\" >> {log}\n\
+                     cat > {credential} <<'CREDENTIAL'\n\
+                     {renewed}\n\
+                     CREDENTIAL\n",
+                    log = log.display(),
+                    credential = credential.display(),
+                    renewed = claude_credentials(4_070_908_800_000, "fresh"),
+                ),
+            )
+            .expect("fake claude");
+            // The Codex CLI renews on its own startup path, so the stand-in rewrites
+            // `auth.json` on the way out rather than in answer to a request.
+            fs::write(
+                bin.join("codex"),
+                format!(
+                    "#!/bin/sh\n\
+                     echo \"ran codex $*\" >> {log}\n\
+                     read -r first || exit 1\n\
+                     printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}'\n\
+                     read -r rest\n\
+                     cat > {auth} <<'AUTHJSON'\n\
+                     {renewed}\n\
+                     AUTHJSON\n",
+                    log = log.display(),
+                    auth = codex_auth.display(),
+                    renewed = codex_credentials(4_070_908_800),
+                ),
+            )
+            .expect("fake codex");
+            for program in ["grok", "claude", "codex"] {
+                fs::set_permissions(bin.join(program), fs::Permissions::from_mode(0o755))
+                    .expect("mode");
+            }
+
+            let state = Arc::new(StateStore::open(&root).expect("state"));
+            let relay = Arc::new(RelayClient::new().expect("relay"));
+            let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+            backend.home = home.clone();
+            backend.environment.clear();
+            backend.environment.insert(
+                "PATH".to_owned(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            );
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut context = backend.collection_context(cancel.clone()).expect("context");
+            let session = |provider: ProviderId| {
+                (
+                    provider,
+                    vec![ProviderSession {
+                        provider,
+                        credential_source: "fixture".to_owned(),
+                    }],
+                )
+            };
+            let discovered = vec![
+                session(ProviderId::Grok),
+                session(ProviderId::Claude),
+                session(ProviderId::Codex),
+            ];
+            let spawns = |program: &str| {
+                fs::read_to_string(&log)
+                    .map(|text| {
+                        text.lines()
+                            .filter(|line| line.starts_with(&format!("ran {program}")))
+                            .count()
+                    })
+                    .unwrap_or(0)
+            };
+
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
+            assert!(
+                fs::read_to_string(&auth).expect("auth").contains("fresh"),
+                "collection reads the file the CLI wrote"
+            );
+            assert!(
+                fs::read_to_string(&codex_auth)
+                    .expect("codex auth")
+                    .contains(&codex_access_token(4_070_908_800)),
+                "collection reads the token the CLI wrote"
+            );
+            assert!(
+                fs::read_to_string(&credential)
+                    .expect("credential")
+                    .contains("fresh"),
+                "collection reads the credential the CLI wrote"
+            );
+            assert!(
+                fs::read_to_string(&log).expect("log").contains("mcp list"),
+                "the renewal is the one invocation that reaches Claude Code's refresh path"
+            );
+            // One record for both providers, so the refresh reads and writes it once.
+            let recorded = state
+                .provider_refresh_attempts()
+                .expect("attempts")
+                .expect("recorded");
+            let attempts =
+                serde_json::from_str::<RenewalAttempts>(&recorded).expect("decodes as a map");
+            assert_eq!(attempts.len(), 3, "{recorded}");
+            for provider in [ProviderId::Claude, ProviderId::Codex, ProviderId::Grok] {
+                assert_eq!(
+                    attempts
+                        .get(provider.as_str())
+                        .map(|attempt| attempt.outcome),
+                    Some(crate::providers::common::RenewalOutcome::Renewed),
+                    "{recorded}"
+                );
+            }
+
+            // Tokens with time left are not sign-in problems, so nothing is started.
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
+
+            // Expired again inside the hour: the record from the first attempt is what keeps
+            // the five-minute timer from turning into a spawn schedule.
+            fs::write(&auth, grok_credentials("2020-01-01T00:00:00Z", "stale")).expect("auth");
+            fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
+                .expect("credential");
+            fs::write(&codex_auth, codex_credentials(1_577_836_800)).expect("codex auth");
+            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
+
+            // A Mac that never signed into any of them never looks for a binary at all.
+            backend.renew_provider_sign_ins(
+                &[
+                    (ProviderId::Grok, Vec::new()),
+                    (ProviderId::Claude, Vec::new()),
+                    (ProviderId::Codex, Vec::new()),
+                ],
+                &mut context,
+            );
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (1, 1, 1)
+            );
+
+            // And the rest of the refresh is exactly where it was.
+            let versions =
+                backend.provider_cli_versions(&[session(ProviderId::Claude)], &context, &cancel);
+            assert_eq!(
+                versions.get(&CliTool::Claude).map(String::as_str),
+                Some("2.4.7")
+            );
+
+            drop(backend);
+            drop(state);
+            fs::remove_dir_all(root).expect("cleanup");
+        }
     }
 
     #[test]
@@ -3971,12 +4311,42 @@ mod tests {
         assert_eq!(error.error.code, ErrorCode::Unavailable);
         assert!(
             state
-                .diagnostic_recent_activity()
+                .diagnostic_recent_attempts()
                 .expect("activity")
-                .attempts
                 .iter()
                 .all(|attempt| attempt.kind != DiagnosticAttemptKind::UsageScan)
         );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The journal is evidence about collection, not a permit to collect.
+    #[test]
+    fn a_journal_that_cannot_be_written_does_not_stop_a_refresh() {
+        let root = std::env::temp_dir().join(format!("quota-journal-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .make_diagnostic_journal_unwritable_for_test()
+            .expect("break the journal");
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+
+        let quota = backend
+            .collect_quota(Arc::new(AtomicBool::new(false)))
+            .expect("quota still collects");
+        assert_eq!(
+            quota.get("results").and_then(Value::as_array).map(Vec::len),
+            Some(ProviderId::ALL.len())
+        );
+        let usage = backend
+            .collect_usage(Arc::new(AtomicBool::new(false)))
+            .expect("usage still scans");
+        assert_eq!(usage.agents.len(), UsageAgent::ALL.len());
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
@@ -4002,10 +4372,7 @@ mod tests {
         let report = backend
             .collect_quota(Arc::new(AtomicBool::new(false)))
             .expect("local quota report");
-        assert_eq!(
-            report.get("protocol_version").and_then(Value::as_i64),
-            Some(crate::protocol::LOCAL_COLLECTION_PROTOCOL)
-        );
+        assert!(report.get("protocol_version").is_none());
         for result in report
             .get("results")
             .and_then(Value::as_array)
@@ -4018,9 +4385,69 @@ mod tests {
             assert!(result.contains_key("snapshots"));
             // An isolated home has no credentials, so every provider reports that it was
             // never set up here rather than that collection failed here.
-            assert_eq!(result.get("sources").and_then(Value::as_u64), Some(0));
+            assert_eq!(
+                result.get("sources").and_then(Value::as_array),
+                Some(&Vec::new())
+            );
         }
         assert!(state.session_json().expect("session state").is_none());
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A body is only described by the validator that came with it. Keeping the old ETag over
+    /// a new document made the next conditional request ask about a document this device no
+    /// longer held, and a 304 would have confirmed the wrong one.
+    #[test]
+    fn a_body_with_no_validator_is_stored_without_one() {
+        let root = std::env::temp_dir().join(format!("quota-etag-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let catalog = |revision: &str| {
+            json!({
+                "schema_version": 2,
+                "revision": revision,
+                "models": [{
+                    "canonical_id": "gpt-5.5",
+                    "aliases": [{"reported_model": "gpt-5.5-alias", "provider": "openai"}]
+                }]
+            })
+        };
+        state
+            .commit_model_catalog(&catalog("model-1"), Some("\"model-1\""))
+            .expect("first catalog");
+
+        let body = serde_json::to_string(&catalog("model-2")).expect("body");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 8_192];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            // A newer document, and no ETag with it.
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .expect("response");
+        });
+        let relay =
+            Arc::new(RelayClient::for_test(&format!("http://{address}")).expect("test relay"));
+        let backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+
+        backend.refresh_model_catalog().expect("refresh");
+
+        assert_eq!(
+            state.model_catalog().expect("catalog"),
+            Some(catalog("model-2"))
+        );
+        assert_eq!(state.model_catalog_etag().expect("etag"), None);
+        server.join().expect("server");
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4064,8 +4491,70 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A browser store macOS refused is not "no session found". It is a permission the reader
+    /// has to grant, no refresh clears it, and the Support page has to say which browser and
+    /// which grant — so it travels the browser-session commit and lands as its own source row.
     #[test]
-    fn diagnostics_v2_treats_empty_and_inactive_as_healthy() {
+    fn a_commit_that_names_a_refusal_becomes_a_browser_access_denied_source() {
+        let root = std::env::temp_dir().join(format!("quota-denied-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = root.join("home");
+        backend.environment.clear();
+        let backend = Arc::new(backend);
+        let service = crate::service::LocalService::new(
+            state.clone(),
+            crate::ipc::JsonLineWriter::stdout(),
+            backend.clone(),
+        );
+
+        let denied = service.handle(
+            serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": "denied",
+                "operation": "commit_provider_browser_session",
+                "payload": {
+                    "provider": "cursor",
+                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
+                }
+            }))
+            .expect("denial request"),
+        );
+        assert!(denied.error.is_none());
+        // No session was stored: a refusal is the absence of one, not a worse one.
+        assert!(
+            state
+                .provider_browser_session("cursor")
+                .expect("read")
+                .is_none()
+        );
+
+        let report = backend.complete_diagnostic_report().expect("diagnostics");
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.code.as_deref() == Some("browser_access_denied"))
+            .expect("refusal row");
+        assert_eq!(source.subject, "provider:cursor");
+        assert_eq!(source.source_id.as_deref(), Some("browser_session"));
+        assert_eq!(source.status, DiagnosticStatus::Blocked);
+        assert_eq!(source.recovery, DiagnosticRecovery::CheckAccess);
+        assert!(source.message.contains("Safari"));
+        assert!(source.message.contains("Full Disk Access"));
+        // The store's path never reaches a report a person copies out of the app.
+        assert!(!source.message.contains(&root.display().to_string()));
+
+        service.shutdown();
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn diagnostics_treat_empty_and_inactive_as_healthy() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -4074,89 +4563,65 @@ mod tests {
         backend.home = root.join("home");
         backend.environment.clear();
         let report = backend.diagnostic_report().expect("diagnostics");
-        assert_eq!(report.schema_version, 2);
+        assert_eq!(report.schema_version, DIAGNOSTIC_SCHEMA_VERSION);
         assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
-        assert_eq!(report.summary.data, DiagnosticDataState::Empty);
         assert_eq!(report.summary.attention, DiagnosticAttention::None);
-        let serialized = serde_json::to_string(&report).expect("serialize");
-        assert!(!serialized.contains("source_file_id"));
-        assert!(!serialized.contains("/tmp"));
-        state
-            .set_usage_upload_enabled(false)
-            .expect("disable Usage upload");
-        assert!(!backend.stage_outbox("UTC").expect("staging disabled"));
-        assert!(!backend.drain_outbox().expect("upload disabled"));
-        let disabled = backend
-            .complete_diagnostic_report()
-            .expect("disabled diagnostics");
-        let sync = disabled
-            .checks
-            .iter()
-            .find(|check| check.name == "usage_upload")
-            .expect("sync check");
-        assert_eq!(sync.mode, DiagnosticMode::Inactive);
-        assert_eq!(sync.operation, DiagnosticOperation::Healthy);
-        drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn persist_probe_corruption_returns_fail_closed_without_salvage() {
-        let root = std::env::temp_dir().join(format!("quota-fail-closed-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = NativeBackend::new(
-            state.clone(),
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        backend
-            .complete_diagnostic_report()
-            .expect("plant snapshot");
-        state
-            .fail_persist_probe_with_corruption_for_test()
-            .expect("corrupt writes");
-
-        let report = backend.diagnostic_report().expect("fail closed");
-        assert_eq!(report.summary.operation, DiagnosticOperation::Blocked);
-        assert_eq!(report.summary.data, DiagnosticDataState::Unknown);
-        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|finding| finding.code == "invalid_state"
-                    && finding.recovery == DiagnosticRecovery::Reinstall)
-        );
         assert_eq!(
             report
                 .surfaces
                 .iter()
-                .map(|surface| surface.name.as_str())
+                .map(|surface| surface.id.as_str())
                 .collect::<Vec<_>>(),
-            vec![
+            [
                 "quota_overview",
                 "usage_this_device",
                 "usage_account",
                 "account"
             ]
         );
-        assert!(state.state_salvaged_at().expect("marker").is_none());
+        assert!(
+            report
+                .surfaces
+                .iter()
+                .all(|surface| surface.data == DiagnosticDataState::Empty)
+        );
+        let serialized = serde_json::to_string(&report).expect("serialize");
+        assert!(!serialized.contains("source_file_id"));
+        assert!(!serialized.contains("/tmp"));
+        state
+            .set_usage_upload_enabled(false)
+            .expect("disable Usage upload");
+        assert!(!backend.stage_outbox().expect("staging disabled"));
+        backend.drain_outbox().expect("upload disabled");
+        let disabled = backend
+            .complete_diagnostic_report()
+            .expect("disabled diagnostics");
+        // A signed-out device with Usage sync off has no upload path to report on at all.
+        assert!(
+            !disabled
+                .sources
+                .iter()
+                .any(|source| source.subject == "usage_upload")
+        );
+        let account_usage = disabled
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == "usage_account")
+            .expect("account usage surface");
+        assert_eq!(account_usage.status, DiagnosticStatus::Inactive);
+        assert_eq!(disabled.summary.operation, DiagnosticOperation::Healthy);
         drop(backend);
-        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
-    fn untrusted_snapshot_evaluate_live_skips_usage_counts_and_is_partial() {
-        let root = std::env::temp_dir().join(format!("quota-untrusted-{}", uuid::Uuid::new_v4()));
+    fn a_rebuilding_cache_reports_local_usage_as_partial() {
+        let root = std::env::temp_dir().join(format!("quota-rebuilding-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         state
-            .insert_usage_file_record_for_test()
-            .expect("usage rows");
-        state.set_snapshot_untrusted(true).expect("untrusted");
+            .mark_cache_rebuilding_for_test(true)
+            .expect("rebuilding");
         let backend = NativeBackend::new(
             state,
             Arc::new(RelayClient::new().expect("relay")),
@@ -4167,12 +4632,11 @@ mod tests {
         let usage = report
             .surfaces
             .iter()
-            .find(|surface| surface.name == "usage_this_device")
+            .find(|surface| surface.id == "usage_this_device")
             .expect("usage surface");
         assert_eq!(usage.data, DiagnosticDataState::Partial);
-        assert_eq!(usage.metrics.get("files"), Some(&0));
-        assert_eq!(usage.metrics.get("records"), Some(&0));
-        assert_eq!(report.summary.data, DiagnosticDataState::Partial);
+        assert_eq!(usage.recovery, DiagnosticRecovery::Automatic);
+        assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
         assert_eq!(report.summary.attention, DiagnosticAttention::Automatic);
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
@@ -4193,49 +4657,23 @@ mod tests {
         let usage = report
             .surfaces
             .iter()
-            .find(|surface| surface.name == "usage_this_device")
+            .find(|surface| surface.id == "usage_this_device")
             .expect("usage surface");
         assert_eq!(usage.data, DiagnosticDataState::Empty);
         assert_ne!(usage.data, DiagnosticDataState::Partial);
-        assert_eq!(report.summary.data, DiagnosticDataState::Empty);
         assert_eq!(report.summary.attention, DiagnosticAttention::None);
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// An identity this device could not read is the one loss no refresh undoes, so it is said
+    /// out loud with the action that fixes it rather than filed as an informational note.
     #[test]
-    fn state_repaired_finding_is_excluded_from_attention() {
-        let root = std::env::temp_dir().join(format!("quota-repaired-{}", uuid::Uuid::new_v4()));
+    fn a_reset_identity_asks_the_person_to_sign_in_again() {
+        let root = std::env::temp_dir().join(format!("quota-identity-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("identity.sqlite"), b"not a database").expect("garbage identity");
         let state = Arc::new(StateStore::open(&root).expect("state"));
-        state
-            .set_state_salvaged_at(Some(&now_rfc3339()))
-            .expect("salvaged");
-        state
-            .set_usage_reindex_pending(false)
-            .expect("reindex clear");
-        state.set_snapshot_untrusted(false).expect("trusted");
-        let scan = state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticAttemptTrigger::Startup,
-                DiagnosticSource::ThisDevice,
-                Some("agent:codex"),
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("scan");
-        state
-            .finish_diagnostic_attempt(
-                scan,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::Success,
-                    code: None,
-                    recovery: DiagnosticRecovery::None,
-                    metrics: metrics([("valid_records", 0)]),
-                },
-            )
-            .expect("scan done");
         let backend = NativeBackend::new(
             state,
             Arc::new(RelayClient::new().expect("relay")),
@@ -4243,27 +4681,14 @@ mod tests {
             "test",
         );
         let report = backend.diagnostic_report().expect("diagnostics");
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|finding| finding.code == "state_repaired"
-                    && finding.severity == DiagnosticSeverity::Info)
-        );
-        assert!(
-            report
-                .checks
-                .iter()
-                .any(|check| check.name == "local_state"
-                    && check.metrics.get("repaired") == Some(&1))
-        );
-        assert_eq!(report.summary.attention, DiagnosticAttention::None);
-        let usage = report
-            .surfaces
+        let reset = report
+            .sources
             .iter()
-            .find(|surface| surface.name == "usage_this_device")
-            .expect("usage surface");
-        assert_eq!(usage.data, DiagnosticDataState::Empty);
+            .find(|source| source.code.as_deref() == Some("local_identity_reset"))
+            .expect("identity reset source");
+        assert_eq!(reset.recovery, DiagnosticRecovery::Login);
+        assert!(reset.message.contains("Sign in again"));
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4272,20 +4697,21 @@ mod tests {
     fn a_failed_collection_republishes_this_devices_reading_as_failed() {
         let now = Utc::now();
         let observed_at = (now - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let reading = |status: &str| {
+        let collected = |status: &str, observed_at: &str| {
             serde_json::json!({
-                "device_id": "device_self",
-                "snapshot": {
+                "results": [{
                     "provider": "codex",
-                    "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                    "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
-                    "status": status,
-                    "observed_at": observed_at
-                }
+                    "outcome": "success",
+                    "snapshots": [{
+                        "provider": "codex",
+                        "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                        "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
+                        "status": status,
+                        "observed_at": observed_at
+                    }]
+                }]
             })
         };
-        let summary =
-            |observations: Value| serde_json::json!({"account_summary": {"quota": observations}});
         let report = serde_json::json!({
             "results": [
                 {"provider": "codex", "outcome": "auth_required", "snapshots": [], "sources": 1},
@@ -4293,12 +4719,8 @@ mod tests {
             ]
         });
 
-        let account = summary(serde_json::json!([
-            reading("available"),
-            // Another device's reading of the same provider is not this device's to speak for.
-            {"device_id": "device_other", "snapshot": reading("available")["snapshot"]}
-        ]));
-        let republished = failure_status_snapshots(&report, Some(&account), "device_self", now);
+        let previous = collected("available", &observed_at);
+        let republished = failure_status_snapshots(&report, Some(&previous), now);
         assert_eq!(republished.len(), 1);
         assert_eq!(
             republished[0].get("status").and_then(Value::as_str),
@@ -4310,28 +4732,73 @@ mod tests {
             Some(observed_at.as_str())
         );
 
-        // Once published, saying it again would rewrite the row and spend a sequence.
-        let published = summary(serde_json::json!([reading("auth_required")]));
-        assert!(failure_status_snapshots(&report, Some(&published), "device_self", now).is_empty());
+        // Once published, saying it again would rewrite the row for nothing.
+        let published = collected("auth_required", &observed_at);
+        assert!(failure_status_snapshots(&report, Some(&published), now).is_empty());
 
         // A reading that already aged out is not current wherever it is read, so restating
         // it says nothing and would rewrite the row on every refresh forever.
-        let aged_out = summary(serde_json::json!([{
-            "device_id": "device_self",
-            "snapshot": {
-                "provider": "codex",
-                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 0.0}],
-                "status": "available",
-                "observed_at": (now - Duration::days(2)).to_rfc3339_opts(SecondsFormat::Secs, true)
-            }
-        }]));
-        assert!(failure_status_snapshots(&report, Some(&aged_out), "device_self", now).is_empty());
+        let aged_out = collected(
+            "available",
+            &(now - Duration::days(2)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
+        assert!(failure_status_snapshots(&report, Some(&aged_out), now).is_empty());
 
-        // A provider this device never uploaded has nothing to republish.
-        let empty = summary(serde_json::json!([]));
-        assert!(failure_status_snapshots(&report, Some(&empty), "device_self", now).is_empty());
-        assert!(failure_status_snapshots(&report, None, "device_self", now).is_empty());
+        // A provider this device never collected has nothing to republish.
+        let empty = serde_json::json!({"results": []});
+        assert!(failure_status_snapshots(&report, Some(&empty), now).is_empty());
+        assert!(failure_status_snapshots(&report, None, now).is_empty());
+    }
+
+    /// A source that cannot be reached ends the refresh with its own name.  This used to
+    /// fall through to a provider CLI, so being offline for a moment started programs.
+    #[test]
+    fn an_unreachable_source_reports_unavailable_and_names_itself() {
+        // A port nothing is listening on: bound to learn a free one, then released.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("port")
+            .local_addr()
+            .expect("address")
+            .port();
+        let context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-unreachable-source-home"),
+            environment: HashMap::from([
+                ("LITELLM_API_KEY".to_owned(), "sk-litellm-test".to_owned()),
+                (
+                    "LITELLM_BASE_URL".to_owned(),
+                    format!("http://127.0.0.1:{port}"),
+                ),
+            ]),
+            config_path: Some(PathBuf::from(
+                "/tmp/quota-unreachable-source-home/none.json",
+            )),
+            browser_sessions: HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-15T08:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        };
+        let sessions = providers::discover(ProviderId::LiteLlm, &context);
+        assert_eq!(sessions.len(), 1);
+        let result = collect_discovered_provider(ProviderId::LiteLlm, sessions, &context);
+        assert_eq!(
+            result.get("outcome").and_then(Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            result.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::litellm::SOURCE,
+                "outcome": "unavailable",
+                "category": "unavailable"
+            }]))
+        );
+        // Nothing to sign in to and nothing refused: a network failure says neither.
+        assert!(result.get("message").is_none());
+        assert!(result.get("access_denied").is_none());
     }
 
     #[test]
@@ -4345,6 +4812,9 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-15T08:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,
@@ -4358,9 +4828,22 @@ mod tests {
             rejected.get("outcome").and_then(Value::as_str),
             Some("auth_required")
         );
+        // Recovery names the program that can renew the grant.  Told only to "sign in
+        // again", a reader has nowhere to do it.
         assert_eq!(
             rejected.get("message").and_then(Value::as_str),
-            Some("The saved sign-in expired or was rejected. Sign in again.")
+            Some(
+                "The saved sign-in expired or was rejected. Open Claude Code to refresh the sign-in."
+            )
+        );
+        // The rung that reached the verdict travels with it.
+        assert_eq!(
+            rejected.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::claude::SOURCE,
+                "outcome": "auth_required",
+                "category": "auth_required"
+            }]))
         );
         let never_configured =
             collect_discovered_provider(ProviderId::Claude, Vec::new(), &context);
@@ -4369,6 +4852,37 @@ mod tests {
             Some("auth_required")
         );
         assert_eq!(never_configured.get("message"), None);
+
+        // A Claude Code that emptied its own credential is a third state again. It is
+        // discovered, because the device holds the entry, and its recovery is the one that
+        // does not say "open Claude Code": the app would open onto the same emptied entry.
+        let home = std::env::temp_dir().join(format!("quota-signed-out-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(home.join(".claude")).expect("home");
+        fs::write(
+            home.join(".claude/.credentials.json"),
+            "{\"claudeAiOauth\": {\"accessToken\": \"\", \"refreshToken\": \"\", \"expiresAt\": 0}}",
+        )
+        .expect("credential");
+        let context = CollectionContext {
+            home_directory: home.clone(),
+            ..context
+        };
+        let sessions = providers::discover(ProviderId::Claude, &context);
+        assert_eq!(sessions.len(), 1);
+        let signed_out = collect_discovered_provider(ProviderId::Claude, sessions, &context);
+        assert_eq!(
+            signed_out.get("message").and_then(Value::as_str),
+            Some("Claude Code is signed out. Run `claude` and sign in again.")
+        );
+        assert_eq!(
+            signed_out.get("sources"),
+            Some(&json!([{
+                "source_id": crate::providers::claude::SIGNED_OUT_SOURCE,
+                "outcome": "auth_required",
+                "category": "auth_required"
+            }]))
+        );
+        fs::remove_dir_all(&home).expect("cleanup");
     }
 
     /// Every reader resolves one subscription the same way, so the rule is stated once as
@@ -4435,6 +4949,61 @@ mod tests {
         }
     }
 
+    /// The Overview is two readings of one subscription: this device's, and the one Relay
+    /// resolved from every other device. The rule is stated once as a fixture and answered here.
+    #[test]
+    fn two_way_subscription_merge_matches_the_shared_conformance_fixture() {
+        const FIXTURE: &str =
+            include_str!("../../../protocol/fixtures/quota-observation-conformance.json");
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
+        let cases = fixture["two_way_merge"].as_array().expect("merge cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let quota = json!({
+                "results": [{
+                    "provider": "codex",
+                    "outcome": "success",
+                    "snapshots": case["local"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                }]
+            });
+            let account = json!({
+                "account_summary": {
+                    "devices": [{
+                        "id": "device_remote",
+                        "display_name": "Studio",
+                        "platform": "macos",
+                        "last_seen_at": null,
+                        "last_observed_at": null
+                    }],
+                    "subscriptions": case["remote"].clone()
+                }
+            });
+            let now = DateTime::parse_from_rfc3339(case["now"].as_str().expect("now"))
+                .expect("instant")
+                .with_timezone(&Utc);
+            let items = overview_items(&quota, Some(&account), now);
+            let expected = case["expected"].as_array().expect("expected");
+            assert_eq!(items.len(), expected.len(), "{name}");
+            for (item, expected) in items.iter().zip(expected) {
+                assert_eq!(
+                    item.selected_source_id,
+                    expected["selected_source_id"].as_str().expect("selected"),
+                    "{name}"
+                );
+                assert_eq!(
+                    item.sources.len(),
+                    expected["sources"].as_u64().expect("sources") as usize,
+                    "{name}"
+                );
+                assert_eq!(item.is_stale, expected["is_stale"], "{name}");
+            }
+        }
+    }
+
     #[test]
     fn expired_observations_are_stale_and_lose_to_a_still_valid_device() {
         let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
@@ -4457,31 +5026,39 @@ mod tests {
                 "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Secs, true)
             })
         };
+        let subscription = |device_id: &str, snapshot: Value| {
+            json!({
+                "key": "codex|account|global|",
+                "provider": "codex",
+                "snapshot": snapshot.clone(),
+                "sources": [{
+                    "device_id": device_id,
+                    "observed_at": snapshot["observed_at"].clone()
+                }]
+            })
+        };
         let now = Utc::now();
         let quota = json!({"results": []});
         let mut account = json!({
             "auth_status": "signed_in",
             "device_id": "this-device",
             "account_summary": {
-                "devices": [{"device_id": "asleep", "display_name": "Asleep"}],
-                "quota": [{"device_id": "asleep", "snapshot": snapshot(now - Duration::days(2))}]
+                "devices": [{"id": "asleep", "display_name": "Asleep"}],
+                "subscriptions": [subscription("asleep", snapshot(now - Duration::days(2)))]
             }
         });
         let expired = backend.build_overview(&quota, Some(&account));
         assert_eq!(expired.len(), 1);
         assert!(expired[0].is_stale);
 
+        // Relay resolves the account's devices into one row, so a fresher reading arrives as
+        // that row rather than as a second card to collapse here.
         account["account_summary"]["devices"]
             .as_array_mut()
             .expect("devices")
-            .push(json!({"device_id": "awake", "display_name": "Studio"}));
-        account["account_summary"]["quota"]
-            .as_array_mut()
-            .expect("observations")
-            .push(json!({
-                "device_id": "awake",
-                "snapshot": snapshot(now - Duration::minutes(1))
-            }));
+            .push(json!({"id": "awake", "display_name": "Studio"}));
+        account["account_summary"]["subscriptions"] =
+            json!([subscription("awake", snapshot(now - Duration::minutes(1)))]);
         let items = backend.build_overview(&quota, Some(&account));
         assert_eq!(items.len(), 1);
         assert!(!items[0].is_stale);
@@ -4490,8 +5067,10 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Local collection is the only authority for the machine in front of you, so a local
+    /// reading of the same instant wins and a newer remote one still takes over.
     #[test]
-    fn overview_ignores_this_device_upload_and_keeps_other_devices() {
+    fn the_local_reading_wins_a_tie_and_loses_to_a_newer_remote_one() {
         let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -4501,48 +5080,104 @@ mod tests {
             "QuotaTest",
             "test",
         );
-        let snapshot = |observed_at: &str| {
+        let snapshot = |observed_at: &str, used: f64| {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": used}],
+                "status": "available",
+                "observed_at": observed_at
+            })
+        };
+        let now = Utc::now();
+        let local_at = (now - Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let quota = json!({
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [snapshot(&local_at, 10.0)]
+            }]
+        });
+        let remote = |observed_at: &str, used: f64| {
+            json!({
+                "auth_status": "signed_in",
+                "account_summary": {
+                    "devices": [{"id": "other", "display_name": "Studio"}],
+                    "subscriptions": [{
+                        "key": "codex|account|global|",
+                        "provider": "codex",
+                        "snapshot": snapshot(observed_at, used),
+                        "sources": [{"device_id": "other", "observed_at": observed_at}]
+                    }]
+                }
+            })
+        };
+
+        let tied = remote(&local_at, 90.0);
+        let items = backend.build_overview(&quota, Some(&tied));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].sources.len(), 2);
+        assert_eq!(items[0].selected_source_id, "local");
+
+        let newer = (now - Duration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let items = backend.build_overview(&quota, Some(&remote(&newer, 90.0)));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].selected_source_id, "device:other");
+        assert_eq!(items[0].selected_source_display_name, "Studio");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A subscription only this device has, and one only the account has, both stand.
+    #[test]
+    fn a_subscription_only_one_side_knows_still_reaches_the_overview() {
+        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let snapshot = |fingerprint: &str| {
+            json!({
+                "provider": "codex",
+                "account": {"fingerprint": fingerprint, "fingerprint_scope": "global"},
                 "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
                 "status": "available",
                 "observed_at": observed_at
             })
         };
-        // The local sign-in was rejected, so this device collected nothing this refresh.
         let quota = json!({
-            "results": [{"provider": "codex", "outcome": "auth_required", "snapshots": []}]
+            "results": [{
+                "provider": "codex",
+                "outcome": "success",
+                "snapshots": [snapshot("local-only")]
+            }]
         });
-        let mut account = json!({
+        let account = json!({
             "auth_status": "signed_in",
-            "account_id": "account",
-            "device_id": "this-device",
-            "device_generation": 1,
             "account_summary": {
-                "devices": [
-                    {"device_id": "this-device", "display_name": "This Mac"},
-                    {"device_id": "other-device", "display_name": "Studio"}
-                ],
-                "quota": [
-                    {"device_id": "this-device", "snapshot": snapshot("2026-08-15T08:00:00Z")}
-                ]
+                "devices": [{"id": "other", "display_name": "Studio"}],
+                "subscriptions": [{
+                    "key": "codex|remote-only|global|",
+                    "provider": "codex",
+                    "snapshot": snapshot("remote-only"),
+                    "sources": [{"device_id": "other", "observed_at": observed_at}]
+                }]
             }
         });
-
-        assert!(backend.build_overview(&quota, Some(&account)).is_empty());
-
-        account["account_summary"]["quota"]
-            .as_array_mut()
-            .expect("observations")
-            .push(json!({
-                "device_id": "other-device",
-                "snapshot": snapshot("2026-08-15T09:00:00Z")
-            }));
         let items = backend.build_overview(&quota, Some(&account));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].sources.len(), 1);
-        assert_eq!(items[0].selected_source_display_name, "Studio");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.identity.fingerprint.as_str())
+                .collect::<Vec<_>>(),
+            vec!["local-only", "remote-only"]
+        );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4552,33 +5187,30 @@ mod tests {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
-        let attempt = state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::QuotaCollection,
-                DiagnosticAttemptTrigger::Scheduled,
-                DiagnosticSource::ThisDevice,
-                Some("provider:codex"),
-                DiagnosticMode::Opportunistic,
-                None,
-            )
-            .expect("quota attempt");
-        state
-            .finish_diagnostic_attempt(
-                attempt,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::NoWork,
-                    code: Some(DiagnosticAttemptCode::AuthenticationRequired),
-                    recovery: DiagnosticRecovery::None,
-                    metrics: metrics([("sources", 1), ("snapshots", 0)]),
-                },
-            )
-            .expect("finish quota attempt");
+        let attempt = state.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::QuotaCollection,
+            DiagnosticAttemptTrigger::Scheduled,
+            Some("provider:codex"),
+            None,
+        );
+        state.finish_diagnostic_attempt(
+            attempt,
+            &DiagnosticAttemptCompletion::new(
+                DiagnosticAttemptOutcome::NoWork,
+                Some(DiagnosticAttemptCode::AuthenticationRequired),
+            ),
+        );
         state
             .set_component(
                 crate::protocol::ComponentName::Quota,
                 crate::protocol::ComponentStatus::Ready,
                 Some(json!({"results":[{
-                    "provider":"codex","outcome":"auth_required","snapshots":[],"sources":1
+                    "provider":"codex","outcome":"auth_required","snapshots":[],
+                    "sources":[{
+                        "source_id":"chatgpt_usage_api",
+                        "outcome":"auth_required",
+                        "category":"auth_required"
+                    }]
                 }]})),
                 Some("2026-08-15T08:00:00Z".into()),
                 None,
@@ -4617,14 +5249,24 @@ mod tests {
         // Another device's reading keeps the surface current and the device itself is
         // working, so operation stays healthy. But this Mac holds a sign-in it cannot use,
         // which Overview now says out loud, so Diagnose cannot report nothing to do.
-        assert_eq!(report.summary.data, DiagnosticDataState::Current);
+        assert_eq!(
+            report
+                .surfaces
+                .iter()
+                .find(|surface| surface.id == "quota_overview")
+                .map(|surface| surface.data),
+            Some(DiagnosticDataState::Current)
+        );
         assert_eq!(report.summary.operation, DiagnosticOperation::Healthy);
         assert_eq!(report.summary.attention, DiagnosticAttention::Required);
-        assert!(report.findings.iter().any(|finding| {
-            finding.subject.as_deref() == Some("provider:codex")
-                && finding.severity == DiagnosticSeverity::Warning
-                && finding.impact == DiagnosticImpact::Source
-                && finding.recovery == DiagnosticRecovery::ConfigureProvider
+        // The row names the rung that failed, not just the provider: a stale browser session
+        // and an unreachable OAuth endpoint are different problems.
+        assert!(report.sources.iter().any(|source| {
+            source.subject == "provider:codex"
+                && source.source_id.as_deref() == Some("chatgpt_usage_api")
+                && source.status == DiagnosticStatus::Degraded
+                && source.recovery == DiagnosticRecovery::ConfigureProvider
+                && source.message.contains("Codex")
         }));
         let serialized = serde_json::to_string(&report).expect("serialize");
         assert!(!serialized.contains("redacted-in-report"));
@@ -4684,12 +5326,11 @@ mod tests {
         let report = backend.diagnostic_report().expect("diagnostics");
 
         assert_eq!(report.summary.operation, DiagnosticOperation::Degraded);
-        assert_eq!(report.summary.data, DiagnosticDataState::Current);
         assert_eq!(report.summary.attention, DiagnosticAttention::Required);
-        assert!(report.findings.iter().any(|finding| {
-            finding.subject.as_deref() == Some("provider:openrouter")
-                && finding.severity == DiagnosticSeverity::Warning
-                && finding.recovery == DiagnosticRecovery::ConfigureProvider
+        assert!(report.sources.iter().any(|source| {
+            source.subject == "provider:openrouter"
+                && source.status == DiagnosticStatus::Degraded
+                && source.recovery == DiagnosticRecovery::ConfigureProvider
         }));
         assert!(
             !serde_json::to_string(&report)
@@ -4719,19 +5360,12 @@ mod tests {
 
         let report = backend.diagnostic_report().expect("diagnostics");
 
-        assert_eq!(report.summary.operation, DiagnosticOperation::Degraded);
         assert_eq!(report.summary.attention, DiagnosticAttention::Required);
-        assert!(report.checks.iter().any(|check| {
-            check.name == "provider_configuration"
-                && check.mode == DiagnosticMode::Required
-                && check.operation == DiagnosticOperation::Degraded
+        assert!(report.sources.iter().any(|source| {
+            source.subject == "provider_configuration"
+                && source.status == DiagnosticStatus::Blocked
+                && source.code.as_deref() == Some("config_unreadable")
         }));
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|finding| finding.code == "config_unreadable")
-        );
         let serialized = serde_json::to_string(&report).expect("serialize");
         assert!(!serialized.contains("secret-value"));
         assert!(!serialized.contains("/Users/private"));
@@ -4748,134 +5382,78 @@ mod tests {
             .write_session_json(&json!({"status":"active"}))
             .expect("session");
         state
-            .insert_usage_dirty_range_for_test(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
-            .expect("dirty range");
+            .insert_usage_dirty_hour_for_test(UsageAgent::Codex, "2026-08-10T12:00:00Z", 1)
+            .expect("dirty hour");
         let backend = NativeBackend::new(
             state.clone(),
             Arc::new(RelayClient::new().expect("relay")),
             "QuotaTest",
             "test",
         );
+        let upload_source = |report: &DiagnosticReport| {
+            report
+                .sources
+                .iter()
+                .find(|source| source.subject == "usage_upload")
+                .cloned()
+                .expect("upload source")
+        };
 
         let waiting = backend.evaluate_diagnostic_report(true).expect("waiting");
-        let upload = waiting
-            .checks
-            .iter()
-            .find(|check| check.name == "usage_upload")
-            .expect("upload check");
-        assert_eq!(upload.operation, DiagnosticOperation::Healthy);
-        assert_eq!(upload.metrics.get("waiting"), Some(&1));
-        assert!(
-            !waiting
-                .findings
-                .iter()
-                .any(|finding| finding.component == "usage_upload")
-        );
+        let source = upload_source(&waiting);
+        assert_eq!(source.status, DiagnosticStatus::Ok);
+        assert_eq!(source.recovery, DiagnosticRecovery::Automatic);
+        assert_eq!(waiting.summary.operation, DiagnosticOperation::Healthy);
 
-        let attempt = state
-            .begin_diagnostic_attempt(
+        let finish = |outcome, code| {
+            let attempt = state.begin_diagnostic_attempt(
                 DiagnosticAttemptKind::UsageUpload,
                 DiagnosticAttemptTrigger::Scheduled,
-                DiagnosticSource::Account,
                 None,
-                DiagnosticMode::Required,
                 None,
-            )
-            .expect("upload attempt");
-        state
-            .finish_diagnostic_attempt(
+            );
+            assert!(attempt.is_some());
+            state.finish_diagnostic_attempt(
                 attempt,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::Failed,
-                    code: Some(DiagnosticAttemptCode::NetworkError),
-                    recovery: DiagnosticRecovery::Retry,
-                    metrics: metrics([("attempted", 1), ("pending", 1)]),
-                },
-            )
-            .expect("upload failure");
+                &DiagnosticAttemptCompletion::new(outcome, code),
+            );
+        };
+
+        finish(
+            DiagnosticAttemptOutcome::Failed,
+            Some(DiagnosticAttemptCode::NetworkError),
+        );
         let failed = backend.evaluate_diagnostic_report(true).expect("failed");
-        assert_eq!(failed.summary.operation, DiagnosticOperation::Degraded);
-        assert!(
-            failed
-                .findings
-                .iter()
-                .any(|finding| finding.component == "usage_upload")
+        assert_eq!(upload_source(&failed).status, DiagnosticStatus::Degraded);
+        assert_eq!(
+            upload_source(&failed).code.as_deref(),
+            Some("network_error")
         );
 
-        let retry = state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::UsageUpload,
-                DiagnosticAttemptTrigger::Scheduled,
-                DiagnosticSource::Account,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("retry attempt");
-        state
-            .finish_diagnostic_attempt(
-                retry,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::NoWork,
-                    code: Some(DiagnosticAttemptCode::NoWork),
-                    recovery: DiagnosticRecovery::None,
-                    metrics: metrics([("attempted", 0), ("pending", 0)]),
-                },
-            )
-            .expect("finish retry");
+        // While uploadable work is still waiting, a later `no_work` attempt does not retire
+        // the failure it never answered.
+        finish(
+            DiagnosticAttemptOutcome::NoWork,
+            Some(DiagnosticAttemptCode::NoWork),
+        );
         let still_failed = backend
             .evaluate_diagnostic_report(true)
             .expect("still failed");
         assert_eq!(
-            still_failed.summary.operation,
-            DiagnosticOperation::Degraded
-        );
-        assert!(
-            still_failed
-                .findings
-                .iter()
-                .any(|finding| finding.component == "usage_upload")
+            upload_source(&still_failed).status,
+            DiagnosticStatus::Degraded
         );
 
-        let success = state
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::UsageUpload,
-                DiagnosticAttemptTrigger::Scheduled,
-                DiagnosticSource::Account,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("success attempt");
-        state
-            .finish_diagnostic_attempt(
-                success,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::Success,
-                    code: None,
-                    recovery: DiagnosticRecovery::None,
-                    metrics: metrics([("attempted", 1), ("pending", 1)]),
-                },
-            )
-            .expect("finish success");
+        finish(DiagnosticAttemptOutcome::Success, None);
         let recovered = backend.evaluate_diagnostic_report(true).expect("recovered");
+        assert_eq!(upload_source(&recovered).status, DiagnosticStatus::Ok);
         assert_eq!(recovered.summary.operation, DiagnosticOperation::Healthy);
-        assert!(
-            !recovered
-                .findings
-                .iter()
-                .any(|finding| finding.component == "usage_upload")
-        );
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
-    fn usage_findings_are_scoped_and_not_repeated_as_rollups() {
+    fn a_partial_usage_scan_is_one_row_per_agent_with_the_reason_worth_acting_on() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
@@ -4883,8 +5461,8 @@ mod tests {
             .write_usage_scan_diagnostics(
                 UsageAgent::Cursor,
                 &json!({
-                    "status":"partial","scanned_files":2,"partial_files":1,"valid_records":9,
-                    "reason_counts":{"malformed_json":4,"truncated_tail":1}
+                    "status": "partial",
+                    "reason_counts": {"malformed_json": 4, "truncated_tail": 1}
                 }),
             )
             .expect("scan diagnostics");
@@ -4899,46 +5477,204 @@ mod tests {
             .evaluate_diagnostic_report(true)
             .expect("diagnostics");
 
-        assert!(
-            report
-                .findings
-                .iter()
-                .all(|finding| { finding.subject.as_deref() == Some("agent:cursor") })
-        );
+        let agents = report
+            .sources
+            .iter()
+            .filter(|source| source.subject.starts_with("agent:"))
+            .collect::<Vec<_>>();
+        assert_eq!(agents.len(), 1);
+        // A file that grew while it was read is ordinary; records this build could not parse
+        // are the half someone can fix, so that is the one the row names.
+        assert_eq!(agents[0].subject, "agent:cursor");
+        assert_eq!(agents[0].code.as_deref(), Some("malformed_json"));
+        assert_eq!(agents[0].recovery, DiagnosticRecovery::UpdateSource);
         assert_eq!(
             report
-                .findings
+                .surfaces
                 .iter()
-                .map(|finding| finding.code.as_str())
-                .collect::<HashSet<_>>(),
-            HashSet::from(["malformed_json", "truncated_tail"])
+                .find(|surface| surface.id == "usage_this_device")
+                .map(|surface| surface.data),
+            Some(DiagnosticDataState::Partial)
         );
-        assert!(!report.findings.iter().any(|finding| {
-            matches!(finding.code.as_str(), "scan_partial" | "partial_sources")
-        }));
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// The cap on how many rows a report carries is a cap on what it prints, not on what it
+    /// noticed: folding after the cut let a long list of healthy sources hide the one row that
+    /// said sign in again.
     #[test]
-    fn diagnostics_do_not_treat_the_open_hour_as_a_pending_upload() {
-        let now = DateTime::parse_from_rfc3339("2026-08-15T04:30:00Z")
-            .expect("now")
-            .with_timezone(&Utc);
-        let ranges = [
-            UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-15T03:00:00Z".into(),
-                end_at: "2026-08-15T04:00:00Z".into(),
-            },
-            UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-15T04:00:00Z".into(),
-                end_at: "2026-08-15T05:00:00Z".into(),
-            },
-        ];
-        assert_eq!(uploadable_dirty_range_count(&ranges, now), 1);
-        assert_eq!(uploadable_dirty_range_count(&ranges[1..], now), 0);
+    fn a_capped_source_list_still_reports_the_attention_it_dropped() {
+        let root = std::env::temp_dir().join(format!("quota-capped-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        drop(state);
+        // A device that could not read who it is: the one row a refresh cannot retire, and the
+        // last one pushed.
+        fs::write(root.join("identity.sqlite"), b"not a database").expect("garbage");
+        let state = Arc::new(StateStore::open(&root).expect("reopen"));
+
+        let results = (0..MAXIMUM_DIAGNOSTIC_SOURCES + 4)
+            .map(|index| {
+                json!({
+                    "provider": format!("provider_{index}"),
+                    "outcome": "success",
+                    "snapshots": [{"provider": "codex"}],
+                    "sources": [{"source_id": "s", "outcome": "success", "category": "success"}]
+                })
+            })
+            .collect::<Vec<_>>();
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({"results": results})),
+                None,
+                None,
+                false,
+            )
+            .expect("quota");
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
+
+        assert_eq!(report.sources.len(), MAXIMUM_DIAGNOSTIC_SOURCES);
+        assert!(
+            !report
+                .sources
+                .iter()
+                .any(|source| source.subject == "local_state"),
+            "the row that needed acting on is past the cap"
+        );
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A credential is proven by being spent on the rung that spends it. A browser session
+    /// answering for the same provider proves nothing about the sign-in on disk, and a rung
+    /// that stopped working takes the proof back with it.
+    #[test]
+    fn only_a_rung_spending_this_device_s_own_credential_proves_it() {
+        let root = std::env::temp_dir().join(format!("quota-proven-{}", uuid::Uuid::new_v4()));
+        let codex_home = root.join("codex");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        fs::write(
+            codex_home.join("auth.json"),
+            r#"{"tokens": {"access_token": "opaque-token", "account_id": "acct"}}"#,
+        )
+        .expect("auth");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let mut context = CollectionContext {
+            home_directory: root.clone(),
+            environment: HashMap::from([(
+                "CODEX_HOME".to_owned(),
+                codex_home.to_string_lossy().into_owned(),
+            )]),
+            ..CollectionContext::default()
+        };
+        // Each refresh builds its context from the cache, which is what the record is for.
+        let reload = |context: &mut CollectionContext, state: &StateStore| {
+            context.proven_credentials = state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        };
+        let result = |source_id: &str, outcome: &str| {
+            json!({
+                "provider": "codex",
+                "outcome": outcome,
+                "snapshots": [],
+                "sources": [{"source_id": source_id, "outcome": outcome, "category": outcome}]
+            })
+        };
+        let proven = |state: &StateStore| {
+            state
+                .proven_provider_credentials()
+                .expect("record")
+                .unwrap_or_default()
+        };
+        let fingerprint = crate::providers::common::sha256_hex("opaque-token");
+
+        // A stored browser session answering for Codex says nothing about `auth.json`.
+        backend.record_proven_credentials(
+            &[result(
+                crate::providers::common::BROWSER_SESSION_SOURCE,
+                "success",
+            )],
+            &context,
+        );
+        assert!(!proven(&state).contains(&fingerprint));
+
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "success")], &context);
+        assert!(proven(&state).contains(&fingerprint));
+
+        // The same sign-in refused is a sign-in that has to earn a renewal again.
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "auth_required")], &context);
+        assert!(!proven(&state).contains(&fingerprint));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The hour still being written to is not work owed, and neither is an hour before this
+    /// device's privacy watermark: staging skips both, so the count that says how much is
+    /// waiting skips them too — and the marks it can never stage are retired rather than left
+    /// to sit in the cache saying the upload is behind.
+    #[test]
+    fn only_complete_hours_inside_the_watermark_count_as_pending_uploads() {
+        let root = std::env::temp_dir().join(format!("quota-pending-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let hour = |back: i64| floor_utc_hour(&(now - Duration::hours(back)));
+        let mut session = active_session();
+        session["upload_not_before"] = json!(hour(3));
+        state.write_session_json(&session).expect("session");
+        for back in [4, 2, 0] {
+            state
+                .insert_usage_dirty_hour_for_test(UsageAgent::Codex, &hour(back), 1)
+                .expect("dirty hour");
+        }
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+
+        // The mark before the watermark is not waiting on anything, and does not stay.
+        state
+            .forget_dirty_usage_hours_before(&hour(3))
+            .expect("retire");
+        assert_eq!(
+            state
+                .dirty_usage_hour_batch(EPOCH_HOUR, "9999-12-31T23:00:00Z", 100)
+                .expect("dirty")
+                .len(),
+            2
+        );
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -4950,119 +5686,306 @@ mod tests {
         assert_ne!(resolve_timezone(&invalid).name(), "not/a-zone");
     }
 
+    /// An upload is bounded by hours and by bytes, and packing never drops an hour to fit.
     #[test]
-    fn usage_upload_batch_matches_stage_and_drain_budget() {
-        assert_eq!(usage_stage_slots(0), 64);
-        assert_eq!(usage_stage_slots(63), 1);
-        assert_eq!(usage_stage_slots(64), 0);
-        assert_eq!(MAX_USAGE_OUTBOX_ENTRIES, MAX_USAGE_MULTIPART_PARTS);
-    }
-
-    #[test]
-    fn multipart_builder_splits_rows_and_bytes_without_truncating() {
-        let start = DateTime::parse_from_rfc3339("2026-08-10T12:00:00Z").expect("start");
-        let end = DateTime::parse_from_rfc3339("2026-08-10T13:00:00Z").expect("end");
-        let context = UsageSubmissionContext {
+    fn an_upload_packs_by_hours_and_by_bytes_without_dropping_one() {
+        let row = |speed: usize| usage::UsageRow {
             agent: UsageAgent::Codex,
-            start: &start,
-            end: &end,
-            timezone: "UTC",
-            account_id: "account_test",
-            device_id: "device_test",
-            generation: 1,
-            partial: false,
-        };
-        let fact = || UsageHourlyFact {
-            bucket_start_utc: "2026-08-10T12:00:00Z".into(),
-            usage_date: "2026-08-10".into(),
-            usage_hour: 12,
-            agent: UsageAgent::Codex,
-            billing_channel: crate::usage::BillingChannel::Unknown,
-            channel_source: crate::usage::ChannelSource::Unknown,
-            model: "model".into(),
-            context_bucket: crate::usage::ContextBucket::Le128k,
+            billing_channel: usage::BillingChannel::OpenaiDirect,
+            channel_source: usage::ChannelSource::Explicit,
+            model: "gpt-5.6-sol".into(),
+            context_bucket: usage::ContextBucket::Le128k,
             service_tier: "standard".into(),
-            speed: "standard".into(),
+            speed: format!("speed{speed}"),
             inference_geo: "global".into(),
-            input_tokens: 1,
-            cache_read_tokens: 0,
-            cache_write_5m_tokens: 0,
+            input_tokens: 1_200,
+            cache_read_tokens: 400,
+            cache_write_5m_tokens: 100,
             cache_write_1h_tokens: 0,
             cache_write_inferred_tokens: 0,
-            output_tokens: 1,
-            reasoning_tokens: 0,
-            requests: 1,
-            web_search_requests: 0,
+            output_tokens: 350,
+            reasoning_tokens: 120,
+            requests: 4,
+            web_search_requests: 1,
             web_fetch_requests: 0,
             source_cost_microusd: None,
             source_cost_covered_requests: 0,
         };
-        let rows = (0..=usage::MAX_USAGE_ROWS)
-            .map(|index| {
-                let mut row = fact();
-                row.model = format!("model-{index}");
-                row
-            })
+        let hour = |index: usize, rows: usize| UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .expect("base hour")
+                .checked_add_signed(chrono::Duration::hours(index as i64))
+                .expect("hour")
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
+            scan_version: 3,
+            partial: false,
+            rows: (0..rows).map(row).collect(),
+        };
+
+        // Small hours: the hour bound is what stops the batch.
+        let many = (0..usage::MAX_USAGE_HOURS_PER_UPLOAD + 10)
+            .map(|index| hour(index, 1))
             .collect::<Vec<_>>();
-        let (batch_id, submissions) =
-            usage_multipart_submissions(&context, 10, &rows).expect("row-bound multipart");
-        assert_eq!(submissions.len(), 2);
-        let mut retained = 0usize;
-        for (index, submission) in submissions.iter().enumerate() {
-            let multipart = submission
-                .get("multipart")
-                .and_then(Value::as_object)
-                .expect("multipart metadata");
-            assert_eq!(
-                multipart.get("batch_id").and_then(Value::as_str),
-                Some(batch_id.as_str())
-            );
-            assert_eq!(
-                multipart.get("part_index").and_then(Value::as_u64),
-                Some(index as u64)
-            );
-            assert_eq!(multipart.get("part_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                submission.get("sequence").and_then(Value::as_u64),
-                Some(10 + index as u64)
-            );
-            let part_rows = submission
-                .get("rows")
-                .and_then(Value::as_array)
-                .expect("part rows");
-            assert!(part_rows.len() <= usage::MAX_USAGE_ROWS);
-            retained += part_rows.len();
-            assert!(
-                serde_json::to_vec(submission).expect("bytes").len()
-                    <= crate::relay::MAXIMUM_REQUEST_BYTES
-            );
-            crate::relay::validate_usage_submission(submission).expect("valid part");
+        assert_eq!(
+            usage_upload_batch_size(UsageAgent::Codex, 1, &many),
+            usage::MAX_USAGE_HOURS_PER_UPLOAD
+        );
+        let upload = usage_upload(
+            UsageAgent::Codex,
+            1,
+            &many[..usage::MAX_USAGE_HOURS_PER_UPLOAD],
+        )
+        .expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
+
+        // Fat hours: the byte bound is, and every packed hour still travels whole.
+        let fat = (0..8)
+            .map(|index| hour(index, usage::MAX_USAGE_ROWS_PER_HOUR))
+            .collect::<Vec<_>>();
+        let taken = usage_upload_batch_size(UsageAgent::Codex, 1, &fat);
+        assert!((1..fat.len()).contains(&taken), "{taken}");
+        let upload = usage_upload(UsageAgent::Codex, 1, &fat[..taken]).expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
+        assert_eq!(
+            upload["hours"].as_array().expect("hours").len(),
+            taken,
+            "packing never truncates an hour"
+        );
+        assert!(serde_json::to_vec(&upload).expect("bytes").len() <= 1_048_576);
+    }
+
+    /// The payloads this device sends, checked against the JSON Schema `packages/protocol`
+    /// exports rather than against a second description of the same contract.
+    ///
+    /// The schema is the shape: which keys are required, which are refused, and what each one
+    /// holds. The value bounds a shape cannot state — token subsets, source-cost coverage,
+    /// unique row identities — are the validators', and the shared fixture is what keeps those
+    /// in step across runtimes.
+    #[test]
+    fn what_this_device_uploads_matches_the_exported_json_schema() {
+        const USAGE_SCHEMA: &str = include_str!("../../../protocol/schema/usage.json");
+        const SNAPSHOT_SCHEMA: &str = include_str!("../../../protocol/schema/quota-snapshot.json");
+
+        let hour = UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: "2026-08-12T09:00:00Z".into(),
+            scan_version: 7,
+            partial: false,
+            rows: vec![usage::UsageRow {
+                agent: UsageAgent::Codex,
+                billing_channel: usage::BillingChannel::OpenaiDirect,
+                channel_source: usage::ChannelSource::Explicit,
+                model: "gpt-5.6-sol".into(),
+                context_bucket: usage::ContextBucket::Le128k,
+                service_tier: "standard".into(),
+                speed: "standard".into(),
+                inference_geo: "global".into(),
+                input_tokens: 1_200,
+                cache_read_tokens: 400,
+                cache_write_5m_tokens: 100,
+                cache_write_1h_tokens: 0,
+                cache_write_inferred_tokens: 0,
+                output_tokens: 350,
+                reasoning_tokens: 120,
+                requests: 4,
+                web_search_requests: 1,
+                web_fetch_requests: 0,
+                source_cost_microusd: Some("4200".into()),
+                source_cost_covered_requests: 4,
+            }],
+        };
+        let upload = usage_upload(UsageAgent::Codex, 3, &[hour]).expect("upload");
+        JsonSchema::parse(USAGE_SCHEMA)
+            .check(&upload)
+            .expect("the Usage upload matches the exported schema");
+
+        // A row without a reported cost omits the key rather than sending it as null.
+        let bare = usage_upload(
+            UsageAgent::Codex,
+            3,
+            &[UsageOutboxEntry {
+                agent: UsageAgent::Codex,
+                bucket_start_utc: "2026-08-12T10:00:00Z".into(),
+                scan_version: 8,
+                partial: true,
+                rows: Vec::new(),
+            }],
+        )
+        .expect("empty upload");
+        JsonSchema::parse(USAGE_SCHEMA)
+            .check(&bare)
+            .expect("an emptied hour matches the exported schema");
+
+        // The check is not vacuous: a key the contract does not name is refused, and so is a
+        // value of the wrong kind.
+        let mut extra = upload.clone();
+        extra["uploaded_at"] = json!("2026-08-12T09:31:00Z");
+        assert!(JsonSchema::parse(USAGE_SCHEMA).check(&extra).is_err());
+        let mut wrong = upload;
+        wrong["hours"][0]["scan_version"] = json!("seven");
+        assert!(JsonSchema::parse(USAGE_SCHEMA).check(&wrong).is_err());
+
+        let envelope = crate::relay::snapshot_envelope(
+            3,
+            vec![json!({
+                "provider": "codex",
+                "account": {"fingerprint": "codex_account_1", "fingerprint_scope": "global"},
+                "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 42.0}],
+                "status": "available",
+                "observed_at": "2026-08-12T09:30:00Z"
+            })],
+        );
+        JsonSchema::parse(SNAPSHOT_SCHEMA)
+            .check(&envelope)
+            .expect("the snapshot envelope matches the exported schema");
+    }
+
+    /// The part of JSON Schema an exported contract uses: what a document is made of, not what
+    /// its text has to look like. String patterns are the runtime validators' job, and the
+    /// shared conformance fixture is what proves those agree across runtimes.
+    struct JsonSchema {
+        root: Value,
+    }
+
+    impl JsonSchema {
+        fn parse(document: &str) -> Self {
+            Self {
+                root: serde_json::from_str(document).expect("schema document"),
+            }
         }
-        assert_eq!(retained, rows.len());
 
-        let fat_rows = (0..usage::MAX_USAGE_ROWS)
-            .map(|index| {
-                let mut row = fact();
-                row.model = format!("{index:06}-{}", "m".repeat(121));
-                row.service_tier = "s".repeat(64);
-                row.speed = "f".repeat(64);
-                row.inference_geo = "g".repeat(64);
-                row
-            })
-            .collect::<Vec<_>>();
-        let (_, byte_parts) =
-            usage_multipart_submissions(&context, 20, &fat_rows).expect("byte-bound multipart");
-        assert!(byte_parts.len() > 1);
-        assert!(byte_parts.iter().all(|part| {
-            serde_json::to_vec(part).expect("bytes").len() <= crate::relay::MAXIMUM_REQUEST_BYTES
-        }));
+        fn check(&self, value: &Value) -> Result<(), String> {
+            self.check_at(value, &self.root, "$")
+        }
 
-        let mut duplicate_rows = rows.clone();
-        duplicate_rows[usage::MAX_USAGE_ROWS] = duplicate_rows[0].clone();
-        assert!(usage_multipart_submissions(&context, 30, &duplicate_rows).is_none());
+        fn check_at(&self, value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+            let schema = self.resolve(schema);
+            let object = schema
+                .as_object()
+                .ok_or_else(|| format!("{path}: schema"))?;
+            if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+                return branches
+                    .iter()
+                    .any(|branch| self.check_at(value, branch, path).is_ok())
+                    .then_some(())
+                    .ok_or_else(|| format!("{path}: matches none of anyOf"));
+            }
+            if let Some(expected) = object.get("const")
+                && value != expected
+            {
+                return Err(format!("{path}: expected {expected}, found {value}"));
+            }
+            if let Some(members) = object.get("enum").and_then(Value::as_array)
+                && !members.contains(value)
+            {
+                return Err(format!("{path}: {value} is not a member"));
+            }
+            match object.get("type").and_then(Value::as_str) {
+                Some("object") => self.check_object(value, object, path),
+                Some("array") => self.check_array(value, object, path),
+                Some("string") if !value.is_string() => Err(format!("{path}: expected a string")),
+                Some("boolean") if !value.is_boolean() => Err(format!("{path}: expected a bool")),
+                Some("integer") if value.as_i64().is_none() => {
+                    Err(format!("{path}: expected an integer"))
+                }
+                Some("number") if !value.is_number() => Err(format!("{path}: expected a number")),
+                Some("null") if !value.is_null() => Err(format!("{path}: expected null")),
+                _ => Ok(()),
+            }
+        }
 
-        let too_many = vec![fact(); usage::MAX_USAGE_ROWS * MAX_USAGE_MULTIPART_PARTS + 1];
-        assert!(usage_multipart_submissions(&context, 40, &too_many).is_none());
+        fn check_object(
+            &self,
+            value: &Value,
+            schema: &serde_json::Map<String, Value>,
+            path: &str,
+        ) -> Result<(), String> {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("{path}: expected an object"))?;
+            let properties = schema.get("properties").and_then(Value::as_object);
+            for key in schema
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !object.contains_key(key) {
+                    return Err(format!("{path}: missing {key}"));
+                }
+            }
+            for (key, item) in object {
+                match properties.and_then(|properties| properties.get(key)) {
+                    Some(property) => self.check_at(item, property, &format!("{path}.{key}"))?,
+                    None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => {
+                        return Err(format!("{path}: {key} is not part of the contract"));
+                    }
+                    None => {}
+                }
+            }
+            Ok(())
+        }
+
+        fn check_array(
+            &self,
+            value: &Value,
+            schema: &serde_json::Map<String, Value>,
+            path: &str,
+        ) -> Result<(), String> {
+            let items = value
+                .as_array()
+                .ok_or_else(|| format!("{path}: expected an array"))?;
+            if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
+                && items.len() as u64 > maximum
+            {
+                return Err(format!("{path}: more than {maximum} items"));
+            }
+            let Some(item_schema) = schema.get("items") else {
+                return Ok(());
+            };
+            for (index, item) in items.iter().enumerate() {
+                self.check_at(item, item_schema, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+
+        /// A `$ref` inside the exported document, which only ever names a sibling `$defs` entry.
+        fn resolve<'a>(&'a self, schema: &'a Value) -> &'a Value {
+            let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
+                return schema;
+            };
+            let name = reference
+                .strip_prefix("#/$defs/")
+                .expect("only local $defs references");
+            self.root
+                .get("$defs")
+                .and_then(|defs| defs.get(name))
+                .map(|target| self.resolve(target))
+                .expect("a named definition")
+        }
+    }
+
+    /// An empty hour is a fact: it is how a device says everything it once reported for that
+    /// hour is gone.
+    #[test]
+    fn an_hour_with_nothing_left_in_it_still_travels() {
+        let upload = usage_upload(
+            UsageAgent::Codex,
+            3,
+            &[UsageOutboxEntry {
+                agent: UsageAgent::Codex,
+                bucket_start_utc: "2026-08-12T09:00:00Z".into(),
+                scan_version: 7,
+                partial: true,
+                rows: Vec::new(),
+            }],
+        )
+        .expect("upload");
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
+        assert_eq!(upload["hours"][0]["partial"], json!(true));
+        assert_eq!(upload["hours"][0]["rows"], json!([]));
     }
 
     #[test]
@@ -5088,7 +6011,6 @@ mod tests {
                     },
                 })
                 .collect(),
-            rows: Vec::new(),
         };
         let report = backend
             .usage_report(&collection, None, None)

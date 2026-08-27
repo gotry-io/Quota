@@ -1,4 +1,5 @@
 {
+  "$comment": "One statement of how a quota reading is read. `freshness` is how long one reading describes current quota; `merge` is how Relay resolves the readings of an account into one subscription per key; `two_way_merge` is the one comparison Relay cannot make \u2014 a resolved row against the local reading of the machine in front of you, which only QuotaBar's service has.",
   "freshness": [
     {
       "name": "the first future window reset bounds the reading",
@@ -686,6 +687,321 @@
               "is_stale": false
             }
           ]
+        }
+      ]
+    }
+  ],
+  "two_way_merge": [
+    {
+      "name": "a newer resolved reading takes over from this device's own",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "fp",
+            "fingerprint_scope": "global"
+          },
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 10,
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-24T09:00:00Z"
+        }
+      ],
+      "remote": [
+        {
+          "key": "codex|fp|global|",
+          "provider": "codex",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 20,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+          },
+          "sources": [
+            {
+              "device_id": "device_remote",
+              "observed_at": "2026-08-24T09:30:00Z"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "selected_source_id": "device:device_remote",
+          "sources": 2,
+          "is_stale": false
+        }
+      ]
+    },
+    {
+      "name": "local collection wins a tie, because it is the authority for this machine",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "fp",
+            "fingerprint_scope": "global"
+          },
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 10,
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-24T09:30:00Z"
+        }
+      ],
+      "remote": [
+        {
+          "key": "codex|fp|global|",
+          "provider": "codex",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 20,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+          },
+          "sources": [
+            {
+              "device_id": "device_remote",
+              "observed_at": "2026-08-24T09:30:00Z"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "selected_source_id": "local",
+          "sources": 2,
+          "is_stale": false
+        }
+      ]
+    },
+    {
+      "name": "an older reading that is still current outranks a newer one that is not",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "fp",
+            "fingerprint_scope": "global"
+          },
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 10,
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-24T09:00:00Z"
+        }
+      ],
+      "remote": [
+        {
+          "key": "codex|fp|global|",
+          "provider": "codex",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 20,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "auth_required",
+            "observed_at": "2026-08-24T09:30:00Z"
+          },
+          "sources": [
+            {
+              "device_id": "device_remote",
+              "observed_at": "2026-08-24T09:30:00Z"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "selected_source_id": "local",
+          "sources": 2,
+          "is_stale": false
+        }
+      ]
+    },
+    {
+      "name": "a subscription only this device knows still reaches the reader",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "fp-local",
+            "fingerprint_scope": "global"
+          },
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 10,
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-24T09:00:00Z"
+        }
+      ],
+      "remote": [],
+      "expected": [
+        {
+          "selected_source_id": "local",
+          "sources": 1,
+          "is_stale": false
+        }
+      ]
+    },
+    {
+      "name": "a subscription only the account knows still reaches the reader",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [],
+      "remote": [
+        {
+          "key": "codex|fp-remote|global|",
+          "provider": "codex",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp-remote",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 10,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          },
+          "sources": [
+            {
+              "device_id": "device_remote",
+              "observed_at": "2026-08-24T09:00:00Z"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "selected_source_id": "device:device_remote",
+          "sources": 1,
+          "is_stale": false
+        }
+      ]
+    },
+    {
+      "name": "two subscriptions of one provider stay two",
+      "now": "2026-08-24T10:00:00Z",
+      "local": [
+        {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "fp-a",
+            "fingerprint_scope": "global"
+          },
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 10,
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-24T09:00:00Z"
+        }
+      ],
+      "remote": [
+        {
+          "key": "codex|fp-b|global|",
+          "provider": "codex",
+          "snapshot": {
+            "provider": "codex",
+            "account": {
+              "fingerprint": "fp-b",
+              "fingerprint_scope": "global"
+            },
+            "windows": [
+              {
+                "id": "weekly",
+                "title": "Weekly",
+                "used_percent": 20,
+                "duration_seconds": 604800
+              }
+            ],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+          },
+          "sources": [
+            {
+              "device_id": "device_remote",
+              "observed_at": "2026-08-24T09:00:00Z"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "selected_source_id": "local",
+          "sources": 1,
+          "is_stale": false
+        },
+        {
+          "selected_source_id": "device:device_remote",
+          "sources": 1,
+          "is_stale": false
         }
       ]
     }

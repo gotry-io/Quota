@@ -28,8 +28,8 @@ struct QuotaOverviewView: View {
       )
     case .empty(let refreshWarning):
       VStack(spacing: 0) {
-        if model.showsDerivedRepairNotice {
-          RepairDerivedNotice(session: model.presentedRepair, now: now)
+        if model.showsCacheRebuildNotice {
+          CacheRebuildNotice()
             .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
             .padding(.top, QuotaDesign.Layout.pageVerticalPadding)
         }
@@ -49,8 +49,8 @@ struct QuotaOverviewView: View {
     case .content(let providers, let refreshWarning):
       ScrollView {
         VStack(spacing: QuotaDesign.Spacing.sm) {
-          if model.showsDerivedRepairNotice {
-            RepairDerivedNotice(session: model.presentedRepair, now: now)
+          if model.showsCacheRebuildNotice {
+            CacheRebuildNotice()
           }
           loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
         }

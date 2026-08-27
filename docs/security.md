@@ -1,300 +1,280 @@
 # Security baseline
 
 This document is the source of truth for Quota's trust, credential, transport, logging, and retained
-data requirements. Architecture and product behavior are defined in
-[`architecture.md`](architecture.md) and [ADR 0006](decisions/0006-managed-account-device-usage.md).
+data requirements. Boundaries and data paths live in [`architecture.md`](architecture.md), and the
+managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usage.md).
 
 ## Trust boundary
 
-- Provider credentials and raw agent logs remain inside the Rust local-collection boundary owned by
-  `packages/service` and used by QuotaBar's bundled service and Linux `quotacli`.
-  Never upload,
-  persist in Relay, print, or log provider access/refresh tokens, cookies, credential files, raw
-  credential payloads, prompts, completions, tool payloads, local paths, session/conversation IDs, or
-  authorization headers.
-- QuotaRelay accepts only protocol-validated account/device authentication material, normalized
-  quota observations, sparse hourly Usage facts, and coverage/control metadata. It never runs a
-  provider collector or exposes command execution. Opt-in account client/model summaries regroup
-  those retained facts and add no prompt, completion, path, session, credential, or new identifier.
-- Rust local clients' Relay traffic is outbound HTTPS to the fixed origin `https://quota.gotry.io`.
-  Only loopback HTTP overrides used by tests are allowed. Redirects are refused.
+- Provider credentials and raw agent logs stay inside the Rust local-collection boundary owned by
+  `packages/service`. Never upload, persist in Relay, print, or log provider tokens, cookies,
+  credential files or payloads, prompts, completions, tool payloads, local paths, session or
+  conversation IDs, or authorization headers.
+- QuotaRelay accepts only protocol-validated authentication material, normalized quota observations,
+  and sparse hourly Usage rows carrying the version of the scan behind each hour. It never runs a
+  collector or exposes command execution, and its rollups regroup retained rows without adding a
+  prompt, completion, path, session, credential, or identifier.
+- Every first-party Relay client — Rust and Swift alike — is fixed to the origin
+  `https://quota.gotry.io`, attaches Bearer only there, refuses redirects, and bounds each request
+  to twenty seconds and 1 MiB. Only loopback HTTP overrides used by tests are allowed.
 - QuotaBar launches only the signed `Contents/Helpers/quota-service` child built from the private
-  `apps/menubar/helper` entry point and exchanges bounded stdin/stdout NDJSON. It does not resolve
-  from `PATH`, run a shell, read service files, or implement provider/account networking.
-- If the private helper cannot initialize its owner-only state, it keeps the IPC stream available and
-  returns only a fixed, allowlisted error/recovery pair. The startup path never sends
-  raw paths, filesystem errors, or diagnostic stderr to Swift. Each Swift request has a fixed
-  fifteen-second deadline; timeout closes the child and all pending continuations so a later request can
-  start a fresh helper.
-- The deliberate macOS browser-session exception is acquisition only. SweetCookieKit briefly reads
-  catalog-allowlisted Cookie names from catalog-declared exact hosts in the one browser selected for
-  login. Its logger is disabled; profile paths/store IDs and unrelated Cookies never cross private
-  stdin or enter logs, diagnostics, UserDefaults, or Relay. Swift retains candidates only in memory.
-  Rust validates Cookie syntax and the provider account over fixed HTTPS, revalidates on commit,
-  and persists only the accepted header plus an irreversible fingerprint and bounded masked label
-  in owner-only SQLite. Failed validation/commit preserves the old session; disconnect removes it
-  transactionally.
-- Quota Web and the Quota iOS `quota-ios` account client receive normalized account data only. They
-  do not discover local credentials or logs.
-  Public `/u/{username}` pages use the GitHub username as the public id and expose remaining quota
-  windows plus aggregated usage totals. They never include device ids, fingerprints, credentials,
-  cookies, raw logs, prompts, or paths. Unknown usernames return not found.
+  `apps/menubar/helper` entry point and exchanges bounded stdin/stdout NDJSON, never resolving from
+  `PATH`, running a shell, reading service files, or doing provider or account networking. A helper
+  that cannot initialize its state keeps the IPC stream available and answers every request with a
+  fixed allowlisted error/recovery pair; the startup path never sends raw paths, filesystem errors,
+  or stderr to Swift. A helper judged gone is terminated, killed if it will not exit, and reaped
+  before its pending requests fail.
+- The macOS browser-session exception is acquisition only, covers the five providers whose catalog
+  entry declares `browser_session` — Codex, Claude, Grok, Kimi, and Cursor — and never starts without
+  the consent popup in [ADR 0010](decisions/0010-provider-browser-session-auth.md). Cursor is the
+  only one marked `exclusive`, because a stored session is the only credential it has.
+  SweetCookieKit's logger is disabled; profile paths, store IDs, the error behind a refused store,
+  and unrelated Cookies never cross private stdin or enter logs, diagnostics, UserDefaults, or
+  Relay, and Swift holds candidates only in memory. Rust revalidates the account on commit and
+  persists only the accepted header plus an irreversible fingerprint and masked label; failed
+  validation keeps the old session and disconnect removes it transactionally.
+- Quota Web and Quota iOS receive normalized account data only, never local credentials or logs.
 
 ## Local credentials and identity
 
-- Do not modify provider-owned credential files or Keychain entries. Provider refresh and rotation
-  remain owned by the official provider CLI or application through the bounded strategies in
-  [`provider-collection.md`](provider-collection.md). Cursor.app `state.vscdb` is opened read-only
-  for the `cursorAuth/accessToken` item; the service never writes Cursor files, never refreshes
-  that JWT, and never persists the derived cookie unless the user later commits a browser session.
-- Optional API-key providers store secrets only in
-  `$XDG_CONFIG_HOME/quotacli/providers.json` or `~/.config/quotacli/providers.json`: directory mode
-  `0700`, file mode `0600`, no symlinks, shared owner-only lock, and same-directory atomic replace.
-  QuotaBar Settings sends a new key only through the private child stdin; Swift never reads the file,
-  persists the secret, places it on argv, or receives more than a masked tip. The Rust service
-  validates and atomically rewrites the file.
-- Operational local state is owner-only `state.sqlite` under the same released user configuration
-  root. It lives outside the app bundle and survives ordinary reinstall. SQLite schema migrations are
-  explicit; a newer schema fails closed and requires an app upgrade. The first Rust launch imports
-  the released installation/session/cache/outbox/pricing JSON transactionally and removes source
-  files only after the imported state is readable. The bounded migration lifecycle is defined in
-  [ADR 0007](decisions/0007-rust-native-local-service.md). Salvage retains at most one owner-only
-  `state.sqlite.broken` and one `state.sqlite.good`; the service never writes a recovered SQL dump,
-  never uploads those files, and never includes their paths in diagnostics
-  ([ADR 0016](decisions/0016-local-service-self-repair.md)). The shared
-  `providers.json`/`ProviderConfigLock` path and OAuth `client_id=quotacli` remain current collection
-  interfaces. The registered `quota-ios` public client is a separate read-only Account interface.
-- SQLite migration v8 stores only the typed diagnostic attempt fields and bounded metrics defined by
-  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md). Completed rows are retained for
-  seven days and capped at 50,000; running rows are recovered or finalized rather than pruned.
-- QuotaBar's private service and Linux `quotacli` use the same owner-only configuration and state
-  boundary. The Linux command is a foreground native binary; it is built and tested only and has no
-  separate published credential or storage format.
-- The installation ID is a random UUID. Relay stores only an account-scoped HMAC derived with
-  `QUOTA_INSTALLATION_KEY`; the raw installation ID must not be logged or used as a global account
-  identifier. Switching to a different Account sets a new upload lower bound so earlier local
-  history is not copied into that Account.
-- Account and device sessions are separate credential families. Persist each token with its
-  audience, authoritative Account/Device IDs, Device generation, and absolute expiry. A response
-  whose principal does not match local state fails closed.
-- SQLite has one process owner for account/logout state, quota and Usage sequences, normalized cache,
-  and outbox transactions. Logout first cancels the active refresh and atomically advances the
-  session to `logout_pending`; subsequent account operations fail their session-epoch check even if
-  token revocation must be retried offline.
-- QuotaBar does not maintain a second report cache. The service's component state may contain masked
-  provider labels, normalized quota, Usage totals, account/device display metadata, and cost
-  coverage, but no provider secret or raw local source metadata. Account tokens never cross IPC.
+- Do not modify provider-owned credential files or Keychain entries; refresh stays owned by the
+  provider's own program ([`provider-collection.md`](provider-collection.md)). Cursor.app
+  `state.vscdb` is opened read-only for `cursorAuth/accessToken`: the service never writes Cursor
+  files, refreshes that JWT, or persists the derived cookie unless a browser session is committed.
+- Optional API-key providers store secrets only in `$XDG_CONFIG_HOME/quota/providers.json` or
+  `~/.config/quota/providers.json`: mode `0700` directory, `0600` file, no symlinks, shared
+  owner-only lock, same-directory atomic replace. QuotaBar sends a new key only through the private
+  child stdin; Swift never reads the file, persists the secret, puts it on argv, or receives more
+  than a masked tip.
+- On first run the service adopts the root it was released under beside its own — the released
+  image's identity, session, upload context, and browser sessions, and its `providers.json` under
+  the same `0700`/`0600` rules — then removes what it read. It looks only beside the root it was
+  given, so an isolated run reads nothing else.
+- Operational local state is two owner-only SQLite files under the released user configuration root,
+  outside the app bundle and surviving a reinstall
+  ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). A newer `identity.sqlite`
+  schema fails closed and asks for an app upgrade; one the service cannot open, or one missing its
+  installation row, is deleted and recreated, so the device becomes a new signed-out installation,
+  never partially recovered. The service never writes a recovered SQL dump, copies rows out of an
+  image it could not read whole, uploads either file, or names their paths in diagnostics.
+- The cache holds only the typed attempt fields of
+  [ADR 0022](decisions/0022-minimal-diagnostics.md), seven days and 5,000 rows; a failed journal
+  write is counted on stderr and blocks nothing.
+- The installation ID is a random UUID; Relay stores only an account-scoped HMAC of it derived with
+  `QUOTA_INSTALLATION_KEY`, the raw ID is never logged or used as a global identifier, and switching
+  Account sets a new upload lower bound.
+- Account reads answer a conditional request from a version stamp over the rows they project, never
+  from a cached body. A 304 asserts only that those rows and the catalog revisions are unchanged, is
+  issued to the principal that asked, and is `private, no-cache` so no shared cache may hold it.
+- A client holds one session, and the scopes on its row are what it may do
+  ([ADR 0027](decisions/0027-one-token-per-client.md)). Persist its token with the authoritative
+  IDs, the Device generation it opened at, and an absolute expiry; a response whose principal does
+  not match local state fails closed.
+- SQLite has one process owner for account state, upload identity, normalized cache, and outbox
+  transactions. Logout cancels the active refresh and atomically advances the session to
+  `logout_pending`, so later account operations fail their session-epoch check even if revocation is
+  retried offline.
+- QuotaBar keeps no second report cache. Component state may carry masked provider labels,
+  normalized quota, Usage totals, display metadata, and cost coverage, but no secret or raw source
+  metadata, and account tokens never cross IPC.
 
 ## Account authentication
 
-- GitHub is the only external identity provider. QuotaRelay is the confidential OAuth client; Rust
-  local clients never embed the GitHub client secret and never receive a GitHub access token.
-- Better Auth owns GitHub OAuth state, PKCE, callback validation, secure browser cookies, session
-  expiry, and standard auth-route origin checks. The registered callback is
-  `https://quota.gotry.io/api/auth/v2/callback/github`.
-- GitHub login requests no email or repository scopes. Relay fetches only the bounded public profile
-  from GitHub's fixed HTTPS API with a 20-second timeout. The numeric provider subject is HMACed
-  before Better Auth stores it; provider access, refresh, and ID tokens are removed by database hooks
-  and are never retained.
+- QuotaRelay is the confidential GitHub OAuth client. Local clients never embed its secret and never
+  receive a GitHub access token, and login requests no scope at all.
+- Relay owns the browser sign-in end to end ([ADR 0025](decisions/0025-one-session-system.md)). Both
+  cookies take the `__Host-` prefix, the ten-minute HMAC-signed handoff carries the `state` and PKCE
+  verifier, and a missing, altered, expired, or mismatched handoff — or a code GitHub will not spend
+  twice — is 400 with no session. Relay reads only the bounded public GitHub profile over fixed
+  HTTPS, HMACs the numeric subject with `GITHUB_SUBJECT_KEY` into the Account id, and never writes
+  the GitHub access token anywhere.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
-  `127.0.0.1` callback on a random port. The callback accepts the exact path/state and an
-  authorization code only; it rejects tokens in query data and stops after success, cancellation, or
-  timeout. Its static no-store success page removes the query from browser history and requests that
-  the browser close the callback tab, with text fallback when browser policy blocks self-close.
-- QuotaBar uses that native browser path; the Linux `quotacli` uses the OAuth Device Authorization
-  Grant and never opens a browser or loopback listener. Device/user codes are high entropy or
-  human-readable as appropriate, single-use, short-lived, hashed at rest, and rate-limited. Polling
-  implements `authorization_pending`, `slow_down`, denial, and expiry without printing device codes
-  or session credentials.
-- The registered `quota-ios` public client uses the same Authorization Code with PKCE S256 authorize
-  route and the exact custom-scheme redirect `io.gotry.quota:/oauth/callback`. The token exchange
-  rejects `installation_id`, `device_display_name`, and `platform`. Relay issues only an account
-  token family with `account:read` and `session:revoke:self`. It never creates a Device, Device
-  session, upload sequence, or installation record. Refresh is account-audience only and rotates
-  with the same compare-and-swap rule. Those credentials use the `qia_`/`qiar_` prefixes and cannot
-  be presented as `quotacli` `qa_`/`qar_` or `qd_`/`qdr_` tokens. These sessions cannot call Web-only
-  management or destructive routes and cannot write snapshots or Usage. Quota iOS generates a
-  cryptographically random verifier and state, verifies the exact callback and state, exchanges the
-  code once, never sends a client secret, and never logs codes or tokens. `ASWebAuthenticationSession`
-  stays in the app target. The access and refresh session is one Keychain item with
-  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. UserDefaults may hold UI preferences only. The
-  HTTPS client is fixed to `https://quota.gotry.io`, attaches Bearer only to that origin, refuses
-  redirects, uses a 20-second timeout and a 1 MiB response limit, and performs one single-flight
-  account refresh after 401. Last-good cache stores only the decoded Account summary and fetched
-  time in protected app storage. Its Account id must match the current Keychain session before the
-  cache is displayed or used as a fallback; orphaned or mismatched cache is cleared. Logout clears
-  the session and the cache.
-- Quota iOS widgets use App Group `group.io.gotry.quota` only. The app target alone performs OAuth,
-  holds the Keychain session, calls Relay, and publishes a non-secret `WidgetSnapshot` through
-  `ProtectedFileWidgetSnapshotStore` (atomic write,
-  `completeFileProtectionUntilFirstUserAuthentication`, excluded from backup). The snapshot may
-  contain display remaining-quota and Today token/cost fields; it must not contain account ids,
-  device ids, fingerprints, tokens, sequences, or raw sources. The WidgetKit extension reads that
-  file and reloads on app publish/clear only. It has no network, no Keychain, no Security framework
-  usage, and no account wire/session modules. Missing, corrupt, or oversize files are treated as
-  no-data. Logout, expired session, and absence of a trusted summary clear the snapshot. Both the
-  app and `io.gotry.quota.widgets` signing identities need the App Group entitlement; provisioning
-  profiles must include `group.io.gotry.quota`. See
-  [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md).
-- Successful collection-client login issues an account-read token family and a current-device-write
-  token family. Access tokens are short-lived; refresh tokens rotate with compare-and-swap so replay
-  revokes or rejects the token family. Store only HMACs of server session and grant secrets.
-- Better Auth browser sessions use secure, HttpOnly cookies. JavaScript cannot read them. On
-  document navigations the Worker reads the session cookie through `WebDocumentPort` so SvelteKit
-  can paint the header username in the first HTML byte. The session token is not exposed to the
-  page, and SvelteKit never receives `env.DB` or Relay secrets. Every document and SvelteKit load
-  response is `Cache-Control: private, no-store`. Raw secondary-storage keys are HMACed; values are
-  AES-GCM encrypted with the key hash as associated data. Its database session table remains empty
-  because Web session material uses that encrypted store.
-- Better Auth validates trusted origins and session freshness for standard sign-in, sign-out, and
-  Account deletion routes. Its user-deletion hook removes the Quota domain Account and cascading
-  business data. Device authorization decisions and Delete Device additionally require a session
-  created within ten minutes and an exact same-origin `Origin` (with same-origin Fetch Metadata when
-  present); session refresh does not advance this authentication timestamp. Cross-account or unknown
-  user codes return a generic not-found response.
+  `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
+  code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
+  answers with a static no-store page that drops the query from history. It is the only grant a
+  collection client has: there is no headless or second-screen flow to authorize.
+- The `quota-ios` client's authority is scoped by
+  [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
+  [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in
+  the app target, the session is one Keychain item with
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, UserDefaults holds UI preferences only, and the
+  client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
+  summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
+  the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
+  app target alone performs OAuth, holds the session, and calls Relay; the extension has no network,
+  Keychain, Security, or account modules.
+- A collection or viewer login issues one access/refresh family, and what it may do is the scopes
+  on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Access tokens are
+  short-lived, a replayed refresh revokes its whole token family, and only HMACs of server session
+  and grant secrets are stored. Each client's tokens are hashed under a domain its prefix names, so
+  a token issued to one cannot be presented as another's.
+- A browser session has no refresh token: `__Host-quota_session` is the whole credential, is
+  `HttpOnly; Secure; SameSite=Lax; Path=/`, and is stored only as an HMAC under its own label, so it
+  cannot be presented as a Bearer token nor a native token as a cookie. JavaScript never reads it,
+  and it appears in no log or response body but its own `Set-Cookie`.
+- A document navigation carrying no cookie of that shape is answered without reaching D1, SvelteKit
+  never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
+  private, no-store`.
+- `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
+  `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
+  that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
+  advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
+  needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
+  out the Device the session spoke for.
 
 ## Upload, Usage, and deletion safety
 
-- Quota and Usage uploads require the device token to match the envelope Device ID and current
-  generation. Account tokens are read/manage only and cannot write device data; device tokens cannot
-  read another Device or the Account aggregate.
-- The device profile endpoint accepts only the current Device's authenticated token and generation.
-  It can update only that Device's bounded display name and platform; it cannot select a Device ID,
-  read Account data, or change authorization state.
-- The Device Health endpoint derives identity from that same authenticated Device principal. The
-  request has no Device ID, must match current generation/platform, and may replace only the latest
-  row at an equal or greater monotonic refresh revision. Server receipt time, not the device clock,
-  determines freshness. Lower delayed revisions cannot refresh old data. The read-only iOS Account
-  token can read opted-in health but cannot write it.
-- The service returns authoritative independent `next_snapshot_sequence` and
-  `next_usage_sequence`. Clients never guess or reset a lost sequence to zero. A conflict fails
-  closed because it can indicate a cloned local configuration.
-- A snapshot retry reuses its sequence. A Usage retry reuses the immutable submission ID, sequence,
-  generation, coverage, and rows. D1 receipts make accepted and duplicate outcomes explicit.
-- Relay keeps one quota observation per `(device_id, provider, fingerprint)` and deletes an
-  observation once it is seven days older than the moment it describes. Readers stop presenting a
-  reading as current a day after it was observed, so retention only bounds what an account keeps
-  from a device that stopped reporting a provider; Device or Account deletion remains the explicit
-  removal boundary for everything else.
-- The owner-only SQLite `usage_upload_enabled` preference defaults on. When disabled, local indexing,
-  aggregation, and display continue, but the service neither stages nor drains Usage uploads. Pending
-  outbox work remains local and resumes after re-enabling. Cached Account Usage is omitted from the
-  private state response so the native Usage surface remains local-only. The preference does not delete facts that Relay
-  already retained; Device or Account deletion remains the explicit removal boundary.
-- Device Health may still upload the disabled preference and generic three-axis device summary, but
-  it must omit Usage attempts, agent subjects, metrics, and local Usage detail from its signal and
-  top-level code selection.
-- Only a complete collector scan may create authoritative replacement coverage. Permission errors,
-  unreadable/changed sources, record limits, malformed or unknown usage records, truncated tails,
-  cancellation, or parser uncertainty make coverage partial. Partial coverage never deletes or
-  replaces remote facts. On reads, `complete` describes only that returned half-open coverage
-  interval; absent intervals remain visible gaps and no item claims that the entire query range is
-  complete. The SQLite file index is the sole file-level invalidation mechanism and keeps changed
-  files dirty after a partial parse so later hours cannot be silently accepted across an unresolved
-  gap; no watcher or byte-checkpoint dependency is used.
-- Outbox payloads contain allowlisted aggregate fields only. Source file IDs, byte offsets, record
-  hashes, paths, raw events, and parser diagnostics remain local. Token/count invariants and payload,
-  row, range, model, and dimension resource bounds are enforced by the current managed-data runtime
-  schema before upload and by Relay again before persistence. Model identifiers are opaque provider text: preserve
-  any non-empty bounded identifier, including punctuation and `unknown`; do not apply a naming
-  whitelist or discard an otherwise valid fact because pricing is missing. Empty internal records
-  with no tokens, billable tools, or nonzero source cost do not become Usage facts. Invalid records
-  are isolated and counted in the local diagnostic report rather than rolling back a complete agent.
-- Model catalog cleanup is report-only. The raw model value is never rewritten, lowercased, trimmed,
-  deleted, or replaced in SQLite, upload payloads, or D1. Catalog aliases are explicit exact matches
-  scoped by inference provider and optionally agent `client` and UTC date; ambiguous, invalid, or
-  unknown values remain unresolved. A catalog revision can regroup historical rows on the next report, but it does
-  not trigger source-file reparsing or fact rewrites. Pricing resolves the raw value independently,
-  before grouping, so a normalized model may remain unpriced.
-- Delete Device is distinct from logout. It transactionally revokes sessions, advances Device
-  generation, records a precise watermark, deletes quota/Usage/coverage/receipt rows, and retains a
-  minimal hidden tombstone. Old tokens and old-generation outbox entries are terminally rejected.
-  The new generation may rebuild the watermark's UTC hour only after the local service filters raw event
-  instants before the precise watermark. The account-scoped browser session remains signed in.
-- Delete Account deletes its Devices and business data transactionally. Better Auth removes every
-  indexed browser session for the deleted user, and Relay additionally rejects any cached Web
-  principal whose business Account no longer exists. Local provider data remains owned by provider
-  tools.
-- Logout disables upload and revokes account/device sessions but intentionally retains the Device and
-  remote facts. Re-login to the same Account may backfill locally readable history, including history
-  created while signed out. Re-login revokes every prior session family for that installation before
-  issuing new credentials; it never reactivates an old access or refresh token.
+- Quota and Usage uploads require `device:write` and a session whose Device ID and generation match
+  the envelope. That scope is only ever granted to a session that names a Device, and such a session
+  stops authorizing the moment its Device moves past the generation it was opened at, so Delete
+  Device ends every token issued before it. A session that names no Device — the browser's, the iOS
+  viewer's — cannot write device data at all. The device profile endpoint writes only the Device its
+  own session names, and only that Device's bounded display name and platform: it cannot select a
+  Device ID, read Account data, or change authorization.
+- An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by
+  when it was observed, an hour is replaced only by a strictly newer `scan_version`, and the
+  response names what it accepted and ignored.
+- Relay keeps one quota observation per `(device_id, provider, fingerprint)` and deletes it seven
+  days after the moment it describes. Readers stop presenting a reading as current a day after it
+  was observed, so retention only bounds what an account keeps from a device that stopped reporting;
+  deletion is the explicit removal boundary.
+- Disabling the owner-only `usage_upload_enabled` preference deletes nothing Relay already retained,
+  and no device uploads an assertion about its own health, so no diagnostic detail leaves it.
+- An uploaded hour states whether its scan was complete: permission errors, unreadable or changed
+  sources, record limits, malformed records, truncated tails, cancellation, or parser uncertainty
+  make it `partial`, and it still replaces the hour it names because it is the newest reading of it.
+- Outbox payloads carry allowlisted aggregate fields only; file IDs, byte offsets, record hashes,
+  paths, raw events, and parser diagnostics stay local, and payload, row, range, model, and
+  dimension bounds plus token invariants are checked by the managed-data schema before upload and by
+  Relay before persistence. Model identifiers are opaque provider text: preserve any non-empty
+  bounded identifier, punctuation and `unknown` included, never rewrite or replace the raw value,
+  and never discard a valid fact because pricing is missing. Records with no tokens, billable tools,
+  or source cost do not become Usage facts, and an invalid record is isolated and counted in the
+  diagnostic report rather than rolling back an agent.
+- The three lifecycle verbs are defined by
+  [ADR 0006](decisions/0006-managed-account-device-usage.md). This is their enforcement. Delete
+  Device runs in one transaction, old tokens and old-generation outbox entries are terminally
+  rejected after it, the new generation rebuilds the watermark's UTC hour only once raw instants
+  before it are filtered out, and the browser session stays signed in. Delete Account leaves no
+  tombstone and clears the cookie in the same response.
+- Logout disables upload and revokes sessions but retains the Device and its remote facts. Re-login
+  may backfill locally readable history, including history created while signed out; it revokes
+  every prior session family for that installation first and never reactivates an old token.
 
 ## Network, subprocesses, and diagnostics
 
-- Provider credentials go only to the fixed official endpoints and documented provider-owned
-  variants in [`provider-collection.md`](provider-collection.md). Except for the explicit
-  catalog-allowlisted browser-session acquisition above, do not import browser Cookies. Hidden
-  WebView state is never an authentication source.
-- Spawn explicit executables with argument arrays. Never interpolate provider or user data into a
-  shell command. Respect cancellation and terminate subprocesses on success, failure, timeout, and
-  cancellation.
-- Provider HTTP requests use a 20-second timeout and 1 MiB response-body limit; browser-session
-  account validation tightens that timeout to ten seconds so it completes inside private IPC.
-  Provider JSON-RPC
-  uses a 1 MiB stdout-line limit and 64 KiB stderr-capture limit. Private IPC limits every line to
-  1 MiB, rejects malformed envelopes, exposes only stable error/recovery codes, and closes a corrupt
-  connection. stdin EOF cancels service work and ends the child.
-- Error output and logs use allowlisted codes and fixed recovery text. Never include raw HTTP bodies,
-  subprocess stderr, JWTs, authorization codes, user/device secrets, installation IDs, raw GitHub
-  subjects, full email addresses, or local source paths.
-- The service owns one bounded diagnostic v2 report for Quota/Usage surfaces and their source checks.
-  QuotaBar's Settings action and Linux `quotacli doctor` consume that same report; they never inspect
-  local state or source logs or derive policy themselves. The report may contain fixed statuses,
-  bounded counters, timestamps, impact/recovery codes, and catalog-owned `provider:<id>` or
-  `agent:<id>` subjects. It must distinguish only `this_device`, `account`, and `system`; account or
-  device display names and IDs never become diagnostic identity. Paths, filenames, model names/lists,
-  prompts, completions, session/conversation/installation/device IDs, credentials, tokens, raw
-  provider responses, and parser excerpts are forbidden. JSON and copied text are equally redacted.
-  A single replaceable SQLite snapshot retains only the last completed report; current refresh phase
-  metadata may be overlaid, but intermediate component values must never be serialized. Its Recent
-  Activity is assembled from the typed local journal, not logs, and is independently bounded. The
-  complete-data, partial-merge, and evaluation rules are canonical in
-  [ADR 0008](decisions/0008-data-integrity-and-diagnostics.md); attempt retention, Support Report,
-  and Device Health minimization are canonical in
-  [ADR 0015](decisions/0015-diagnostic-attempts-and-device-health.md).
-- Account/device display values and provider labels are untrusted presentation data: bound, mask
-  where required, render as text rather than HTML, and exclude from security logs.
-- Model diagnostics may expose only bounded resolved/unresolved/ambiguous counts and catalog-revision
-  availability; they must never expose model names or aliases.
-- Tests and fixtures use synthetic credentials and identities only. Tests that exercise local files
-  use isolated temporary roots and clean them after completion.
+- Provider credentials go only to the fixed endpoints in
+  [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
+  import browser Cookies, and hidden WebView state is never an authentication source.
+- A refresh starts three kinds of process and no others, and no collector starts any of them: the
+  two that drive a provider CLI run on the refresh worker before collection, so nothing on the
+  five-minute timer can spawn on its own account.
+  - `/usr/bin/security` reads Claude Code's Keychain grant once per refresh, for both discovery and
+    collection, plus once more when a renewal actually ran — a renewal replaces a credential this
+    refresh may already have read, so the memo taken before it ran describes the grant it replaced.
+    A read that fails costs a second call which asks only whether the entry is there: that is what
+    separates a Mac that was never signed in from one that is not allowed to read the secret, and
+    the answer decides whether the reader is offered "sign in" or "grant access". Neither call is
+    made again once the refresh has its answer.
+  - `<binary> --version` reads the installed Claude Code or Codex version the request headers claim,
+    only for a provider this device holds a sign-in for, and only when the binary's real path, size,
+    and mtime differ from the fingerprint stored in the disposable cache — so a given installed
+    binary is run at most once, and never more than once an hour. Bounded to five seconds and 4 KiB
+    of stdout, no stdin, stderr discarded, only `HOME` and `PATH` in its environment, and the same
+    empty owner-only working directory a renewal gets. A failed or
+    absent read leaves the header on its fallback constant, and collection neither waits on it nor
+    fails because of it.
+  - **The renewal** asks the CLI that owns a sign-in to renew it, and only when the credential on
+    disk is already expired or within a minute of expiry. It is one mechanism serving three
+    providers rather than three rungs: a provider states the program, its arguments, which of this
+    device's variables the child inherits, whether the sign-in is expiring, whether it is usable,
+    and how to talk to the child; the binary lookup, the working directory, the environment, the
+    spawn, the floor, and the verdict are shared, and there is exactly one place in the provider
+    sources where any of these programs is started.
+    - `claude mcp list`, additionally requiring a `claudeAiOauth` `refreshToken` in the entry — one
+      with no refresh token cannot be renewed by anything, and a Keychain item holding only
+      `mcpOAuth` is not a Claude sign-in, so neither is worth a spawn. It is the invocation that
+      reaches Claude Code's own refresh path without asking for anything else; its one side effect
+      is that it health-checks the MCP servers this device approved, which the empty working
+      directory narrows to the user-scoped ones in `~/.claude.json` and the deadline bounds.
+    - `codex -s read-only -a never app-server`, additionally requiring an OAuth grant rather than a
+      personal access token, whose expiry is the `exp` in the access token's own JWT payload —
+      read as a timestamp, with no signature check, because a forged one would buy a spawn rather
+      than a reading, and an unreadable one counts as expiring. The Codex CLI renews on its own
+      startup path rather than in answer to any request; `initialize` is sent to know the program
+      came up, its reply read, and stdin then closed so the CLI can finish and leave.
+    - `grok agent stdio`, which asks for the `cached_token` method and no other: the CLI's
+      interactive sign-in prints a device code and waits for a person, and nothing on a timer may
+      start that.
+    - At most one attempt an hour per provider whatever the outcome, recorded in the disposable
+      cache — on time alone, so a binary that rewrites itself cannot buy an earlier spawn. Bounded
+      to the CLI's own deadline (10 s for Claude Code, 8 s for Codex, 5 s for Grok) and 64 KiB of
+      stdout, stderr discarded, an empty owner-only directory created for the run as its working
+      directory, and an environment of `HOME`, `PATH`, the one variable naming that provider's
+      credential home, and whatever fixed pair that provider's plan names — Claude Code's is
+      `TERM=dumb`, so its CLI does not try to draw a terminal into a pipe. The outcome is judged by re-reading the credential, never by an exit
+      status; a credential the CLI emptied or removed is a program that signed itself out, which is
+      a different answer from one that could not renew. The service never submits a refresh token
+      itself and never writes a provider's credential file or Keychain item — Codex's refresh
+      tokens are single-use, so a second program spending one would strand the CLI with a token the
+      server has already retired.
+  - Everywhere else an expired grant is reported as `auth_required` rather than renewed by driving
+    its owner, and no collector runs a provider's CLI to read quota. Spawn explicit executables with
+    argument arrays, never interpolate provider or user data into a shell, and terminate subprocesses
+    on success, failure, timeout, and cancellation.
+- Provider HTTP uses the same twenty-second, 1 MiB bounds; browser-session validation tightens the
+  timeout to ten seconds so it finishes inside private IPC, and the Keychain lookup is bounded the
+  same way with its secret in a type whose `Debug` is redacted. Private IPC limits each line to 1
+  MiB, rejects malformed envelopes, exposes only stable codes, and closes a corrupt connection.
+- Error output and logs use allowlisted codes and fixed recovery text, never raw HTTP bodies,
+  subprocess stderr, JWTs, authorization codes, secrets, installation IDs, raw GitHub subjects, full
+  email addresses, or local source paths.
+- The service owns one bounded diagnostic report, which QuotaBar's Support page consumes without
+  inspecting local state or source logs. It may carry fixed statuses,
+  timestamps, recovery codes, catalog-owned `provider:<id>` or `agent:<id>` subjects with an
+  optional `source_id`, the service's fixed names for its non-provider paths, and the safe sentences
+  it writes. Display names and IDs never become diagnostic identity; paths, filenames, model names,
+  prompts, completions, session, conversation, installation, and device IDs, credentials, tokens,
+  raw responses, and parser excerpts are forbidden, and JSON and copied text are equally redacted.
+  Intermediate component values are never serialized, and a copied report's recent work comes from
+  the typed journal rather than logs ([ADR 0022](decisions/0022-minimal-diagnostics.md)).
+- Display values and provider labels are untrusted presentation data: bound them, mask where
+  required, render as text rather than HTML, and keep them out of security logs. Model diagnostics
+  expose only bounded resolved, unresolved, and ambiguous counts and catalog-revision availability.
+- Tests and fixtures use synthetic credentials and isolated temporary roots, cleaned afterwards.
 
 ## Relay storage and operations
 
-- D1 is the only Relay store. Keep migrations explicit; never rewrite an applied migration. Review
-  lifecycle, retention, and new retained fields as security-sensitive changes.
-- Treat protocol routing as a trust boundary. V2 writes must pass the closed v2 provider/agent
-  schemas. Relay serves one managed data contract, so a read never has to exclude what a retired
-  contract could not carry.
-- Persist GitHub subjects, installation identities, token/grant secrets, session-store keys, and
-  rate-limit subjects only as keyed hashes where equality is required. Better Auth session values
-  are encrypted at rest. Persist plaintext native tokens only in the one successful issuance
-  response, never in D1.
-- Retained business data is limited to Account/Device lifecycle metadata, each Device's latest
-  bounded health snapshot, normalized quota observations, sparse hourly Usage facts, complete
-  coverage, idempotency receipts, and bounded rate limits. Device/Account deletion cascades health;
-  Relay retains no health history. Calculated cost is derived from the canonical catalog; it is not
-  persisted as an invoice.
-- Rate limits use fixed-window counters keyed by hashes of action and subject. Managed anonymous
-  network subjects may use only Cloudflare's trusted connecting-IP metadata. Readiness probes and
-  the hourly Worker schedule delete at most 100 expired rows from each credential table per run.
-  Expired login grants, Better Auth encrypted sessions, and rate-limit counters are eligible
-  immediately. Expired or revoked native account/device sessions remain for seven days so logout
-  retries stay diagnosable without allowing those credentials to authenticate.
-- Production keys (`GITHUB_CLIENT_SECRET`, `BETTER_AUTH_SECRET`, and
-  subject/installation/session HMAC keys) are Cloudflare secrets and must not be tracked. Each key has
-  a distinct purpose and must contain sufficient entropy; do not reuse one secret across purposes.
-- Local builds, Linux `quotacli` build/tests, local D1 migrations, and Wrangler dry runs are
-  verification. Do not deploy, apply remote migrations, publish packages, or change production
-  secrets without explicit authorization.
+- Keep D1 migrations explicit, never rewrite an applied one, and review lifecycle, retention, and
+  new retained fields as security-sensitive. Protocol routing is a trust boundary: v6 writes pass
+  the closed v6 provider and agent schemas, and one managed contract is served, so a read excludes
+  nothing a retired one could not carry.
+- Persist GitHub subjects, installation identities, token and grant secrets, session-store keys, and
+  rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
+  appear only in the one successful issuance response, never in D1, and browser session tokens only
+  in their `Set-Cookie`.
+- Retained business data is limited to Account and Device lifecycle metadata, normalized quota
+  observations, sparse hourly Usage rows, the daily rollup, and bounded rate limits. Nothing is kept
+  to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
+  catalog, never persisted as an invoice.
+- Rate limits use fixed-window counters keyed by hashes of action and subject, and an anonymous
+  network subject may come only from Cloudflare's trusted connecting-IP metadata. Readiness probes
+  and the hourly schedule delete at most 100 expired rows per credential and observation table per
+  run, and consuming a limit collects at most 100 expired counters inline; each delete addresses
+  whole rows, so expiring one window never resets a live one. Expired grants and counters are
+  eligible at once; expired or revoked sessions remain seven days so logout retries stay
+  diagnosable.
+- Production keys (`GITHUB_CLIENT_SECRET` and the subject, installation, and session HMAC keys) are
+  Cloudflare secrets, are never tracked, and are never reused across purposes.
+  `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser session token
+  and `__Host-quota_oauth` signature included — each under its own domain label.
 
 ## Failure behavior
 
-- A provider failure never fabricates a quota or Usage value.
-- Authentication, unavailable, unsupported, stale generation, deleted range, sequence conflict,
-  partial coverage, malformed data, and unpriced cost remain distinct outcomes.
-- Preserve last-known-good local display data on transient collection/network failures and mark its
-  age or coverage; do not silently replace it with empty data.
-- Unknown price, channel, model, tier, region, speed, or context is unpriced/partial, never `$0` and
-  never resolved by fuzzy or cross-channel fallback.
+- A provider failure never fabricates a quota or Usage value. Authentication, unavailable,
+  unsupported, stale generation, an ignored hour, an incompletely scanned hour, malformed data, and
+  unpriced cost remain distinct outcomes.
+- Preserve last-known-good display data on a transient collection or network failure and mark its
+  age rather than replacing it with empty data.
+- Unknown price, channel, model, tier, region, speed, or context is unpriced or partial, never `$0`
+  and never resolved by fuzzy or cross-channel fallback.

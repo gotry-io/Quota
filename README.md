@@ -8,67 +8,47 @@ subscription quota and privacy-preserving Usage together across a user's devices
   snapshot for Home Screen and Lock Screen widgets.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
-- **QuotaCLI** — Linux-only native Rust command that reuses the shared local service crate. It is
-  released as a static x86_64 binary; Windows is not currently supported.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub login, device authorization, and account dashboard.
+- **Quota Web** — public site, GitHub sign-in, and account dashboard.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-Cursor. Cursor prefers a signed-in Cursor.app session from local desktop state, then a stored
-browser session. On macOS, QuotaBar can acquire catalog-declared browser sessions for Cursor, Codex,
-Claude, Grok, and Kimi.
-Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs. Provider credentials,
-prompts, completions, raw events, local paths, and conversation identifiers never upload.
+Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
+Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
+never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
+session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
+[security baseline](docs/security.md).
 
-Both collection clients expose the same service-owned diagnostics: Linux `quotacli doctor
-[--format text|json] [--pretty]` and the QuotaBar Settings **Diagnostics** action on macOS. The
-v2 report evaluates user-visible Quota/Usage surfaces and explains them with source-scoped checks and
-root-cause findings. Absent setup is healthy/inactive and Account data may fulfill Overview without a local provider
-login, but a local source this device holds and cannot collect stays actionable on both surfaces;
-pending Usage waits normally until a completed upload attempt fails. The
-report uses the last completed refresh boundary and contains only safe provider/agent identities,
-bounded counters, timestamps, impact, and recovery codes. It never includes credentials, tokens,
-local paths or filenames, model lists, raw logs/responses, parser excerpts, prompts, completions,
-session identifiers, or device identifiers. QuotaCLI exits nonzero for failed operation,
-stale/partial/unknown data, or required attention; healthy empty and automatic waiting states succeed.
+The QuotaBar Settings **Support** page renders one service-owned report. It lists the four
+user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account — and the
+sources behind them, each with one sentence naming what happened and what to do about it. The
+service writes that sentence; QuotaBar renders it
+([ADR 0022](docs/decisions/0022-minimal-diagnostics.md)).
 
 ## Architecture
 
 QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and communicates over bounded,
-versioned stdin/stdout NDJSON. Each request has a fixed fifteen-second deadline; a timed-out child is
-closed and the next request starts a fresh helper. The shared Rust service immediately returns its
-last valid SQLite state, then collects provider quota, incrementally indexes Usage logs, refreshes
-pricing and report-time model aliases, and synchronizes a signed-in account in the background. Its
-five-minute scheduler exists only for the QuotaBar process lifetime, so quitting QuotaBar stops local
-work and synchronization. Linux `quotacli` uses the same Rust service semantics through a native
-command-line entry point.
+versioned stdin/stdout NDJSON. The child announces `ready` once its local state is open, and
+QuotaBar holds every request until then. Requests have no deadline of their own: a `ping` the child
+answers without taking a lock is what says it is alive, and only a child that leaves two consecutive
+pings unanswered is killed and replaced. The Rust service immediately returns its last valid state,
+then collects provider quota, incrementally indexes Usage logs, refreshes pricing and report-time
+model aliases, and synchronizes a signed-in account in the background. Its five-minute scheduler
+lives only for the QuotaBar process lifetime, so quitting QuotaBar stops local work and
+synchronization.
 
-Swift owns presentation, UI preferences, accessibility, and Launch at Login. Shared remaining-quota,
-plan, count, cost, and compact-age copy lives in `packages/apple-shared`; wire decoding and Relay
-access stay in each app or `packages/apple-client`. Rust owns provider and
-Usage semantics, credentials, OAuth, Relay traffic, persistence, the durable Usage upload setting,
-outbox sequencing, merging local and account observations, and scheduling. QuotaRelay and Quota Web
-remain TypeScript. See the canonical
-[architecture](docs/architecture.md), [security baseline](docs/security.md),
-[provider strategies](docs/provider-collection.md),
-[CodexBar platform capability baseline](docs/codexbar-platform-capabilities.md), [native service decision](docs/decisions/0007-rust-native-local-service.md),
-[managed account decision](docs/decisions/0006-managed-account-device-usage.md),
-[managed-data v3](docs/decisions/0012-managed-data-v3.md),
-[read-only iOS account client](docs/decisions/0013-readonly-ios-account-client.md),
-[non-secret iOS widget snapshot](docs/decisions/0014-nonsecret-ios-widget-snapshot.md), and
-[SvelteKit document Worker composition](docs/decisions/0011-sveltekit-document-worker.md). The data
-integrity and diagnostic contract is [ADR 0008](docs/decisions/0008-data-integrity-and-diagnostics.md),
-report-time model identity is [ADR 0009](docs/decisions/0009-versioned-model-catalog.md),
-structured attempts, Support Report, and Device Health are
-[ADR 0015](docs/decisions/0015-diagnostic-attempts-and-device-health.md), local service self-repair is
-[ADR 0016](docs/decisions/0016-local-service-self-repair.md), and provider
-browser-session authentication is
-[ADR 0010](docs/decisions/0010-provider-browser-session-auth.md).
+Swift owns presentation, UI preferences, accessibility, and Launch at Login; shared remaining-quota,
+plan, count, cost, and compact-age copy lives in `packages/apple-shared`, and wire decoding and Relay
+access in each app or `packages/apple-client`. Rust owns provider and Usage semantics, credentials,
+OAuth, Relay traffic, persistence, and scheduling. QuotaRelay and Quota Web are TypeScript.
+
+The canonical documents are [architecture](docs/architecture.md),
+[security baseline](docs/security.md), [provider strategies](docs/provider-collection.md), and
+[CodexBar platform capabilities](docs/codexbar-platform-capabilities.md);
+[`AGENTS.md`](AGENTS.md) indexes the decision records behind each area.
 
 ## Repository layout
 
 ```text
-apps/cli/                  Linux-only native Rust quotacli command
 apps/ios/                 Quota iPhone/iPad SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
@@ -83,19 +63,15 @@ packages/relay-core/      Runtime-neutral account and Usage state contracts
 docs/                     Architecture, security, provider, and decision records
 ```
 
-Provider registration starts in `packages/provider/catalog.json`. Run
-`pnpm generate:provider-catalog` after a catalog change to regenerate Rust, Swift, and TypeScript
-provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on v2; quota,
-Usage, and Account summary use managed-data v4, the only data contract Relay serves.
-Bundled private IPC v1 changes
-atomically with QuotaBar. Its local Usage v3 report carries scan status and coverage; state snapshots
-carry precomputed period totals grouped by agent, then inference provider, then model. Summary totals are total, input,
-output, cache-read input, cache-write input, reasoning, and usage-bearing output messages; sessions
-are not collected.
-The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in Account,
-so QuotaBar switches periods without collection or network work; Overview remains quota-only.
-Catalog `account_sync` declares whether a provider synchronizes to the managed Account. The local
-collection catalog may be broader than the set the Account accepts.
+Provider registration starts in `packages/provider/catalog.json`; run
+`pnpm generate:provider-catalog` after a catalog change to regenerate the Rust, Swift, and
+TypeScript provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on v2, while
+quota, Usage, and Account summary use managed-data v6, the only data contract Relay serves. Bundled
+private IPC v1 changes atomically with QuotaBar; the local Usage report and state snapshots ride
+that version rather than naming their own. Summary totals are total, input, output, cache-read
+input, cache-write input, reasoning, and usage-bearing output messages; sessions are not collected.
+The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in
+Account, so QuotaBar switches periods without collection or network work; Overview stays quota-only.
 
 ## Development
 
@@ -109,16 +85,11 @@ pnpm format:check
 pnpm check
 pnpm test
 pnpm build
-
-# Linux only: build and test the native QuotaCLI
-pnpm build:linux-cli
-pnpm test:linux-cli
 ```
 
 The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
-only; they intentionally do not compile the Linux-only CLI or the iOS app. Run the Linux commands on
-Ubuntu (or another supported Linux host). Run the iOS commands on macOS. `pnpm test` runs every
-Swift package, not only QuotaBar.
+only; they intentionally do not compile the iOS app. Run the iOS commands on macOS. `pnpm test`
+runs every Swift package, not only QuotaBar.
 
 `pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
 rejects unformatted sources and a stale generated provider catalog; pre-push runs the tests for the
@@ -144,17 +115,13 @@ remote migrations or deploy manually without explicit authorization.
 
 ## Distribution
 
-QuotaBar and QuotaCLI release on independent tags, coupled only by the repository `latest` alias
-that QuotaBar distribution resolves through (see [architecture](docs/architecture.md)). A
-`menubar-vX.Y.Z` tag builds one signed and notarized Apple Silicon app, a drag-install `.dmg`, a
-Sparkle `appcast.xml` for in-app updates, and updates the Homebrew Cask. The Cask installs only
-`QuotaBar.app`; it does not expose the private service as a command. Install with `brew install
-gotry-io/tap/quotabar` or the website `.dmg`. A `cli-vX.Y.Z` tag publishes a static x86_64 Linux
-binary and checksum to GitHub Releases. QuotaCLI is not published to npm or Homebrew; Windows is not
-built or released.
+QuotaBar is the only released product, and it resolves updates through the repository `latest`
+alias (see [architecture](docs/architecture.md)). A `menubar-vX.Y.Z` tag builds one signed and
+notarized Apple Silicon app, a drag-install `.dmg`, a Sparkle `appcast.xml` for in-app updates, and
+updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
+service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`.
 
 ```bash
-pnpm version:bump:cli patch      # or minor | major | explicit semver
 pnpm version:bump:menubar patch  # or minor | major | explicit semver
 ```
 
@@ -162,26 +129,32 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The repository implements protocol-v2 account/device authentication, managed-data v4, a registered
-read-only `quota-ios` account OAuth client, a Quota iOS Connect Account / Today overview slice on
-`packages/apple-client`, shared Apple presentation semantics in `packages/apple-shared`, a
-non-secret App Group widget snapshot with an embedded WidgetKit extension, independent
-quota and Usage upload sequencing, D1 persistence and deletion watermarks, eight Rust quota collectors, six Rust
-Usage parsers with file-level incremental indexing, effective-dated cost calculation, owner-only
-local SQLite state and provider configuration, persistent private IPC, QuotaBar account/provider
-configuration UI, Sparkle in-app updates, fixed-window client-scoped account-or-local Usage
-detail, shareable remaining-quota/usage exports, opt-in public `/u/{username}` pages, and the Web
-account dashboard. Raw model
-identifiers remain opaque bounded provider text; a separately versioned catalog derives stable
-report keys without rewriting facts or changing pricing. Valid facts remain usable when pricing or
-model aliases are unknown. Record/file failures are isolated and complete uploads are partitioned
-losslessly, while partial scans do not replace remote facts. The service-owned diagnostics v2 report
-separates operational health, data state, and attention; source checks explain a coherent
-last-completed refresh without treating absent optional setup as failure. A seven-day bounded local
-attempt journal supplies recent Support activity and canonical latest-attempt/success facts. Signed-in
-collection Devices upload only a sanitized latest health snapshot; QuotaBar, Web, and iOS opt into
-the compatible Account Device Health view with version, platform, and server-authoritative last
-report/refresh/sync state.
+The menu bar shows the tightest remaining percentage across the subscriptions Overview still counts
+as current, and Overview closes with a Today line for spend and tokens. Local state is two
+owner-only SQLite files: an identity store holding what this Mac cannot regenerate, and a cache that
+is deleted and rebuilt rather than repaired when SQLite refuses to read it. The bundled helper
+announces `ready` when that state is open and answers `ping` while it works, so QuotaBar waits on
+what the child says rather than on a clock. `diagnose` answers one `schema_version: 3` report —
+four surfaces, the sources behind them, and up to 100 recent attempts — and no device asserts
+anything about another.
+
+Managed data is v6. A Usage upload names whole UTC hours carrying the version of the scan behind
+each one, Relay replaces an hour only for a strictly newer scan and folds the days it touched into a
+rollup every read answers from, and an Account summary resolves subscriptions once so an account
+collected on three Macs reads as one subscription everywhere. Relay owns GitHub sign-in itself
+through a hand-written OAuth round trip, and every client — browser, QuotaBar, iOS — holds one
+session in one table, scoped by what that client is for
+([ADR 0027](docs/decisions/0027-one-token-per-client.md)).
+Five providers can fall back to a browser session as their last rung, behind a consent sheet and
+an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
+background as well as on screen.
+
+Around those: eight Rust quota collectors, six Usage parsers that read an appended log from where
+the last parse stopped, local hourly facts a scan recomputes only where records moved,
+effective-dated cost calculation with a separately versioned model catalog that regroups reports
+without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-app updates, and the
+Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
+and file failures are isolated.
 
 Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
 configuration. The checked-in deployment workflow is the only authorized production path.

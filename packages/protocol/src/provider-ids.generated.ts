@@ -30,3 +30,20 @@ export const LOCAL_PROVIDER_IDS = [
 ] as const;
 export type LocalProviderId = (typeof LOCAL_PROVIDER_IDS)[number];
 export const LocalProviderIdSchema = z.enum(LOCAL_PROVIDER_IDS);
+
+// The one place a provider is named for a person to read. Every surface asks the catalog.
+export const PROVIDER_DISPLAY_NAMES: Readonly<Record<LocalProviderId, string>> = {
+  codex: "Codex",
+  claude: "Claude Code",
+  grok: "Grok",
+  openrouter: "OpenRouter",
+  deepseek: "DeepSeek",
+  kimi: "Kimi Code",
+  litellm: "LiteLLM",
+  cursor: "Cursor",
+};
+
+/** A provider this build has never heard of gets a neutral name, never its wire id (ADR 0023). */
+export function providerDisplayName(provider: string): string {
+  return PROVIDER_DISPLAY_NAMES[provider as LocalProviderId] ?? "Unknown provider";
+}

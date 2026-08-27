@@ -9,6 +9,7 @@ struct BrowserApplicationChoice: Identifiable, Equatable, Sendable {
   let title: String
 
   var id: String { browser.rawValue }
+  var family: BrowserSessionFamily { BrowserSessionImporter.family(of: browser) }
 }
 
 struct BrowserSessionCookieCandidate: Equatable, Sendable {
@@ -18,13 +19,49 @@ struct BrowserSessionCookieCandidate: Equatable, Sendable {
   let profileName: String
 }
 
+/// Why macOS handed this app nothing when it opened a browser's cookie store.
+///
+/// Each of these is a different thing for the reader to do, and none of them is fixed by
+/// waiting. The reason travels as a case, never as the underlying error's text: that text
+/// names the store's path, which must not reach the panel, a log, or the service.
+enum BrowserAccessDenialReason: String, Equatable, Sendable {
+  /// Safari keeps its cookies where only an app with Full Disk Access may look.
+  case fullDiskAccess = "full_disk_access"
+  /// A Chrome-family store is sealed with a Keychain item macOS would not release.
+  case keychainRefused = "keychain_refused"
+  /// The store is there, and could not be opened or parsed.
+  case storeUnreadable = "store_unreadable"
+}
+
+/// What one pass over a browser's cookie stores produced.
+///
+/// "This browser is not signed in" and "this Mac was refused the file" both end with no
+/// candidate, and only the second is something the reader can act on. Collapsing them is how a
+/// missing Full Disk Access grant spends two minutes reading as "no session found".
+enum BrowserSessionReadOutcome: Equatable, Sendable {
+  /// The stores opened and held no cookie the catalog names.
+  case noSession
+  case accessDenied(BrowserAccessDenial)
+  case found([BrowserSessionCookieCandidate])
+}
+
+/// One refused read, in the two facts a reader and the Support page both need.
+struct BrowserAccessDenial: Equatable, Sendable {
+  let browserName: String
+  let reason: BrowserAccessDenialReason
+
+  var message: String {
+    BrowserSessionCopy.accessDeniedMessage(browserName: browserName, reason: reason)
+  }
+}
+
 protocol BrowserSessionImporting: Sendable {
-  func candidates(
+  func read(
     spec: BrowserSessionSpec,
     browser: Browser,
     now: Date,
     deadline: Date
-  ) async -> [BrowserSessionCookieCandidate]
+  ) async -> BrowserSessionReadOutcome
 }
 
 struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
@@ -32,14 +69,14 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
   private static let maximumCandidates = 32
   private static let maximumCookieHeaderBytes = 8_192
 
-  func candidates(
+  func read(
     spec: BrowserSessionSpec,
     browser: Browser,
     now: Date,
     deadline: Date
-  ) async -> [BrowserSessionCookieCandidate] {
-    let task = Task<[BrowserSessionCookieCandidate], Never>.detached(priority: .utility) {
-      guard !Task.isCancelled, Date() < deadline else { return [] }
+  ) async -> BrowserSessionReadOutcome {
+    let task = Task<BrowserSessionReadOutcome, Never>.detached(priority: .utility) {
+      guard !Task.isCancelled, Date() < deadline else { return .noSession }
       let client = BrowserCookieClient()
       let stores = Array(client.stores(for: browser).prefix(Self.maximumStores))
       let query = BrowserCookieQuery(
@@ -52,11 +89,17 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
       let allowedNames = Set(spec.cookieNames)
       var seen = Set<String>()
       var candidates: [BrowserSessionCookieCandidate] = []
+      var denial: BrowserAccessDenialReason?
       for store in stores {
-        guard !Task.isCancelled, Date() < deadline else { return [] }
-        guard
-          let records = try? client.records(matching: query, in: store, logger: nil)
-        else { continue }
+        guard !Task.isCancelled, Date() < deadline else { return .noSession }
+        let records: [BrowserCookieRecord]
+        do {
+          records = try client.records(matching: query, in: store, logger: nil)
+        } catch {
+          // Only the case and the browser survive: the error's own text names the store's path.
+          denial = denial ?? Self.denialReason(for: error, browser: browser)
+          continue
+        }
         let grouped = Self.groupedCandidates(
           records: records,
           browserName: browser.displayName,
@@ -72,7 +115,14 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
         }
         if candidates.count == Self.maximumCandidates { break }
       }
-      return candidates
+      if !candidates.isEmpty { return .found(candidates) }
+      // A profile this Mac may read and is simply not signed into answers the question; a
+      // refusal only means the answer is still unknown.
+      if let denial {
+        return .accessDenied(
+          BrowserAccessDenial(browserName: browser.displayName, reason: denial))
+      }
+      return .noSession
     }
     return await withTaskCancellationHandler {
       await task.value
@@ -80,6 +130,39 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
       task.cancel()
     }
   }
+
+  /// Which gatekeeper stands in front of this browser's cookie jar. Read once, here, from the
+  /// browser itself: the consent sheet and the refusal copy are two sentences about the same
+  /// fact, and neither may recover it by looking at a name on screen.
+  static func family(of browser: Browser) -> BrowserSessionFamily {
+    if browser == .safari { return .safari }
+    return geckoBrowsers.contains(browser) ? .gecko : .chromium
+  }
+
+  /// A store that is simply not there is not a refusal: that browser has never been used.
+  ///
+  /// The two refusals macOS actually issues come from different gatekeepers. Safari's jar sits
+  /// behind Full Disk Access; a Chrome-family jar is encrypted with a Keychain item the user
+  /// has to release. Gecko has neither, so an unreadable profile is just that.
+  static func denialReason(for error: any Error, browser: Browser) -> BrowserAccessDenialReason? {
+    guard let cookieError = error as? BrowserCookieError else { return .storeUnreadable }
+    switch cookieError {
+    case .notFound:
+      return nil
+    case .loadFailed:
+      return .storeUnreadable
+    case .accessDenied:
+      return switch family(of: browser) {
+      case .safari: .fullDiskAccess
+      case .gecko: .storeUnreadable
+      case .chromium: .keychainRefused
+      }
+    }
+  }
+
+  private static let geckoBrowsers: Set<Browser> = [
+    .firefox, .firefoxBeta, .firefoxDeveloperEdition, .firefoxNightly, .zen,
+  ]
 
   static func orderedBrowsers(for spec: BrowserSessionSpec) -> [Browser] {
     let preferred = spec.browserPriority.compactMap(Browser.init(rawValue:))
@@ -147,6 +230,16 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     return (record.name, record.value, host.lowercased())
   }
 
+  /// One candidate per sign-in per host.
+  ///
+  /// Most allowlisted names are a whole session on their own, so two of them are two sign-ins
+  /// to choose between and stay separate candidates — Cursor's `wos-session` and
+  /// `WorkosCursorSessionToken` are never combined. Two exceptions travel together because
+  /// neither half is a session by itself: a cookie a browser split into numbered chunks
+  /// (`…session-token.0`, `.1`), and Grok's `sso` / `sso-rw`, which are one session's two
+  /// halves. Context cookies name the account or organization a session is currently acting
+  /// as and ride along with every candidate on their host. Hosts and browser profiles are
+  /// never combined.
   static func groupedCandidates(
     records: [BrowserCookieRecord],
     browserName: String,
@@ -195,7 +288,7 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
         else { continue }
         candidates.append(candidate)
       }
-      for pair in standalones {
+      for pair in standalones.sorted(by: { $0.name < $1.name }) {
         guard
           let candidate = candidate(
             pairs: [pair] + context,
@@ -209,6 +302,7 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     return candidates
   }
 
+  /// The name of the sign-in a cookie is one half of, or `nil` when it is a whole one.
   static func complementaryFamily(for name: String) -> String? {
     if name == "sso" || name == "sso-rw" {
       return "sso"
@@ -222,6 +316,8 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     return String(name[..<separator])
   }
 
+  /// A cookie that says which account or organization a session is acting as. It is not a
+  /// sign-in, so it never stands alone; it rides along with the sessions on its host.
   static func isOptionalContextCookie(_ name: String) -> Bool {
     name == "_account" || name == "lastActiveOrg"
   }

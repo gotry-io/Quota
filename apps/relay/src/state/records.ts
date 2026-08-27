@@ -1,10 +1,8 @@
 import {
-  ACCOUNT_SCOPES,
-  type AccountScope,
-  DEVICE_SCOPES,
-  type DeviceScope,
   type RateLimitInput,
   type RateLimitResult,
+  SESSION_SCOPES,
+  type SessionScope,
 } from "@gotry-io/relay-core";
 
 export interface RateLimitRow {
@@ -12,23 +10,42 @@ export interface RateLimitRow {
   window_expires_at: string;
 }
 
-export function encodeScopes(scopes: readonly string[], allowed: readonly string[]): string {
+/**
+ * What each client is allowed to do, stated once.
+ *
+ * A browser is the only place an Account can be managed, because managing it requires a recent
+ * sign-in and an exact same-origin request that only a browser makes. QuotaBar reads the Account
+ * and writes its own Device. The iOS viewer only reads
+ * ([ADR 0013](../../../../docs/decisions/0013-readonly-ios-account-client.md)).
+ */
+export const WEB_SESSION_SCOPES: readonly SessionScope[] = ["account:read", "account:manage"];
+export const QUOTABAR_SESSION_SCOPES: readonly SessionScope[] = ["account:read", "device:write"];
+export const IOS_SESSION_SCOPES: readonly SessionScope[] = ["account:read"];
+
+export function encodeScopes(scopes: readonly SessionScope[]): string {
   if (
     scopes.length === 0 ||
     new Set(scopes).size !== scopes.length ||
-    scopes.some((scope) => !allowed.includes(scope))
+    scopes.some((scope) => !SESSION_SCOPES.includes(scope))
   ) {
     throw new Error("Session contains invalid scopes");
   }
   return JSON.stringify(scopes);
 }
 
-export function decodeAccountScopes(value: string): AccountScope[] {
-  return decodeScopes(value, ACCOUNT_SCOPES) as AccountScope[];
-}
-
-export function decodeDeviceScopes(value: string): DeviceScope[] {
-  return decodeScopes(value, DEVICE_SCOPES) as DeviceScope[];
+export function decodeSessionScopes(value: string): SessionScope[] {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    new Set(parsed).size !== parsed.length ||
+    parsed.some(
+      (scope) => typeof scope !== "string" || !SESSION_SCOPES.includes(scope as SessionScope),
+    )
+  ) {
+    throw new Error("Persisted session contains invalid scopes");
+  }
+  return parsed as SessionScope[];
 }
 
 export function validateRateLimitInput(input: RateLimitInput): void {
@@ -56,19 +73,6 @@ export function rateLimitResult(row: RateLimitRow, input: RateLimitInput): RateL
           ),
         ),
   };
-}
-
-function decodeScopes(value: string, allowed: readonly string[]): string[] {
-  const parsed: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length === 0 ||
-    new Set(parsed).size !== parsed.length ||
-    parsed.some((scope) => typeof scope !== "string" || !allowed.includes(scope))
-  ) {
-    throw new Error("Persisted session contains invalid scopes");
-  }
-  return parsed as string[];
 }
 
 function parseTimestamp(value: string): number {

@@ -122,11 +122,11 @@ struct OverviewWidgetContentTests {
   }
 
   @Test
-  func agesUseCompactRelativeFormat() {
+  func agesUseTheSharedRelativePhrases() {
     let now = date("2026-08-14T16:00:00Z")
     let fetched = date("2026-08-14T15:45:00Z")
     let resets = date("2026-08-14T18:00:00Z")
-    #expect(OverviewWidgetContent.updatedAge(fetchedAt: fetched, now: now) == "15min")
+    #expect(OverviewWidgetContent.updated(fetchedAt: fetched, now: now) == "Updated 15m ago")
     #expect(OverviewWidgetContent.resetAge(resetsAt: resets, now: now) == "2h")
   }
 

@@ -36,14 +36,16 @@
   @Test
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
+      ("account", "Account", 2),
       ("agents", "Agents", 2),
       ("provider-codex", "Codex", 3),
       ("provider-openrouter", "OpenRouter", 3),
       ("provider-cursor", "Cursor", 3),
-      ("devices", "Devices", 2),
+      ("devices", "Devices", 3),
       ("usage", "Usage", 2),
+      ("menu-bar-style", "Menu Bar Style", 2),
+      ("menu-bar-provider", "Menu Bar Provider", 2),
       ("support", "Support", 2),
-      ("diagnostics", "Diagnostics", 3),
     ]
 
     for expectation in routeExpectations {
@@ -77,11 +79,12 @@
     #expect(model.accountState == .signedIn)
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
-    #expect(model.accountSummary?.usage.cost.status == .partial)
-    #expect(model.accountSummary?.usage.coverage == .partial)
+    #expect(model.accountSummary?.usage.today.cost.status == .partial)
+    #expect(model.accountSummary?.usage.today.partial == true)
     #expect(
-      model.accountSummary?.usage.breakdowns.filter { $0.dimension == .model }.map(\.key)
-        == ["gpt-5", "claude-sonnet-4"]
+      model.accountSummary?.usage.today.agents.flatMap { agent in
+        agent.providers.flatMap { $0.models.map(\.model) }
+      } == ["gpt-5", "claude-sonnet-4"]
     )
     #expect(model.accountReportingProviders() == [.codex, .claude, .grok])
     #expect(
@@ -99,7 +102,17 @@
     }
     #expect(warning == nil)
     #expect(providers.map(\.provider) == [.codex, .claude, .grok])
-    #expect(providers.flatMap(\.accounts).allSatisfy { $0.sourceSummary == "Device" })
+    // Every fixture row is an account device's reading, and the row's spoken label — the only
+    // place the source and its age survive — names that device.
+    #expect(
+      providers.flatMap(\.accounts).map {
+        $0.accessibilityLabel(accountIndex: 0, now: referenceDate)
+      } == [
+        "Account: pe***@example.com. Studio Mac. Updated 1m ago",
+        "Account: Team workspace. Studio Mac. Updated 2m ago",
+        "Account 1. Travel Mac. Updated 3m ago",
+      ]
+    )
 
     let encoded = try QuotaWireCodec.makeEncoder().encode(model.accountSummary)
     let encodedText = String(decoding: encoded, as: UTF8.self).lowercased()
@@ -158,67 +171,87 @@
     )
   }
 
+  /// The bottom bar's left half and the menu-bar item answer the same fixtures: the content
+  /// fixture has a day to report, and a Mac that has read nothing has none.
   @Test @MainActor
-  func repairVisualRouteAndFixturesCompile() throws {
+  func bottomBarTodayAndMenuBarItemReadTheSameFixtures() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
-    let route = try #require(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "repair"]))
-    #expect(route.initialPath.isEmpty)
 
-    let durable = try configuration(fixture: .repairingDurable, referenceDate: referenceDate)
-      .makeModel()
-    #expect(durable.showsFullRepairPage)
-    #expect(durable.repairBlocksQuit)
-    #expect(durable.presentedRepair.severity == .durable)
+    let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()
+    let today = try #require(content.todayUsageSummary(source: .account))
+    #expect(today.text.hasPrefix("Today · "))
+    #expect(today.text.hasSuffix("1.7M tokens"))
 
-    let derived = try configuration(fixture: .repairingDerived, referenceDate: referenceDate)
-      .makeModel()
-    #expect(!derived.showsFullRepairPage)
-    #expect(derived.showsDerivedRepairNotice)
-    #expect(!derived.repairBlocksQuit)
+    // The tightest current window in the fixture is Grok's monthly quota at 73% used, so the
+    // item wears Grok's mark.
+    let item = content.menuBarLabel(style: .iconAndPercent, now: referenceDate)
+    #expect(item.text == "27%")
+    #expect(item.icon == .provider(.grok))
 
-    let stuck = try configuration(fixture: .stuck, referenceDate: referenceDate).makeModel()
-    #expect(stuck.showsFullRepairPage)
-    #expect(stuck.repairHeaderTitle == "Repair stopped")
+    // Watching one provider answers with that provider, tighter or not.
+    #expect(
+      content.menuBarLabel(
+        style: .iconAndPercent,
+        provider: .provider(.claude),
+        now: referenceDate
+      ).text == "53%"
+    )
 
-    let failed = try configuration(fixture: .failed, referenceDate: referenceDate).makeModel()
-    #expect(failed.showsFullRepairPage)
-    #expect(failed.repairHeaderTitle == "Repair failed")
+    // Nothing has been read yet, and a signed-out Mac has no Usage to report.
+    for fixture in [VisualTestFixture.loading, .empty] {
+      let model = try configuration(fixture: fixture, referenceDate: referenceDate).makeModel()
+      #expect(model.todayUsageSummary(source: .account) == nil)
+      #expect(model.menuBarLabel(style: .iconAndPercent, now: referenceDate).text == nil)
+    }
   }
 
   @Test @MainActor
-  func diagnosticsVisualFixturesCoverLoadingContentStaleAndErrorStates() throws {
+  func cacheRebuildingVisualFixtureShowsTheCatchUpNotice() throws {
+    let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+    let rebuilding = try configuration(fixture: .cacheRebuilding, referenceDate: referenceDate)
+      .makeModel()
+    #expect(rebuilding.showsCacheRebuildNotice)
+    // Quota is read from the providers, not from the cache, so it is still on screen.
+    #expect(rebuilding.report != nil)
+
+    let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()
+    #expect(!content.showsCacheRebuildNotice)
+  }
+
+  @Test @MainActor
+  func supportVisualFixturesCoverLoadingContentStaleAndErrorStates() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
 
     let loading = try configuration(fixture: .loading, referenceDate: referenceDate)
-      .makeDiagnosticsModel()
+      .makeSupportModel()
     guard case .loading = loading.pageState else {
-      Issue.record("Expected Diagnostics loading fixture.")
+      Issue.record("Expected Support loading fixture.")
       return
     }
     #expect(!loading.showsHeaderActions)
 
     let content = try configuration(fixture: .content, referenceDate: referenceDate)
-      .makeDiagnosticsModel()
+      .makeSupportModel()
     guard case .report(let contentReport, false, nil) = content.pageState else {
-      Issue.record("Expected Diagnostics content fixture.")
+      Issue.record("Expected Support content fixture.")
       return
     }
     #expect(contentReport.summary.operation == .healthy)
+    #expect(contentReport.isValid)
     #expect(content.showsHeaderActions)
 
     let stale = try configuration(fixture: .cachedRefreshError, referenceDate: referenceDate)
-      .makeDiagnosticsModel()
+      .makeSupportModel()
     guard case .report(_, false, let warning?) = stale.pageState else {
-      Issue.record("Expected Diagnostics stale-content fixture.")
+      Issue.record("Expected Support stale-content fixture.")
       return
     }
-    #expect(warning.contains("Showing the last diagnostics report"))
-    #expect(stale.canCopy)
+    #expect(warning.contains("Showing the last report"))
 
     let unavailable = try configuration(fixture: .unavailable, referenceDate: referenceDate)
-      .makeDiagnosticsModel()
+      .makeSupportModel()
     guard case .error(let message) = unavailable.pageState else {
-      Issue.record("Expected Diagnostics unavailable fixture.")
+      Issue.record("Expected Support unavailable fixture.")
       return
     }
     #expect(message.contains("local service"))

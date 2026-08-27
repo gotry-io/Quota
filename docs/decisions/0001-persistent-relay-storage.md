@@ -6,8 +6,8 @@
 ## Context
 
 QuotaRelay must preserve account identity, device lifecycle controls, token hashes, normalized quota
-observations, sparse hourly Usage facts, coverage, idempotency receipts, pricing metadata, and bounded
-rate-limit counters across Worker restarts. Lifecycle operations must update related rows
+observations, sparse hourly Usage facts, the daily rollup folded from them, pricing metadata, and
+bounded rate-limit counters across Worker restarts. Lifecycle operations must update related rows
 transactionally. Provider credentials and raw agent logs are outside this storage boundary.
 
 The current product has one managed Cloudflare deployment. The former self-hosted SQLite runtime was

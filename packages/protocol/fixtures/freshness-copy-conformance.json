@@ -1,0 +1,115 @@
+{
+  "$comment": "How old a reading is, in the words every Quota client uses. One rule, one voice: the menu bar footer, a provider row, a device row, the website, and the widgets all state age relative to now rather than as a clock time or a calendar date, because an absolute instant makes the reader do the subtraction. `age` is the bare relative phrase; `observation` is the whole line under a reading, which names why a reading is not current instead of only that it is not; `device` is the age half of a device row. `packages/apple-shared` and `apps/web/src/lib/format.ts` both answer this file, so a phrase one of them changes cannot drift from the other.",
+  "phrases": {
+    "no_reset_time": "No reset time reported",
+    "not_checked": "Not checked",
+    "no_readings": "no readings yet"
+  },
+  "age": [
+    {
+      "name": "under a minute reads as an instant, not a ticking second count",
+      "age_seconds": 0,
+      "expected": "just now"
+    },
+    {
+      "name": "the last second before a minute is still an instant",
+      "age_seconds": 59,
+      "expected": "just now"
+    },
+    {
+      "name": "a whole minute is the first age worth a number",
+      "age_seconds": 60,
+      "expected": "1m ago"
+    },
+    {
+      "name": "minutes run to the last one before an hour",
+      "age_seconds": 3599,
+      "expected": "59m ago"
+    },
+    { "name": "an hour", "age_seconds": 3600, "expected": "1h ago" },
+    {
+      "name": "hours run to the last one before a day",
+      "age_seconds": 86399,
+      "expected": "23h ago"
+    },
+    { "name": "a day", "age_seconds": 86400, "expected": "1d ago" },
+    {
+      "name": "days run to the last one before a week",
+      "age_seconds": 604799,
+      "expected": "6d ago"
+    },
+    { "name": "a week", "age_seconds": 604800, "expected": "1w ago" },
+    {
+      "name": "weeks run to the last one before a year",
+      "age_seconds": 31535999,
+      "expected": "52w ago"
+    },
+    { "name": "a year", "age_seconds": 31536000, "expected": "1y ago" },
+    {
+      "name": "a reading stamped in the future is not negative",
+      "age_seconds": -600,
+      "expected": "just now"
+    }
+  ],
+  "observation": [
+    {
+      "name": "a current reading says when it was taken",
+      "status": "available",
+      "age_seconds": 180,
+      "expected": "Updated 3m ago"
+    },
+    {
+      "name": "a current reading hours old still says so plainly",
+      "status": "available",
+      "age_seconds": 7200,
+      "expected": "Updated 2h ago"
+    },
+    {
+      "name": "a reading that aged out says it is not current",
+      "status": "stale",
+      "age_seconds": 172800,
+      "expected": "Not current — last reading 2d ago"
+    },
+    {
+      "name": "a source that lost its sign-in names that instead",
+      "status": "auth_required",
+      "age_seconds": 172800,
+      "expected": "Sign-in needed — last reading 2d ago"
+    },
+    {
+      "name": "a source that could not be reached names that instead",
+      "status": "unavailable",
+      "age_seconds": 3600,
+      "expected": "Unavailable — last reading 1h ago"
+    },
+    {
+      "name": "a source that cannot answer at all names that instead",
+      "status": "unsupported",
+      "age_seconds": 3600,
+      "expected": "Unsupported — last reading 1h ago"
+    },
+    {
+      "name": "a source that failed names that instead",
+      "status": "error",
+      "age_seconds": 60,
+      "expected": "Can’t refresh — last reading 1m ago"
+    }
+  ],
+  "device": [
+    {
+      "name": "a device that reported recently",
+      "age_seconds": 300,
+      "expected": "last reading 5m ago"
+    },
+    {
+      "name": "a device that reported a week ago",
+      "age_seconds": 604800,
+      "expected": "last reading 1w ago"
+    },
+    {
+      "name": "a device the Account has never heard from",
+      "age_seconds": null,
+      "expected": "no readings yet"
+    }
+  ]
+}

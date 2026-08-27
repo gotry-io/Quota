@@ -1,22 +1,18 @@
-import type {
-  AccountDeviceHealth,
-  DeviceHealthUploadRequest,
-  QuotaSnapshot,
-  QuotaSnapshotEnvelope,
-} from "@gotry-io/quota-protocol";
+import type { ProviderId, QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
 
-export const ACCOUNT_SCOPES = ["account:read", "account:manage", "session:revoke:self"] as const;
-export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
+/**
+ * Everything a session can be allowed to do.
+ *
+ * One vocabulary, because there is one session table. `device:write` is the whole write side of a
+ * collection client — quota, Usage, and the device profile and sync control behind them — and it
+ * is meaningful only on a session that names a Device. Ending a session is not a scope: holding
+ * its refresh token is the proof, which is what `POST /oauth/v2/revoke` asks for.
+ */
+export const SESSION_SCOPES = ["account:read", "account:manage", "device:write"] as const;
+export type SessionScope = (typeof SESSION_SCOPES)[number];
 
-export const DEVICE_SCOPES = [
-  "quota:write:self",
-  "usage:write:self",
-  "sync:read:self",
-  "session:revoke:self",
-] as const;
-export type DeviceScope = (typeof DEVICE_SCOPES)[number];
-export type AccountClientKind = "web" | "cli" | "ios";
-export type LoginGrantKind = "browser_pkce" | "device_code";
+/** Which client holds a session. It decides the rules, not what the session is stored in. */
+export type SessionClientKind = "web" | "quotabar" | "ios";
 
 export interface AccountRecord {
   id: string;
@@ -24,8 +20,6 @@ export interface AccountRecord {
   display_label: string | null;
   created_at: string;
   updated_at: string;
-  public_profile_enabled?: number | null;
-  public_profile_slug?: string | null;
 }
 
 export interface DeviceRecord {
@@ -34,8 +28,6 @@ export interface DeviceRecord {
   display_name: string | null;
   platform: string | null;
   generation: number;
-  last_sequence: number;
-  last_usage_sequence: number;
   usage_sync_revision: number;
   created_at: string;
   last_login_at: string;
@@ -45,66 +37,58 @@ export interface DeviceRecord {
   deleted_before: string | null;
 }
 
-export interface StoredDeviceHealth extends AccountDeviceHealth {
-  device_id: string;
-  device_generation: number;
-}
-
-export type DeviceHealthWriteOutcome = "updated" | "ignored_stale" | "unauthorized";
-
-export interface AccountPrincipal {
-  kind: "account";
+/**
+ * Whoever is making this request, as one session row states them.
+ *
+ * A browser cookie, QuotaBar's Bearer token, and the iOS viewer's Bearer token all resolve to
+ * this. `device_id` and `device_generation` are set together or not at all: a session either
+ * names the Device it speaks for, at the generation that Device had when the session opened, or
+ * it names none.
+ */
+export interface SessionPrincipal {
   session_id: string;
   family_id: string;
   account_id: string;
   device_id: string | null;
-  client_kind: AccountClientKind;
-  scopes: AccountScope[];
+  device_generation: number | null;
+  client_kind: SessionClientKind;
+  scopes: SessionScope[];
   authenticated_at: string;
 }
 
-export interface DevicePrincipal {
-  kind: "device";
-  session_id: string;
-  family_id: string;
-  account_id: string;
+/** A principal that carries `device:write` and the Device it carries it for. */
+export interface DeviceWriterPrincipal extends SessionPrincipal {
   device_id: string;
-  generation: number;
-  scopes: DeviceScope[];
+  device_generation: number;
 }
 
+/**
+ * One browser sign-in in flight, on its way to an authorization code.
+ *
+ * Authorization Code with PKCE over a loopback callback is the only grant Relay issues, so a
+ * grant is one shape: the login token that identifies it while the browser is at GitHub, the
+ * challenge the exchange must answer, and where the code goes.
+ */
 export interface CreateLoginGrantInput {
   id: string;
-  grant_kind: LoginGrantKind;
   client_id: string;
-  login_token_hash: string | null;
-  device_code_hash: string | null;
-  user_code_hash: string | null;
-  installation_id_hash: string | null;
-  device_display_name: string | null;
-  platform: string | null;
-  pkce_challenge: string | null;
-  redirect_uri: string | null;
-  client_state: string | null;
-  poll_interval_seconds: number | null;
+  login_token_hash: string;
+  pkce_challenge: string;
+  redirect_uri: string;
+  client_state: string;
   expires_at: string;
   created_at: string;
 }
 
 export interface LoginGrantRecord {
   id: string;
-  grant_kind: LoginGrantKind;
   client_id: string;
   account_id: string | null;
-  installation_id_hash: string | null;
-  device_display_name: string | null;
-  platform: string | null;
   pkce_challenge: string | null;
   redirect_uri: string | null;
   client_state: string | null;
   expires_at: string;
-  approved_at: string | null;
-  denied_at: string | null;
+  completed_at: string | null;
   consumed_at: string | null;
 }
 
@@ -132,28 +116,6 @@ export interface CompleteIdentityLoginResult {
   account: AccountRecord | null;
 }
 
-export interface AuthorizeDeviceGrantInput {
-  user_code_hash: string;
-  account_id: string;
-  decision: "approve" | "deny";
-  decided_at: string;
-}
-
-export type DeviceGrantDecisionOutcome =
-  | "approved"
-  | "denied"
-  | "not_found"
-  | "expired"
-  | "already_decided"
-  | "consumed";
-
-export type DeviceGrantPollResult =
-  | { outcome: "ready"; grant: LoginGrantRecord; poll_interval_seconds: number }
-  | {
-      outcome: "pending" | "slow_down" | "denied" | "expired" | "consumed" | "not_found";
-      poll_interval_seconds: number;
-    };
-
 export interface ConsumeLoginGrantInput {
   grant_id: string;
   credential_hash: string;
@@ -163,8 +125,7 @@ export interface ConsumeLoginGrantInput {
   display_name: string;
   platform: string;
   family_id: string;
-  account_session: SessionCredentialHashes;
-  device_session: SessionCredentialHashes;
+  session: SessionCredentialHashes;
   consumed_at: string;
 }
 
@@ -172,22 +133,38 @@ export type LoginGrantConsumeResult =
   | {
       outcome: "issued";
       account_id: string;
+      display_label: string | null;
       device: DeviceRecord;
     }
-  | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
+  | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
+
+/**
+ * One browser sign-in, as Relay stores it.
+ *
+ * The Account is found or created in the same batch: a first GitHub sign-in and a return visit
+ * differ only in whether the row was already there.
+ */
+export interface CreateWebSessionInput {
+  session_id: string;
+  account_id: string;
+  display_label: string;
+  access_token_hash: string;
+  authenticated_at: string;
+  expires_at: string;
+}
 
 export interface ConsumeAccountLoginGrantInput {
   grant_id: string;
   credential_hash: string;
   completion_nonce_hash: string;
   family_id: string;
-  account_session: SessionCredentialHashes;
+  session: SessionCredentialHashes;
   consumed_at: string;
 }
 
 export type AccountLoginGrantConsumeResult =
-  | { outcome: "issued"; account_id: string }
-  | { outcome: "not_found" | "expired" | "consumed" | "not_approved" };
+  | { outcome: "issued"; account_id: string; display_label: string | null }
+  | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
 
 export interface RefreshSessionInput {
   refresh_token_hash: string;
@@ -198,11 +175,8 @@ export interface RefreshSessionInput {
   refreshed_at: string;
 }
 
-export type SessionTokenAudience = "account" | "device";
-
 export interface RevokeRefreshSessionInput {
   refresh_token_hash: string;
-  token_audience: SessionTokenAudience;
   revoked_at: string;
 }
 
@@ -219,6 +193,32 @@ export interface RateLimitResult {
   retry_after: number;
 }
 
+/**
+ * Everything an Account read depends on, collapsed to numbers a reader can compare.
+ *
+ * Account reads are polled on a timer and are almost always unchanged, so they answer a
+ * conditional request from this stamp instead of aggregating Usage again. Each field either
+ * counts rows or takes the newest instant of a table the response reads, so any write that
+ * could change a byte of the response moves at least one of them. `usage_revision` sums the
+ * per-device counters rather than taking their maximum: each accepted upload increments one
+ * device, and a maximum would not move when the device that uploaded is not the leader.
+ * `active_devices` is here because the device status the response reports is derived from the
+ * read instant, not from a stored column, so it changes with no write at all.
+ */
+export interface AccountVersionStamp {
+  /** When the Account row last changed. The response carries its display label. */
+  account_updated_at: string | null;
+  devices: number;
+  active_devices: number;
+  usage_revision: number;
+  device_generation: number;
+  device_last_seen_at: string | null;
+  device_last_login_at: string | null;
+  device_signed_out_at: string | null;
+  snapshots: number;
+  snapshot_updated_at: string | null;
+}
+
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
@@ -230,6 +230,19 @@ export interface AccountMaintenanceInput {
    * this; this is when Relay stops keeping it at all.
    */
   snapshot_observed_before: string;
+  /**
+   * The `bucket_start_utc` before which stored hours are deleted.
+   *
+   * Hours exist to answer the UTC day a local period's edge cuts, which is never more than a
+   * day or two back. They are kept far longer than that so a device returning from a long
+   * absence can still be told its old hours are already stored, and no longer.
+   */
+  usage_hour_before: string;
+  /**
+   * The `utc_date` before which stored days are deleted. The daily rollup is what a long read
+   * folds, so it outlives both the hours behind it and the widest window `all` covers.
+   */
+  usage_day_before: string;
   limit: number;
 }
 
@@ -237,19 +250,23 @@ export type QuotaSnapshotSubmission = QuotaSnapshotEnvelope;
 
 export interface StoredQuotaSnapshot {
   device_id: string;
-  sequence: number;
-  captured_at: string;
   snapshot: QuotaSnapshot;
-  updated_at: string;
 }
 
-export type SnapshotWriteOutcome = "accepted" | "duplicate" | "sequence_conflict" | "stale_device";
+/**
+ * What one snapshot upload did to the providers it named.
+ *
+ * A provider is accepted when at least one of its readings was newer than the one already stored.
+ * Either way the envelope states the fingerprints this device now sees for that provider, so the
+ * ones it no longer names are dropped.
+ */
+export type SnapshotWriteResult =
+  | { outcome: "stale_device" }
+  | { outcome: "written"; accepted: ProviderId[]; ignored: ProviderId[] };
 
 export interface DeviceSyncControl {
   device_id: string;
   generation: number;
-  next_snapshot_sequence: number;
-  next_usage_sequence: number;
   usage_deleted_before: string | null;
   usage_sync_revision: number;
 }
@@ -270,39 +287,33 @@ export interface AccountState {
     hash: string,
     checkedAt: string,
   ): Promise<LoginGrantRecord | null>;
-  authorizeDeviceGrant(input: AuthorizeDeviceGrantInput): Promise<DeviceGrantDecisionOutcome>;
-  pollDeviceGrant(hash: string, checkedAt: string): Promise<DeviceGrantPollResult>;
   consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult>;
   consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
-  authorizeAccountSession(
+  createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
+  /**
+   * Resolve a Bearer token to its session.
+   *
+   * `marksDeviceSeen` is what a device route passes: a Device is "last seen" when it uses the
+   * session that speaks for it. An Account read must not move that instant, because the
+   * conditional answer to that read is derived from it — a read that changed its own validator
+   * could never be answered 304.
+   */
+  authorizeSession(
     accessTokenHash: string,
     checkedAt: string,
-  ): Promise<AccountPrincipal | null>;
-  authorizeDeviceSession(
-    accessTokenHash: string,
-    checkedAt: string,
-  ): Promise<DevicePrincipal | null>;
-  refreshAccountSession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
-  refreshAccountOnlySession(input: RefreshSessionInput): Promise<AccountPrincipal | null>;
-  refreshDeviceSession(input: RefreshSessionInput): Promise<DevicePrincipal | null>;
+    marksDeviceSeen: boolean,
+  ): Promise<SessionPrincipal | null>;
+  refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null>;
   revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void>;
   revokePrincipalFamily(
-    principal: AccountPrincipal | DevicePrincipal,
+    principal: SessionPrincipal,
     revokedAt: string,
     signOutDevice: boolean,
   ): Promise<void>;
   getAccount(accountId: string): Promise<AccountRecord | null>;
-  getAccountByPublicSlug(slug: string): Promise<AccountRecord | null>;
-  setPublicProfile(
-    accountId: string,
-    enabled: boolean,
-    slug: string | null,
-    updatedAt: string,
-  ): Promise<"ok" | "conflict">;
   listAccountDevices(accountId: string): Promise<DeviceRecord[]>;
-  accountOwnsVisibleDevice(accountId: string, deviceId: string): Promise<boolean>;
   getDeviceSyncControl(deviceId: string, generation: number): Promise<DeviceSyncControl | null>;
   updateDeviceProfile(
     deviceId: string,
@@ -311,23 +322,18 @@ export interface AccountState {
     platform: string,
     updatedAt: string,
   ): Promise<boolean>;
-  recordDeviceHealth(
-    principal: DevicePrincipal,
-    health: DeviceHealthUploadRequest,
-    receivedAt: string,
-    freshUntil: string,
-  ): Promise<DeviceHealthWriteOutcome>;
-  listDeviceHealth(accountId: string): Promise<StoredDeviceHealth[]>;
+  accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,
     deletedAt: string,
   ): Promise<DeleteDeviceResult | null>;
+  deleteAccountData(accountId: string): Promise<boolean>;
   recordSnapshot(
-    principal: DevicePrincipal,
+    principal: DeviceWriterPrincipal,
     envelope: QuotaSnapshotSubmission,
     receivedAt: string,
-  ): Promise<SnapshotWriteOutcome>;
+  ): Promise<SnapshotWriteResult>;
   listLatestSnapshots(accountId: string): Promise<StoredQuotaSnapshot[]>;
   consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult>;
 }

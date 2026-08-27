@@ -11,7 +11,11 @@ use super::common::{
 
 mod app;
 
-pub const SOURCE: &str = "cursor_dashboard_api";
+/// The dashboard reached with a stored browser session, and the same dashboard reached with
+/// the session a signed-in Cursor.app holds. Which rung failed is what a reader is told to go
+/// and fix, so a failure names the credential it was spending, not just the endpoint.
+pub const WEB_SOURCE: &str = "cursor_dashboard_api";
+pub const APP_SOURCE: &str = app::SOURCE;
 const ORIGIN: &str = "https://cursor.com";
 /// Optional dashboard calls must not stretch a refresh that already has its
 /// required usage summary.
@@ -25,6 +29,8 @@ struct Identity {
     subject: Option<String>,
 }
 
+/// Cursor has no CLI to sign in with and no API key, so a signed-in Cursor.app is the only
+/// credential this Mac can find on its own, and a stored browser session is the rung after it.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     discover_official_or_browser(
         ProviderId::Cursor,
@@ -40,16 +46,17 @@ pub fn validate_browser_session(
     cookie_header: &str,
     context: &CollectionContext,
 ) -> Result<ValidatedBrowserSession, ProviderError> {
-    validate_at(cookie_header, context, ORIGIN).map(|identity| identity.session)
+    validate_at(cookie_header, context, ORIGIN, WEB_SOURCE).map(|identity| identity.session)
 }
 
 fn validate_at(
     cookie_header: &str,
     context: &CollectionContext,
     origin: &str,
+    source: &'static str,
 ) -> Result<Identity, ProviderError> {
     if context.cancelled() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
+        return Err(ProviderError::new(ErrorCategory::Unavailable, source));
     }
     let client = HttpClient::with_timeout(VALIDATION_TIMEOUT)?;
     let user_agent = context.user_agent();
@@ -59,11 +66,15 @@ fn validate_at(
         ("User-Agent", user_agent.as_str()),
     ];
     let (_, identity) =
-        client.get_json_session(&format!("{origin}/api/auth/me"), &headers, SOURCE)?;
-    identity_from_response(&identity, cookie_header)
+        client.get_json_session(&format!("{origin}/api/auth/me"), &headers, source)?;
+    identity_from_response(&identity, cookie_header, source)
 }
 
-fn identity_from_response(value: &Value, cookie_header: &str) -> Result<Identity, ProviderError> {
+fn identity_from_response(
+    value: &Value,
+    cookie_header: &str,
+    source: &'static str,
+) -> Result<Identity, ProviderError> {
     let sub = bounded_identity(value.get("sub"), 256);
     let email = bounded_identity(value.get("email"), 254).filter(|value| valid_email(value));
     let normalized_email = email.as_ref().map(|value| value.to_ascii_lowercase());
@@ -71,7 +82,7 @@ fn identity_from_response(value: &Value, cookie_header: &str) -> Result<Identity
         .as_deref()
         .map(|value| ("sub", value))
         .or_else(|| normalized_email.as_deref().map(|value| ("email", value)))
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, SOURCE))?;
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, source))?;
     let (account_fingerprint, _) = account_identity("cursor", namespace, Some(owner));
     let display_email = email.as_deref().and_then(|value| {
         let (local, domain) = value.split_once('@')?;
@@ -110,6 +121,9 @@ fn valid_email(value: &str) -> bool {
         && !domain.contains('@')
 }
 
+/// Reads the live Cursor.app session, and falls back to the stored browser session only when
+/// the app has no usable sign-in to offer. Any other failure is this refresh's answer: a
+/// rejected reading is not a reason to spend a second request on the same account.
 pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -118,17 +132,17 @@ pub fn collect(
         session,
         context,
         ProviderId::Cursor,
-        SOURCE,
+        APP_SOURCE,
         || {
             let cookie_header = app::cookie_header(context)
-                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-            collect_with_cookie(&cookie_header, context)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, APP_SOURCE))?;
+            collect_with_cookie(&cookie_header, context, APP_SOURCE)
         },
         || {
             let cookie_header = context
                 .browser_session(ProviderId::Cursor)
-                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-            collect_with_cookie(cookie_header, context)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+            collect_with_cookie(cookie_header, context, WEB_SOURCE)
         },
     )
 }
@@ -136,8 +150,9 @@ pub fn collect(
 fn collect_with_cookie(
     cookie_header: &str,
     context: &CollectionContext,
+    source: &'static str,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    let identity = validate_at(cookie_header, context, ORIGIN)?;
+    let identity = validate_at(cookie_header, context, ORIGIN, source)?;
     let client = HttpClient::new()?;
     let user_agent = context.user_agent();
     let headers = [
@@ -146,14 +161,15 @@ fn collect_with_cookie(
         ("User-Agent", user_agent.as_str()),
     ];
     let (_, summary) =
-        client.get_json_session(&format!("{ORIGIN}/api/usage-summary"), &headers, SOURCE)?;
+        client.get_json_session(&format!("{ORIGIN}/api/usage-summary"), &headers, source)?;
     let extras = optional_usage(
         &summary,
         cookie_header,
         identity.subject.as_deref(),
         context,
+        source,
     );
-    let windows = quota_windows(&summary, &extras)?;
+    let windows = quota_windows(&summary, &extras, source)?;
     Ok(QuotaSnapshot {
         provider: ProviderId::Cursor,
         account: QuotaAccount {
@@ -189,6 +205,7 @@ fn optional_usage(
     cookie_header: &str,
     subject: Option<&str>,
     context: &CollectionContext,
+    source: &'static str,
 ) -> OptionalUsage {
     if context.cancelled() {
         return OptionalUsage::None;
@@ -209,7 +226,7 @@ fn optional_usage(
                 &format!("{ORIGIN}/api/dashboard/get-sand-usage-status"),
                 &headers,
                 &Value::Object(Default::default()),
-                SOURCE,
+                source,
             )
             .ok()
             .map(|(_, value)| OptionalUsage::GrokBot(value))
@@ -219,7 +236,7 @@ fn optional_usage(
         .and_then(|subject| {
             let url = format!("{ORIGIN}/api/usage?user={}", url_encode(subject));
             client
-                .get_json_session(&url, &headers, SOURCE)
+                .get_json_session(&url, &headers, source)
                 .ok()
                 .map(|(_, value)| OptionalUsage::Requests(value))
         })
@@ -241,6 +258,7 @@ fn has_token_based_plan(summary: &Value) -> bool {
 fn quota_windows(
     summary: &Value,
     extras: &OptionalUsage,
+    source: &'static str,
 ) -> Result<Vec<QuotaWindow>, ProviderError> {
     let reset = parse_date(summary.get("billingCycleEnd")).map(unix_seconds_to_iso);
     let individual = obj_get(summary, "individualUsage");
@@ -264,12 +282,11 @@ fn quota_windows(
             windows.push(window);
         }
     }
-    if let Some(overall) = individual.and_then(|value| obj_get(value, "overall")) {
-        if windows.is_empty()
-            && let Some(window) = money_window("individual", "Individual", overall, reset.clone())
-        {
-            windows.push(window);
-        }
+    if windows.is_empty()
+        && let Some(overall) = individual.and_then(|value| obj_get(value, "overall"))
+        && let Some(window) = money_window("individual", "Individual", overall, reset.clone())
+    {
+        windows.push(window);
     }
     if let Some(on_demand) = individual.and_then(|value| obj_get(value, "onDemand"))
         && let Some(window) = money_window("on_demand", "On-demand", on_demand, reset.clone())
@@ -288,7 +305,7 @@ fn quota_windows(
         windows.push(window);
     }
     if windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
+        return Err(ProviderError::new(ErrorCategory::Error, source));
     }
     Ok(windows)
 }
@@ -411,6 +428,7 @@ fn money_window(
 
 #[cfg(test)]
 mod tests {
+    use super::super::common::BROWSER_SESSION_SOURCE;
     use super::*;
 
     #[test]
@@ -428,9 +446,61 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_session_is_discovered_only_without_a_usable_app_session() {
+        let mut context = CollectionContext {
+            home_directory: std::path::PathBuf::from("/tmp/quota-cursor-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        };
+        assert!(discover(&context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Cursor, "wos-session=stored".to_owned());
+        let sessions = discover(&context);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].credential_source, BROWSER_SESSION_SOURCE);
+    }
+
+    /// A cancelled refresh must not start a request for either rung, and whichever rung it was
+    /// answers under its own name: an app session a reader has to renew in Cursor.app is not a
+    /// browser session they re-add here.
+    #[test]
+    fn a_cancelled_refresh_reads_neither_rung_and_each_answers_for_itself() {
+        let mut context = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..CollectionContext::default()
+        };
+        context
+            .browser_sessions
+            .insert(ProviderId::Cursor, "wos-session=stored".to_owned());
+        let session = |credential_source: &str| ProviderSession {
+            provider: ProviderId::Cursor,
+            credential_source: credential_source.to_owned(),
+        };
+
+        let app = collect(&session(app::SOURCE), &context).expect_err("cancelled");
+        assert_eq!(app.source_id, APP_SOURCE);
+
+        let web = collect(&session(BROWSER_SESSION_SOURCE), &context).expect_err("cancelled");
+        assert_eq!(web.category, ErrorCategory::Unavailable);
+        assert_eq!(web.source_id, WEB_SOURCE);
+    }
+
+    #[test]
     fn identity_is_stable_and_redacted() {
         let value = serde_json::json!({"sub":"user-secret", "email":"Ada@Example.com"});
-        let identity = identity_from_response(&value, "wos-session=secret").expect("identity");
+        let identity =
+            identity_from_response(&value, "wos-session=secret", WEB_SOURCE).expect("identity");
         assert_eq!(identity.subject.as_deref(), Some("user-secret"));
         let session = identity.session;
         assert_eq!(session.account_label.as_deref(), Some("Ad***@example.com"));
@@ -457,6 +527,7 @@ mod tests {
                 }
             }),
             &OptionalUsage::default(),
+            WEB_SOURCE,
         )
         .expect("windows");
         assert_eq!(windows.len(), 3);
@@ -476,7 +547,8 @@ mod tests {
         assert!(
             quota_windows(
                 &serde_json::json!({"individualUsage":{"plan":{"used":1}}}),
-                &OptionalUsage::default()
+                &OptionalUsage::default(),
+                WEB_SOURCE
             )
             .is_err()
         );
@@ -501,7 +573,7 @@ mod tests {
             "hasAvailableUsage": true,
             "hasNonZeroIncludedLimit": true
         }));
-        let windows = quota_windows(&token_summary(), &extras).expect("windows");
+        let windows = quota_windows(&token_summary(), &extras, WEB_SOURCE).expect("windows");
         assert_eq!(
             windows
                 .iter()
@@ -519,7 +591,7 @@ mod tests {
             serde_json::json!({"usagePercent": 10, "hasNonZeroIncludedLimit": false}),
         );
         assert!(
-            quota_windows(&token_summary(), &no_allowance)
+            quota_windows(&token_summary(), &no_allowance, WEB_SOURCE)
                 .expect("windows")
                 .iter()
                 .all(|window| window.id != "grok_bot")
@@ -532,7 +604,7 @@ mod tests {
             "gpt-4": {"numRequests": 120, "numRequestsTotal": 130, "maxRequestUsage": 500},
             "startOfMonth": "2026-08-01T00:00:00Z"
         }));
-        let windows = quota_windows(&token_summary(), &extras).expect("windows");
+        let windows = quota_windows(&token_summary(), &extras, WEB_SOURCE).expect("windows");
         assert_eq!(
             windows
                 .iter()
@@ -553,7 +625,7 @@ mod tests {
             serde_json::json!({"gpt-4": {"numRequests": 3, "maxRequestUsage": null}}),
         );
         assert_eq!(
-            quota_windows(&token_summary(), &unlimited).expect("windows")[0].id,
+            quota_windows(&token_summary(), &unlimited, WEB_SOURCE).expect("windows")[0].id,
             "cursor_models"
         );
     }
@@ -590,35 +662,22 @@ mod tests {
             serde_json::json!({"email":"not-an-email"}),
             serde_json::json!({"email":"a@localhost"}),
         ] {
-            assert!(identity_from_response(&value, "wos-session=secret").is_err());
+            assert!(identity_from_response(&value, "wos-session=secret", WEB_SOURCE).is_err());
         }
     }
 
     #[test]
     fn validation_maps_provider_auth_status_without_leaking_body() {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        for status in ["401 Unauthorized", "403 Forbidden"] {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-            let address = listener.local_addr().expect("address");
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().expect("accept");
-                let mut request = [0_u8; 2048];
-                let _ = stream.read(&mut request);
-                let body = b"provider-secret-response";
-                write!(
-                    stream,
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .expect("response headers");
-                stream.write_all(body).expect("response body");
-            });
+        for status in [401, 403] {
+            let (address, server) = crate::providers::common::serve_responses(vec![(
+                status,
+                b"provider-secret-response".to_vec(),
+            )]);
             let error = validate_at(
                 "wos-session=cookie-secret",
                 &CollectionContext::default(),
                 &format!("http://{address}"),
+                WEB_SOURCE,
             )
             .expect_err("auth failure");
             assert_eq!(error.category, ErrorCategory::AuthRequired);

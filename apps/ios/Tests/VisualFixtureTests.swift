@@ -57,10 +57,10 @@ struct VisualFixtureParserTests {
       #expect(providers == [.codex, .claude, .grok])
       #expect(model.providerCards.count == 3)
 
-      let usage = model.summary?.usage
+      let usage = model.summary?.usage.today
       #expect(usage?.totals.inputTokens == 1_420_500)
       #expect(usage?.totals.outputTokens == 284_120)
-      #expect(usage?.totals.requests == 164)
+      #expect(usage?.totals.messages == 164)
       #expect(usage?.cost.status == .complete)
       #expect(usage?.cost.amountMicrousd == "1489234")
 
@@ -77,18 +77,18 @@ struct VisualFixtureParserTests {
       #expect(model.fetchedAt == now.addingTimeInterval(-90))
       #expect(model.summary?.account.createdAt == now.addingTimeInterval(-30 * 86_400))
 
-      let codex = model.summary?.quota.first { $0.snapshot.provider == .codex }
+      let codex = model.summary?.subscriptions.first { $0.snapshot.provider == .codex }
       #expect(codex?.snapshot.observedAt == now.addingTimeInterval(-90))
       let fiveHour = codex?.snapshot.windows.first { $0.id == "five_hour" }
       #expect(fiveHour?.resetsAt == now.addingTimeInterval(2_700))
       let weekly = codex?.snapshot.windows.first { $0.id == "weekly" }
       #expect(weekly?.resetsAt == now.addingTimeInterval(4 * 86_400))
 
-      let claude = model.summary?.quota.first { $0.snapshot.provider == .claude }
+      let claude = model.summary?.subscriptions.first { $0.snapshot.provider == .claude }
       let session = claude?.snapshot.windows.first { $0.id == "session" }
       #expect(session?.resetsAt == now.addingTimeInterval(7_200))
 
-      let grok = model.summary?.quota.first { $0.snapshot.provider == .grok }
+      let grok = model.summary?.subscriptions.first { $0.snapshot.provider == .grok }
       let monthly = grok?.snapshot.windows.first { $0.id == "monthly" }
       #expect(monthly?.resetsAt == now.addingTimeInterval(12 * 86_400))
 
@@ -117,9 +117,9 @@ struct VisualFixtureParserTests {
       #expect(model.skipsRestore)
       #expect(model.phase == .signedIn)
       #expect(model.providerCards.isEmpty)
-      #expect(model.summary?.quota.isEmpty == true)
-      #expect(model.summary?.usage.totals.requests == 0)
-      #expect(model.summary?.usage.totals.inputTokens == 0)
+      #expect(model.summary?.subscriptions.isEmpty == true)
+      #expect(model.summary?.usage.today.totals.messages == 0)
+      #expect(model.summary?.usage.today.totals.inputTokens == 0)
       #expect(model.banner == nil)
     }
   }

@@ -1,13 +1,7 @@
-//! Durable SQLite schema migrations.
+//! Local SQLite schemas.
+//!
+//! Two files, two schemas, both starting at v1: `identity.sqlite` holds what this device cannot
+//! regenerate, `cache.sqlite` holds what it can.
 
-mod schema;
-
-pub fn apply(conn: &mut rusqlite::Connection) -> Result<(), crate::state::StateError> {
-    schema::apply(conn)
-}
-
-pub(crate) fn recreate_usage_index_tables(
-    tx: &rusqlite::Transaction<'_>,
-) -> Result<(), crate::state::StateError> {
-    schema::recreate_usage_index_tables(tx)
-}
+pub mod cache;
+pub mod identity;

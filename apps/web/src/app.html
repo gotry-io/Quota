@@ -8,7 +8,7 @@
       content="Quota keeps remaining coding-agent quota and privacy-preserving Usage together. Install QuotaBar on macOS from a .dmg or Homebrew."
     />
     <meta name="theme-color" content="#f2f8f5" />
-    <script>
+    <script nonce="%sveltekit.nonce%">
       (() => {
         const stored = localStorage.getItem("quota-theme");
         const explicitTheme = stored === "light" || stored === "dark" ? stored : null;
@@ -24,7 +24,7 @@
     <meta property="og:title" content="Quota — Know what you have left" />
     <meta
       property="og:description"
-      content="See remaining quota in the menu bar and optionally publish /u/your-github-username."
+      content="See remaining quota for Codex, Claude, Grok, Cursor, and API keys in the menu bar."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://quota.gotry.io" />

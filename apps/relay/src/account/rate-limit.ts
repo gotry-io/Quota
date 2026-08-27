@@ -1,8 +1,6 @@
 import type { AccountState } from "@gotry-io/relay-core";
 import type { SecretHasher } from "../security.ts";
 
-export const publicProfileRateLimit = { limit: 120, windowSeconds: 10 * 60 } as const;
-
 export type NamedRateLimitOutcome =
   | { allowed: true }
   | { allowed: false; retryAfterSeconds: number };

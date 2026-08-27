@@ -1,5 +1,4 @@
 const textEncoder = new TextEncoder();
-const userCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 export class SecretHasher {
   constructor(private readonly key: string) {
@@ -39,21 +38,8 @@ export function randomOpaqueSecret(prefix = ""): string {
   return `${prefix}${bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))}`;
 }
 
-export function randomUserCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  const characters = Array.from(
-    bytes,
-    (byte) => userCodeAlphabet[byte % userCodeAlphabet.length] ?? "",
-  );
-  return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
-}
-
 export function bearerToken(authorization: string | undefined): string | undefined {
   return authorization ? /^Bearer ([^\s]+)$/.exec(authorization)?.[1] : undefined;
-}
-
-export function normalizeUserCode(value: string): string {
-  return value.trim().toUpperCase();
 }
 
 export function constantTimeEqual(left: string, right: string): boolean {

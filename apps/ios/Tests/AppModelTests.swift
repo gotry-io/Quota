@@ -8,73 +8,72 @@ import Testing
 
 @MainActor
 struct AppModelTests {
+  /// The verdict itself is `DeviceActivityTests` in `packages/apple-shared`; what the card owes
+  /// it is both witnessed instants, so a device quiet for a day but reporting minutes ago is
+  /// still active.
   @Test
-  func remoteDeviceHealthPresentationUsesAllAxesAndServerFreshness() {
+  func deviceActivityUsesTheNewerOfLastSeenAndLastReading() {
     let now = Fixtures.date("2026-08-15T08:10:00Z")
-    func device(
-      operation: AccountDeviceHealthOperation = .healthy,
-      data: AccountDeviceHealthDataState = .current,
-      attention: AccountDeviceHealthAttention = .none,
-      freshUntil: Date? = Fixtures.date("2026-08-15T08:20:00Z"),
-      status: AccountDeviceStatus = .active
-    ) -> AccountDevice {
+    func device(lastSeenAt: Date?, lastObservedAt: Date? = nil) -> AccountDevice {
       AccountDevice(
-        deviceID: "device_01",
+        id: "device_01",
         displayName: "Studio Mac",
         platform: .macos,
-        deviceGeneration: 1,
-        status: status,
-        createdAt: now.addingTimeInterval(-86_400),
-        lastLoginAt: now.addingTimeInterval(-600),
-        lastSeenAt: now.addingTimeInterval(-300),
-        signedOutAt: status == .signedOut ? now.addingTimeInterval(-60) : nil,
-        health: freshUntil.map { freshUntil in
-          AccountDeviceHealth(
-            clientProduct: .quotaBar,
-            clientVersion: "0.0.16",
-            platform: .macos,
-            observedAt: now.addingTimeInterval(-300),
-            refreshRevision: 9,
-            lastCompletedRefreshAt: now.addingTimeInterval(-300),
-            lastSuccessfulAccountSyncAt: nil,
-            summary: AccountDeviceHealthSummary(
-              operation: operation,
-              data: data,
-              attention: attention
-            ),
-            topCode: nil,
-            consecutiveFailures: 0,
-            usageUploadEnabled: true,
-            receivedAt: now.addingTimeInterval(-295),
-            freshUntil: freshUntil
-          )
-        }
+        lastSeenAt: lastSeenAt,
+        lastObservedAt: lastObservedAt
       )
     }
 
-    #expect(RemoteDeviceHealthStatus.status(for: device(), now: now) == .healthy)
-    #expect(RemoteDeviceHealthStatus.status(for: device(data: .partial), now: now) == .needsAttention)
+    #expect(device(lastSeenAt: now.addingTimeInterval(-300)).activity(now: now).status == .active)
     #expect(
-      RemoteDeviceHealthStatus.status(for: device(attention: .required), now: now)
-        == .needsAttention)
-    #expect(
-      RemoteDeviceHealthStatus.status(
-        for: device(freshUntil: now.addingTimeInterval(-1)), now: now) == .notRecentlyActive)
-    #expect(RemoteDeviceHealthStatus.status(for: device(freshUntil: nil), now: now) == .unknown)
-    #expect(
-      RemoteDeviceHealthStatus.status(
-        for: device(freshUntil: nil, status: .signedOut), now: now) == .signedOut)
+      device(
+        lastSeenAt: now.addingTimeInterval(-86_400),
+        lastObservedAt: now.addingTimeInterval(-120)
+      ).activity(now: now).status == .active)
+    #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
   }
 
   @Test
   func restoreSignedOutWithoutSession() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
-    let model = makeModel(session: nil, cache: nil, exchanges: [], widgetPublisher: publisher)
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
     await model.restore()
     #expect(model.phase == .signedOut)
     #expect(model.summary == nil)
     #expect(publisher.clearCount == 1)
     #expect(publisher.publishCount == 0)
+    // Nothing to read, so nothing to be woken for.
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
+  }
+
+  /// A deliberate logout, or a first launch, is not an expiry. Connect Account says only what it
+  /// always says, and the background window nobody can use any more is withdrawn.
+  @Test
+  func refreshWithoutASessionIsPlainSignedOutAndWithdrawsTheBackgroundWindow() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh() == false)
+    #expect(model.phase == .signedOut)
+    #expect(model.expiredMessage == nil)
+    #expect(model.banner == nil)
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
   }
 
   @Test
@@ -205,9 +204,12 @@ struct AppModelTests {
     #expect(publisher.clearCount == 1)
   }
 
+  /// An expired session still says so — it is the one status line Connect Account has — and the
+  /// standing background window goes with the session behind it.
   @Test
   func expiredSessionReturnsToConnect() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
     let model = makeModel(
       session: Fixtures.session(),
       cache: CachedAccountSummary(
@@ -223,15 +225,68 @@ struct AppModelTests {
           ])
         ),
       ],
-      widgetPublisher: publisher
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
     )
     await model.restore()
     #expect(model.phase == .signedOut)
-    #expect(model.expiredMessage?.contains("Session expired") == true)
+    #expect(model.expiredMessage == "Session expired. Connect Account to continue.")
     #expect(model.summary == nil)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
+  }
+
+  /// The refresh a background app refresh runs is the refresh the pull-to-refresh gesture runs:
+  /// it republishes the widget snapshot from the read it just made and asks for the next window.
+  @Test
+  func sharedRefreshRepublishesSnapshotAndSchedulesTheNextWindow() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: Fixtures.session(),
+      cache: nil,
+      exchanges: [.init(status: 200, body: try Fixtures.accountSummaryJSON())],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh())
+    #expect(publisher.publishCount == 1)
+    #expect(publisher.clearCount == 0)
+    #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
+    #expect(scheduler.scheduleCount == 1)
+  }
+
+  /// A refresh that never reaches Relay reports failure — which is the success a background task
+  /// completes with — and leaves the snapshot the widget is already drawing in place.
+  @Test
+  func sharedRefreshFailureKeepsThePublishedSnapshot() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: Fixtures.session(),
+      cache: nil,
+      exchanges: [
+        .init(status: 200, body: try mutatedSummaryLabel("fresh-label")),
+        .init(status: 503, body: Data()),
+      ],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh())
+    let published = publisher.lastPublished
+    #expect(published != nil)
+
+    #expect(await model.refresh() == false)
+    #expect(model.summary?.account.displayLabel == "fresh-label")
+    #expect(publisher.publishCount == 1)
+    #expect(publisher.clearCount == 0)
+    #expect(publisher.lastPublished == published)
+    #expect(scheduler.scheduleCount == 2)
   }
 
   @Test
@@ -259,6 +314,7 @@ struct AppModelTests {
       .init(status: 204, body: Data()),
     ])
     let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
     let account = AccountClient(
       relay: RelayClient(transport: transport),
       sessionStore: MemoryAccountSessionStore(),
@@ -269,6 +325,7 @@ struct AppModelTests {
       account: account,
       authenticator: authenticator,
       widgetPublisher: publisher,
+      backgroundRefresh: scheduler,
       makeAuthorizationAttempt: { attempt }
     )
 
@@ -284,9 +341,12 @@ struct AppModelTests {
     await model.logout()
     #expect(model.phase == .signedOut)
     #expect(model.summary == nil)
+    #expect(model.expiredMessage == nil)
     #expect(try await account.hasSession() == false)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
+    // The pending request outlives the session unless it is cancelled.
+    #expect(scheduler.cancelCount == 1)
   }
 }
 
@@ -338,7 +398,8 @@ private func makeModel(
   session: AccountSession?,
   cache: CachedAccountSummary?,
   exchanges: [ScriptedHTTPTransport.Exchange],
-  widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher()
+  widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler()
 ) -> AppModel {
   AppModel(
     account: AccountClient(
@@ -350,7 +411,8 @@ private func makeModel(
     authenticator: ScriptedAuthenticator(
       result: .failure(AuthorizationError.cancelled)
     ),
-    widgetPublisher: widgetPublisher
+    widgetPublisher: widgetPublisher,
+    backgroundRefresh: backgroundRefresh
   )
 }
 
@@ -374,7 +436,7 @@ private func tokenResponse() throws -> Data {
       "protocol_version": 2,
       "token_type": "Bearer",
       "account_id": "account_01",
-      "account_session": [
+      "session": [
         "access_token": Fixtures.accessToken,
         "access_expires_at": "2026-08-14T12:15:00Z",
         "refresh_token": Fixtures.refreshToken,
@@ -405,48 +467,50 @@ private enum Fixtures {
   }
 
   static func accountSummaryJSON(accountID: String = "account_01") throws -> Data {
-    try JSONSerialization.data(
+    let period: [String: Any] = [
+      "totals": [
+        "total_tokens": 1200,
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "cache_read_input_tokens": 100,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 50,
+        "messages": 1,
+      ] as [String: Any],
+      "cost": [
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "3138",
+        "catalog_revision": "pricing_1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": ["agent_default_channel"],
+        "unpriced": [],
+      ] as [String: Any],
+      "partial": false,
+      "agents": [],
+    ]
+    return try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 5,
+        "protocol_version": 6,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",
           "created_at": "2026-07-01T00:00:00Z",
         ],
         "devices": [],
-        "quota": [],
+        "subscriptions": [],
         "usage": [
-          "range": ["from": "2026-08-14", "to": "2026-08-14"],
-          "totals": [
-            "input_tokens": 1000,
-            "cache_read_tokens": 100,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 200,
-            "reasoning_tokens": 50,
-            "requests": 1,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": NSNull(),
-            "source_cost_covered_requests": 0,
-          ],
-          "cost": [
-            "mode": "calculate",
-            "basis": "calculated",
-            "status": "complete",
-            "amount_microusd": "3138",
-            "catalog_revision": "pricing_1",
-            "calculated_rows": 1,
-            "reported_rows": 0,
-            "unpriced_rows": 0,
-            "assumptions": ["agent_default_channel"],
-            "unpriced": [],
-          ],
-          "coverage": "complete",
-          "breakdowns": [],
+          "today": period,
+          "last_7_days": period,
+          "last_30_days": period,
+          "all": period,
         ],
-      ]
+        "pricing_revision": "pricing_1",
+        "model_catalog_revision": "models_1",
+      ] as [String: Any]
     )
   }
 }

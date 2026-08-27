@@ -31,7 +31,7 @@ describe("composed Worker documents", () => {
   it("supplies Worker secrets without a local .env file", () => {
     const bindings = env as CloudflareBindings;
     expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(bindings.BETTER_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
+    expect(bindings.GITHUB_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
   });
 
   it("renders the signed-out landing header and keeps the response uncacheable", async () => {
@@ -42,6 +42,51 @@ describe("composed Worker documents", () => {
     expect(html).toContain("Know what you have left");
     expect(html).toContain("Continue with GitHub");
     expect(html).toContain('id="header-login"');
+  });
+
+  it("locks every document down and still lets the inline theme script run", async () => {
+    for (const path of ["/", "/my"]) {
+      const response = await renderDocument(
+        path,
+        fakePort({ displayLabel: path === "/my" ? "octocat" : null }),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("Referrer-Policy")).toBe("same-origin");
+      expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+      const policy = response.headers.get("Content-Security-Policy") ?? "";
+      for (const directive of [
+        "default-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "object-src 'none'",
+        "form-action 'self'",
+      ]) {
+        expect(policy).toContain(directive);
+      }
+      // Nothing is hashed ahead of time: the page states one nonce and every inline script it
+      // carries — SvelteKit's bootstrap and the theme script from `app.html` — claims it.
+      const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(policy)?.[1];
+      expect(nonce).toBeTruthy();
+      const html = await response.text();
+      const inline = [...html.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>/g)].map(
+        (match) => match[1] ?? "",
+      );
+      expect(inline.length).toBeGreaterThanOrEqual(2);
+      for (const attributes of inline) expect(attributes).toContain(`nonce="${nonce}"`);
+      expect(html).toContain('localStorage.getItem("quota-theme")');
+    }
+  });
+
+  it("stamps a policy on a document response SvelteKit does not render", async () => {
+    const response = await renderDocument("/my/__data.json", fakePort({ displayLabel: "octocat" }));
+    expect(response.headers.get("Content-Security-Policy")).toContain("script-src 'self';");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
   });
 
   it("redirects unsigned /my and shipped /app bookmarks", async () => {
@@ -56,8 +101,8 @@ describe("composed Worker documents", () => {
     expect(nested.headers.get("Location")).toBe("/my");
   });
 
-  it("returns a document 404 for unknown public slugs without leaking Usage totals", async () => {
-    const response = await fetchDocument("/u/nobody-here");
+  it("returns a document 404 for an unknown path without leaking Usage totals", async () => {
+    const response = await fetchDocument("/nobody-here");
     const html = await response.text();
     expect(response.status).toBe(404);
     expect(html).toMatch(/unavailable|does not exist/i);
@@ -90,121 +135,32 @@ describe("composed Worker documents", () => {
     expect(body).not.toContain("<img src=x");
   });
 
-  it("streams the signed-in Account summary into /my", async () => {
-    const response = await renderDocument(
-      "/my",
-      fakePort({ displayLabel: "octocat", summary: true }),
-    );
+  it("renders /my as a signed-in shell that carries no Account data", async () => {
+    const response = await renderDocument("/my", fakePort({ displayLabel: "octocat" }));
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("octocat");
     expect(html).toContain('id="dashboard-title"');
-    expect(html).toMatch(/input_tokens|output_tokens|amount_microusd/);
+    // The read that fills this page is bounded by the caller's calendar, which a document
+    // request cannot know. Rendering one here would answer in UTC and be thrown away.
+    expect(html).not.toMatch(/input_tokens|output_tokens|amount_microusd/);
   });
 
-  it("keeps the streamed signed-in summary private and uncacheable", async () => {
-    const response = await renderDocument(
-      "/my/__data.json",
-      fakePort({ displayLabel: "octocat", summary: true }),
-    );
+  it("keeps the signed-in document payload private and uncacheable", async () => {
+    const response = await renderDocument("/my/__data.json", fakePort({ displayLabel: "octocat" }));
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(response.headers.get("ETag")).toBeNull();
     const payload = await response.text();
     expect(payload).toContain("octocat");
-    expect(payload).not.toContain("accountId");
-    expect(payload).toContain("account_id");
     expect(payload).not.toMatch(/session_token|credential|access_token/);
-  });
-
-  it("serves an existing public profile document", async () => {
-    const response = await renderDocument(
-      "/u/octocat",
-      fakePort({ displayLabel: null, profile: "exists" }),
-    );
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Public profile");
-  });
-
-  it("returns Retry-After on a rate-limited public profile document", async () => {
-    const response = await renderDocument(
-      "/u/octocat",
-      fakePort({ displayLabel: null, profile: "rate_limited" }),
-    );
-    expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("12");
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 });
 
-function fakePort(input: {
-  displayLabel: string | null;
-  profile?: "exists" | "missing" | "rate_limited";
-  summary?: boolean;
-}): WebDocumentPort {
+function fakePort(input: { displayLabel: string | null }): WebDocumentPort {
   return {
     async getViewer() {
       return input.displayLabel === null ? null : { displayLabel: input.displayLabel };
-    },
-    ...(input.summary
-      ? {
-          async getAccountSummary() {
-            return { status: "ok" as const, summary: accountSummary() };
-          },
-        }
-      : {}),
-    async lookupPublicProfile() {
-      if (input.profile === "rate_limited") {
-        return { status: "rate_limited", retryAfterSeconds: 12 };
-      }
-      return { status: input.profile === "exists" ? "exists" : "missing" };
-    },
-  };
-}
-
-function accountSummary() {
-  const totals = {
-    input_tokens: 10,
-    cache_read_tokens: 0,
-    cache_write_5m_tokens: 0,
-    cache_write_1h_tokens: 0,
-    cache_write_inferred_tokens: 0,
-    output_tokens: 4,
-    reasoning_tokens: 0,
-    requests: 1,
-    web_search_requests: 0,
-    web_fetch_requests: 0,
-    source_cost_microusd: null,
-    source_cost_covered_requests: 0,
-  };
-  return {
-    protocol_version: 3 as const,
-    generated_at: "2026-08-14T00:00:00Z",
-    account: {
-      account_id: "account_01",
-      display_label: "octocat",
-      created_at: "2026-08-01T00:00:00Z",
-    },
-    devices: [],
-    quota: [],
-    usage: {
-      range: { from: "2026-08-14", to: "2026-08-14" },
-      totals,
-      cost: {
-        mode: "calculate" as const,
-        basis: "none" as const,
-        status: "complete" as const,
-        amount_microusd: null,
-        catalog_revision: null,
-        calculated_rows: 0,
-        reported_rows: 0,
-        unpriced_rows: 0,
-        assumptions: [],
-        unpriced: [],
-      },
-      coverage: [],
-      breakdowns: [],
     },
   };
 }

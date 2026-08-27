@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 pub const IPC_VERSION: u32 = 1;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
@@ -15,10 +14,12 @@ pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
+    Ping,
     GetState,
     Diagnose,
     RecheckDiagnostics,
     Refresh,
+    ResetCache,
     Login,
     CancelLogin,
     Logout,
@@ -39,7 +40,6 @@ pub enum ComponentName {
     Account,
     Pricing,
     Providers,
-    Repair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -49,7 +49,6 @@ pub enum ComponentStatus {
     Stale,
     AuthRequired,
     Unavailable,
-    Unsupported,
     Error,
     SignedOut,
 }
@@ -221,7 +220,28 @@ pub enum EventMessageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
+    Ready,
     StateChanged,
+}
+
+/// Announces that the helper finished opening its local state and will now read requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpcReadyEvent {
+    #[serde(rename = "type")]
+    pub message_type: EventMessageType,
+    pub event: EventName,
+    pub ipc_version: u32,
+}
+
+impl IpcReadyEvent {
+    pub const fn ready() -> Self {
+        Self {
+            message_type: EventMessageType::Event,
+            event: EventName::Ready,
+            ipc_version: IPC_VERSION,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,6 +286,46 @@ pub struct ProviderBrowserSessionPayload {
     pub cookie_header: String,
 }
 
+/// Why macOS handed the client nothing when it opened a browser's cookie store.
+///
+/// The reason is a closed set, not prose: the store's path and the underlying error's text
+/// stay on the client's side of the boundary, because neither belongs in a report a person
+/// copies out of the app.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAccessDenialReason {
+    /// Safari keeps its cookies where only an app with Full Disk Access may look.
+    FullDiskAccess,
+    /// A Chrome-family store is sealed with a Keychain item macOS would not release.
+    KeychainRefused,
+    /// The store is there, and could not be opened or parsed.
+    StoreUnreadable,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderBrowserAccessDenial {
+    /// The browser's display name. Never a profile name or a store path.
+    pub browser: String,
+    pub reason: BrowserAccessDenialReason,
+}
+
+/// What one browser sign-in attempt produced.
+///
+/// A commit either stores the session a browser released, or records that the browser released
+/// nothing because macOS refused the store. Both are answers to the same question, and only
+/// the second is one the reader has to act on, so the two must not arrive as the same silence.
+/// Exactly one of the two fields is present.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitProviderBrowserSessionPayload {
+    pub provider: String,
+    #[serde(default)]
+    pub cookie_header: Option<String>,
+    #[serde(default)]
+    pub access_denied: Option<ProviderBrowserAccessDenial>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetUsageUploadPayload {
@@ -283,6 +343,13 @@ pub struct RefreshResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyResult {}
+
+/// Liveness answer.  It carries no state, because the point is that the helper could answer.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PingResult {
+    pub ok: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -341,39 +408,33 @@ pub struct ComponentState {
     pub refreshing: bool,
 }
 
-impl ComponentState {
-    pub fn empty(status: ComponentStatus) -> Self {
-        Self {
-            status,
-            value: None,
-            updated_at: None,
-            last_error: None,
-            refreshing: false,
-        }
-    }
-}
-
+/// What this device knows about the Account it is signed in to.
+///
+/// `display_label` is what the sign-in itself said the Account is called. It is separate from
+/// `account_summary` because the summary is a whole Account read — devices, subscriptions, four
+/// Usage periods, two catalog revisions — and none of that is known at the instant a session is
+/// issued. Naming the account is, so it is stated on its own rather than as a summary with
+/// invented fields.
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountComponentValue {
     pub auth_status: AuthStatus,
     pub account_id: Option<String>,
+    pub display_label: Option<String>,
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
     pub account_summary: Option<Value>,
 }
 
-/// OAuth, Device authorization and control, Account metadata, and the catalogs.
+/// OAuth, Device control, Account metadata, and the catalogs.
 pub const CONTROL_PROTOCOL: i64 = 2;
 
 /// The managed-data protocol this build uploads to and reads from Relay.
-pub const MANAGED_DATA_PROTOCOL: i64 = 5;
-
-/// The private local Usage report contract, versioned independently of managed data.
-pub const LOCAL_USAGE_PROTOCOL: i64 = 3;
-
-/// The private local quota collection report, versioned independently of both.
-pub const LOCAL_COLLECTION_PROTOCOL: i64 = 3;
+///
+/// The private local Usage and quota collection reports name no version of their own: they only
+/// ever travel nested inside a `StateSnapshot` that carries `ipc_version`, and both ends of that
+/// pipe ship in the same build.
+pub const MANAGED_DATA_PROTOCOL: i64 = 6;
 
 #[derive(Debug, Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -420,197 +481,18 @@ pub struct StateSnapshot {
     pub providers: Vec<ProviderConfigView>,
     pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
     pub overview: Vec<QuotaOverviewItem>,
-    pub repair: RepairSession,
+    pub cache: CacheState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairStatus {
-    Idle,
-    Checking,
-    Repairing,
-    Stuck,
-    Failed,
-    Completed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairSeverity {
-    None,
-    Derived,
-    Durable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairPhase {
-    PreservingAccount,
-    RebuildingStorage,
-    ReindexingUsage,
-    Verifying,
-    RestoringLastGood,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepairRecoveryAction {
-    Retry,
-    Reinstall,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// What a reader is told about the disposable half of local state.
+///
+/// `rebuilding` means the cache was thrown away and this device has not yet completed one full
+/// Usage scan, so local history is still filling in. `reset_at` is when that happened.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepairSession {
-    pub status: RepairStatus,
-    pub severity: RepairSeverity,
-    pub phase: Option<RepairPhase>,
-    pub title: Option<String>,
-    pub guidance: Option<String>,
-    pub activity: Option<String>,
-    pub started_at: Option<String>,
-    pub heartbeat_at: Option<String>,
-    pub progress_current: Option<i64>,
-    pub progress_total: Option<i64>,
-    pub stuck: bool,
-    pub blocks_quit: bool,
-    pub recovery_action: Option<RepairRecoveryAction>,
-}
-
-impl RepairSession {
-    pub const TITLE_MAX_CHARS: usize = 64;
-    pub const GUIDANCE_MAX_CHARS: usize = 160;
-    pub const ACTIVITY_MAX_CHARS: usize = 64;
-    pub const PROGRESS_TOTAL_MAX: i64 = 1_000_000;
-
-    pub fn idle() -> Self {
-        Self {
-            status: RepairStatus::Idle,
-            severity: RepairSeverity::None,
-            phase: None,
-            title: None,
-            guidance: None,
-            activity: None,
-            started_at: None,
-            heartbeat_at: None,
-            progress_current: None,
-            progress_total: None,
-            stuck: false,
-            blocks_quit: false,
-            recovery_action: None,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.validation_error().is_none()
-    }
-
-    pub fn validation_error(&self) -> Option<&'static str> {
-        if !text_field_ok(self.title.as_deref(), Self::TITLE_MAX_CHARS) {
-            return Some("invalid repair title");
-        }
-        if !text_field_ok(self.guidance.as_deref(), Self::GUIDANCE_MAX_CHARS) {
-            return Some("invalid repair guidance");
-        }
-        if !text_field_ok(self.activity.as_deref(), Self::ACTIVITY_MAX_CHARS) {
-            return Some("invalid repair activity");
-        }
-        match (self.progress_current, self.progress_total) {
-            (None, None) => {}
-            (Some(current), Some(total))
-                if (1..=Self::PROGRESS_TOTAL_MAX).contains(&total)
-                    && current >= 0
-                    && current <= total => {}
-            _ => return Some("invalid repair progress"),
-        }
-        if self.blocks_quit
-            && !(self.severity == RepairSeverity::Durable && self.status == RepairStatus::Repairing)
-        {
-            return Some("blocks_quit is only valid while durable repairing");
-        }
-        if self.status == RepairStatus::Idle {
-            if self.severity != RepairSeverity::None
-                || self.phase.is_some()
-                || self.title.is_some()
-                || self.guidance.is_some()
-                || self.activity.is_some()
-                || self.started_at.is_some()
-                || self.heartbeat_at.is_some()
-                || self.progress_current.is_some()
-                || self.progress_total.is_some()
-                || self.stuck
-                || self.blocks_quit
-                || self.recovery_action.is_some()
-            {
-                return Some("idle repair session must be empty");
-            }
-            return None;
-        }
-        if self.started_at.is_none() || self.heartbeat_at.is_none() {
-            return Some("started_at and heartbeat_at are required while not idle");
-        }
-        if self.recovery_action.is_some()
-            && !matches!(self.status, RepairStatus::Stuck | RepairStatus::Failed)
-        {
-            return Some("recovery_action is only valid when stuck or failed");
-        }
-        if self.stuck && !matches!(self.status, RepairStatus::Stuck | RepairStatus::Failed) {
-            return Some("stuck is only valid when status is stuck or failed");
-        }
-        None
-    }
-}
-
-fn text_field_ok(value: Option<&str>, max_chars: usize) -> bool {
-    value.is_none_or(|text| {
-        text.chars().count() <= max_chars && !text.chars().any(|ch| ch.is_control())
-    })
-}
-
-impl<'de> Deserialize<'de> for RepairSession {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawRepairSession {
-            status: RepairStatus,
-            severity: RepairSeverity,
-            phase: Option<RepairPhase>,
-            title: Option<String>,
-            guidance: Option<String>,
-            activity: Option<String>,
-            started_at: Option<String>,
-            heartbeat_at: Option<String>,
-            progress_current: Option<i64>,
-            progress_total: Option<i64>,
-            stuck: bool,
-            blocks_quit: bool,
-            recovery_action: Option<RepairRecoveryAction>,
-        }
-
-        let raw = RawRepairSession::deserialize(deserializer)?;
-        let session = Self {
-            status: raw.status,
-            severity: raw.severity,
-            phase: raw.phase,
-            title: raw.title,
-            guidance: raw.guidance,
-            activity: raw.activity,
-            started_at: raw.started_at,
-            heartbeat_at: raw.heartbeat_at,
-            progress_current: raw.progress_current,
-            progress_total: raw.progress_total,
-            stuck: raw.stuck,
-            blocks_quit: raw.blocks_quit,
-            recovery_action: raw.recovery_action,
-        };
-        if let Some(error) = session.validation_error() {
-            return Err(serde::de::Error::custom(error));
-        }
-        Ok(session)
-    }
+pub struct CacheState {
+    pub rebuilding: bool,
+    pub reset_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -640,6 +522,7 @@ impl UsagePeriodValues {
     }
 }
 
+/// How well the product as a whole is working right now.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticOperation {
@@ -648,6 +531,27 @@ pub enum DiagnosticOperation {
     Blocked,
 }
 
+/// Who, if anyone, has to do something.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticAttention {
+    None,
+    Automatic,
+    Required,
+}
+
+/// One surface or one collection source, in the four states either can be in.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticStatus {
+    Ok,
+    Degraded,
+    Blocked,
+    Inactive,
+}
+
+/// What the retained data behind a surface is worth.  Nothing is ever "unknown": a surface the
+/// service could not evaluate is `empty` and `blocked`.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticDataState {
@@ -655,81 +559,21 @@ pub enum DiagnosticDataState {
     Stale,
     Partial,
     Empty,
-    Unknown,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticAttention {
-    None,
-    Automatic,
-    Optional,
-    Required,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiagnosticSummary {
-    pub operation: DiagnosticOperation,
-    pub data: DiagnosticDataState,
-    pub attention: DiagnosticAttention,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticRefreshPhase {
-    Idle,
-    Running,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiagnosticRefresh {
-    pub phase: DiagnosticRefreshPhase,
-    pub revision: u64,
-    pub as_of: String,
-    pub started_at: Option<String>,
-    pub next_due_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticSource {
-    ThisDevice,
-    Account,
-    System,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticMode {
-    Inactive,
-    Opportunistic,
-    Required,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticImpact {
-    None,
-    Source,
-    Surface,
-    System,
-}
-
+/// The machine-readable half of a message.  The sentence a person reads is `message`; this is
+/// only for grouping and for deciding which affordance to offer.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticRecovery {
     None,
     Automatic,
+    Retry,
     Login,
     ConfigureProvider,
-    Retry,
     UpdateSource,
     CheckAccess,
-    Upgrade,
     Reinstall,
-    Feedback,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -741,49 +585,36 @@ pub struct DiagnosticClient {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DiagnosticSurface {
-    pub name: String,
+pub struct DiagnosticSummary {
     pub operation: DiagnosticOperation,
-    pub data: DiagnosticDataState,
-    pub source: Option<DiagnosticSource>,
-    pub metrics: BTreeMap<String, i64>,
+    pub attention: DiagnosticAttention,
 }
 
+/// One of the four things the product promises to show.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct DiagnosticCheck {
-    pub name: String,
-    pub source: DiagnosticSource,
-    pub subject: Option<String>,
-    pub mode: DiagnosticMode,
-    pub operation: DiagnosticOperation,
+pub struct DiagnosticSurface {
+    pub id: String,
+    pub status: DiagnosticStatus,
     pub data: DiagnosticDataState,
+    pub last_success_at: Option<String>,
+    pub message: String,
+    pub recovery: DiagnosticRecovery,
+}
+
+/// One place a surface's data comes from: a provider on this Mac, a Usage agent, the account,
+/// the upload path, the pricing catalog, or this device's own local state.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticSourceState {
+    pub subject: String,
+    pub source_id: Option<String>,
+    pub status: DiagnosticStatus,
     pub last_attempt_at: Option<String>,
     pub last_success_at: Option<String>,
-    pub metrics: BTreeMap<String, i64>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticSeverity {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiagnosticFinding {
-    pub component: String,
-    pub source: DiagnosticSource,
-    pub subject: Option<String>,
-    pub code: String,
-    pub severity: DiagnosticSeverity,
-    pub impact: DiagnosticImpact,
-    pub recovery: DiagnosticRecovery,
-    pub count: i64,
-    pub observed_at: String,
+    pub code: Option<String>,
     pub message: String,
+    pub recovery: DiagnosticRecovery,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
@@ -795,7 +626,6 @@ pub enum DiagnosticAttemptKind {
     UsageUpload,
     AccountSync,
     PricingRefresh,
-    DeviceHealthUpload,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
@@ -838,53 +668,36 @@ pub enum DiagnosticAttemptCode {
     PartialSource,
     MalformedData,
     TruncatedActiveSource,
-    InvalidUsageBatch,
-    UnrepresentableHour,
     DeviceDeleted,
-    UploadDisabled,
-    SignedOut,
 }
 
+/// One completed or still-running piece of work, as the copied report lists it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticAttempt {
     pub kind: DiagnosticAttemptKind,
-    pub trigger: DiagnosticAttemptTrigger,
-    pub source: DiagnosticSource,
     pub subject: Option<String>,
-    pub mode: DiagnosticMode,
     pub started_at: String,
-    pub completed_at: Option<String>,
     pub duration_ms: Option<u64>,
     pub outcome: DiagnosticAttemptOutcome,
     pub code: Option<DiagnosticAttemptCode>,
-    pub recovery: DiagnosticRecovery,
-    pub metrics: BTreeMap<String, i64>,
-    pub start_revision: u64,
-    pub end_revision: Option<u64>,
-    pub parent_refresh_started_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiagnosticRecentActivity {
-    pub attempts: Vec<DiagnosticAttempt>,
-    pub history_truncated: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticReport {
     pub schema_version: u32,
-    pub summary: DiagnosticSummary,
-    pub refresh: DiagnosticRefresh,
     pub generated_at: String,
     pub client: DiagnosticClient,
+    pub summary: DiagnosticSummary,
     pub surfaces: Vec<DiagnosticSurface>,
-    pub checks: Vec<DiagnosticCheck>,
-    pub findings: Vec<DiagnosticFinding>,
-    pub recent_activity: DiagnosticRecentActivity,
+    pub sources: Vec<DiagnosticSourceState>,
+    pub recent: Vec<DiagnosticAttempt>,
 }
+
+pub const DIAGNOSTIC_SCHEMA_VERSION: u32 = 3;
+pub const MAXIMUM_DIAGNOSTIC_SOURCES: usize = 64;
+pub const MAXIMUM_DIAGNOSTIC_RECENT: usize = 100;
 
 #[cfg(test)]
 mod tests {
@@ -941,101 +754,34 @@ mod tests {
     }
 
     #[test]
-    fn repair_session_idle_and_repairing_round_trip() {
-        let idle = serde_json::from_value::<RepairSession>(serde_json::json!({
-            "status": "idle",
-            "severity": "none",
-            "phase": null,
-            "title": null,
-            "guidance": null,
-            "activity": null,
-            "started_at": null,
-            "heartbeat_at": null,
-            "progress_current": null,
-            "progress_total": null,
-            "stuck": false,
-            "blocks_quit": false,
-            "recovery_action": null
-        }))
-        .expect("idle session");
-        assert_eq!(idle, RepairSession::idle());
-
-        let repairing = serde_json::from_value::<RepairSession>(serde_json::json!({
-            "status": "repairing",
-            "severity": "derived",
-            "phase": "reindexing_usage",
-            "title": "Rebuilding Usage history",
-            "guidance": "Quota and Account stay available. Usage history is catching up.",
-            "activity": "Scanning local logs",
-            "started_at": "2026-08-17T01:00:00Z",
-            "heartbeat_at": "2026-08-17T01:00:14Z",
-            "progress_current": 12,
-            "progress_total": 40,
-            "stuck": false,
-            "blocks_quit": false,
-            "recovery_action": null
-        }))
-        .expect("repairing session");
-        assert_eq!(repairing.status, RepairStatus::Repairing);
-        assert_eq!(repairing.severity, RepairSeverity::Derived);
-        assert_eq!(repairing.progress_current, Some(12));
-        assert_eq!(repairing.progress_total, Some(40));
-        assert!(!repairing.blocks_quit);
-    }
-
-    #[test]
-    fn repair_session_rejects_invalid_progress_and_unknown_fields() {
-        assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "repairing",
-                "severity": "durable",
-                "phase": "preserving_account",
-                "title": "Repairing local data",
-                "guidance": "Keep QuotaBar open. You can close this menu.",
-                "activity": "Copying account",
-                "started_at": "2026-08-17T01:00:00Z",
-                "heartbeat_at": "2026-08-17T01:00:14Z",
-                "progress_current": 8,
-                "progress_total": 4,
-                "stuck": false,
-                "blocks_quit": true,
-                "recovery_action": null
-            }))
-            .is_err()
+    fn the_cache_state_says_whether_local_history_is_still_filling_in() {
+        let value = serde_json::to_value(CacheState {
+            rebuilding: true,
+            reset_at: Some("2026-08-25T01:00:00Z".into()),
+        })
+        .expect("serializes");
+        assert_eq!(value["rebuilding"], true);
+        assert_eq!(value["reset_at"], "2026-08-25T01:00:00Z");
+        assert_eq!(
+            serde_json::from_value::<CacheState>(value).expect("round trip"),
+            CacheState {
+                rebuilding: true,
+                reset_at: Some("2026-08-25T01:00:00Z".into()),
+            }
+        );
+        // A cache this device has never had to throw away says so with an absent instant, not
+        // with a made-up one.
+        assert_eq!(
+            CacheState::default(),
+            CacheState {
+                rebuilding: false,
+                reset_at: None
+            }
         );
         assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "idle",
-                "severity": "none",
-                "phase": null,
-                "title": null,
-                "guidance": null,
-                "activity": null,
-                "started_at": null,
-                "heartbeat_at": null,
-                "progress_current": 0,
-                "progress_total": null,
-                "stuck": false,
-                "blocks_quit": false,
-                "recovery_action": null
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<RepairSession>(serde_json::json!({
-                "status": "idle",
-                "severity": "none",
-                "phase": null,
-                "title": null,
-                "guidance": null,
-                "activity": null,
-                "started_at": null,
-                "heartbeat_at": null,
-                "progress_current": null,
-                "progress_total": null,
-                "stuck": false,
-                "blocks_quit": false,
-                "recovery_action": null,
+            serde_json::from_value::<CacheState>(serde_json::json!({
+                "rebuilding": false,
+                "reset_at": null,
                 "seq": 1
             }))
             .is_err()

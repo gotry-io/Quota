@@ -33,6 +33,7 @@ final class AppModel {
   private let authenticator: any BrowserSessionAuthenticating
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
+  private let backgroundRefresh: any BackgroundRefreshScheduling
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -51,6 +52,7 @@ final class AppModel {
     account: AccountClient,
     authenticator: any BrowserSessionAuthenticating,
     widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+    backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
     }
@@ -58,10 +60,11 @@ final class AppModel {
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
+    self.backgroundRefresh = backgroundRefresh
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
   }
 
-  convenience init() {
+  convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
     self.init(
       account: AccountClient(
         sessionStore: KeychainAccountSessionStore(),
@@ -69,7 +72,8 @@ final class AppModel {
           ?? MemoryAccountSummaryStore()
       ),
       authenticator: SystemBrowserAuthenticator(),
-      widgetPublisher: AppGroupWidgetSnapshotPublisher.make()
+      widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
+      backgroundRefresh: backgroundRefresh
     )
   }
 
@@ -78,12 +82,11 @@ final class AppModel {
   }
 
   /// One card per provider, and inside it one row per subscription rather than per
-  /// reporting device: an account collected on three Macs is one subscription, not three.
+  /// reporting device: an account collected on three Macs is one subscription, not three,
+  /// and Relay has already resolved it that way.
   var providerCards: [ProviderQuotaCardModel] {
     guard let summary else { return [] }
-    let grouped = Dictionary(grouping: AccountQuotaSubscriptions.resolve(summary.quota)) {
-      $0.reading.provider
-    }
+    let grouped = Dictionary(grouping: summary.subscriptions) { $0.snapshot.provider }
     return ProviderID.allCases.compactMap { provider in
       guard let subscriptions = grouped[provider], !subscriptions.isEmpty else { return nil }
       return ProviderQuotaCardModel(provider: provider, subscriptions: subscriptions)
@@ -102,8 +105,7 @@ final class AppModel {
       }
       await refresh()
     } else {
-      phase = .signedOut
-      clearWidget()
+      applySignedOut()
     }
   }
 
@@ -144,23 +146,30 @@ final class AppModel {
     }
   }
 
-  func refresh() async {
-    guard !isRefreshing else { return }
+  /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
+  /// the account summary, apply it, republish the widget snapshot from the result, and ask for
+  /// the next background window. Reports whether the read reached Relay, which is the success
+  /// a `BGAppRefreshTask` completes with.
+  ///
+  /// The next window is only worth asking for while a session exists to read with. A read that
+  /// ends signed out — no session, or one Relay would not renew — leaves without asking, and
+  /// has already withdrawn the standing ask on its way through `applySignedOut`.
+  @discardableResult
+  func refresh() async -> Bool {
+    guard !isRefreshing else { return false }
     isRefreshing = true
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
     apply(result)
+    if phase == .signedIn {
+      backgroundRefresh.scheduleNextRefresh()
+    }
+    return result.error == nil
   }
 
   func logout() async {
     await account.logout()
-    summary = nil
-    fetchedAt = nil
-    fromCache = false
-    banner = nil
-    expiredMessage = nil
-    phase = .signedOut
-    clearWidget()
+    applySignedOut()
   }
 
   private func apply(_ result: AccountRefreshResult) {
@@ -177,8 +186,12 @@ final class AppModel {
       } else {
         clearWidget()
       }
-    case .sessionExpired, .notSignedIn:
+    case .sessionExpired:
       applyExpired()
+    case .notSignedIn:
+      // Signing out, or never having signed in, is not an expiry. Saying a session expired to
+      // someone who deliberately logged out invents a failure that did not happen.
+      applySignedOut()
     case .relay(.unavailable), .relay(.timeout):
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
@@ -213,12 +226,20 @@ final class AppModel {
   }
 
   private func applyExpired() {
+    applySignedOut()
+    expiredMessage = "Session expired. Connect Account to continue."
+  }
+
+  /// Connect Account with nothing said about why: no session, or one the person ended. There is
+  /// no account left to read, so the standing background-refresh ask goes with it.
+  private func applySignedOut() {
     summary = nil
     fetchedAt = nil
     fromCache = false
     banner = nil
-    expiredMessage = "Session expired. Connect Account to continue."
+    expiredMessage = nil
     phase = .signedOut
+    backgroundRefresh.cancelPendingRefresh()
     clearWidget()
   }
 
@@ -235,5 +256,5 @@ final class AppModel {
 struct ProviderQuotaCardModel: Identifiable, Equatable {
   var id: ProviderID { provider }
   let provider: ProviderID
-  let subscriptions: [QuotaSubscription<QuotaSnapshot>]
+  let subscriptions: [QuotaSubscription]
 }

@@ -20,7 +20,6 @@
     "@gotry-io/quota-model": "workspace:*",
     "@gotry-io/quota-protocol": "workspace:*",
     "@gotry-io/relay-core": "workspace:*",
-    "better-auth": "1.6.26",
     "hono": "4.12.33"
   },
   "devDependencies": {

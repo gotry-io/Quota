@@ -25,7 +25,7 @@ func usageSubmissionMatchesTheSharedConformanceFixture() throws {
     let accepted = testCase["accepted"] as! Bool
     let data = try JSONSerialization.data(withJSONObject: testCase["payload"] as! [String: Any])
     let decoded =
-      (try? QuotaWireCodec.makeDecoder().decode(UsageSubmission.self, from: data)) != nil
+      (try? QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: data)) != nil
     #expect(decoded == accepted, "\(name)")
   }
 }

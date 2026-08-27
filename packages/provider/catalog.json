@@ -205,15 +205,7 @@
       "browser_session": {
         "login_url": "https://authenticator.cursor.sh/",
         "cookie_hosts": ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
-        "cookie_names": [
-          "WorkosCursorSessionToken",
-          "__Secure-next-auth.session-token",
-          "next-auth.session-token",
-          "wos-session",
-          "__Secure-wos-session",
-          "authjs.session-token",
-          "__Secure-authjs.session-token"
-        ],
+        "cookie_names": ["WorkosCursorSessionToken", "wos-session", "__Secure-wos-session"],
         "browser_priority": [
           "safari",
           "chrome",

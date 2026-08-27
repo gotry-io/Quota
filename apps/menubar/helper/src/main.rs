@@ -16,7 +16,6 @@ fn main() {
     let writer = JsonLineWriter::stdout();
     match build_service(writer.clone()) {
         Ok(service) => {
-            service.start_scheduler();
             let _ = run_stdio(service, writer);
         }
         Err(error) => {

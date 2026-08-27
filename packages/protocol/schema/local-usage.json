@@ -5,30 +5,26 @@
   "$comment": "Local-only Usage collection status and coverage; period summaries are precomputed in the private state snapshot.",
   "type": "object",
   "properties": {
-    "protocol_version": {
+    "generated_at": {
       "$ref": "#/$defs/__schema0"
     },
-    "generated_at": {
+    "aggregation_timezone": {
       "$ref": "#/$defs/__schema1"
     },
-    "aggregation_timezone": {
+    "range": {
       "$ref": "#/$defs/__schema2"
     },
-    "range": {
-      "$ref": "#/$defs/__schema3"
-    },
     "status": {
-      "$ref": "#/$defs/__schema5"
+      "$ref": "#/$defs/__schema4"
     },
     "model_catalog_revision": {
-      "$ref": "#/$defs/__schema6"
+      "$ref": "#/$defs/__schema5"
     },
     "coverage": {
-      "$ref": "#/$defs/__schema7"
+      "$ref": "#/$defs/__schema6"
     }
   },
   "required": [
-    "protocol_version",
     "generated_at",
     "aggregation_timezone",
     "range",
@@ -39,16 +35,12 @@
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
-      "type": "number",
-      "const": 3
-    },
-    "__schema1": {
       "type": "string",
       "maxLength": 64,
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     },
-    "__schema2": {
+    "__schema1": {
       "anyOf": [
         {
           "type": "string",
@@ -61,28 +53,28 @@
         }
       ]
     },
-    "__schema3": {
+    "__schema2": {
       "type": "object",
       "properties": {
         "from": {
-          "$ref": "#/$defs/__schema4"
+          "$ref": "#/$defs/__schema3"
         },
         "to": {
-          "$ref": "#/$defs/__schema4"
+          "$ref": "#/$defs/__schema3"
         }
       },
       "required": ["from", "to"],
       "additionalProperties": false
     },
-    "__schema4": {
+    "__schema3": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
-    "__schema5": {
+    "__schema4": {
       "type": "string",
       "enum": ["complete", "partial", "unavailable"]
     },
-    "__schema6": {
+    "__schema5": {
       "anyOf": [
         {
           "type": "string",
@@ -95,41 +87,41 @@
         }
       ]
     },
-    "__schema7": {
+    "__schema6": {
       "maxItems": 2048,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema8"
+        "$ref": "#/$defs/__schema7"
       }
     },
-    "__schema8": {
+    "__schema7": {
       "type": "object",
       "properties": {
         "agent": {
-          "$ref": "#/$defs/__schema9"
+          "$ref": "#/$defs/__schema8"
         },
         "start_at": {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema9"
         },
         "end_at": {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema9"
         },
         "status": {
-          "$ref": "#/$defs/__schema11"
+          "$ref": "#/$defs/__schema10"
         }
       },
       "required": ["agent", "start_at", "end_at", "status"],
       "additionalProperties": false
     },
-    "__schema9": {
+    "__schema8": {
       "type": "string",
       "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
     },
-    "__schema10": {
+    "__schema9": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:00:00Z$"
     },
-    "__schema11": {
+    "__schema10": {
       "type": "string",
       "enum": ["complete", "partial"]
     }

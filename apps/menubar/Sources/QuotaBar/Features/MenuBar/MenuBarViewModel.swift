@@ -35,14 +35,24 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   /// What the row says about this reading: the source's own report, or aged out by the
   /// service's verdict. Resolved once here so the view never re-derives it.
   let state: QuotaObservationState
-  let sources: [QuotaObservationSource]
-  let selectedSource: QuotaObservationSource
   let selectedSourceDisplayName: String
 
   var id: QuotaSubscriptionIdentity { identity }
-  var sourceSummary: String { selectedSource.isLocal ? "Local" : "Device" }
-  var sourceSymbolName: String { selectedSource.isLocal ? "laptopcomputer" : "desktopcomputer" }
-  var sourceAccessibilityLabel: String { "Source: \(selectedSourceDisplayName)" }
+
+  /// An Overview row spends no line on which source answered or how old the reading is; a
+  /// reading that no longer describes live quota says so in tone. Tone cannot be read aloud,
+  /// so the sentence it replaced is what VoiceOver announces for the row.
+  func accessibilityLabel(accountIndex: Int, now: Date) -> String {
+    let account =
+      PlanDisplay.accountLabel(snapshot.account.label).map { "Account: \($0)" }
+      ?? "Account \(accountIndex + 1)"
+    let freshness = FreshnessCopy.observation(
+      state: state,
+      observedAt: snapshot.observedAt,
+      now: now
+    )
+    return "\(account). \(selectedSourceDisplayName). \(freshness)"
+  }
 }
 
 struct ProviderReportingSourcePresentation: Equatable, Identifiable {
@@ -60,10 +70,12 @@ struct ProviderReportingSourcePresentation: Equatable, Identifiable {
   var symbolName: String { kind == .local ? "laptopcomputer" : "desktopcomputer" }
 
   func detailLabel(now: Date) -> String {
-    var parts = [kind.rawValue]
-    if isStale { parts.append(QuotaObservationState.stale.label) }
-    parts.append("\(CompactAgeFormat.string(since: observedAt, now: now)) ago")
-    return parts.joined(separator: " · ")
+    let freshness = FreshnessCopy.observation(
+      state: isStale ? .stale : .available,
+      observedAt: observedAt,
+      now: now
+    )
+    return "\(kind.rawValue) · \(freshness)"
   }
 }
 
@@ -83,6 +95,8 @@ struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
 
 enum ProviderBrowserSessionPopup: Equatable, Sendable {
   case browser(provider: ProviderID, choices: [BrowserApplicationChoice])
+  /// Asked before the first cookie is read, once the browser to be read is known.
+  case consent(provider: ProviderID, choice: BrowserApplicationChoice)
   case account(provider: ProviderID, choices: [BrowserSessionAccountChoice])
   case confirmDisconnect(provider: ProviderID)
 }
@@ -106,18 +120,7 @@ enum AccountDisconnectReason: Equatable {
     let accountSummary: AccountSummary?
     let authStatus: LocalServiceAuthStatus
     let overview: [LocalServiceOverviewItem]
-    var repair: LocalServiceRepairSession = .idle
-
-    func withRepair(_ repair: LocalServiceRepairSession) -> MenuBarVisualState {
-      MenuBarVisualState(
-        report: report,
-        localUsage: localUsage,
-        accountSummary: accountSummary,
-        authStatus: authStatus,
-        overview: overview,
-        repair: repair
-      )
-    }
+    var cache: LocalServiceCacheState = .settled
   }
 #endif
 
@@ -127,6 +130,8 @@ final class MenuBarViewModel {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
+  /// The name the sign-in gave, held until an account read carries one of its own.
+  private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
@@ -143,6 +148,9 @@ final class MenuBarViewModel {
   private(set) var providerBrowserSessions: [ProviderID: LocalServiceProviderBrowserSession] = [:]
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
   private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
+  /// A read macOS refused, which is a different state from finding no session: it stands until
+  /// the reader changes a permission, and the Support page carries it too.
+  private(set) var browserSessionAccessDenials: [ProviderID: BrowserAccessDenial] = [:]
   private(set) var browserSessionWaitingProvider: ProviderID?
   private(set) var canCancelBrowserSessionLogin = false
   private(set) var browserSessionActivityText: String?
@@ -150,10 +158,15 @@ final class MenuBarViewModel {
   private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
   private var revision = 0
-  private(set) var repair: LocalServiceRepairSession = .idle
-  private var localRepairOverride: LocalServiceRepairSession?
-  private var lastSuccessfulStateAt: Date?
-  private var lastRepairEventAt: Date?
+  private(set) var cache: LocalServiceCacheState = .settled
+
+  /// The instant the menu-bar item is drawn for.
+  ///
+  /// The item's content is a function of time — the shared freshness rule retires a reading —
+  /// but observation only re-reads it when something it read changed. Without a clock of its
+  /// own the item would keep a percent that stopped describing live quota until the next
+  /// service event, which for a Mac that has stopped collecting is never.
+  private(set) var menuBarClock = Date()
 
   var accountState: AccountViewState {
     switch authStatus {
@@ -164,15 +177,24 @@ final class MenuBarViewModel {
     }
   }
 
+  /// What to call the account.
+  ///
+  /// The account read is the fuller answer, but it is not the first one: signing in already said
+  /// what the account is called, so the name stands from that moment rather than from whenever
+  /// the first read finishes.
   var accountDisplayLabel: String {
-    PlanDisplay.accountLabel(accountSummary?.account.displayLabel) ?? "Quota account"
+    PlanDisplay.accountLabel(accountSummary?.account.displayLabel)
+      ?? PlanDisplay.accountLabel(signInDisplayLabel)
+      ?? "Quota account"
   }
 
   var accountDeviceSummary: String {
     guard let devices = accountSummary?.devices else {
       return accountState == .signedIn ? "Unavailable" : "Sign in"
     }
-    let active = devices.filter { $0.status == .active }.count
+    let now = Date()
+    let active = devices.filter { $0.activity(now: now).status == .active }
+      .count
     return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
   }
 
@@ -182,41 +204,28 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private let initializationError: String?
 
-  var presentedRepair: LocalServiceRepairSession {
-    localRepairOverride ?? repair
-  }
-
-  var repairPresentation: RepairPresentationKind {
-    RepairPresentation.kind(for: presentedRepair)
-  }
-
-  var showsFullRepairPage: Bool {
-    repairPresentation == .fullPage
-  }
-
-  var showsDerivedRepairNotice: Bool {
-    repairPresentation == .derivedNotice
-  }
-
-  var repairHeaderTitle: String {
-    RepairPresentation.headerTitle(for: presentedRepair)
-  }
-
-  var repairBlocksQuit: Bool {
-    presentedRepair.blocksQuit
+  var showsCacheRebuildNotice: Bool {
+    cache.rebuilding
   }
 
   @ObservationIgnored
   private var eventTask: Task<Void, Never>?
 
   @ObservationIgnored
-  private var repairWatchTask: Task<Void, Never>?
-
-  @ObservationIgnored
   private var loginTask: Task<Void, Never>?
 
   @ObservationIgnored
+  private var cancelLoginTask: Task<Void, Never>?
+
+  @ObservationIgnored
   private var browserSessionTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var menuBarClockTask: Task<Void, Never>?
+
+  /// Which readings were current the last time the clock was published.
+  @ObservationIgnored
+  private var menuBarCurrency: [Bool] = []
 
   @ObservationIgnored
   private let browserSessionImporter: any BrowserSessionImporting
@@ -227,13 +236,26 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private var accountActionErrorMessage: String?
 
+  /// How long a quit waits for the service's goodbye before going ahead without it.
+  nonisolated static let shutdownDeadline: Duration = .seconds(2)
+
+  /// How often the menu-bar item is re-evaluated against the clock. The shared freshness rule's
+  /// smallest unit is a minute — under one everything reads "just now" — so a minute is as fine
+  /// as the item's answer can change.
+  nonisolated static let menuBarClockInterval: Duration = .seconds(60)
+
+  @ObservationIgnored
+  private let shutdownDeadline: Duration
+
   init(
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
-    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter()
+    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter(),
+    shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     self.browserSessionImporter = browserSessionImporter
     self.browserApplicationRouter = browserApplicationRouter
+    self.shutdownDeadline = shutdownDeadline
     if let client {
       self.client = client
       initializationError = nil
@@ -257,6 +279,7 @@ final class MenuBarViewModel {
       browserSessionImporter = BrowserSessionImporter()
       browserApplicationRouter = WorkspaceBrowserApplicationRouter()
       client = nil
+      shutdownDeadline = MenuBarViewModel.shutdownDeadline
       initializationError = nil
       self.errorMessage = errorMessage
       self.lastCheckedAt = lastCheckedAt
@@ -265,36 +288,60 @@ final class MenuBarViewModel {
       localUsage = visualTestState.localUsage
       accountSummary = visualTestState.accountSummary
       if let usage = visualTestState.accountSummary?.usage {
-        let detail = LocalServiceUsageDetail(
-          range: usage.range,
-          usage: LocalUsagePeriodSummary(
-            totals: UsageSummaryTotals(usage.totals),
-            cost: usage.cost,
-            agents: usage.agents ?? [],
-            modelsTruncated: usage.breakdownsTruncated
-          ),
-          incomplete: usage.coverage == .partial,
-          detailsTruncated: usage.hasTruncatedDetails
-        )
         let values = LocalServiceUsagePeriodValues(
-          today: detail,
-          last7Days: detail,
-          last30Days: detail,
-          all: detail
+          today: Self.periodDetail(usage.today),
+          last7Days: Self.periodDetail(usage.last7Days),
+          last30Days: Self.periodDetail(usage.last30Days),
+          all: Self.periodDetail(usage.all)
         )
         usagePeriods = LocalServiceUsagePeriodCache(local: values, account: values)
       }
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
-      repair = visualTestState.repair
+      cache = visualTestState.cache
+    }
+
+    /// The managed period, in the shape the panel already reads. A managed tree states totals
+    /// and cost only at the leaf, so what a fixture shows above them is folded here.
+    private static func periodDetail(_ period: QuotaWire.UsagePeriod)
+      -> LocalServiceUsageDetail
+    {
+      let agents = period.agents.map { agent in
+        LocalUsageAgentSummary(
+          agent: agent.agent,
+          totals: period.totals,
+          cost: period.cost,
+          providers: agent.providers.map { provider in
+            LocalUsageProviderSummary(
+              provider: provider.provider,
+              totals: period.totals,
+              cost: period.cost,
+              models: provider.models.map {
+                LocalUsageModelSummary(model: $0.model, totals: $0.totals, cost: $0.cost)
+              }
+            )
+          }
+        )
+      }
+      return LocalServiceUsageDetail(
+        range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
+        usage: LocalUsagePeriodSummary(
+          totals: period.totals,
+          cost: period.cost,
+          agents: agents
+        ),
+        incomplete: period.partial,
+        detailsTruncated: period.hasTruncatedDetails
+      )
     }
   #endif
 
   deinit {
     eventTask?.cancel()
-    repairWatchTask?.cancel()
     loginTask?.cancel()
+    cancelLoginTask?.cancel()
     browserSessionTask?.cancel()
+    menuBarClockTask?.cancel()
   }
 
   func start() {
@@ -307,23 +354,58 @@ final class MenuBarViewModel {
       for await event in client.events {
         guard !Task.isCancelled else { return }
         guard let self else { continue }
-        if event.changedComponents.contains(.repair) {
-          lastRepairEventAt = Date()
-        }
         guard event.revision > revision else { continue }
         await reloadState()
       }
     }
-    repairWatchTask = Task { @MainActor [weak self] in
+    let interval = Self.menuBarClockInterval
+    menuBarClockTask = Task { @MainActor [weak self] in
       while !Task.isCancelled {
-        try? await Task.sleep(for: .seconds(20))
-        await self?.checkRepairLiveness()
+        do {
+          try await Task.sleep(for: interval)
+        } catch {
+          return
+        }
+        self?.advanceMenuBarClock(to: Date())
       }
     }
   }
 
-  func presentRepairPageFromQuitAttempt() {
-    localRepairOverride = presentedRepair
+  /// Publishes the instant the menu-bar item is drawn for.
+  ///
+  /// The item depends on time only through which readings still describe live quota, so a
+  /// minute in which that set did not change is a minute in which the item cannot have changed
+  /// either, and publishing would rebuild the status item for the same answer. New readings are
+  /// the exception: the label is re-read for them anyway, and they have to be judged against the
+  /// present rather than against whenever the clock last had reason to move.
+  func advanceMenuBarClock(to now: Date, forNewReadings: Bool = false) {
+    let currency = MenuBarLabelModel.currency(of: overview, now: now)
+    guard forNewReadings || currency != menuBarCurrency else { return }
+    menuBarCurrency = currency
+    menuBarClock = now
+  }
+
+  /// QuotaBar's last word to its local service, and the last thing that can hold up a quit. The
+  /// panel stops following the service, then the client asks the helper to exit and escalates to
+  /// terminate and kill if it will not — but the wait for that answer is capped, because the
+  /// person pressed Quit. A helper wedged badly enough to answer neither its `shutdown` nor a
+  /// ping would otherwise hold the run loop AppKit is turning on our behalf; past the deadline
+  /// the escalation finishes without an audience, and this process exiting closes the child's
+  /// stdin, which says the same thing by a slower route.
+  func shutdown() async {
+    eventTask?.cancel()
+    eventTask = nil
+    guard let client else { return }
+    // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
+    // and a goodbye that lands first cancels it so a healthy quit is not slowed to two seconds.
+    let goodbye = Task { await client.shutdown() }
+    let deadline = Task { try await Task.sleep(for: shutdownDeadline) }
+    let arrival = Task {
+      await goodbye.value
+      deadline.cancel()
+    }
+    _ = await deadline.result
+    arrival.cancel()
   }
 
   func refreshIfNeeded() async {
@@ -355,20 +437,59 @@ final class MenuBarViewModel {
     let previous = try await client.diagnose()
     let refresh = try await client.recheckDiagnostics()
     guard refresh.accepted || refresh.pending else { return previous }
+    // A running refresh keeps answering with the report it already had, so a different
+    // evaluation time is the only proof that a newer one exists.
     let deadline = Date().addingTimeInterval(12)
     var latest = previous
     repeat {
       try await Task.sleep(for: .milliseconds(150))
       latest = try await client.diagnose()
-      if latest.refresh.phase == .idle, latest.refresh.revision != previous.refresh.revision {
-        return latest
-      }
+      if latest.generatedAt != previous.generatedAt { return latest }
     } while Date() < deadline
     return latest
   }
 
+  /// Deletes this Mac's derived cache and starts filling it in again. The session, the upload
+  /// queue, and saved browser sessions live in a different file and are untouched.
+  func resetLocalData() async {
+    guard let client else { return }
+    do {
+      try await client.resetCache()
+      await reloadState()
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
+  }
+
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
     usagePeriods?.detail(source: source, period: period)
+  }
+
+  /// Account answers for Usage only while it can. Everywhere the selection is honored uses
+  /// this, so Overview and the Usage page never disagree about which numbers are on screen.
+  func effectiveUsageSource(_ selected: UsageSource) -> UsageSource {
+    !usageUploadEnabled || accountSummary == nil ? .local : selected
+  }
+
+  /// The bottom bar's one line of today's spend, or `nil` when there is nothing to say.
+  func todayUsageSummary(source: UsageSource) -> UsageTodaySummary? {
+    guard let detail = usageDetail(source: effectiveUsageSource(source), period: .today) else {
+      return nil
+    }
+    return UsageValueFormatter.todaySummary(
+      tokens: detail.usage.totals.totalTokens,
+      cost: detail.usage.cost
+    )
+  }
+
+  /// The menu-bar item, drawn for `now` — which in the app is ``menuBarClock``, so reading the
+  /// label subscribes the item to the clock as well as to the readings.
+  func menuBarLabel(
+    style: MenuBarStylePreference,
+    provider: MenuBarProviderPreference = .automatic,
+    now: Date
+  ) -> MenuBarLabelModel {
+    MenuBarLabelModel.make(overview: overview, style: style, provider: provider, now: now)
   }
 
   func isPreparingUsage(source: UsageSource) -> Bool {
@@ -405,14 +526,20 @@ final class MenuBarViewModel {
     }
   }
 
+  /// Calls off a browser sign-in.
+  ///
+  /// The row keeps its Cancel until the service says the flow is over, so it is easy to press
+  /// twice. A second press joins the request already in flight rather than sending the service a
+  /// second `cancel_login` to race the first.
   func cancelLogin() {
-    guard let client else { return }
+    guard cancelLoginTask == nil, let client else { return }
     loginTask?.cancel()
     loginTask = nil
     isLoggingIn = false
     accountActionErrorMessage = nil
     accountErrorMessage = nil
-    Task { @MainActor [weak self] in
+    cancelLoginTask = Task { @MainActor [weak self] in
+      defer { self?.cancelLoginTask = nil }
       do {
         try await client.cancelLogin()
       } catch {
@@ -478,6 +605,8 @@ final class MenuBarViewModel {
     await reloadState()
   }
 
+  /// Nothing is read until the browser is known and the reader has agreed to that browser
+  /// being read. The consent popup is the gate: declining it leaves every cookie store shut.
   func startProviderBrowserSessionLogin(_ provider: ProviderID) {
     guard
       browserSessionTask == nil,
@@ -485,12 +614,13 @@ final class MenuBarViewModel {
       let loginURL = URL(string: spec.loginURL)
     else { return }
     browserSessionErrorMessages[provider] = nil
+    browserSessionAccessDenials[provider] = nil
     let browsers = BrowserSessionImporter.orderedBrowsers(for: spec)
     if let applicationURL = browserApplicationRouter.defaultApplication(for: loginURL),
       let choice = BrowserApplicationCatalog.choice(
         for: applicationURL, allowed: browsers)
     {
-      beginBrowserSessionPolling(provider, choice: choice)
+      browserSessionPopup = .consent(provider: provider, choice: choice)
       return
     }
     var seen = Set<String>()
@@ -517,6 +647,12 @@ final class MenuBarViewModel {
       popupProvider == provider,
       let choice = choices.first(where: { $0.id == id })
     else { return }
+    browserSessionPopup = .consent(provider: provider, choice: choice)
+  }
+
+  /// The only path to a cookie read. Cancelling the consent popup takes the other one.
+  func confirmProviderBrowserSessionConsent() {
+    guard case .consent(let provider, let choice) = browserSessionPopup else { return }
     browserSessionPopup = nil
     beginBrowserSessionPolling(provider, choice: choice)
   }
@@ -600,8 +736,17 @@ final class MenuBarViewModel {
       let deadline = Date().addingTimeInterval(120)
       var seenHeaders = Set<String>()
       while !Task.isCancelled, Date() < deadline {
-        let candidates = await browserSessionImporter.candidates(
+        let outcome = await browserSessionImporter.read(
           spec: spec, browser: choice.browser, now: Date(), deadline: deadline)
+        // A refusal is not "keep waiting": it stands until the reader changes a permission,
+        // and polling for another two minutes only delays saying so.
+        if case .accessDenied(let denial) = outcome {
+          guard !Task.isCancelled else { return }
+          await recordBrowserAccessDenial(provider, denial: denial)
+          return
+        }
+        let candidates: [BrowserSessionCookieCandidate] =
+          if case .found(let found) = outcome { found } else { [] }
         var accounts: [String: BrowserSessionAccountChoice] = [:]
         for candidate in candidates where !Task.isCancelled && Date() < deadline {
           guard seenHeaders.insert(candidate.headerFingerprint).inserted else { continue }
@@ -650,6 +795,23 @@ final class MenuBarViewModel {
     }
   }
 
+  /// Shows the refusal here, and tells the service so the Support page carries it too. A
+  /// permission this Mac was refused is a local fact, and the report is where a person looks
+  /// for local facts.
+  private func recordBrowserAccessDenial(
+    _ provider: ProviderID,
+    denial: BrowserAccessDenial
+  ) async {
+    browserSessionAccessDenials[provider] = denial
+    browserSessionErrorMessages[provider] = denial.message
+    guard let client else { return }
+    _ = try? await client.reportProviderBrowserAccessDenied(
+      provider,
+      browserName: denial.browserName,
+      reason: denial.reason
+    )
+  }
+
   private func startBrowserSessionCommit(_ choice: BrowserSessionAccountChoice) {
     guard browserSessionTask == nil else { return }
     canCancelBrowserSessionLogin = false
@@ -676,6 +838,9 @@ final class MenuBarViewModel {
       _ = try await client.commitProviderBrowserSession(
         choice.provider, cookieHeader: choice.cookieHeader)
       guard !Task.isCancelled else { return }
+      // A committed session is proof the store was readable, so any refusal on record is stale.
+      browserSessionAccessDenials[choice.provider] = nil
+      browserSessionErrorMessages[choice.provider] = nil
       await reloadState()
     } catch is CancellationError {
       return
@@ -736,7 +901,7 @@ final class MenuBarViewModel {
       // A local failure is about this Mac. Another device's reading fills the row but does
       // not mean collection here is fine, so the failure still shows. A provider that was
       // never set up here has nothing to recover and stays quiet once the account covers it.
-      let collectedHere = (result?.sources ?? 0) > 0
+      let collectedHere = !(result?.sources.isEmpty ?? true)
       let status =
         accounts.isEmpty || collectedHere ? result.flatMap(ProviderStatusCopy.from) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
@@ -767,15 +932,13 @@ final class MenuBarViewModel {
 
   private func apply(_ state: LocalServiceState) {
     revision = state.revision
-    lastSuccessfulStateAt = Date()
-    localRepairOverride = nil
-    repair = state.repair
-    QuotaBarUpdater.setChecksSuppressed(state.repair.blocksQuit)
+    cache = state.cache
     usageUploadEnabled = state.usageUploadEnabled
     usagePeriods = state.usagePeriods
     report = state.quota.value
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
+    signInDisplayLabel = state.account.value?.displayLabel
     authStatus =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)
@@ -790,6 +953,7 @@ final class MenuBarViewModel {
         nil
       }
     overview = state.overview
+    advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
     )
@@ -817,56 +981,15 @@ final class MenuBarViewModel {
     }
   }
 
-  private func checkRepairLiveness() async {
-    guard let client else { return }
-    guard presentedRepair.status == .repairing || presentedRepair.status == .checking else {
-      return
-    }
-    let now = Date()
-    let lastSignal = [lastRepairEventAt, lastSuccessfulStateAt].compactMap { $0 }.max()
-    if let lastSignal, now.timeIntervalSince(lastSignal) < 20 { return }
-    do {
-      apply(try await client.probeStatePreservingHelper())
-      lastSuccessfulStateAt = Date()
-      if let heartbeat = presentedRepair.heartbeatAt,
-        Date().timeIntervalSince(heartbeat) > 45
-      {
-        renderStuckFromLastSession()
-      }
-    } catch {
-      renderStuckFromLastSession()
-    }
-  }
-
-  private func renderStuckFromLastSession() {
-    guard presentedRepair.status == .repairing else { return }
-    localRepairOverride = LocalServiceRepairSession(
-      status: .stuck,
-      severity: presentedRepair.severity,
-      phase: presentedRepair.phase,
-      title: presentedRepair.title,
-      guidance: "Repair stopped responding. You can retry.",
-      activity: presentedRepair.activity,
-      startedAt: presentedRepair.startedAt,
-      heartbeatAt: presentedRepair.heartbeatAt,
-      progressCurrent: presentedRepair.progressCurrent,
-      progressTotal: presentedRepair.progressTotal,
-      stuck: true,
-      blocksQuit: false,
-      recoveryAction: .retry
-    )
-  }
-
   private static func presentation(
     for item: LocalServiceOverviewItem
   ) -> AccountQuotaPresentation? {
     let sourcePairs = item.sources.compactMap { source in
       source.observationSource.map { (source.sourceID, $0) }
     }
-    guard
-      let selectedSource = sourcePairs.first(where: { $0.0 == item.selectedSourceID })?.1,
-      !sourcePairs.isEmpty
-    else { return nil }
+    // A selected source the service did not also describe is not a row this panel can stand
+    // behind, so the whole observation is dropped rather than shown without provenance.
+    guard sourcePairs.contains(where: { $0.0 == item.selectedSourceID }) else { return nil }
 
     let scope: QuotaSubscriptionIdentity.Scope
     switch item.identity.scope {
@@ -889,8 +1012,6 @@ final class MenuBarViewModel {
       state: item.snapshot.reportedState == .available && item.isStale
         ? .stale
         : item.snapshot.reportedState,
-      sources: sourcePairs.map(\.1),
-      selectedSource: selectedSource,
       selectedSourceDisplayName: item.selectedSourceDisplayName
     )
   }

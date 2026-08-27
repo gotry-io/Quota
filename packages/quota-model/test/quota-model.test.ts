@@ -3,9 +3,9 @@ import pricingConformanceJson from "../../protocol/fixtures/pricing-conformance.
 };
 import type {
   BillingChannel,
+  DatedUsageRow,
   PricingCatalog,
   PricingCatalogEntry,
-  UsageHourlyFact,
 } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,7 +13,6 @@ import {
   calculateUsageCost,
   calculateUsageRowCost,
   foldPreparedUsageCosts,
-  foldUsageFacts,
   type NormalizedUsageEvent,
   prepareUsageCosts,
   remainingPercent,
@@ -23,7 +22,7 @@ import {
 
 type PricingConformanceFixture = {
   catalogs: Record<string, PricingCatalog>;
-  rows: Record<string, UsageHourlyFact>;
+  rows: Record<string, DatedUsageRow>;
   validation: Array<{
     name: string;
     catalog: string;
@@ -37,7 +36,8 @@ type PricingConformanceFixture = {
   }>;
   cost: Array<{
     name: string;
-    catalog: string;
+    /** `null` states the case where no catalog is available at all. */
+    catalog: string | null;
     mode: "calculate" | "auto" | "reported";
     rows: string[];
     expected: Record<string, unknown>;
@@ -80,7 +80,7 @@ describe("pricing conformance", () => {
       const rows = testCase.rows.map((name) => pricingConformance.rows[name]!);
       const actual = calculateUsageCost(
         rows,
-        pricingConformance.catalogs[testCase.catalog]!,
+        testCase.catalog === null ? null : pricingConformance.catalogs[testCase.catalog]!,
         testCase.mode,
       );
       expect(actual, testCase.name).toEqual(testCase.expected);
@@ -97,48 +97,43 @@ describe("quota calculations", () => {
 });
 
 describe("Usage aggregation", () => {
-  it("keeps local-hour splits inside the same UTC hour for fractional offsets", () => {
-    const rows = aggregateUsageEvents(
-      [
-        event({ occurred_at: "2026-08-02T00:10:00Z", input_tokens: 100 }),
-        event({ occurred_at: "2026-08-02T00:20:00Z", input_tokens: 200 }),
-      ],
-      "Asia/Kathmandu",
-    );
+  it("places every event by the UTC hour it happened in", () => {
+    const rows = aggregateUsageEvents([
+      event({ occurred_at: "2026-08-02T00:10:00Z", input_tokens: 100 }),
+      event({ occurred_at: "2026-08-02T00:20:00Z", input_tokens: 200 }),
+      event({ occurred_at: "2026-08-02T01:05:00Z", input_tokens: 400 }),
+    ]);
 
-    expect(rows).toHaveLength(2);
+    // The two events inside one UTC hour are one row now: nothing splits them by a local
+    // clock the row no longer carries.
     expect(rows.map((row) => row.bucket_start_utc)).toEqual([
       "2026-08-02T00:00:00Z",
-      "2026-08-02T00:00:00Z",
+      "2026-08-02T01:00:00Z",
     ]);
-    expect(rows.map((row) => row.usage_hour)).toEqual([5, 6]);
-    expect(foldUsageFacts(rows).input_tokens).toBe(300);
+    expect(rows.map((row) => row.input_tokens)).toEqual([300, 400]);
   });
 
   it("merges identical dimensions and conserves every token/source-cost subset", () => {
-    const rows = aggregateUsageEvents(
-      [
-        event({
-          occurred_at: "2026-08-02T00:01:00Z",
-          input_tokens: 1_000,
-          cache_read_tokens: 100,
-          output_tokens: 200,
-          reasoning_tokens: 50,
-          source_cost_microusd: 123n,
-          source_cost_covered_requests: 1,
-        }),
-        event({
-          occurred_at: "2026-08-02T00:02:00Z",
-          input_tokens: 2_000,
-          cache_write_5m_tokens: 500,
-          output_tokens: 300,
-          reasoning_tokens: 75,
-          source_cost_microusd: 456n,
-          source_cost_covered_requests: 1,
-        }),
-      ],
-      "UTC",
-    );
+    const rows = aggregateUsageEvents([
+      event({
+        occurred_at: "2026-08-02T00:01:00Z",
+        input_tokens: 1_000,
+        cache_read_tokens: 100,
+        output_tokens: 200,
+        reasoning_tokens: 50,
+        source_cost_microusd: 123n,
+        source_cost_covered_requests: 1,
+      }),
+      event({
+        occurred_at: "2026-08-02T00:02:00Z",
+        input_tokens: 2_000,
+        cache_write_5m_tokens: 500,
+        output_tokens: 300,
+        reasoning_tokens: 75,
+        source_cost_microusd: 456n,
+        source_cost_covered_requests: 1,
+      }),
+    ]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -150,11 +145,6 @@ describe("Usage aggregation", () => {
       requests: 2,
       source_cost_microusd: "579",
       source_cost_covered_requests: 2,
-    });
-    expect(foldUsageFacts(rows)).toMatchObject({
-      input_tokens: 3_000,
-      output_tokens: 500,
-      source_cost_microusd: "579",
     });
   });
 
@@ -177,8 +167,8 @@ describe("Usage aggregation", () => {
       }),
     ];
 
-    const forward = aggregateUsageEvents(events, "UTC");
-    const reversed = aggregateUsageEvents([...events].reverse(), "UTC");
+    const forward = aggregateUsageEvents(events);
+    const reversed = aggregateUsageEvents([...events].reverse());
 
     expect(reversed).toEqual(forward);
     expect(forward.map((row) => `${row.agent}:${row.model}:${row.service_tier}`)).toEqual([
@@ -188,20 +178,16 @@ describe("Usage aggregation", () => {
     ]);
   });
 
-  it("rejects invalid instants, timezones, token subsets, and safe-integer overflow", () => {
-    expect(() => aggregateUsageEvents([event({ occurred_at: "2026-08-02" })], "UTC")).toThrow();
-    expect(() => aggregateUsageEvents([event()], "Mars/Olympus_Mons")).toThrow();
+  it("rejects invalid instants, token subsets, and safe-integer overflow", () => {
+    expect(() => aggregateUsageEvents([event({ occurred_at: "2026-08-02" })])).toThrow();
     expect(() =>
-      aggregateUsageEvents([event({ input_tokens: 1, cache_read_tokens: 2 })], "UTC"),
+      aggregateUsageEvents([event({ input_tokens: 1, cache_read_tokens: 2 })]),
     ).toThrow();
     expect(() =>
-      aggregateUsageEvents(
-        [
-          event({ input_tokens: Number.MAX_SAFE_INTEGER }),
-          event({ occurred_at: "2026-08-02T00:02:00Z", input_tokens: 1 }),
-        ],
-        "UTC",
-      ),
+      aggregateUsageEvents([
+        event({ input_tokens: Number.MAX_SAFE_INTEGER }),
+        event({ occurred_at: "2026-08-02T00:02:00Z", input_tokens: 1 }),
+      ]),
     ).toThrow(/safe-integer/);
   });
 });
@@ -270,8 +256,8 @@ describe("Usage cost", () => {
     ]);
     const cost = calculateUsageCost(
       [
-        usageRow({ bucket_start_utc: "2026-08-02T12:00:00Z", input_tokens: 1 }),
-        usageRow({ bucket_start_utc: "2026-08-02T13:00:00Z", input_tokens: 1 }),
+        usageRow({ date: "2026-08-02", input_tokens: 1 }),
+        usageRow({ date: "2026-08-03", input_tokens: 1 }),
       ],
       halfRateCatalog,
     );
@@ -397,7 +383,7 @@ describe("Usage cost", () => {
     );
     expect(foldPreparedUsageCosts(prepared, [0, 2])).toEqual(
       calculateUsageCost(
-        [rows[0] as UsageHourlyFact, rows[2] as UsageHourlyFact],
+        [rows[0] as DatedUsageRow, rows[2] as DatedUsageRow],
         priceCatalog,
         "auto",
       ),
@@ -454,11 +440,9 @@ function event(overrides: Partial<NormalizedUsageEvent> = {}): NormalizedUsageEv
   };
 }
 
-function usageRow(overrides: Partial<UsageHourlyFact> = {}): UsageHourlyFact {
+function usageRow(overrides: Partial<DatedUsageRow> = {}): DatedUsageRow {
   return {
-    bucket_start_utc: "2026-08-02T12:00:00Z",
-    usage_date: "2026-08-02",
-    usage_hour: 20,
+    date: "2026-08-02",
     agent: "codex",
     billing_channel: "openai_direct",
     channel_source: "agent_default",

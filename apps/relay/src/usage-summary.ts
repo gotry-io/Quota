@@ -1,4 +1,5 @@
 import {
+  type DatedUsageRow,
   foldPreparedUsageCosts,
   inferenceProvider,
   type PreparedUsageCosts,
@@ -6,89 +7,33 @@ import {
   resolveModel,
 } from "@gotry-io/quota-model";
 import {
-  type AccountUsageSummary,
-  AccountUsageSummarySchema,
+  type AccountUsage,
+  AccountUsageSchema,
   type InferenceProvider,
-  type LocalUsageAgentSummary,
   MAXIMUM_UNPRICED_ITEMS,
-  MAXIMUM_USAGE_BREAKDOWNS,
+  MAXIMUM_USAGE_PERIOD_LEAVES,
   type ModelCatalog,
   type PricingCatalog,
-  type UsageBreakdownDimension,
-  type UsageCostMode,
+  USAGE_OTHER_MODEL,
+  type UsageActivityDay,
+  UsageActivityDaySchema,
+  exceedsContractBound,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
-  type UsageHourlyFact,
-  type UsageTokenTotals,
-  UsageTokenTotalsSchema,
+  type UsagePeriod,
+  UsagePeriodSchema,
+  type UsageSummaryTotals,
   type UsageUnpricedItem,
 } from "@gotry-io/quota-protocol";
-import type { StoredUsageHourlyFact, UsageQueryResult } from "@gotry-io/relay-core";
+import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
+import { LOCAL_PERIOD_KEYS, type LocalPeriodKey, type UsageDateWindow } from "./local-periods.ts";
 
-const breakdownDimensions = [
-  "device",
-  "agent",
-  "model",
-  "billing_channel",
-  "usage_date",
-  "bucket_start_utc",
-] as const satisfies readonly UsageBreakdownDimension[];
-
-export function buildUsageSummary(
-  result: UsageQueryResult,
-  range: { from: string; to: string },
-  mode: UsageCostMode,
-  catalog: PricingCatalog,
-  includeHourlyBreakdowns = true,
-  modelCatalog?: ModelCatalog,
-  includeClients = false,
-): AccountUsageSummary {
-  const facts = result.rows.map(usageFact);
-  const preparedCosts = prepareUsageCosts(facts, catalog, mode);
-  const totals = emptyTotals();
-  const groups = new Map<string, UsageSummaryGroup>();
-  let breakdownsTruncated = false;
-  for (const [index, row] of result.rows.entries()) {
-    const fact = facts[index];
-    if (!fact) throw new UsageSummaryLimitError();
-    addTotals(totals, fact);
-    for (const dimension of includeHourlyBreakdowns
-      ? breakdownDimensions
-      : breakdownDimensions.slice(0, -1)) {
-      const groupKey = breakdownKey(row, dimension, modelCatalog);
-      if (!addGroup(groups, dimension, groupKey.identity, groupKey.key, fact, index)) {
-        breakdownsTruncated = true;
-      }
-    }
-  }
-  const breakdowns = [...groups]
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([, group]) => {
-      return {
-        dimension: group.dimension,
-        key: group.key,
-        totals: serializedTotals(group.totals),
-        cost: boundedFoldPreparedUsageCosts(preparedCosts, group.rowIndexes),
-      };
-    });
-  const agentSummary = includeClients
-    ? buildUsageAgents(result.rows, facts, preparedCosts, modelCatalog)
-    : undefined;
-  return boundedModelResult(() =>
-    AccountUsageSummarySchema.parse({
-      range,
-      totals: serializedTotals(totals),
-      cost: boundedFoldPreparedUsageCosts(preparedCosts),
-      coverage: result.coverage,
-      breakdowns,
-      ...(agentSummary ? { agents: agentSummary.agents } : {}),
-      ...(modelCatalog ? { model_catalog_revision: modelCatalog.revision } : {}),
-      ...(breakdownsTruncated || agentSummary?.modelsTruncated
-        ? { breakdowns_truncated: true }
-        : {}),
-    }),
-  );
-}
+/**
+ * Cost is resolved from the catalog and falls back to what a provider itself reported when the
+ * catalog cannot price a row. The other modes only ever narrowed that answer, and no reader
+ * asked for a narrower one.
+ */
+const accountCostMode = "auto" as const;
 
 export class UsageSummaryLimitError extends Error {
   constructor() {
@@ -97,237 +42,294 @@ export class UsageSummaryLimitError extends Error {
   }
 }
 
-function usageFact(row: StoredUsageHourlyFact) {
-  const { device_id: _deviceID, aggregation_timezone: _aggregationTimezone, ...fact } = row;
-  return fact;
+/** Rows the rollup could not answer for, and the periods that fold them. */
+export interface AccountUsageBoundary {
+  periods: readonly LocalPeriodKey[];
+  rows: readonly StoredUsageDailyRow[];
 }
 
-function buildUsageAgents(
-  rows: readonly StoredUsageHourlyFact[],
-  facts: readonly UsageHourlyFact[],
-  preparedCosts: PreparedUsageCosts,
-  modelCatalog?: ModelCatalog,
-): { agents: LocalUsageAgentSummary[]; modelsTruncated: boolean } {
-  const agents = new Map<string, UsageAgentGroup>();
-  let modelCount = 0;
-  let modelsTruncated = false;
-  for (const [index, row] of rows.entries()) {
-    let agent = agents.get(row.agent);
-    if (!agent) {
-      agent = { agent: row.agent, rowIndexes: [], providers: new Map() };
-      agents.set(row.agent, agent);
-    }
-    agent.rowIndexes.push(index);
-
-    const providerID = inferenceProvider(row.billing_channel);
-    let provider = agent.providers.get(providerID);
-    if (!provider) {
-      provider = { provider: providerID, rowIndexes: [], models: new Map() };
-      agent.providers.set(providerID, provider);
-    }
-    provider.rowIndexes.push(index);
-
-    const modelKey = breakdownKey(row, "model", modelCatalog);
-    let model = provider.models.get(modelKey.identity);
-    if (!model) {
-      if (modelCount === MAXIMUM_USAGE_BREAKDOWNS) {
-        modelsTruncated = true;
-        continue;
-      }
-      model = { model: modelKey.key, rowIndexes: [] };
-      provider.models.set(modelKey.identity, model);
-      modelCount += 1;
-    }
-    model.rowIndexes.push(index);
-  }
-
-  return {
-    agents: [...agents.values()]
-      .sort((left, right) => left.agent.localeCompare(right.agent))
-      .map((agent) => ({
-        agent: agent.agent,
-        totals: summaryTotals(facts, agent.rowIndexes),
-        cost: boundedFoldPreparedUsageCosts(preparedCosts, agent.rowIndexes),
-        providers: [...agent.providers.values()]
-          .sort((left, right) => left.provider.localeCompare(right.provider))
-          .map((provider) => ({
-            provider: provider.provider,
-            totals: summaryTotals(facts, provider.rowIndexes),
-            cost: boundedFoldPreparedUsageCosts(preparedCosts, provider.rowIndexes),
-            models: [...provider.models]
-              .sort(([left], [right]) => left.localeCompare(right))
-              .map(([, model]) => ({
-                model: model.model,
-                totals: summaryTotals(facts, model.rowIndexes),
-                cost: boundedFoldPreparedUsageCosts(preparedCosts, model.rowIndexes),
-              })),
-          })),
-      })),
-    modelsTruncated,
-  };
+export interface AccountUsageInput {
+  /** Every retained day of the rollup, which is what `all` is. */
+  daily: readonly StoredUsageDailyRow[];
+  boundaries: readonly AccountUsageBoundary[];
+  /** The whole UTC days each local period folds from the rollup. */
+  days: Record<LocalPeriodKey, UsageDateWindow | null>;
+  catalog: PricingCatalog;
+  modelCatalog: ModelCatalog;
 }
 
-function summaryTotals(facts: readonly UsageHourlyFact[], indexes: readonly number[]) {
-  const totals = emptyTotals();
-  for (const index of indexes) {
-    const fact = facts[index];
-    if (!fact) throw new UsageSummaryLimitError();
-    addTotals(totals, fact);
-  }
-  const totalTokens = totals.input_tokens + totals.output_tokens;
-  const cacheWriteInputTokens =
-    totals.cache_write_5m_tokens +
-    totals.cache_write_1h_tokens +
-    totals.cache_write_inferred_tokens;
-  if (!Number.isSafeInteger(totalTokens) || !Number.isSafeInteger(cacheWriteInputTokens)) {
-    throw new UsageSummaryLimitError();
-  }
-  return {
-    total_tokens: totalTokens,
-    input_tokens: totals.input_tokens,
-    output_tokens: totals.output_tokens,
-    cache_read_input_tokens: totals.cache_read_tokens,
-    cache_write_input_tokens: cacheWriteInputTokens,
-    reasoning_tokens: totals.reasoning_tokens,
-    messages: totals.requests,
-  };
-}
-
-interface UsageAgentGroup {
-  agent: StoredUsageHourlyFact["agent"];
-  rowIndexes: number[];
-  providers: Map<InferenceProvider, UsageProviderGroup>;
-}
-
-interface UsageProviderGroup {
-  provider: InferenceProvider;
-  rowIndexes: number[];
-  models: Map<string, UsageModelGroup>;
-}
-
-interface UsageModelGroup {
-  model: string;
-  rowIndexes: number[];
-}
-
-function breakdownKey(
-  row: StoredUsageHourlyFact,
-  dimension: (typeof breakdownDimensions)[number],
-  modelCatalog?: ModelCatalog,
-): { identity: string; key: string } {
-  switch (dimension) {
-    case "device":
-      return { identity: row.device_id, key: row.device_id };
-    case "agent":
-      return { identity: row.agent, key: row.agent };
-    case "model": {
-      if (!modelCatalog) return { identity: "raw:" + row.model, key: row.model };
-      const resolution = resolveModel(modelCatalog, row);
-      return resolution
-        ? {
-            identity: "canonical:" + resolution,
-            key: resolution,
-          }
-        : { identity: "raw:" + row.model, key: row.model };
-    }
-    case "billing_channel":
-      return { identity: row.billing_channel, key: row.billing_channel };
-    case "usage_date":
-      return { identity: row.usage_date, key: row.usage_date };
-    case "bucket_start_utc":
-      return { identity: row.bucket_start_utc, key: row.bucket_start_utc };
-  }
-}
-
-function addGroup(
-  groups: Map<string, UsageSummaryGroup>,
-  dimension: UsageBreakdownDimension,
-  identity: string,
-  key: string,
-  row: UsageHourlyFact,
-  rowIndex: number,
-): boolean {
-  // Model text is opaque and may contain punctuation such as ':'. Keep the
-  // display fields separate instead of recovering them from a delimiter.
-  const compound = dimension + "\u0000" + identity;
-  let group = groups.get(compound);
-  if (!group) {
-    if (groups.size >= MAXIMUM_USAGE_BREAKDOWNS) return false;
-    group = { dimension, key, totals: emptyTotals(), rowIndexes: [] };
-    groups.set(compound, group);
-  }
-  addTotals(group.totals, row);
-  group.rowIndexes.push(rowIndex);
-  return true;
-}
-
-interface UsageSummaryGroup {
-  dimension: UsageBreakdownDimension;
-  key: string;
-  totals: MutableUsageTotals;
-  rowIndexes: number[];
-}
-
-type MutableUsageTotals = Omit<UsageTokenTotals, "source_cost_microusd"> & {
-  source_cost_microusd: bigint;
-};
-
-const countKeys = [
-  "input_tokens",
-  "cache_read_tokens",
-  "cache_write_5m_tokens",
-  "cache_write_1h_tokens",
-  "cache_write_inferred_tokens",
-  "output_tokens",
-  "reasoning_tokens",
-  "requests",
-  "web_search_requests",
-  "web_fetch_requests",
-  "source_cost_covered_requests",
-] as const;
-
-function emptyTotals(): MutableUsageTotals {
-  return {
-    input_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_5m_tokens: 0,
-    cache_write_1h_tokens: 0,
-    cache_write_inferred_tokens: 0,
-    output_tokens: 0,
-    reasoning_tokens: 0,
-    requests: 0,
-    web_search_requests: 0,
-    web_fetch_requests: 0,
-    source_cost_microusd: 0n,
-    source_cost_covered_requests: 0,
-  };
-}
-
-function addTotals(target: MutableUsageTotals, row: UsageHourlyFact): void {
-  for (const key of countKeys) {
-    const total = target[key] + row[key];
-    if (!Number.isSafeInteger(total)) throw new UsageSummaryLimitError();
-    target[key] = total;
-  }
-  target.source_cost_microusd += BigInt(row.source_cost_microusd ?? "0");
-}
-
-function serializedTotals(totals: MutableUsageTotals): UsageTokenTotals {
-  return boundedModelResult(() =>
-    UsageTokenTotalsSchema.parse({
-      ...totals,
-      source_cost_microusd:
-        totals.source_cost_covered_requests === 0 ? null : totals.source_cost_microusd.toString(),
+/**
+ * The four periods an Account read answers.
+ *
+ * `all` is the rollup entire. The other three cover local days, so each folds the whole UTC days
+ * inside it from the rollup and the hours its edges cut from `usage_hourly` — every instant it
+ * covers counted once, from exactly one of the two.
+ *
+ * Prices are resolved once per row and every period selects from that, so a row inside three
+ * windows is priced once rather than three times.
+ */
+export function buildAccountUsage(input: AccountUsageInput): AccountUsage {
+  const rows = [...input.daily, ...input.boundaries.flatMap((boundary) => boundary.rows)];
+  const facts = rows.map(usageRow);
+  const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const selected = selectPeriods(input);
+  const period = (indexes: readonly number[]) =>
+    buildUsagePeriod(rows, facts, prepared, indexes, input.modelCatalog);
+  return boundedResult(() =>
+    AccountUsageSchema.parse({
+      today: period(selected.today),
+      last_7_days: period(selected.last_7_days),
+      last_30_days: period(selected.last_30_days),
+      all: period(input.daily.map((_, index) => index)),
     }),
   );
 }
 
+/** One entry per UTC date that has Usage, in date order. */
+export function buildActivityDays(input: {
+  rows: readonly StoredUsageDailyRow[];
+  catalog: PricingCatalog;
+}): UsageActivityDay[] {
+  const facts = input.rows.map(usageRow);
+  const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const byDate = new Map<string, number[]>();
+  for (const [index, row] of input.rows.entries()) {
+    const indexes = byDate.get(row.date);
+    if (indexes) indexes.push(index);
+    else byDate.set(row.date, [index]);
+  }
+  return boundedResult(() =>
+    [...byDate]
+      .sort(([left], [right]) => compareText(left, right))
+      .map(([date, indexes]) =>
+        UsageActivityDaySchema.parse({
+          date,
+          totals: summaryTotals(facts, indexes),
+          cost: boundedFoldPreparedUsageCosts(prepared, indexes),
+          partial: indexes.some((index) => (input.rows[index]?.partial_hours ?? 0) > 0),
+        }),
+      ),
+  );
+}
+
+/** Which of the folded rows each local period takes, over the rows `buildAccountUsage` laid out. */
+function selectPeriods(input: AccountUsageInput): Record<LocalPeriodKey, number[]> {
+  const selected: Record<LocalPeriodKey, number[]> = {
+    today: [],
+    last_7_days: [],
+    last_30_days: [],
+  };
+  for (const [index, row] of input.daily.entries()) {
+    for (const key of LOCAL_PERIOD_KEYS) {
+      const window = input.days[key];
+      if (window && row.date >= window.from && row.date <= window.to) selected[key].push(index);
+    }
+  }
+  let offset = input.daily.length;
+  for (const boundary of input.boundaries) {
+    for (const index of boundary.rows.keys()) {
+      for (const key of boundary.periods) selected[key].push(offset + index);
+    }
+    offset += boundary.rows.length;
+  }
+  return selected;
+}
+
+function usageRow(row: StoredUsageDailyRow): DatedUsageRow {
+  const { device_id: _device, partial_hours: _partial, ...fact } = row;
+  return fact;
+}
+
+function buildUsagePeriod(
+  rows: readonly StoredUsageDailyRow[],
+  facts: readonly DatedUsageRow[],
+  prepared: PreparedUsageCosts,
+  indexes: readonly number[],
+  modelCatalog: ModelCatalog,
+): UsagePeriod {
+  return UsagePeriodSchema.parse({
+    totals: summaryTotals(facts, indexes),
+    cost: boundedFoldPreparedUsageCosts(prepared, indexes),
+    partial: indexes.some((index) => (rows[index]?.partial_hours ?? 0) > 0),
+    agents: buildAgentTree(facts, prepared, indexes, modelCatalog),
+  });
+}
+
+interface UsageLeaf {
+  agent: string;
+  provider: InferenceProvider;
+  model: string;
+  indexes: number[];
+  tokens: number;
+}
+
+/**
+ * The agent tree for one period, bounded by its leaf count.
+ *
+ * A tree that would carry more model leaves than the contract allows keeps the largest and
+ * folds the rest into an `other` leaf under the provider they belong to, so a response cannot
+ * grow without bound and nothing folded is missing from the totals above it.
+ */
+function buildAgentTree(
+  facts: readonly DatedUsageRow[],
+  prepared: PreparedUsageCosts,
+  indexes: readonly number[],
+  modelCatalog: ModelCatalog,
+): unknown[] {
+  const leaves = new Map<string, UsageLeaf>();
+  for (const index of indexes) {
+    const fact = facts[index];
+    if (!fact) throw new UsageSummaryLimitError();
+    const provider = inferenceProvider(fact.billing_channel);
+    const model = resolveModel(modelCatalog, fact) ?? fact.model;
+    const key = leafKey(fact.agent, provider, model);
+    let leaf = leaves.get(key);
+    if (!leaf) {
+      leaf = { agent: fact.agent, provider, model, indexes: [], tokens: 0 };
+      leaves.set(key, leaf);
+    }
+    leaf.indexes.push(index);
+    leaf.tokens = addSafe(leaf.tokens, addSafe(fact.input_tokens, fact.output_tokens));
+  }
+
+  const agents = new Map<string, Map<InferenceProvider, UsageLeaf[]>>();
+  for (const leaf of boundLeaves([...leaves.values()])) {
+    let providers = agents.get(leaf.agent);
+    if (!providers) {
+      providers = new Map();
+      agents.set(leaf.agent, providers);
+    }
+    const models = providers.get(leaf.provider);
+    if (models) models.push(leaf);
+    else providers.set(leaf.provider, [leaf]);
+  }
+
+  return [...agents]
+    .sort(([left], [right]) => compareText(left, right))
+    .map(([agent, providers]) => ({
+      agent,
+      providers: [...providers]
+        .sort(([left], [right]) => compareText(left, right))
+        .map(([provider, models]) => ({
+          provider,
+          models: models
+            .sort((left, right) => compareText(left.model, right.model))
+            .map((leaf) => ({
+              model: leaf.model,
+              totals: summaryTotals(facts, leaf.indexes),
+              cost: boundedFoldPreparedUsageCosts(prepared, leaf.indexes),
+            })),
+        })),
+    }));
+}
+
+function boundLeaves(leaves: readonly UsageLeaf[]): UsageLeaf[] {
+  if (leaves.length <= MAXIMUM_USAGE_PERIOD_LEAVES) return [...leaves];
+  const ranked = [...leaves].sort(
+    (left, right) =>
+      right.tokens - left.tokens ||
+      compareText(left.agent, right.agent) ||
+      compareText(left.provider, right.provider) ||
+      compareText(left.model, right.model),
+  );
+  // How many `other` leaves the tail would need if the split were made at each position, so the
+  // budget covers both what is kept and what replaces the rest.
+  const branches = new Set<string>();
+  const tailBranches: number[] = new Array(ranked.length + 1).fill(0);
+  for (let index = ranked.length - 1; index >= 0; index -= 1) {
+    const leaf = ranked[index];
+    if (leaf) branches.add(leafKey(leaf.agent, leaf.provider, ""));
+    tailBranches[index] = branches.size;
+  }
+  let split = 0;
+  for (let candidate = MAXIMUM_USAGE_PERIOD_LEAVES; candidate >= 0; candidate -= 1) {
+    if (candidate + (tailBranches[candidate] ?? 0) <= MAXIMUM_USAGE_PERIOD_LEAVES) {
+      split = candidate;
+      break;
+    }
+  }
+  const folded = new Map<string, UsageLeaf>();
+  for (const leaf of ranked.slice(split)) {
+    const key = leafKey(leaf.agent, leaf.provider, "");
+    const existing = folded.get(key);
+    if (existing) {
+      existing.indexes.push(...leaf.indexes);
+      existing.tokens = addSafe(existing.tokens, leaf.tokens);
+      continue;
+    }
+    folded.set(key, {
+      agent: leaf.agent,
+      provider: leaf.provider,
+      model: USAGE_OTHER_MODEL,
+      indexes: [...leaf.indexes],
+      tokens: leaf.tokens,
+    });
+  }
+  return [...ranked.slice(0, split), ...folded.values()];
+}
+
+/** Model text is provider-owned and may contain any punctuation, so the parts are quoted. */
+function leafKey(agent: string, provider: string, model: string): string {
+  return JSON.stringify([agent, provider, model]);
+}
+
+function summaryTotals(
+  facts: readonly DatedUsageRow[],
+  indexes: readonly number[],
+): UsageSummaryTotals {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let reasoning = 0;
+  let requests = 0;
+  for (const index of indexes) {
+    const fact = facts[index];
+    if (!fact) throw new UsageSummaryLimitError();
+    input = addSafe(input, fact.input_tokens);
+    output = addSafe(output, fact.output_tokens);
+    cacheRead = addSafe(cacheRead, fact.cache_read_tokens);
+    cacheWrite = addSafe(
+      cacheWrite,
+      fact.cache_write_5m_tokens + fact.cache_write_1h_tokens + fact.cache_write_inferred_tokens,
+    );
+    reasoning = addSafe(reasoning, fact.reasoning_tokens);
+    requests = addSafe(requests, fact.requests);
+  }
+  return {
+    total_tokens: addSafe(input, output),
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cacheRead,
+    cache_write_input_tokens: cacheWrite,
+    reasoning_tokens: reasoning,
+    messages: requests,
+  };
+}
+
+function addSafe(left: number, right: number): number {
+  const total = left + right;
+  if (!Number.isSafeInteger(total)) throw new UsageSummaryLimitError();
+  return total;
+}
+
+function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/**
+ * Fold a selected set of prepared rows, keeping the unpriced detail bounded.
+ *
+ * The detail list names every distinct channel/model/reason that could not be priced. An
+ * account with more of those than the contract carries reports the count and marks the list
+ * truncated rather than failing the whole read.
+ */
 function boundedFoldPreparedUsageCosts(
   prepared: PreparedUsageCosts,
-  indexes?: readonly number[],
+  indexes: readonly number[],
 ): UsageCostOutcome {
-  const selected = indexes ?? prepared.rows.map((_, index) => index);
-  if (!hasTooManyUnpricedDetails(prepared, selected)) {
+  if (!hasTooManyUnpricedDetails(prepared, indexes)) {
     return foldPreparedUsageCosts(prepared, indexes);
   }
 
@@ -336,11 +338,11 @@ function boundedFoldPreparedUsageCosts(
   let amount = 0n;
   const assumptions = new Set<UsageCostOutcome["assumptions"][number]>();
   const unpriced = new Map<string, UsageUnpricedItem>();
-  for (const index of selected) {
+  for (const index of indexes) {
     const row = prepared.rows[index];
-    if (!row) throw new RangeError(`Missing prepared Usage row at index ${index}.`);
+    if (!row) throw new UsageSummaryLimitError();
     if (row.status !== "priced") {
-      const key = `${row.billing_channel}\u0000${row.model}\u0000${row.reason}`;
+      const key = unpricedKey(row.billing_channel, row.model, row.reason);
       const existing = unpriced.get(key);
       if (existing) existing.rows += 1;
       else {
@@ -358,11 +360,12 @@ function boundedFoldPreparedUsageCosts(
     else reportedRows += 1;
     for (const assumption of row.assumptions) assumptions.add(assumption);
   }
-  const unpricedRows = selected.length - calculatedRows - reportedRows;
+  const unpricedRows = indexes.length - calculatedRows - reportedRows;
   const details = [...unpriced.values()]
     .sort((left, right) =>
-      `${left.billing_channel}\u0000${left.model}\u0000${left.reason}`.localeCompare(
-        `${right.billing_channel}\u0000${right.model}\u0000${right.reason}`,
+      compareText(
+        unpricedKey(left.billing_channel, left.model, left.reason),
+        unpricedKey(right.billing_channel, right.model, right.reason),
       ),
     )
     .slice(0, MAXIMUM_UNPRICED_ITEMS);
@@ -393,6 +396,10 @@ function boundedFoldPreparedUsageCosts(
   });
 }
 
+function unpricedKey(channel: string, model: string, reason: string): string {
+  return JSON.stringify([channel, model, reason]);
+}
+
 function hasTooManyUnpricedDetails(
   prepared: PreparedUsageCosts,
   indexes: readonly number[],
@@ -400,19 +407,30 @@ function hasTooManyUnpricedDetails(
   const keys = new Set<string>();
   for (const index of indexes) {
     const row = prepared.rows[index];
-    if (!row) throw new RangeError(`Missing prepared Usage row at index ${index}.`);
+    if (!row) throw new UsageSummaryLimitError();
     if (row.status === "unpriced") {
-      keys.add(`${row.billing_channel}\u0000${row.model}\u0000${row.reason}`);
+      keys.add(unpricedKey(row.billing_channel, row.model, row.reason));
       if (keys.size > MAXIMUM_UNPRICED_ITEMS) return true;
     }
   }
   return false;
 }
 
-function boundedModelResult<Result>(operation: () => Result): Result {
+/**
+ * Run something that can overrun the contract, and say so when it does.
+ *
+ * Only two failures mean "this answer does not fit": a total this module cannot add without
+ * losing precision, and a schema refusing a value for overrunning a bound it states. Everything
+ * else — a bug here, a catalog that cannot be read, a stored row the contract does not describe —
+ * is a failure of this build and travels to the error handler as itself, so it is logged as a
+ * 500 rather than dressed up as a caller asking for too much.
+ */
+function boundedResult<Result>(operation: () => Result): Result {
   try {
     return operation();
-  } catch {
-    throw new UsageSummaryLimitError();
+  } catch (error) {
+    if (error instanceof UsageSummaryLimitError) throw error;
+    if (exceedsContractBound(error)) throw new UsageSummaryLimitError();
+    throw error;
   }
 }

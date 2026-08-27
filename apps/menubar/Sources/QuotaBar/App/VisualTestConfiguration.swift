@@ -14,10 +14,7 @@
     case cachedRefreshError = "cached-refresh-error"
     case empty
     case unavailable
-    case repairingDurable = "repairing-durable"
-    case repairingDerived = "repairing-derived"
-    case stuck
-    case failed
+    case cacheRebuilding = "cache-rebuilding"
 
     @MainActor
     fileprivate func makeModel(referenceDate: Date) -> MenuBarViewModel {
@@ -50,112 +47,45 @@
           errorMessage: "The bundled local service could not be started.",
           lastCheckedAt: nil
         )
-      case .repairingDurable, .repairingDerived, .stuck, .failed:
+      case .cacheRebuilding:
         MenuBarViewModel(
-          visualTestState: contentVisualState(at: referenceDate).withRepair(repairSession(at: referenceDate)),
+          visualTestState: rebuildingVisualState(at: referenceDate),
           errorMessage: nil,
           lastCheckedAt: referenceDate.addingTimeInterval(-30)
         )
       }
     }
 
-    fileprivate func repairSession(at date: Date) -> LocalServiceRepairSession {
-      switch self {
-      case .repairingDurable:
-        LocalServiceRepairSession(
-          status: .repairing,
-          severity: .durable,
-          phase: .preservingAccount,
-          title: "Repairing local data",
-          guidance: "Keep QuotaBar open. You can close this menu.",
-          activity: "Copying account",
-          startedAt: date.addingTimeInterval(-14),
-          heartbeatAt: date.addingTimeInterval(-2),
-          progressCurrent: 3,
-          progressTotal: 7,
-          stuck: false,
-          blocksQuit: true,
-          recoveryAction: nil
-        )
-      case .repairingDerived:
-        LocalServiceRepairSession(
-          status: .repairing,
-          severity: .derived,
-          phase: .reindexingUsage,
-          title: "Rebuilding Usage history",
-          guidance: "Quota and Account stay available. Usage history is catching up.",
-          activity: "Scanning local logs",
-          startedAt: date.addingTimeInterval(-14),
-          heartbeatAt: date.addingTimeInterval(-2),
-          progressCurrent: 12,
-          progressTotal: 40,
-          stuck: false,
-          blocksQuit: false,
-          recoveryAction: nil
-        )
-      case .stuck:
-        LocalServiceRepairSession(
-          status: .stuck,
-          severity: .durable,
-          phase: .preservingAccount,
-          title: "Repairing local data",
-          guidance: "Repair stopped responding. You can retry.",
-          activity: "Copying account",
-          startedAt: date.addingTimeInterval(-60),
-          heartbeatAt: date.addingTimeInterval(-50),
-          progressCurrent: 3,
-          progressTotal: 7,
-          stuck: true,
-          blocksQuit: false,
-          recoveryAction: .retry
-        )
-      case .failed:
-        LocalServiceRepairSession(
-          status: .failed,
-          severity: .durable,
-          phase: .rebuildingStorage,
-          title: "Repairing local data",
-          guidance: "Reinstall QuotaBar to repair local data.",
-          activity: "Rebuilding storage",
-          startedAt: date.addingTimeInterval(-90),
-          heartbeatAt: date.addingTimeInterval(-80),
-          progressCurrent: nil,
-          progressTotal: nil,
-          stuck: true,
-          blocksQuit: false,
-          recoveryAction: .reinstall
-        )
-      default:
-        .idle
-      }
-    }
   }
 
   enum VisualTestRoute: String {
     case overview
     case settings
+    case account
     case agents
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
     case providerCursor = "provider-cursor"
     case devices
     case usage
+    case menuBarStyle = "menu-bar-style"
+    case menuBarProvider = "menu-bar-provider"
     case support
-    case diagnostics
-    case repair
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
-      case .overview, .repair: []
+      case .overview: []
       case .settings: [.settings]
+      case .account: [.settings, .account]
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
       case .providerCursor: [.settings, .agents, .provider(.cursor)]
-      case .devices: [.settings, .devices]
+      case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
+      case .menuBarStyle: [.settings, .menuBarStyle]
+      case .menuBarProvider: [.settings, .menuBarProvider]
       case .support: [.settings, .support]
-      case .diagnostics: [.settings, .support, .diagnostics]
       }
     }
   }
@@ -250,24 +180,24 @@
     }
 
     @MainActor
-    func makeDiagnosticsModel() -> DiagnosticsPageModel {
-      guard dataSource == .fixture else { return DiagnosticsPageModel() }
+    func makeSupportModel() -> SupportPageModel {
+      guard dataSource == .fixture else { return SupportPageModel() }
       switch fixture {
       case .loading:
-        return DiagnosticsPageModel(isLoading: true)
+        return SupportPageModel(isLoading: true)
       case .content:
-        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(report: supportVisualReport(at: referenceDate))
       case .cachedRefreshError:
-        return DiagnosticsPageModel(
-          report: diagnosticVisualReport(at: referenceDate),
-          errorMessage: "The latest check failed. Showing the last diagnostics report."
+        return SupportPageModel(
+          report: supportVisualReport(at: referenceDate),
+          errorMessage: "The latest check failed. Showing the last report."
         )
       case .empty:
-        return DiagnosticsPageModel(report: signedOutDiagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(report: signedOutSupportVisualReport(at: referenceDate))
       case .unavailable:
-        return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
-      case .repairingDurable, .repairingDerived, .stuck, .failed:
-        return DiagnosticsPageModel(report: diagnosticVisualReport(at: referenceDate))
+        return SupportPageModel(errorMessage: "The bundled local service could not be started.")
+      case .cacheRebuilding:
+        return SupportPageModel(report: supportVisualReport(at: referenceDate))
       }
     }
 
@@ -291,78 +221,91 @@
 
   }
 
+  /// The panel a Mac shows right after its cache was thrown away: quota still reads, and the
+  /// notice says local Usage history is on its way back.
+  private func rebuildingVisualState(at date: Date) -> MenuBarVisualState {
+    var state = contentVisualState(at: date)
+    state.cache = LocalServiceCacheState(
+      rebuilding: true,
+      resetAt: date.addingTimeInterval(-14)
+    )
+    return state
+  }
+
   private func contentVisualState(at date: Date) -> MenuBarVisualState {
     let report = contentReport(at: date)
     let accountSummary = contentAccountSummary(at: date, report: report)
     return MenuBarVisualState(
       report: report,
-      localUsage: localUsageReport(at: date, summary: accountSummary.usage),
+      localUsage: localUsageReport(at: date, partial: accountSummary.usage.today.partial),
       accountSummary: accountSummary,
       authStatus: .signedIn,
       overview: overviewItems(summary: accountSummary, now: date)
     )
   }
 
-  private func diagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+  private func supportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
     LocalServiceDiagnosticReport(
-      schemaVersion: 2,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .current, attention: .none),
-      refresh: LocalServiceDiagnosticRefresh(
-        phase: .idle, asOf: date, startedAt: nil, nextDueAt: date.addingTimeInterval(300)),
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "QuotaBar", version: "Visual QA"),
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .none),
       surfaces: [
         LocalServiceDiagnosticSurface(
-          name: "quota_overview", operation: .healthy, data: .current, source: nil,
-          metrics: ["items": 5, "this_device_sources": 3, "account_sources": 2]),
+          id: "quota_overview", status: .ok, data: .current, lastSuccessAt: date,
+          message: "5 subscriptions shown, all current.",
+          recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_this_device", operation: .healthy, data: .current, source: .thisDevice,
-          metrics: ["records": 128, "files": 4, "partial_hours": 0]),
+          id: "usage_this_device", status: .ok, data: .current, lastSuccessAt: date,
+          message: "128 records read from 4 agents.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "usage_account", operation: .healthy, data: .current, source: .account,
-          metrics: ["enabled": 1, "periods": 4]),
+          id: "usage_account", status: .ok, data: .current, lastSuccessAt: date,
+          message: "Usage from this Mac is part of your account totals.", recovery: .none),
         LocalServiceDiagnosticSurface(
-          name: "account", operation: .healthy, data: .current, source: .account,
-          metrics: ["signed_in": 1, "devices": 2]),
+          id: "account", status: .ok, data: .current, lastSuccessAt: date,
+          message: "Signed in · 2 devices.", recovery: .none),
       ],
-      checks: [],
-      findings: []
+      sources: [
+        LocalServiceDiagnosticSource(
+          subject: "provider:codex", sourceID: "oauth", status: .ok, lastAttemptAt: date,
+          lastSuccessAt: date, message: "Quota was read on this Mac.", recovery: .none),
+        LocalServiceDiagnosticSource(
+          subject: "agent:claude_code", status: .ok, lastAttemptAt: date, lastSuccessAt: date,
+          message: "Usage records were read on this Mac.", recovery: .none),
+      ],
+      recent: [
+        LocalServiceDiagnosticAttempt(
+          kind: .refresh, subject: nil, startedAt: date.addingTimeInterval(-30),
+          durationMs: 2_400, outcome: .success, code: nil)
+      ]
     )
   }
 
-  private func signedOutDiagnosticVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
-    let report = diagnosticVisualReport(at: date)
+  private func signedOutSupportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+    let report = supportVisualReport(at: date)
     return LocalServiceDiagnosticReport(
-      schemaVersion: report.schemaVersion,
-      summary: LocalServiceDiagnosticSummary(
-        operation: .healthy, data: .current, attention: .optional),
-      refresh: report.refresh,
       generatedAt: report.generatedAt,
       client: report.client,
+      summary: LocalServiceDiagnosticSummary(operation: .healthy, attention: .required),
       surfaces: report.surfaces,
-      checks: [],
-      findings: [
-        LocalServiceDiagnosticFinding(
-          component: "quota_collection",
-          source: .thisDevice,
+      sources: [
+        LocalServiceDiagnosticSource(
           subject: "provider:codex",
+          sourceID: "chatgpt_usage_api",
+          status: .degraded,
+          lastAttemptAt: date,
           code: "auth_required",
-          severity: .info,
-          impact: .none,
-          recovery: .login,
-          count: 1,
-          observedAt: date,
-          message: "An opportunistically discovered local source could not be collected."
+          message:
+            "The saved sign-in expired or was rejected. Open Codex to refresh the sign-in.",
+          recovery: .configureProvider
         )
-      ]
+      ],
+      recent: report.recent
     )
   }
 
   private func signedOutVisualState(at date: Date) -> MenuBarVisualState {
     MenuBarVisualState(
       report: QuotaCollectionReport(
-        protocolVersion: 2,
         capturedAt: date,
         results: [
           failureResult(
@@ -389,16 +332,19 @@
     )
   }
 
-  /// The Overview the service would return for this Account, resolved by the shared rule so
-  /// a visual fixture shows what the panel actually shows rather than one row per upload.
+  /// The Overview the service would return for this Account.
+  ///
+  /// Relay resolves an account's readings into one row per subscription, so a fixture shows
+  /// those rows rather than one per upload.
   private func overviewItems(
     summary: AccountSummary,
     now: Date
   ) -> [LocalServiceOverviewItem] {
     func displayName(_ deviceID: String) -> String {
-      summary.devices.first { $0.deviceID == deviceID }?.displayName ?? "Account device"
+      summary.devices.first { $0.id == deviceID }?.displayName ?? "Account device"
     }
-    return AccountQuotaSubscriptions.resolve(summary.quota, now: now).map { subscription in
+    return summary.subscriptions.map { subscription in
+      let isStale = subscription.snapshot.isStale(now: now)
       let sources = subscription.sources.map { source in
         LocalServiceOverviewSource(
           sourceID: "device:\(source.deviceID)",
@@ -406,45 +352,44 @@
           deviceID: source.deviceID,
           displayName: displayName(source.deviceID),
           observedAt: source.observedAt,
-          isStale: source.isStale
+          isStale: source.observedAt != subscription.snapshot.observedAt || isStale
         )
       }
-      let selectedSourceID = "device:\(subscription.selectedDeviceID)"
+      let selectedDeviceID = subscription.sources
+        .first { $0.observedAt == subscription.snapshot.observedAt }?
+        .deviceID ?? subscription.sources.first?.deviceID ?? "unknown"
       return LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
-          provider: subscription.reading.provider,
-          fingerprint: subscription.identity.fingerprint,
-          scope: subscription.identity.sourceID == nil ? .global : .source,
-          sourceID: subscription.identity.sourceID.map { "device:\($0)" }
+          provider: subscription.snapshot.provider,
+          fingerprint: subscription.snapshot.account.fingerprint,
+          scope: subscription.snapshot.account.fingerprintScope == .source ? .source : .global,
+          sourceID: subscription.snapshot.account.fingerprintScope == .source
+            ? "device:\(selectedDeviceID)" : nil
         ),
-        snapshot: subscription.reading,
+        snapshot: subscription.snapshot,
         sources: sources,
-        selectedSourceID: selectedSourceID,
-        selectedSourceDisplayName: displayName(subscription.selectedDeviceID),
-        isStale: subscription.isStale
+        selectedSourceID: "device:\(selectedDeviceID)",
+        selectedSourceDisplayName: displayName(selectedDeviceID),
+        isStale: isStale
       )
     }
   }
 
-  private func localUsageReport(
-    at date: Date,
-    summary: AccountUsageSummary
-  ) -> LocalUsageReport {
-    let coverage = [
-      LocalUsageCoverage(
-        agent: .codex,
-        startAt: "2026-08-02T00:00:00Z",
-        endAt: "2026-08-03T00:00:00Z",
-        status: summary.coverage == .partial ? .partial : .complete
-      )
-    ]
-    return LocalUsageReport(
+  private func localUsageReport(at date: Date, partial: Bool) -> LocalUsageReport {
+    LocalUsageReport(
       generatedAt: date,
       aggregationTimezone: "UTC",
-      range: summary.range,
-      status: summary.coverage == .partial ? .partial : .complete,
+      range: UsageDateRange(from: "2026-08-02", to: "2026-08-02"),
+      status: partial ? .partial : .complete,
       modelCatalogRevision: "visual-model-catalog",
-      coverage: coverage
+      coverage: [
+        LocalUsageCoverage(
+          agent: .codex,
+          startAt: "2026-08-02T00:00:00Z",
+          endAt: "2026-08-03T00:00:00Z",
+          status: partial ? .partial : .complete
+        )
+      ]
     )
   }
 
@@ -461,7 +406,6 @@
 
   private func contentReport(at date: Date) -> QuotaCollectionReport {
     QuotaCollectionReport(
-      protocolVersion: 2,
       capturedAt: date,
       results: [
         successResult(
@@ -541,10 +485,16 @@
     let studioID = "device_visual_studio_mac_01"
     let travelID = "device_visual_travel_mac_02"
     let snapshots = report.results.flatMap(\.snapshots)
-    let observations = snapshots.enumerated().map { index, snapshot in
-      AccountQuotaObservation(
-        deviceID: index == 2 ? travelID : studioID,
+    let subscriptions = snapshots.enumerated().map { index, snapshot in
+      let deviceID = index == 2 ? travelID : studioID
+      let scope = snapshot.account.fingerprintScope == .source ? "source" : "global"
+      return QuotaSubscription(
+        key: "\(snapshot.provider.rawValue)|\(snapshot.account.fingerprint)|\(scope)|",
+        provider: snapshot.provider,
         snapshot: snapshot,
+        sources: [
+          QuotaSubscriptionSource(deviceID: deviceID, observedAt: snapshot.observedAt)
+        ]
       )
     }
     return AccountSummary(
@@ -555,51 +505,38 @@
       ),
       devices: [
         AccountDevice(
-          deviceID: studioID,
+          id: studioID,
           displayName: "Studio Mac",
           platform: .macos,
-          deviceGeneration: 3,
-          status: .active,
-          createdAt: date.addingTimeInterval(-30 * 86_400),
-          lastLoginAt: date.addingTimeInterval(-5 * 86_400),
           lastSeenAt: date.addingTimeInterval(-45),
-          signedOutAt: nil
+          lastObservedAt: date.addingTimeInterval(-60)
         ),
         AccountDevice(
-          deviceID: travelID,
+          id: travelID,
           displayName: "Travel Mac",
           platform: .macos,
-          deviceGeneration: 2,
-          status: .offline,
-          createdAt: date.addingTimeInterval(-20 * 86_400),
-          lastLoginAt: date.addingTimeInterval(-10 * 86_400),
           lastSeenAt: date.addingTimeInterval(-3 * 86_400),
-          signedOutAt: nil
+          lastObservedAt: date.addingTimeInterval(-3 * 86_400)
         ),
       ],
-      quota: observations,
-      usage: visualUsageSummary(at: date, studioID: studioID, travelID: travelID)
+      subscriptions: subscriptions,
+      usage: visualAccountUsage(),
+      pricingRevision: "pricing_2026_08_01",
+      modelCatalogRevision: "visual-model-catalog"
     )
   }
 
-  private func visualUsageSummary(
-    at date: Date,
-    studioID: String,
-    travelID: String
-  ) -> AccountUsageSummary {
-    let totals = UsageTokenTotals(
+  /// A managed period states totals and cost at the period and at the model leaf; the panel
+  /// folds what it shows in between.
+  private func visualAccountUsage() -> AccountUsage {
+    let totals = UsageSummaryTotals(
+      totalTokens: 1_704_620,
       inputTokens: 1_420_500,
-      cacheReadTokens: 480_000,
-      cacheWrite5mTokens: 20_000,
-      cacheWrite1hTokens: 0,
-      cacheWriteInferredTokens: 0,
       outputTokens: 284_120,
+      cacheReadInputTokens: 480_000,
+      cacheWriteInputTokens: 20_000,
       reasoningTokens: 92_400,
-      requests: 164,
-      webSearchRequests: 8,
-      webFetchRequests: 3,
-      sourceCostMicrousd: nil,
-      sourceCostCoveredRequests: 0
+      messages: 164
     )
     let cost = UsageCostOutcome(
       mode: .calculate,
@@ -607,125 +544,72 @@
       status: .partial,
       amountMicrousd: "1489234",
       catalogRevision: "pricing_2026_08_01",
-      calculatedRows: 162,
+      calculatedRows: 2,
       reportedRows: 0,
-      unpricedRows: 2,
-      assumptions: [.agentDefaultChannel, .modelAlias],
+      unpricedRows: 1,
+      assumptions: [.modelAlias],
       unpriced: [
         UsageUnpricedItem(
-          billingChannel: .unknown,
-          model: "custom-model",
+          billingChannel: .anthropicDirect,
+          model: "claude-opus-4",
           reason: .unknownModel,
-          rows: 2
+          rows: 1
         )
       ]
     )
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .iso8601)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "yyyy-MM-dd"
-    let to = formatter.string(from: date)
-    let from = formatter.string(from: date.addingTimeInterval(-6 * 86_400))
-    let summary = AccountUsageSummary(
-      range: UsageDateRange(from: from, to: to),
+    let model = { (name: String, provider: InferenceProvider, amount: String) in
+      UsageModelUsage(
+        model: name,
+        totals: UsageSummaryTotals(
+          totalTokens: 852_310,
+          inputTokens: 710_250,
+          outputTokens: 142_060,
+          cacheReadInputTokens: 240_000,
+          cacheWriteInputTokens: 10_000,
+          reasoningTokens: 46_200,
+          messages: 82
+        ),
+        cost: UsageCostOutcome(
+          mode: .calculate,
+          basis: .calculated,
+          status: .complete,
+          amountMicrousd: amount,
+          catalogRevision: "pricing_2026_08_01",
+          calculatedRows: 1,
+          reportedRows: 0,
+          unpricedRows: 0,
+          assumptions: [.modelAlias],
+          unpriced: []
+        )
+      )
+    }
+    let period = QuotaWire.UsagePeriod(
       totals: totals,
       cost: cost,
-      coverage: .partial,
-      breakdowns: [
-        UsageBreakdown(
-          dimension: .model,
-          key: "gpt-5",
-          totals: UsageTokenTotals(
-            inputTokens: 1_120_000,
-            cacheReadTokens: 400_000,
-            cacheWrite5mTokens: 10_000,
-            cacheWrite1hTokens: 0,
-            cacheWriteInferredTokens: 0,
-            outputTokens: 240_000,
-            reasoningTokens: 80_000,
-            requests: 132,
-            webSearchRequests: 6,
-            webFetchRequests: 2,
-            sourceCostMicrousd: nil,
-            sourceCostCoveredRequests: 0
-          ),
-          cost: UsageCostOutcome(
-            mode: .calculate,
-            basis: .calculated,
-            status: .complete,
-            amountMicrousd: "1200000",
-            catalogRevision: "pricing_2026_08_01",
-            calculatedRows: 1,
-            reportedRows: 0,
-            unpricedRows: 0,
-            assumptions: [.modelAlias],
-            unpriced: []
-          )
+      partial: true,
+      agents: [
+        UsageAgentUsage(
+          agent: .codex,
+          providers: [
+            UsageProviderUsage(provider: .openai, models: [model("gpt-5", .openai, "1200000")])
+          ]
         ),
-        UsageBreakdown(
-          dimension: .model,
-          key: "claude-sonnet-4",
-          totals: UsageTokenTotals(
-            inputTokens: 300_500,
-            cacheReadTokens: 80_000,
-            cacheWrite5mTokens: 10_000,
-            cacheWrite1hTokens: 0,
-            cacheWriteInferredTokens: 0,
-            outputTokens: 44_120,
-            reasoningTokens: 12_400,
-            requests: 32,
-            webSearchRequests: 2,
-            webFetchRequests: 1,
-            sourceCostMicrousd: nil,
-            sourceCostCoveredRequests: 0
-          ),
-          cost: UsageCostOutcome(
-            mode: .calculate,
-            basis: .calculated,
-            status: .complete,
-            amountMicrousd: "289234",
-            catalogRevision: "pricing_2026_08_01",
-            calculatedRows: 1,
-            reportedRows: 0,
-            unpricedRows: 0,
-            assumptions: [.modelAlias],
-            unpriced: []
-          )
+        UsageAgentUsage(
+          agent: .claudeCode,
+          providers: [
+            UsageProviderUsage(
+              provider: .anthropic,
+              models: [model("claude-sonnet-4", .anthropic, "289234")]
+            )
+          ]
         ),
       ]
     )
-    return AccountUsageSummary(
-      range: summary.range,
-      totals: summary.totals,
-      cost: summary.cost,
-      modelCatalogRevision: summary.modelCatalogRevision,
-      coverage: summary.coverage,
-      breakdowns: summary.breakdowns,
-      agents: summary.breakdowns.enumerated().map { index, breakdown in
-        let totals = UsageSummaryTotals(breakdown.totals)
-        let provider = index == 0 ? InferenceProvider.openai : .anthropic
-        let client = index == 0 ? BillingAgent.codex : .claudeCode
-        let model = LocalUsageModelSummary(
-          model: breakdown.key,
-          totals: totals,
-          cost: breakdown.cost
-        )
-        return LocalUsageAgentSummary(
-          agent: client,
-          totals: totals,
-          cost: breakdown.cost,
-          providers: [
-            LocalUsageProviderSummary(
-              provider: provider,
-              totals: totals,
-              cost: breakdown.cost,
-              models: [model]
-            )
-          ]
-        )
-      },
-      breakdownsTruncated: summary.breakdownsTruncated
+    return AccountUsage(
+      today: period,
+      last7Days: period,
+      last30Days: period,
+      all: period
     )
   }
 
@@ -739,7 +623,9 @@
       snapshots: snapshots,
       source: nil,
       message: nil,
-      sources: 1,
+      sources: [
+        QuotaCollectionSource(sourceID: "browser_session", outcome: .success, category: .success)
+      ],
       accessDenied: nil
     )
   }
@@ -756,7 +642,13 @@
       source: nil,
       message: message,
       // A Mac whose stored sign-ins were rejected, not one that never had them.
-      sources: 1,
+      sources: [
+        QuotaCollectionSource(
+          sourceID: "browser_session",
+          outcome: outcome,
+          category: CollectionSourceCategory(rawValue: outcome.rawValue) ?? .error
+        )
+      ],
       accessDenied: nil
     )
   }

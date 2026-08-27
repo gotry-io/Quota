@@ -1,32 +1,47 @@
 use crate::catalog::ProviderId;
-use chrono::{DateTime, Datelike, NaiveDate, TimeZone};
-use chrono_tz::Tz;
 use serde_json::Value;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
+use std::process::Command;
 use std::time::Duration;
-use uuid::Uuid;
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, discover_official_or_browser, is_executable_file,
-    mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file, run_bounded_command,
-    slug, string,
+    CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
+    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
+    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
+    read_bounded_file, run_bounded_command, slug, string,
 };
 
+pub mod refresh;
 mod web;
 
 pub const SOURCE: &str = "anthropic_oauth_usage_api";
-pub const CLI_SOURCE: &str = "claude_cli_usage";
+pub const WEB_SOURCE: &str = web::SOURCE;
+/// What an emptied credential reports under.
+///
+/// Not a rung: the same OAuth path answered, and what it found was a Claude Code that signed
+/// itself out. It is a source of its own because it is the one sign-in failure whose recovery
+/// is not "open Claude Code" — the app opens onto the same emptied entry — and the recovery
+/// text is chosen by the source that reached the verdict.
+pub const SIGNED_OUT_SOURCE: &str = "anthropic_oauth_signed_out";
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const AUTH_REFRESH_SKEW: i64 = 60;
+/// What the header claims when this device has no readable Claude Code install to ask.
+const FALLBACK_CLI_VERSION: &str = "2.1.0";
+
+/// The usage endpoint answers Claude Code, so the request identifies as Claude Code — with
+/// the version of the install that is actually on this device when one could be read.
+fn user_agent(context: &CollectionContext) -> String {
+    format!(
+        "claude-code/{}",
+        context
+            .cli_version(CliTool::Claude)
+            .unwrap_or(FALLBACK_CLI_VERSION)
+    )
+}
 
 #[derive(Clone, Debug)]
 struct Credentials {
@@ -35,16 +50,58 @@ struct Credentials {
     scopes: Vec<String>,
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
+    /// Whether Claude Code holds a refresh token in this entry.  The token itself is never
+    /// read into this process — only the CLI that owns it may ever spend it — and this
+    /// decides one thing: whether asking that CLI to renew is worth a spawn.
+    refresh_token_present: bool,
     source: String,
 }
 
+/// One credential document as this build reads it.
+#[derive(Clone, Debug)]
+enum Entry {
+    Grant(Credentials),
+    /// The entry Claude Code leaves when it signs itself out, and the store it was read from.
+    SignedOut(String),
+}
+
+impl Entry {
+    fn source(&self) -> &str {
+        match self {
+            Self::Grant(credentials) => &credentials.source,
+            Self::SignedOut(source) => source,
+        }
+    }
+
+    /// Whether this entry is the thing standing between the refresh and a reading. An emptied
+    /// one always is, and no clock will change that.
+    fn expiring(&self, now: i64) -> bool {
+        match self {
+            Self::Grant(credentials) => is_expiring(credentials, now),
+            Self::SignedOut(_) => true,
+        }
+    }
+
+    fn grant(self) -> Option<Credentials> {
+        match self {
+            Self::Grant(credentials) => Some(credentials),
+            Self::SignedOut(_) => None,
+        }
+    }
+}
+
+/// The Claude sign-in this device holds, emptied entries included: a Claude Code that signed
+/// itself out is a credential this Mac has and cannot use, which is a different thing to tell
+/// the reader from a Mac that never had one.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     discover_official_or_browser(
         ProviderId::Claude,
-        load_credentials(context).map(|credentials| ProviderSession {
-            provider: ProviderId::Claude,
-            credential_source: credentials.source,
-        }),
+        look_up_credentials(context)
+            .entry
+            .map(|entry| ProviderSession {
+                provider: ProviderId::Claude,
+                credential_source: entry.source().to_owned(),
+            }),
         context,
     )
 }
@@ -56,6 +113,7 @@ pub fn validate_browser_session(
     web::validate_browser_session(cookie_header, context)
 }
 
+/// The OAuth grant Claude Code renews, then the stored claude.ai session.
 pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -72,7 +130,7 @@ pub fn collect(
 
 fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let lookup = look_up_credentials(context);
-    let Some(credentials) = lookup.credentials else {
+    let Some(entry) = lookup.entry else {
         // A withheld secret is not an expired sign-in, and reporting it as one sends the
         // reader to sign in again for as long as the access decision stands.
         return Err(ProviderError::new(
@@ -84,65 +142,30 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
             SOURCE,
         ));
     };
-    let plan = credentials.subscription_type.clone();
-    match collect_oauth(credentials, context) {
-        Ok(snapshot) => Ok(snapshot),
-        Err(error) if error.category == ErrorCategory::Error => Err(error),
-        // The official CLI renders the same account's usage panel. It only runs
-        // when local credentials exist, so a missing sign-in never spawns a probe
-        // and the OAuth verdict still drives the browser-session fallback.
-        Err(oauth_error) => collect_cli_usage(plan, context).map_err(|_| oauth_error),
-    }
-}
-
-fn collect_oauth(
-    mut credentials: Credentials,
-    context: &CollectionContext,
-) -> Result<QuotaSnapshot, ProviderError> {
-    if !credentials
-        .scopes
-        .iter()
-        .any(|scope| scope == "user:profile")
-    {
+    let Some(credentials) = entry.grant() else {
+        // Claude Code emptied its own credential rather than renew it, which is the one
+        // sign-in problem that opening Claude Code does not fix: it opens onto the same
+        // emptied entry.  Unless the Keychain withheld the entry it holds — then the emptied
+        // one is a file an older Claude Code left behind, and it says nothing about the grant
+        // this device was refused.
+        return Err(if lookup.keychain_refused {
+            ProviderError::new(ErrorCategory::AccessDenied, SOURCE)
+        } else {
+            ProviderError::new(ErrorCategory::AuthRequired, SIGNED_OUT_SOURCE)
+        });
+    };
+    // Claude Code owns token renewal. The refresh worker already gave it its one chance to
+    // renew an expired grant ([`refresh`]); one still out of time here is a sign-in only the
+    // reader can restore, and saying so sends them somewhere that can actually fix it.
+    if is_expiring(&credentials, context.observed_unix()) {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
-    let refresh_attempted = credentials
-        .expires_at
-        .map(|expiry| expiry <= context.observed_unix() + AUTH_REFRESH_SKEW)
-        .unwrap_or(false);
-    if refresh_attempted {
-        credentials = refresh_and_reload(&credentials, context).unwrap_or(credentials);
-    }
-    match collect_with_credentials(&credentials, context) {
-        Ok(snapshot) => Ok(snapshot),
-        Err(error) if error.category == ErrorCategory::AuthRequired && !refresh_attempted => {
-            let refreshed =
-                refresh_and_reload(&credentials, context).unwrap_or(credentials.clone());
-            if refreshed.access_token != credentials.access_token
-                || refreshed.expires_at != credentials.expires_at
-            {
-                collect_with_credentials(&refreshed, context)
-            } else {
-                Err(error)
-            }
-        }
-        Err(error) => Err(error),
-    }
+    collect_at(&credentials, context, USAGE_URL, PROFILE_URL)
 }
 
-/// What the Keychain had to say about this account's sign-in.
-enum KeychainRead {
-    Found(Credentials),
-    /// No entry for this service, or this build does not read the Keychain at all.
-    Absent,
-    /// The entry is there and its secret was withheld.  That is an access decision, and
-    /// signing in again only rewrites a secret this device still would not be handed.
-    Refused,
-}
-
-/// This device's Claude sign-in, and whether the Keychain refused to hand one over.
+/// This device's Claude credential, and whether the Keychain refused to hand one over.
 struct CredentialLookup {
-    credentials: Option<Credentials>,
+    entry: Option<Entry>,
     keychain_refused: bool,
 }
 
@@ -152,68 +175,83 @@ fn look_up_credentials(context: &CollectionContext) -> CredentialLookup {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| context.home_directory.join(".claude"));
-    let file_credentials = read_credentials_file(&root.join(".credentials.json"));
-    let keychain = if cfg!(target_os = "macos") && context.allows_host_keychain() {
-        read_keychain(context)
-    } else {
-        KeychainRead::Absent
-    };
-    let keychain_refused = matches!(keychain, KeychainRead::Refused);
-    let keychain_credentials = match keychain {
-        KeychainRead::Found(credentials) => Some(credentials),
-        KeychainRead::Absent | KeychainRead::Refused => None,
+    let file_entry = read_credentials_file(&root.join(".credentials.json"));
+    let keychain = (cfg!(target_os = "macos") && context.allows_host_keychain())
+        .then(|| context.keychain_secret(|| read_keychain(context)));
+    let keychain_refused = matches!(keychain, Some(KeychainSecret::Refused));
+    let keychain_entry = match keychain {
+        Some(KeychainSecret::Found(secret)) => serde_json::from_slice::<Value>(secret)
+            .ok()
+            .and_then(|value| parse_entry(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}"))),
+        Some(KeychainSecret::Absent | KeychainSecret::Refused) | None => None,
     };
     // Claude renews the Keychain entry in place, so that is the live grant and the file is
     // what an older version left behind.  Reading the file first let one that had been
-    // revoked but not yet expired mask the renewed grant for as long as its clock ran, and
-    // took the renewal this collector performs with it: `/status` writes to the Keychain, so
-    // reloading returned the same dead token and the refresh looked like it had done nothing.
+    // revoked but not yet expired mask the renewed grant for as long as its clock ran.
     CredentialLookup {
-        credentials: preferred_credentials(
-            keychain_credentials,
-            file_credentials,
-            context.observed_unix(),
-        ),
+        entry: preferred_entry(keychain_entry, file_entry, context.observed_unix()),
         keychain_refused,
     }
 }
 
-/// The Keychain grant wins unless it is the only expiring one of the two.
-fn preferred_credentials(
-    keychain: Option<Credentials>,
-    file: Option<Credentials>,
-    now: i64,
-) -> Option<Credentials> {
+/// The Keychain entry wins unless it is the only expiring one of the two.
+fn preferred_entry(keychain: Option<Entry>, file: Option<Entry>, now: i64) -> Option<Entry> {
     match (keychain, file) {
-        (Some(keychain), Some(file)) => {
-            Some(if !is_expiring(&keychain, now) || is_expiring(&file, now) {
-                keychain
-            } else {
-                file
-            })
-        }
+        (Some(keychain), Some(file)) => Some(if !keychain.expiring(now) || file.expiring(now) {
+            keychain
+        } else {
+            file
+        }),
         (Some(keychain), None) => Some(keychain),
         (None, file) => file,
     }
 }
 
-fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
-    look_up_credentials(context).credentials
+/// Whether this device's Claude sign-in is the thing standing between the refresh and a
+/// reading, and Claude Code holds what it needs to renew it.
+///
+/// The refresh token is that: 2.1.x can leave a Keychain item holding only `mcpOAuth`, and an
+/// entry carrying no refresh token cannot be renewed by anything, so neither earns a spawn.
+fn sign_in_expiring(context: &CollectionContext) -> bool {
+    matches!(
+        look_up_credentials(context).entry,
+        Some(Entry::Grant(credentials))
+            if credentials.refresh_token_present
+                && is_expiring(&credentials, context.observed_unix())
+    )
 }
 
-fn read_credentials_file(path: &Path) -> Option<Credentials> {
+/// Whether the credential holds a grant this refresh can spend, under the preference
+/// discovery uses.
+///
+/// Deliberately not `!sign_in_expiring`: an emptied entry, or a store the CLI removed, is
+/// neither expiring nor usable, and that third answer is what tells a Claude Code that signed
+/// itself out — which no number of attempts would restore — from one that could not renew.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    matches!(
+        look_up_credentials(context).entry,
+        Some(Entry::Grant(credentials)) if !is_expiring(&credentials, context.observed_unix())
+    )
+}
+
+fn read_credentials_file(path: &Path) -> Option<Entry> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return None;
     }
     let value: Value = serde_json::from_slice(&read_bounded_file(path, LOCAL_FILE_LIMIT)?).ok()?;
-    parse_credentials(&value, &path.to_string_lossy())
+    parse_entry(&value, &path.to_string_lossy())
 }
 
-fn read_keychain(context: &CollectionContext) -> KeychainRead {
+/// The Claude Code credential entry, or why it did not produce one.
+///
+/// The collection context memoizes this, so one refresh reads the Keychain once however
+/// many collectors ask.  A renewal that actually ran forgets that memo and costs a second
+/// read, because the CLI rewrites the entry the first one described.
+fn read_keychain(context: &CollectionContext) -> KeychainSecret {
     let mut command = Command::new("/usr/bin/security");
     command.args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]);
-    let Some(output) = run_bounded_command(
+    let Some(secret) = run_bounded_command(
         command,
         Duration::from_secs(10),
         context.cancel.as_ref(),
@@ -226,20 +264,18 @@ fn read_keychain(context: &CollectionContext) -> KeychainRead {
             .as_ref()
             .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
         return if !cancelled && keychain_entry_exists(context) {
-            KeychainRead::Refused
+            KeychainSecret::Refused
         } else {
-            KeychainRead::Absent
+            KeychainSecret::Absent
         };
     };
-    serde_json::from_slice::<Value>(&output)
-        .ok()
-        .and_then(|value| parse_credentials(&value, &format!("macOS Keychain: {KEYCHAIN_SERVICE}")))
-        .map_or(KeychainRead::Absent, KeychainRead::Found)
+    KeychainSecret::Found(secret)
 }
 
 /// Asks only whether the entry is there.  Answering that needs no access to the secret it
 /// holds, which is what separates an account that was never signed in from one this device
-/// is not allowed to read.
+/// is not allowed to read.  Only [`read_keychain`] calls it, and only when the read it
+/// memoizes already failed.
 fn keychain_entry_exists(context: &CollectionContext) -> bool {
     let mut command = Command::new("/usr/bin/security");
     command.args(["find-generic-password", "-s", KEYCHAIN_SERVICE]);
@@ -252,10 +288,22 @@ fn keychain_entry_exists(context: &CollectionContext) -> bool {
     .is_some()
 }
 
+/// The Claude sign-in a credential document holds, or the emptied entry in its place.
+///
+/// A document with no `claudeAiOauth` object is no Claude sign-in at all — 2.1.x can leave a
+/// Keychain item holding only `mcpOAuth`, which belongs to MCP servers — and is no entry
+/// here. One that has the object without a usable access token is the opposite: Claude Code
+/// signs itself out by emptying the entry in place, blanking the tokens and setting
+/// `expiresAt` to zero, and that is a credential this device holds and cannot use.
+fn parse_entry(value: &Value, source: &str) -> Option<Entry> {
+    value.get("claudeAiOauth")?.as_object()?;
+    Some(match parse_credentials(value, source) {
+        Some(credentials) => Entry::Grant(credentials),
+        None => Entry::SignedOut(source.to_owned()),
+    })
+}
+
 fn parse_credentials(value: &Value, source: &str) -> Option<Credentials> {
-    if value.get("claudeAiOauth").is_none() && value.get("mcpOAuth").is_some() {
-        return None;
-    }
     let oauth = value.get("claudeAiOauth")?.as_object()?;
     let access_token = obj_get_any(
         &Value::Object(oauth.clone()),
@@ -283,6 +331,12 @@ fn parse_credentials(value: &Value, source: &str) -> Option<Credentials> {
             &["rateLimitTier", "rate_limit_tier"],
         )
         .and_then(|v| string(Some(v))),
+        refresh_token_present: obj_get_any(
+            &Value::Object(oauth.clone()),
+            &["refreshToken", "refresh_token"],
+        )
+        .and_then(|v| string(Some(v)))
+        .is_some(),
         source: source.to_owned(),
     })
 }
@@ -294,455 +348,11 @@ fn is_expiring(credentials: &Credentials, now: i64) -> bool {
         .unwrap_or(false)
 }
 
-fn refresh_and_reload(
-    credentials: &Credentials,
-    context: &CollectionContext,
-) -> Option<Credentials> {
-    // Claude owns token renewal: its interactive `/status` refreshes an
-    // expiring OAuth token on disk, and the probe exits immediately after.
-    run_cli_slash_command(context, "/status")?;
-    let reloaded = load_credentials(context)?;
-    ((reloaded.access_token != credentials.access_token)
-        || (reloaded.expires_at != credentials.expires_at))
-        .then_some(reloaded)
-}
-
-fn stop_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-struct ProbeCleanup {
-    probe_dir: PathBuf,
-    transcript: PathBuf,
-}
-
-impl ProbeCleanup {
-    fn new(context: &CollectionContext, probe_dir: &Path, session_id: &str) -> Self {
-        let config_root = context
-            .env("CLAUDE_CONFIG_DIR")
-            .and_then(|value| value.split(',').next())
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| context.home_directory.join(".claude"));
-        let project = probe_dir
-            .to_string_lossy()
-            .chars()
-            .map(|value| {
-                if value.is_ascii_alphanumeric() {
-                    value
-                } else {
-                    '-'
-                }
-            })
-            .take(200)
-            .collect::<String>();
-        Self {
-            probe_dir: probe_dir.to_owned(),
-            transcript: config_root
-                .join("projects")
-                .join(project)
-                .join(format!("{session_id}.jsonl")),
-        }
-    }
-}
-
-impl Drop for ProbeCleanup {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.transcript);
-        let _ = fs::remove_dir_all(&self.probe_dir);
-    }
-}
-
-fn resolve_executable(context: &CollectionContext) -> Option<String> {
-    if let Some(path) = context
-        .env("CLAUDE_CLI_PATH")
-        .filter(|v| !v.trim().is_empty())
-    {
-        return Some(path.to_owned());
-    }
-    let paths = [
-        context.home_directory.join(".local/bin/claude"),
-        context.home_directory.join(".claude/local/claude"),
-        context.home_directory.join(".claude/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        PathBuf::from("/Applications/cmux.app/Contents/Resources/bin/claude"),
-    ];
-    paths
-        .into_iter()
-        .find(|path| is_executable_file(path))
-        .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| Some("claude".to_owned()))
-}
-
-fn collect_cli_usage(
-    plan: Option<String>,
-    context: &CollectionContext,
-) -> Result<QuotaSnapshot, ProviderError> {
-    let output = run_cli_slash_command(context, "/usage")
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE))?;
-    let text = String::from_utf8_lossy(&output);
-    let windows = map_cli_usage_text(&text, context.observed_unix(), context.timezone());
-    if windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, CLI_SOURCE));
-    }
-    let (fingerprint, scope) = account_identity("claude", "organization_id", None);
-    Ok(QuotaSnapshot {
-        provider: ProviderId::Claude,
-        account: QuotaAccount {
-            fingerprint,
-            fingerprint_scope: scope,
-            label: None,
-            plan,
-        },
-        windows,
-        status: "available",
-        observed_at: context.observed_at(),
-    })
-}
-
-const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
-const PROBE_EXIT_GRACE: Duration = Duration::from_secs(10);
-const PROBE_STARTUP_FLOOR: Duration = Duration::from_secs(2);
-const PROBE_QUIET: Duration = Duration::from_millis(1_500);
-const PROBE_PANEL_QUIET: Duration = Duration::from_millis(2_500);
-const PROBE_PANEL_LIMIT: Duration = Duration::from_secs(20);
-const PROBE_SETTLE: Duration = Duration::from_millis(1_000);
-const PROBE_NUDGE: Duration = Duration::from_millis(800);
-const PROBE_OUTPUT_LIMIT: usize = 1_048_576;
-const PROBE_TAIL: usize = 16_384;
-/// Terminal cursor-position query the TUI may issue at startup; answered so it
-/// does not wait on a reply.
-const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
-const CURSOR_POSITION_REPLY: &[u8] = b"\x1b[1;1R";
-
-/// Interactive prompts the CLI can show before or after a slash command, matched
-/// on whitespace-free lowercase output. Each group is one dialog (its needles
-/// are alternative wordings) and is answered at most once. The trust dialog
-/// covers the empty, owner-only probe directory in which no tool is allowed;
-/// the palette groups confirm the command's own autocomplete row so a
-/// neighbouring action is never selected.
-struct PromptReply {
-    needles: &'static [&'static str],
-    reply: &'static [u8],
-}
-
-const PROMPT_REPLIES: &[PromptReply] = &[
-    PromptReply {
-        needles: &["yes,itrustthisfolder", "quicksafetycheck"],
-        reply: b"\r",
-    },
-    PromptReply {
-        needles: &["doyoutrustthefilesinthisfolder"],
-        reply: b"y\r",
-    },
-    PromptReply {
-        needles: &["readytocodehere"],
-        reply: b"\r",
-    },
-    PromptReply {
-        needles: &["pressentertocontinue"],
-        reply: b"\r",
-    },
-];
-const USAGE_PALETTE_REPLIES: &[PromptReply] = &[PromptReply {
-    needles: &["showplanusagelimits", "showplan"],
-    reply: b"\r",
-}];
-const STATUS_PALETTE_REPLIES: &[PromptReply] = &[PromptReply {
-    needles: &["showclaudecodestatus", "showclaudecode"],
-    reply: b"\r",
-}];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum ProbeStage {
-    /// Waiting for the CLI to settle: answer its prompts, then submit the slash
-    /// command once output goes quiet.
-    Starting,
-    /// Command submitted; wait for the panel it opens to carry its data (or,
-    /// for commands without a recognizable payload, to go quiet).
-    Submitted,
-    /// Panel dismissed with Escape; `/exit` goes next.
-    Dismissed,
-    /// `/exit` submitted; wait for the process to leave.
-    Exiting,
-}
-
-/// Runs the official Claude CLI in a bounded, tool-less, probe-only session,
-/// submits one slash command, and returns the captured terminal output.
-///
-/// macOS `script` allocates the PTY that Claude's interactive slash commands
-/// require, while still invoking the executable without a shell. The TUI reads
-/// raw keystrokes, so commands are submitted with a carriage return, its
-/// Settings panels are closed with Escape, and its interactive prompts are
-/// answered from [`PROMPT_REPLIES`]. The probe directory is stable per user so
-/// the first-run trust dialog is answered once. `/usage` is considered rendered
-/// as soon as the session row carries a percentage; a panel that is still
-/// loading is nudged with Enter, and one that reports a load failure is left
-/// immediately.
-fn run_cli_slash_command(context: &CollectionContext, command: &str) -> Option<Vec<u8>> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let executable = resolve_executable(context)?;
-    let script = Path::new("/usr/bin/script");
-    if !fs::metadata(script)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    let probe_dir = std::env::temp_dir().join("quota-claude-probe");
-    fs::create_dir_all(probe_dir.join(".claude")).ok()?;
-    let settings = probe_dir.join(".claude/settings.local.json");
-    fs::write(
-        &settings,
-        b"{\"disableDeepLinkRegistration\":\"disable\"}\n",
-    )
-    .ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&probe_dir, fs::Permissions::from_mode(0o700)).ok()?;
-        fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).ok()?;
-    }
-    let session_id = Uuid::new_v4().to_string();
-    let _cleanup = ProbeCleanup::new(context, &probe_dir, &session_id);
-    let mut child = Command::new(script)
-        .args([
-            "-q",
-            "/dev/null",
-            &executable,
-            "--allowed-tools",
-            "",
-            "--strict-mcp-config",
-            "--session-id",
-            &session_id,
-        ])
-        .current_dir(&probe_dir)
-        .envs(
-            context
-                .environment
-                .iter()
-                .filter(|(key, _)| *key != "HOME" && !key.starts_with("ANTHROPIC_")),
-        )
-        .env("HOME", &context.home_directory)
-        .env("DISABLE_AUTOUPDATER", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        stop_child(&mut child);
-        return None;
-    };
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut chunk = [0u8; 8_192];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(count) => {
-                    if sender.send(chunk[..count].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let is_usage = command == "/usage";
-    let palette = if is_usage {
-        USAGE_PALETTE_REPLIES
-    } else {
-        STATUS_PALETTE_REPLIES
-    };
-    let started = std::time::Instant::now();
-    let mut last_output = started;
-    let mut stage = ProbeStage::Starting;
-    let mut stage_since = started;
-    let mut last_nudge = started;
-    let mut answered = [false; PROMPT_REPLIES.len() + 1];
-    let mut screen = CompactText::default();
-    let mut output = Vec::new();
-    let mut send = |bytes: &[u8]| stdin.write_all(bytes).and_then(|_| stdin.flush()).is_ok();
-    loop {
-        if context.cancelled() || started.elapsed() > PROBE_TIMEOUT {
-            stop_child(&mut child);
-            return None;
-        }
-        let mut grew = false;
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            // Drain what else has already arrived so a burst of small writes
-            // costs one rescan rather than one per write.
-            Ok(first) => {
-                for chunk in std::iter::once(first).chain(receiver.try_iter()) {
-                    if chunk
-                        .windows(CURSOR_POSITION_QUERY.len())
-                        .any(|window| window == CURSOR_POSITION_QUERY)
-                    {
-                        let _ = send(CURSOR_POSITION_REPLY);
-                    }
-                    output.extend_from_slice(&chunk);
-                }
-                grew = true;
-                last_output = std::time::Instant::now();
-                if output.len() > PROBE_OUTPUT_LIMIT {
-                    stop_child(&mut child);
-                    return None;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = child.wait();
-                return (stage >= ProbeStage::Dismissed).then_some(output);
-            }
-        }
-        if let Ok(Some(_)) = child.try_wait() {
-            // Drain what the reader still holds, then hand back the transcript.
-            while let Ok(chunk) = receiver.try_recv() {
-                output.extend_from_slice(&chunk);
-            }
-            return (stage >= ProbeStage::Dismissed).then_some(output);
-        }
-        // Nothing new means the screen is provably unchanged since the last scan.
-        if grew || screen.lower.is_empty() {
-            let tail = output.len().saturating_sub(PROBE_TAIL);
-            screen = compact_terminal_text(&String::from_utf8_lossy(&output[tail..]));
-        }
-        if stage < ProbeStage::Dismissed {
-            // Palette rows only exist once the command has been typed.
-            let visible = if stage == ProbeStage::Submitted {
-                answered.len()
-            } else {
-                PROMPT_REPLIES.len()
-            };
-            let prompts = PROMPT_REPLIES.iter().chain(palette.iter()).take(visible);
-            for (index, prompt) in prompts.enumerate() {
-                if answered[index]
-                    || !prompt
-                        .needles
-                        .iter()
-                        .any(|needle| screen.lower.contains(needle))
-                {
-                    continue;
-                }
-                answered[index] = true;
-                if !send(prompt.reply) {
-                    stop_child(&mut child);
-                    return None;
-                }
-                last_output = std::time::Instant::now();
-            }
-        }
-        let quiet = last_output.elapsed();
-        match stage {
-            ProbeStage::Starting => {
-                if quiet >= PROBE_QUIET && started.elapsed() >= PROBE_STARTUP_FLOOR {
-                    if !send(format!("{command}\r").as_bytes()) {
-                        stop_child(&mut child);
-                        return None;
-                    }
-                    stage = ProbeStage::Submitted;
-                    stage_since = std::time::Instant::now();
-                    last_output = stage_since;
-                    last_nudge = stage_since;
-                }
-            }
-            ProbeStage::Submitted => {
-                let panel = &screen.lower;
-                // A panel that stopped drawing, or one that has drawn too long,
-                // is as done as it is going to get.
-                let settled = quiet >= PROBE_PANEL_QUIET;
-                let expired = stage_since.elapsed() >= PROBE_PANEL_LIMIT;
-                let rendered = expired
-                    || if is_usage {
-                        let failed = panel.contains("failedtoloadusagedata");
-                        let has_data = panel.contains("currentsession") && has_percent(panel);
-                        let loading = panel.contains("loadingusagedata") && !has_data;
-                        if loading && last_nudge.elapsed() >= PROBE_NUDGE {
-                            // Claude's panel can wait for a keystroke before it draws the rows.
-                            let _ = send(b"\r");
-                            last_nudge = std::time::Instant::now();
-                        }
-                        failed || (has_data && quiet >= PROBE_SETTLE) || (!loading && settled)
-                    } else {
-                        settled
-                    };
-                if rendered {
-                    if !send(b"\x1b") {
-                        stop_child(&mut child);
-                        return None;
-                    }
-                    stage = ProbeStage::Dismissed;
-                    last_output = std::time::Instant::now();
-                }
-            }
-            ProbeStage::Dismissed => {
-                if quiet >= PROBE_QUIET {
-                    if !send(b"/exit\r") {
-                        stop_child(&mut child);
-                        return Some(output);
-                    }
-                    stage = ProbeStage::Exiting;
-                    stage_since = std::time::Instant::now();
-                }
-            }
-            ProbeStage::Exiting => {
-                if stage_since.elapsed() > PROBE_EXIT_GRACE {
-                    // The panel text is already captured; do not let a stuck TUI
-                    // outlive the refresh.
-                    stop_child(&mut child);
-                    return Some(output);
-                }
-            }
-        }
-    }
-}
-
-fn has_percent(lower: &str) -> bool {
-    let bytes = lower.as_bytes();
-    bytes
-        .iter()
-        .enumerate()
-        .any(|(index, byte)| *byte == b'%' && index > 0 && bytes[index - 1].is_ascii_digit())
-}
-
-/// Terminal text with escape sequences and whitespace removed. The TUI positions
-/// words with cursor moves rather than spaces, so matching must ignore spacing.
-/// `lower` is ASCII-lowercased and byte-aligned with `text`.
-#[derive(Default)]
-struct CompactText {
-    text: String,
-    lower: String,
-}
-
-/// One window's slice of [`CompactText`], keeping the same byte alignment.
-struct Segment<'a> {
-    text: &'a str,
-    lower: &'a str,
-}
-
-fn compact_terminal_text(raw: &str) -> CompactText {
-    let text: String = strip_ansi(raw)
-        .chars()
-        .filter(|character| !character.is_whitespace() && !character.is_control())
-        .collect();
-    let lower = text.to_ascii_lowercase();
-    CompactText { text, lower }
-}
-
-/// One of Claude's fixed usage windows. Both the OAuth body and the CLI panel
-/// describe the same quota, so they share this table rather than each carrying
-/// its own ids and titles — that is what keeps either source updating the same row.
+/// One of Claude's fixed usage windows, named once so the OAuth body's key, the
+/// window id this build reports, and its title cannot drift apart.
 struct ClaudeWindow {
     /// Key in the OAuth usage body.
     field: &'static str,
-    /// Whitespace-free lowercase scopes the Settings panel renders inside
-    /// `Current week (…)`. Empty when the panel has no row for this window.
-    labels: &'static [&'static str],
     id: &'static str,
     title: &'static str,
     duration_seconds: u64,
@@ -751,12 +361,9 @@ struct ClaudeWindow {
     weekly_group: bool,
 }
 
-const FIVE_HOUR_FIELD: &str = "five_hour";
 const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
-        field: FIVE_HOUR_FIELD,
-        // The panel calls this one "Current session" rather than a weekly scope.
-        labels: &[],
+        field: "five_hour",
         id: "five_hour",
         title: "5 hour",
         duration_seconds: 18_000,
@@ -764,7 +371,6 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     },
     ClaudeWindow {
         field: "seven_day",
-        labels: &["allmodels"],
         id: "seven_day",
         title: "Weekly",
         duration_seconds: 604_800,
@@ -772,7 +378,6 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     },
     ClaudeWindow {
         field: "seven_day_sonnet",
-        labels: &["sonnet", "sonnetonly"],
         id: "seven_day_sonnet",
         title: "Sonnet weekly",
         duration_seconds: 604_800,
@@ -780,7 +385,6 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     },
     ClaudeWindow {
         field: "seven_day_opus",
-        labels: &["opus", "opusonly"],
         id: "seven_day_opus",
         title: "Opus weekly",
         duration_seconds: 604_800,
@@ -788,7 +392,6 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     },
     ClaudeWindow {
         field: "seven_day_oauth_apps",
-        labels: &[],
         id: "seven_day_oauth_apps",
         title: "OAuth apps weekly",
         duration_seconds: 604_800,
@@ -830,336 +433,11 @@ fn inherit_weekly_reset(windows: &mut [QuotaWindow], group: &[String]) {
     }
 }
 
-/// Maps the text of Claude's Settings → Usage panel. Each window is a title such
-/// as `Current session` or `Current week (Fable)` followed by a bar,
-/// `<n>% used`, and its own reset line; Claude reports percent *used*, taken verbatim.
-fn map_cli_usage_text(text: &str, observed_at: i64, zone: Tz) -> Vec<QuotaWindow> {
-    let compact = compact_terminal_text(text);
-    let mut windows: Vec<QuotaWindow> = Vec::new();
-    let mut weekly_group: Vec<String> = Vec::new();
-    let mut push = |id: String,
-                    title: String,
-                    used: f64,
-                    duration: u64,
-                    resets_at: Option<i64>,
-                    weekly: bool| {
-        if windows.iter().any(|window| window.id == id) {
-            return;
-        }
-        if weekly {
-            weekly_group.push(id.clone());
-        }
-        windows.push(QuotaWindow {
-            id,
-            title,
-            used_percent: clamp_percent(used),
-            resets_at: resets_at.map(super::common::unix_seconds_to_iso),
-            duration_seconds: Some(duration),
-            remaining_value: None,
-            limit_value: None,
-            value_unit: None,
-        });
-    };
-    let five_hour = CLAUDE_WINDOWS
-        .iter()
-        .find(|window| window.field == FIVE_HOUR_FIELD);
-    if let Some(window) = five_hour
-        && let Some(index) = compact.lower.find(SESSION_TITLE)
-    {
-        let segment = window_segment(&compact, index + SESSION_TITLE.len());
-        if let Some(used) = percent_used(segment.lower) {
-            push(
-                window.id.to_owned(),
-                window.title.to_owned(),
-                used,
-                window.duration_seconds,
-                panel_reset_at(&segment, observed_at, zone, window.duration_seconds),
-                window.weekly_group,
-            );
-        }
-    }
-    let mut cursor = 0;
-    while let Some(offset) = compact.lower[cursor..].find(WEEK_TITLE) {
-        let open = cursor + offset + WEEK_TITLE.len();
-        let Some(close) = compact.lower[open..].find(')').map(|index| open + index) else {
-            break;
-        };
-        cursor = close + 1;
-        let segment = window_segment(&compact, close + 1);
-        let Some(used) = percent_used(segment.lower) else {
-            continue;
-        };
-        let scope = &compact.lower[open..close];
-        let (id, title) = match CLAUDE_WINDOWS
-            .iter()
-            .find(|window| window.labels.contains(&scope))
-        {
-            Some(window) => (window.id.to_owned(), window.title.to_owned()),
-            None => {
-                let name = compact.text[open..close].trim_end_matches("only");
-                if name.is_empty() {
-                    continue;
-                }
-                scoped_weekly_window(name)
-            }
-        };
-        push(
-            id,
-            title,
-            used,
-            WEEK_SECONDS,
-            panel_reset_at(&segment, observed_at, zone, WEEK_SECONDS),
-            // Every `Current week (…)` row is a weekly-group limit, named or model-scoped.
-            true,
-        );
-    }
-    inherit_weekly_reset(&mut windows, &weekly_group);
-    windows
-}
-
-/// One window's text: from `start` up to the next window title, bounded so a panel that
-/// never starts another window cannot pull in the whole screen. Both the percentage and
-/// the reset line for that window live inside it.
-///
-/// The bound is a title, not the word `current`: a promo line or footnote that compacts
-/// to `currently` would otherwise cut a real row off before its percentage or reset.
-fn window_segment(compact: &CompactText, start: usize) -> Segment<'_> {
-    let mut end = next_window_title(&compact.lower, start)
-        .unwrap_or(compact.lower.len())
-        .min(start + 600);
-    // The bar glyphs survive compaction, so the byte bound can land inside one.
-    while end > start && !compact.lower.is_char_boundary(end) {
-        end -= 1;
-    }
-    Segment {
-        text: &compact.text[start..end],
-        lower: &compact.lower[start..end],
-    }
-}
-
-const SESSION_TITLE: &str = "currentsession";
-const WEEK_TITLE: &str = "currentweek(";
-
-/// Where the next window's title starts, searching from `start`.
-fn next_window_title(lower: &str, start: usize) -> Option<usize> {
-    let rest = lower.get(start..)?;
-    [SESSION_TITLE, WEEK_TITLE]
-        .iter()
-        .filter_map(|title| rest.find(title))
-        .min()
-        .map(|index| start + index)
-}
-
-/// `Resets 4pm (Asia/Shanghai)` or `Resets Aug 25 at 9am`, as an instant.
-///
-/// Compaction removes the spacing the TUI never guaranteed, so this reads a fixed
-/// grammar rather than words: `resets` [`<mon><day>` `at`] `<hour>[:<minute>]<am|pm>`
-/// [`(<zone>)`]. The panel prints local wall-clock time; an unnamed zone is this
-/// machine's. The result must land inside the window it belongs to, and anything that
-/// does not match exactly is left unset, because a guessed reset instant reads as fact.
-fn panel_reset_at(
-    segment: &Segment<'_>,
-    observed_at: i64,
-    zone: Tz,
-    duration_seconds: u64,
-) -> Option<i64> {
-    let mut index = segment.lower.find("resets")? + "resets".len();
-    let mut month_day = None;
-    if let Some((month, day, next)) = read_month_day(segment.lower, index) {
-        month_day = Some((month, day));
-        index = next;
-    }
-    let (hour, minute, next) = read_clock(segment.lower, index)?;
-    let zone = match named_zone(segment, next) {
-        // The panel named a zone. Reading its clock in this machine's instead would be a
-        // guess about an instant it did not print, and a near-miss guess still passes the
-        // horizon below.
-        Some(named) => named.parse::<Tz>().ok()?,
-        None => zone,
-    };
-    let reset = resolve_reset(month_day, hour, minute, zone, observed_at)?;
-    // `resolve_reset` already refused anything before the observation.
-    let horizon = observed_at.saturating_add(i64::try_from(duration_seconds).unwrap_or(i64::MAX));
-    (reset <= horizon.saturating_add(3_600)).then_some(reset)
-}
-
-const MONTHS: [&str; 12] = [
-    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-];
-
-/// `aug25at` / `aug25`, returning the month, day, and the index after it.
-fn read_month_day(lower: &str, index: usize) -> Option<(u32, u32, usize)> {
-    let rest = lower.get(index..)?;
-    let month = MONTHS
-        .iter()
-        .position(|month| rest.starts_with(month))
-        .map(|position| position as u32 + 1)?;
-    let after_month = index + 3;
-    let (day, after_day) = read_number(lower, after_month)?;
-    if !(1..=31).contains(&day) {
-        return None;
-    }
-    let skips_at = lower
-        .get(after_day..)
-        .is_some_and(|rest| rest.starts_with("at"));
-    Some((month, day, after_day + if skips_at { 2 } else { 0 }))
-}
-
-/// `9am` / `10:30pm`, returning 24-hour time and the index after it.
-fn read_clock(lower: &str, index: usize) -> Option<(u32, u32, usize)> {
-    let (hour, after_hour) = read_number(lower, index)?;
-    if !(1..=12).contains(&hour) {
-        return None;
-    }
-    let (minute, after_minute) = if lower.get(after_hour..).is_some_and(|r| r.starts_with(':')) {
-        read_number(lower, after_hour + 1)?
-    } else {
-        (0, after_hour)
-    };
-    if minute > 59 {
-        return None;
-    }
-    let rest = lower.get(after_minute..)?;
-    let hour = match (rest.starts_with("am"), rest.starts_with("pm")) {
-        (true, _) => hour % 12,
-        (_, true) => hour % 12 + 12,
-        _ => return None,
-    };
-    Some((hour, minute, after_minute + 2))
-}
-
-/// The zone the panel names in parentheses, in its original case. `None` when it names
-/// none, which is the panel printing this machine's own wall-clock time.
-fn named_zone<'a>(segment: &Segment<'a>, index: usize) -> Option<&'a str> {
-    let open = index + 1;
-    let close = open + segment.lower.get(index..)?.strip_prefix('(')?.find(')')?;
-    segment.text.get(open..close)
-}
-
-/// A one- or two-digit number at `index`, with the index after it.
-fn read_number(lower: &str, index: usize) -> Option<(u32, usize)> {
-    let rest = lower.get(index..)?;
-    let width = rest.bytes().take(2).take_while(u8::is_ascii_digit).count();
-    Some((rest.get(..width)?.parse().ok()?, index + width))
-}
-
-/// The next occurrence of a wall-clock reset, in the zone the panel printed it in.
-/// A dated reset is anchored to the year that puts it ahead of the observation.
-fn resolve_reset(
-    month_day: Option<(u32, u32)>,
-    hour: u32,
-    minute: u32,
-    zone: Tz,
-    observed_at: i64,
-) -> Option<i64> {
-    let observed = DateTime::from_timestamp(observed_at, 0)?.with_timezone(&zone);
-    let today = observed.date_naive();
-    let dates = match month_day {
-        Some((month, day)) => {
-            [-1, 0, 1].map(|shift| NaiveDate::from_ymd_opt(observed.year() + shift, month, day))
-        }
-        // A reset the panel prints without a date is today's or tomorrow's wall time,
-        // which stays correct across a daylight-saving shift.
-        None => [Some(today), today.succ_opt(), None],
-    };
-    dates
-        .into_iter()
-        .flatten()
-        .filter_map(|date| {
-            zone.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
-                .earliest()
-        })
-        .map(|value| value.timestamp())
-        .filter(|value| *value >= observed_at)
-        .min()
-}
-
-/// Wording that marks a percentage as consumed versus remaining. Claude's panel
-/// currently prints `<n>% used`; a remaining-style phrasing is converted so a copy
-/// change cannot invert every reading.
-const USED_WORDS: &[&str] = &["used", "spent", "consumed"];
-const REMAINING_WORDS: &[&str] = &["left", "remaining", "available"];
-
-/// The first labelled percentage inside one window's text, as a used percent.
-fn percent_used(window: &str) -> Option<f64> {
-    let bytes = window.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte != b'%' {
-            continue;
-        }
-        let digits = bytes[..index]
-            .iter()
-            .rev()
-            .take_while(|byte| byte.is_ascii_digit())
-            .count();
-        if digits == 0 {
-            continue;
-        }
-        let Ok(value) = window[index - digits..index].parse::<f64>() else {
-            continue;
-        };
-        if !(0.0..=100.0).contains(&value) {
-            continue;
-        }
-        let after = &window[index + 1..];
-        if USED_WORDS.iter().any(|word| after.starts_with(word)) {
-            return Some(value);
-        }
-        if REMAINING_WORDS.iter().any(|word| after.starts_with(word)) {
-            return Some(100.0 - value);
-        }
-    }
-    None
-}
-
-/// Drops ANSI escape sequences: CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or
-/// `ESC \`), and two-byte `ESC x` forms.
-fn strip_ansi(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != 0x1b {
-            output.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        index += 1;
-        match bytes.get(index) {
-            Some(b'[') => {
-                index += 1;
-                while index < bytes.len() {
-                    let byte = bytes[index];
-                    index += 1;
-                    if (0x40..=0x7e).contains(&byte) {
-                        break;
-                    }
-                }
-            }
-            Some(b']') => {
-                index += 1;
-                while index < bytes.len() {
-                    let byte = bytes[index];
-                    index += 1;
-                    if byte == 0x07 {
-                        break;
-                    }
-                    if byte == 0x1b && bytes.get(index) == Some(&b'\\') {
-                        index += 1;
-                        break;
-                    }
-                }
-            }
-            Some(_) => index += 1,
-            None => {}
-        }
-    }
-    String::from_utf8_lossy(&output).into_owned()
-}
-
-fn collect_with_credentials(
+fn collect_at(
     credentials: &Credentials,
     context: &CollectionContext,
+    usage_url: &str,
+    profile_url: &str,
 ) -> Result<QuotaSnapshot, ProviderError> {
     if !credentials
         .scopes
@@ -1170,13 +448,14 @@ fn collect_with_credentials(
     }
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {}", credentials.access_token);
+    let user_agent = user_agent(context);
     let headers = [
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
         ("anthropic-beta", "oauth-2025-04-20"),
-        ("User-Agent", "claude-code/2.1.0"),
+        ("User-Agent", user_agent.as_str()),
     ];
-    let usage = match client.get_json(USAGE_URL, &headers, SOURCE) {
+    let usage = match client.get_json(usage_url, &headers, SOURCE) {
         Ok((_, value)) => value,
         Err(error) => return Err(error),
     };
@@ -1194,7 +473,7 @@ fn collect_with_credentials(
             ("Authorization", bearer.as_str()),
             ("Accept", "application/json"),
         ];
-        match client.get_json(PROFILE_URL, &profile_headers, SOURCE) {
+        match client.get_json(profile_url, &profile_headers, SOURCE) {
             Ok((_, value)) => map_profile(&value),
             Err(_) => (None, None),
         }
@@ -1221,7 +500,7 @@ fn collect_with_credentials(
 
 /// Whether the response named a window this build knows and answered `null` for it, which is
 /// an account stating it has no such window rather than a shape this build failed to read.
-fn answers_for_a_known_window(value: &Value) -> bool {
+pub(super) fn answers_for_a_known_window(value: &Value) -> bool {
     CLAUDE_WINDOWS
         .iter()
         .any(|entry| matches!(obj_get(value, entry.field), Some(Value::Null)))
@@ -1390,6 +669,7 @@ mod tests {
             scopes: Vec::new(),
             subscription_type: None,
             rate_limit_tier: None,
+            refresh_token_present: true,
             source: source.to_owned(),
         }
     }
@@ -1401,46 +681,87 @@ mod tests {
     #[test]
     fn the_renewed_grant_outranks_the_file_left_behind() {
         let now = 1_000_000;
-        let live = || Some(credential("keychain", Some(now + 86_400)));
-        let stale = || Some(credential("file", Some(now + 86_400)));
-        let expired = |source: &'static str| Some(credential(source, Some(now - 1)));
+        let entry = |source: &'static str, expires_at| {
+            Some(Entry::Grant(credential(source, Some(expires_at))))
+        };
+        let live = || entry("keychain", now + 86_400);
+        let stale = || entry("file", now + 86_400);
+        let expired = |source: &'static str| entry(source, now - 1);
+        let preferred = |keychain, file| {
+            preferred_entry(keychain, file, now).map(|entry| entry.source().to_owned())
+        };
 
         // Both usable: the Keychain is the one Claude renews.
-        assert_eq!(
-            preferred_credentials(live(), stale(), now)
-                .expect("credentials")
-                .source,
-            "keychain"
-        );
+        assert_eq!(preferred(live(), stale()).as_deref(), Some("keychain"));
         // Only the file is usable: an expiring Keychain grant is not worth preferring.
         assert_eq!(
-            preferred_credentials(expired("keychain"), stale(), now)
-                .expect("credentials")
-                .source,
-            "file"
+            preferred(expired("keychain"), stale()).as_deref(),
+            Some("file")
         );
         // Both expiring: still the Keychain, so the caller reports one expired sign-in
         // rather than reporting the one that cannot be renewed.
         assert_eq!(
-            preferred_credentials(expired("keychain"), expired("file"), now)
-                .expect("credentials")
-                .source,
-            "keychain"
+            preferred(expired("keychain"), expired("file")).as_deref(),
+            Some("keychain")
         );
         // Either alone is used, and neither means neither.
+        assert_eq!(preferred(live(), None).as_deref(), Some("keychain"));
+        assert_eq!(preferred(None, stale()).as_deref(), Some("file"));
+        assert!(preferred(None, None).is_none());
+        // An emptied Keychain entry is always the expiring one, so a file grant with time
+        // left is what this refresh reads — and when neither has time, the reader is told
+        // about the Claude Code that signed itself out rather than about a stale file.
+        let emptied = || Some(Entry::SignedOut("keychain".to_owned()));
+        assert_eq!(preferred(emptied(), stale()).as_deref(), Some("file"));
         assert_eq!(
-            preferred_credentials(live(), None, now)
-                .expect("credentials")
-                .source,
-            "keychain"
+            preferred(emptied(), expired("file")).as_deref(),
+            Some("keychain")
+        );
+    }
+
+    /// A withheld secret is not a sign-out.  An emptied file next to a Keychain this device
+    /// was refused is what an older Claude Code left behind, and the grant that was withheld
+    /// may be perfectly good — so the reader is told about the refusal, which they can act on,
+    /// rather than sent to sign in again for as long as the access decision stands.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_emptied_file_beside_a_refused_keychain_reports_the_refusal() {
+        let home = std::env::temp_dir().join(format!("quota-claude-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(home.join(".claude")).expect("home");
+        fs::write(
+            home.join(".claude/.credentials.json"),
+            r#"{"claudeAiOauth": {"accessToken": "", "refreshToken": "", "expiresAt": 0}}"#,
+        )
+        .expect("credential");
+        let context = |secret: KeychainSecret| {
+            let context = CollectionContext {
+                home_directory: home.clone(),
+                environment: std::collections::HashMap::from([(
+                    "HOME".to_owned(),
+                    home.to_string_lossy().into_owned(),
+                )]),
+                now: Some("2026-08-26T12:00:00Z".to_owned()),
+                ..CollectionContext::default()
+            };
+            // Seeded, so the one Keychain read of this refresh has already happened and no
+            // test starts `/usr/bin/security`.
+            context.keychain.set(secret).expect("unread");
+            context
+        };
+        assert!(context(KeychainSecret::Absent).allows_host_keychain());
+        let verdict = |secret| {
+            let error = collect_official(&context(secret)).expect_err("no reading");
+            (error.category, error.source_id)
+        };
+        assert_eq!(
+            verdict(KeychainSecret::Refused),
+            (ErrorCategory::AccessDenied, SOURCE)
         );
         assert_eq!(
-            preferred_credentials(None, stale(), now)
-                .expect("credentials")
-                .source,
-            "file"
+            verdict(KeychainSecret::Absent),
+            (ErrorCategory::AuthRequired, SIGNED_OUT_SOURCE)
         );
-        assert!(preferred_credentials(None, None, now).is_none());
+        fs::remove_dir_all(&home).expect("cleanup");
     }
 
     fn isolated_context() -> CollectionContext {
@@ -1453,11 +774,73 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
+    /// The usage endpoint answers Claude Code, so the request says it is Claude Code — and
+    /// says which one.  A device that could not read an install still asks, under the version
+    /// this build falls back to, because the reading matters more than the accuracy of a
+    /// header field neither side can verify.
     #[test]
-    fn discovers_browser_session_when_oauth_is_absent() {
+    fn the_usage_request_names_the_installed_claude_code() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        for (installed, expected) in [
+            (Some("2.4.7"), "user-agent: claude-code/2.4.7"),
+            (None, "user-agent: claude-code/2.1.0"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let mut heads = Vec::new();
+                for body in [
+                    r#"{"five_hour":{"utilization":12}}"#,
+                    r#"{"account":{"email":"ada@example.com"}}"#,
+                ] {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        break;
+                    };
+                    let mut request = [0_u8; 2048];
+                    let read = stream.read(&mut request).unwrap_or(0);
+                    heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                heads
+            });
+            let mut context = isolated_context();
+            if let Some(version) = installed {
+                context
+                    .cli_versions
+                    .insert(CliTool::Claude, version.to_owned());
+            }
+            let mut credentials = credential("fixture", None);
+            credentials.scopes = vec!["user:profile".to_owned()];
+            let snapshot = collect_at(
+                &credentials,
+                &context,
+                &format!("http://{address}/usage"),
+                &format!("http://{address}/profile"),
+            )
+            .expect("snapshot");
+            assert_eq!(snapshot.windows.len(), 1);
+            let heads = server.join().expect("server");
+            assert!(heads[0].contains(expected), "{}", heads[0]);
+            assert!(heads[0].contains("anthropic-beta: oauth-2025-04-20"));
+        }
+    }
+
+    /// Claude Code owns this grant. A Mac without one has only the stored claude.ai session
+    /// to try, and without that too there is nothing at all.
+    #[test]
+    fn the_browser_session_is_discovered_only_without_a_local_grant() {
         let mut context = isolated_context();
         assert!(!context.allows_host_keychain());
         assert!(discover(&context).is_empty());
@@ -1466,7 +849,51 @@ mod tests {
             .insert(ProviderId::Claude, "sessionKey=sk-ant-ok".to_owned());
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].credential_source, "browser_session");
+        assert_eq!(
+            sessions[0].credential_source,
+            super::super::BROWSER_SESSION_SOURCE
+        );
+    }
+
+    /// The stored session is the last rung, and only the last rung.
+    ///
+    /// It answers when this Mac's own credential said "sign in again"; it never answers first,
+    /// it is not reached at all when nothing was stored, and a cancelled refresh reads neither.
+    #[test]
+    fn the_stored_session_is_reached_only_after_the_grant_says_sign_in_again() {
+        let mut context = isolated_context();
+        let official = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: ".credentials.json".to_owned(),
+        };
+        // Nothing on disk and nothing stored: the credential path's verdict is the answer.
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("no credential")
+                .source_id,
+            SOURCE
+        );
+        // With a session stored, that same verdict hands off to it, and the rung that answers
+        // names itself. The header is one this rung rejects without a request.
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "lastActiveOrg=org-2".to_owned());
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("stored session")
+                .source_id,
+            web::SOURCE
+        );
+        // A cancelled refresh reads neither rung.
+        let cancelled = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..context.clone()
+        };
+        let error = collect(&official, &cancelled).expect_err("cancelled");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.source_id, SOURCE);
     }
 
     #[test]
@@ -1483,144 +910,6 @@ mod tests {
         }));
         assert_eq!(aliased[0].id, "five_hour");
         assert_eq!(aliased[0].used_percent, 10.0);
-    }
-
-    #[test]
-    fn maps_cli_usage_panel_used_percent_verbatim() {
-        let panel = concat!(
-            "\u{1b}[1mSettings\u{1b}[0m  Usage\n",
-            "Current session\n",
-            "\u{1b}[32m████\u{1b}[0m░░░░░░░░░░░░░░░░ 20% used\n",
-            "Resets 4pm (Asia/Shanghai)\n",
-            "\n",
-            "Current week (all models)\n",
-            "█████████░░░░░░░░░░░ 45% used\n",
-            "Resets Aug 25 at 9am (Asia/Shanghai)\n",
-            "\n",
-            "Current week (Sonnet only)\n",
-            "██░░░░░░░░░░░░░░░░░░ 10% used\n",
-        );
-        // 2026-08-22T04:00:00Z is 12:00 in the zone the panel names.
-        let observed = 1_787_371_200;
-        let windows = map_cli_usage_text(panel, observed, Tz::UTC);
-        assert_eq!(
-            windows
-                .iter()
-                .map(|window| (
-                    window.id.as_str(),
-                    window.used_percent,
-                    window.resets_at.as_deref()
-                ))
-                .collect::<Vec<_>>(),
-            [
-                ("five_hour", 20.0, Some("2026-08-22T08:00:00Z")),
-                ("seven_day", 45.0, Some("2026-08-25T01:00:00Z")),
-                // The panel prints no reset for a scoped week; it shares the weekly cycle.
-                ("seven_day_sonnet", 10.0, Some("2026-08-25T01:00:00Z")),
-            ]
-        );
-        assert!(map_cli_usage_text("Not logged in\n", observed, Tz::UTC).is_empty());
-        // A remaining-style phrasing is converted; a bare percentage is ignored.
-        let remaining = map_cli_usage_text(
-            "Current session\n████ 80% left\nCurrent week (all models)\n45%\n",
-            observed,
-            Tz::UTC,
-        );
-        assert_eq!(
-            remaining
-                .iter()
-                .map(|window| (
-                    window.id.as_str(),
-                    window.used_percent,
-                    window.resets_at.clone()
-                ))
-                .collect::<Vec<_>>(),
-            [("five_hour", 20.0, None)]
-        );
-    }
-
-    #[test]
-    fn maps_cursor_positioned_panel_and_model_scoped_week() {
-        // The TUI places words with cursor moves, so spacing is unreliable, and a
-        // session's stats block precedes the windows.
-        let panel = concat!(
-            "\u{1b}]0;claude\u{7}Session Total cost: $0.0000\u{1b}[3;5H",
-            "Current\u{1b}[1Csession████████████████▌\u{1b}[12C33%usedResets 10:30pm (Asia/Singapore)",
-            "\u{1b}[5;1HCurrent week (all models)   ██▌   5% used  Resets Aug 23 at 12pm",
-            "\u{1b}[7;1H+50% weekly limits promo through Aug 31",
-            "\u{1b}[9;1HCurrent week (Fable)██▌\u{1b}[40C5% used",
-        );
-        // 2026-08-22T13:00:00Z is 21:00 in the zone the session row names; the weekly row
-        // names no zone, so it is read in the collection timezone.
-        let windows = map_cli_usage_text(panel, 1_787_403_600, Tz::UTC);
-        assert_eq!(
-            windows
-                .iter()
-                .map(|window| (
-                    window.id.as_str(),
-                    window.title.as_str(),
-                    window.used_percent,
-                    window.resets_at.as_deref()
-                ))
-                .collect::<Vec<_>>(),
-            [
-                ("five_hour", "5 hour", 33.0, Some("2026-08-22T14:30:00Z")),
-                ("seven_day", "Weekly", 5.0, Some("2026-08-23T12:00:00Z")),
-                (
-                    "claude-weekly-scoped-fable",
-                    "Fable only",
-                    5.0,
-                    Some("2026-08-23T12:00:00Z")
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_panel_reset_is_read_strictly_and_must_belong_to_its_window() {
-        let session = |reset: &str| format!("Current session\n████ 20% used\n{reset}\n");
-        let reset_at = |panel: &str, observed: i64| {
-            map_cli_usage_text(panel, observed, Tz::UTC)
-                .first()
-                .and_then(|window| window.resets_at.clone())
-        };
-        // 2026-08-22T13:00:00Z: the printed 4pm is three hours into a five-hour window.
-        assert_eq!(
-            reset_at(&session("Resets 4pm"), 1_787_403_600).as_deref(),
-            Some("2026-08-22T16:00:00Z")
-        );
-        // A zone the panel names but this build cannot resolve is refused, rather than
-        // read in a different zone that happens to survive the horizon.
-        assert_eq!(
-            reset_at(&session("Resets 4pm (Not/AZone)"), 1_787_403_600),
-            None
-        );
-        // At 09:00 the same text is seven hours out. A five-hour window cannot reset that
-        // far ahead, so the reading is a zone or parse mismatch and nothing is claimed.
-        assert_eq!(reset_at(&session("Resets 4pm"), 1_787_389_200), None);
-        // Text that is not a clock is not a reset.
-        assert_eq!(reset_at(&session("Resets soon"), 1_787_403_600), None);
-        assert_eq!(reset_at(&session("Resets 25:00pm"), 1_787_403_600), None);
-        // Prose between rows is not a window boundary: the row keeps its own reset.
-        let promoted = concat!(
-            "Current session\n████ 20% used\nResets 4pm\n",
-            "You are currently on the Max plan\n",
-            "Current week (all models)\n██ 5% used\n"
-        );
-        let windows = map_cli_usage_text(promoted, 1_787_403_600, Tz::UTC);
-        assert_eq!(
-            windows
-                .iter()
-                .map(|window| (window.id.as_str(), window.resets_at.as_deref()))
-                .collect::<Vec<_>>(),
-            [
-                ("five_hour", Some("2026-08-22T16:00:00Z")),
-                ("seven_day", None),
-            ]
-        );
-        // The window bound is a byte count over text whose bar glyphs are multibyte.
-        let long_bar = format!("Current session\n{} 20% used\n", "█".repeat(250));
-        assert!(map_cli_usage_text(&long_bar, 1_787_403_600, Tz::UTC).is_empty());
     }
 
     #[test]
@@ -1643,24 +932,53 @@ mod tests {
         assert_eq!(credentials.expires_at, Some(1786406400));
         assert_eq!(credentials.scopes, ["user:profile"]);
         assert_eq!(credentials.subscription_type.as_deref(), Some("pro"));
+        // The token itself is never read into this process: only whether Claude Code holds
+        // one, which is the whole question a renewal turns on.
+        assert!(credentials.refresh_token_present);
         assert!(
-            parse_credentials(
+            !parse_credentials(
                 &serde_json::json!({
-                    "mcpOAuth": {"token": "mcp-only"}
+                    "claudeAiOauth": {"accessToken": "claude-access", "refreshToken": "  "}
                 }),
+                "fixture"
+            )
+            .expect("credentials")
+            .refresh_token_present
+        );
+    }
+
+    /// The three shapes a Claude Code credential comes in, and what each one is.
+    #[test]
+    fn an_emptied_entry_is_a_signed_out_claude_code_and_mcp_items_are_not_a_sign_in() {
+        // A Keychain item holding only MCP server tokens is not a Claude sign-in at all, and
+        // a device holding one has nothing for this provider.
+        assert!(
+            parse_entry(
+                &serde_json::json!({"mcpOAuth": {"token": "mcp-only"}}),
                 "fixture"
             )
             .is_none()
         );
-        assert!(
-            parse_credentials(
-                &serde_json::json!({
-                    "claudeAiOauth": {"scopes": ["user:profile"]}
-                }),
+        // Claude Code signs itself out by emptying the entry in place. That is a credential
+        // this device holds and cannot use, which is not the same as holding none.
+        for emptied in [
+            serde_json::json!({"claudeAiOauth": {
+                "accessToken": "", "refreshToken": "", "expiresAt": 0
+            }}),
+            serde_json::json!({"claudeAiOauth": {"scopes": ["user:profile"]}}),
+        ] {
+            assert!(matches!(
+                parse_entry(&emptied, "fixture"),
+                Some(Entry::SignedOut(_))
+            ));
+        }
+        assert!(matches!(
+            parse_entry(
+                &serde_json::json!({"claudeAiOauth": {"accessToken": "live"}}),
                 "fixture"
-            )
-            .is_none()
-        );
+            ),
+            Some(Entry::Grant(_))
+        ));
     }
 
     /// A collection failure and an account with nothing to report are different answers, and

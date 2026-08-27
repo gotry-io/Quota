@@ -8,7 +8,7 @@ enum QuotaFormat {
       remainingPercent: window.remainingPercent,
       remainingValue: window.remainingValue,
       hasLimit: window.limitValue != nil,
-      unit: window.valueUnit?.remainingUnit
+      unit: window.valueUnit.flatMap(\.remainingUnit)
     )
   }
 
@@ -46,12 +46,9 @@ enum QuotaFormat {
     )
   }
 
-  static func fetchedTime(_ date: Date) -> String {
-    date.formatted(date: .omitted, time: .shortened)
-  }
-
-  static func refreshedAge(_ date: Date, now: Date = Date()) -> String {
-    CompactAgeFormat.string(since: date, now: now)
+  /// How old the account summary on screen is, in the words every Quota client uses.
+  static func updated(_ date: Date, now: Date = Date()) -> String {
+    FreshnessCopy.updated(since: date, now: now)
   }
 
   static func resetTime(_ date: Date) -> String {
@@ -60,16 +57,6 @@ enum QuotaFormat {
 
   static func planBadge(_ raw: String?) -> String? {
     PlanDisplay.planBadge(raw)
-  }
-}
-
-extension UsageCostCoverage {
-  fileprivate init(_ status: UsageCostStatus) {
-    switch status {
-    case .complete: self = .complete
-    case .partial: self = .partial
-    case .unavailable: self = .unavailable
-    }
   }
 }
 

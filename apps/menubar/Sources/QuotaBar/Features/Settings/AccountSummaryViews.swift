@@ -10,29 +10,6 @@ private enum AccountDevicesPageState: Equatable {
   case content(summary: AccountSummary, refreshWarning: String?)
 }
 
-enum AccountDeviceHealthPresentation: String, Equatable, Sendable {
-  case healthy = "Healthy"
-  case needsAttention = "Needs attention"
-  case checkDevice = "Check device"
-  case notRecentlyActive = "Not recently active"
-  case unknown = "Unknown"
-  case signedOut = "Signed out"
-
-  static func status(for device: AccountDevice, now: Date) -> Self {
-    if device.status == .signedOut { return .signedOut }
-    guard let health = device.health else { return .unknown }
-    guard now <= health.freshUntil else { return .notRecentlyActive }
-    guard health.summary.operation == .healthy,
-      health.summary.data == .current || health.summary.data == .empty
-    else { return .needsAttention }
-    switch health.summary.attention {
-    case .none, .automatic: return .healthy
-    case .optional: return .checkDevice
-    case .required: return .needsAttention
-    }
-  }
-}
-
 struct AccountDevicesView: View {
   @Bindable var model: MenuBarViewModel
 
@@ -97,19 +74,20 @@ struct AccountDevicesView: View {
           } else {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(summary.devices) { device in
+                let activity = device.activity(now: now)
                 SettingsListRow(
                   title: device.displayName,
-                  subtitle: deviceSubtitle(device, now: now),
+                  subtitle: deviceSubtitle(device, activity: activity, now: now),
                   systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
                   height: QuotaDesign.Layout.settingsListRowHeight
                 ) {
-                  Text(statusLabel(device, now: now))
+                  Text(activity.label)
                     .quotaListSecondaryStyle()
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(device.displayName)
                 .accessibilityValue(
-                  "\(statusLabel(device, now: now)). \(deviceSubtitle(device, now: now))"
+                  activity.label + ". " + deviceSubtitle(device, activity: activity, now: now)
                 )
               }
             }
@@ -128,39 +106,17 @@ struct AccountDevicesView: View {
       : "Sign in from Settings to view account devices."
   }
 
-  private func deviceSubtitle(_ device: AccountDevice, now: Date) -> String {
+  private func deviceSubtitle(
+    _ device: AccountDevice,
+    activity: DeviceActivity,
+    now: Date
+  ) -> String {
     let platform =
       switch device.platform {
       case .macos: "macOS"
-      case .linux: "Linux"
-      case .windows: "Windows"
+      case .unknown: "Unknown"
       }
-    var parts = [platform]
-    if let health = device.health {
-      let product = health.clientProduct == .quotaBar ? "QuotaBar" : "QuotaCLI"
-      parts.append("\(product) \(health.clientVersion)")
-      parts.append("Report \(CompactAgeFormat.string(since: health.receivedAt, now: now)) ago")
-      if let refresh = health.lastCompletedRefreshAt {
-        parts.append("Refresh \(CompactAgeFormat.string(since: refresh, now: now)) ago")
-      }
-      if let sync = health.lastSuccessfulAccountSyncAt {
-        parts.append("Sync \(CompactAgeFormat.string(since: sync, now: now)) ago")
-      }
-    } else if let activity = device.lastSeenAt ?? device.signedOutAt {
-      parts.append("Last seen \(CompactAgeFormat.string(since: activity, now: now)) ago")
-    }
-    if matchesAttention(AccountDeviceHealthPresentation.status(for: device, now: now)) {
-      parts.append("Review Diagnostics on this device")
-    }
-    return parts.joined(separator: " · ")
-  }
-
-  private func matchesAttention(_ status: AccountDeviceHealthPresentation) -> Bool {
-    status == .needsAttention || status == .checkDevice
-  }
-
-  private func statusLabel(_ device: AccountDevice, now: Date) -> String {
-    AccountDeviceHealthPresentation.status(for: device, now: now).rawValue
+    return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
   }
 
 }
@@ -247,7 +203,7 @@ struct AccountUsageView: View {
   }
 
   private var effectiveSource: UsageSource {
-    !model.usageUploadEnabled || model.accountSummary == nil ? .local : source
+    model.effectiveUsageSource(source)
   }
 
   private var usagePeriodTabs: some View {
@@ -525,16 +481,6 @@ private struct PresentedUsageTotals: Equatable {
     messages = totals.messages
   }
 
-  init(_ totals: UsageTokenTotals) {
-    totalTokens = totals.inputTokens + totals.outputTokens
-    inputTokens = totals.inputTokens
-    outputTokens = totals.outputTokens
-    cacheReadInputTokens = totals.cacheReadTokens
-    cacheWriteInputTokens =
-      totals.cacheWrite5mTokens + totals.cacheWrite1hTokens + totals.cacheWriteInferredTokens
-    reasoningTokens = totals.reasoningTokens
-    messages = totals.requests
-  }
 }
 
 private struct PresentedUsageModel: Equatable {

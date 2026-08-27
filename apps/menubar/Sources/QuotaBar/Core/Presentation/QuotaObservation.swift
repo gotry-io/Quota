@@ -4,23 +4,6 @@ import QuotaWire
 enum QuotaObservationSource: Equatable, Hashable, Sendable {
   case local
   case device(deviceID: String)
-
-  var stableID: String {
-    switch self {
-    case .local:
-      "local"
-    case .device(let deviceID):
-      "device:\(Self.component(deviceID))"
-    }
-  }
-
-  var isLocal: Bool {
-    self == .local
-  }
-
-  private static func component(_ value: String) -> String {
-    "\(value.utf8.count):\(value)"
-  }
 }
 
 struct QuotaSubscriptionIdentity: Equatable, Hashable, Sendable {

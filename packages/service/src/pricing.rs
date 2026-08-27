@@ -6,7 +6,7 @@
 //! summed.
 
 use crate::usage::{
-    BillingChannel, ChannelSource, ContextBucket, MAX_SAFE_COUNT, UsageError, UsageHourlyFact,
+    BillingChannel, ChannelSource, ContextBucket, DatedUsageRow, MAX_SAFE_COUNT, UsageError,
 };
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
@@ -96,7 +96,6 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingRates {
     pub uncached_input_per_million: Option<String>,
     pub cache_read_per_million: Option<String>,
@@ -142,7 +141,6 @@ impl PricingRates {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingCatalogEntry {
     pub entry_id: String,
     pub billing_channel: BillingChannel,
@@ -160,8 +158,11 @@ pub struct PricingCatalogEntry {
     pub verified_at: String,
 }
 
+/// The catalog as Relay serves it.
+///
+/// A catalog carrying a field this build does not read is still a catalog; refusing it would
+/// leave every cost unpriced over a key nothing here looks at. See ADR 0023.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PricingCatalog {
     pub protocol_version: u8,
     pub revision: String,
@@ -251,7 +252,7 @@ pub enum PricingResolution {
     Unpriced(UsageUnpricedReason),
 }
 
-pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &UsageHourlyFact) -> PricingResolution {
+pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &DatedUsageRow) -> PricingResolution {
     if row.billing_channel == BillingChannel::Unknown {
         return PricingResolution::Unpriced(UsageUnpricedReason::UnknownChannel);
     }
@@ -267,7 +268,7 @@ pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &UsageHourlyFact) ->
     if by_model.is_empty() {
         return PricingResolution::Unpriced(UsageUnpricedReason::UnknownModel);
     }
-    let date = row.bucket_start_utc.get(..10).unwrap_or_default();
+    let date = row.date.as_str();
     let by_date: Vec<&PricingCatalogEntry> = by_model
         .into_iter()
         .filter(|entry| {
@@ -345,7 +346,7 @@ pub struct PreparedUsageCosts {
 }
 
 pub fn calculate_usage_cost(
-    rows: &[UsageHourlyFact],
+    rows: &[DatedUsageRow],
     catalog: Option<&PricingCatalog>,
     mode: UsageCostMode,
 ) -> Result<UsageCostOutcome, UsageError> {
@@ -355,7 +356,7 @@ pub fn calculate_usage_cost(
 
 /// Resolve and round each row once.  An empty index list means all rows.
 pub fn prepare_usage_costs(
-    rows: &[UsageHourlyFact],
+    rows: &[DatedUsageRow],
     catalog: Option<&PricingCatalog>,
     mode: UsageCostMode,
 ) -> Result<PreparedUsageCosts, UsageError> {
@@ -367,7 +368,7 @@ pub fn prepare_usage_costs(
     let catalog_revision = catalog_valid.map(|catalog| catalog.revision.clone());
     let mut prepared = Vec::with_capacity(rows.len());
     for row in rows {
-        super::usage::validate_fact(row)?;
+        super::usage::validate_dated_row(row)?;
         let calculated = match mode {
             UsageCostMode::Reported => None,
             UsageCostMode::Calculate | UsageCostMode::Auto => Some(match catalog_valid {
@@ -396,8 +397,12 @@ pub fn prepare_usage_costs(
             });
             continue;
         }
-        let can_use_reported = matches!(mode, UsageCostMode::Reported)
-            || (mode == UsageCostMode::Auto && catalog_valid.is_some());
+        // The provider's own figure is worth using in `auto` whenever the catalog could
+        // not price the row — because it is missing, because it is invalid, or because it
+        // does not cover this row.  Requiring a valid catalog first meant a device that had
+        // never fetched one reported no cost at all, while every row it held carried the
+        // amount the provider had already charged.
+        let can_use_reported = matches!(mode, UsageCostMode::Reported | UsageCostMode::Auto);
         if can_use_reported
             && row.source_cost_microusd.is_some()
             && row.source_cost_covered_requests == row.requests
@@ -557,6 +562,115 @@ pub fn fold_prepared_usage_costs(
     })
 }
 
+/// Adds the cost outcomes of a tree's leaves into the outcome of the branch above them.
+///
+/// A managed read states cost only at the leaf, because that is the only place its rollup has
+/// to keep it. Every derived field — the basis, the status, the amount — follows from the row
+/// counts, so folding is addition and then the same verdict the leaf reached.
+pub fn fold_usage_cost_outcomes(
+    outcomes: &[UsageCostOutcome],
+) -> Result<UsageCostOutcome, UsageError> {
+    let mut amount = BigUint::zero();
+    let mut priced_any = false;
+    let mut calculated_rows = 0u64;
+    let mut reported_rows = 0u64;
+    let mut unpriced_rows = 0u64;
+    let mut mode = UsageCostMode::Auto;
+    let mut catalog_revision = None;
+    let mut assumptions = BTreeSet::new();
+    let mut unpriced = BTreeMap::<(BillingChannel, String, UsageUnpricedReason), u64>::new();
+    let mut truncated = false;
+    for (index, outcome) in outcomes.iter().enumerate() {
+        if index == 0 {
+            mode = outcome.mode;
+            catalog_revision = outcome.catalog_revision.clone();
+        } else if catalog_revision != outcome.catalog_revision {
+            catalog_revision = None;
+        }
+        if let Some(value) = &outcome.amount_microusd {
+            amount += parse_biguint(value)?;
+            priced_any = true;
+        }
+        calculated_rows = checked_add(calculated_rows, outcome.calculated_rows)?;
+        reported_rows = checked_add(reported_rows, outcome.reported_rows)?;
+        unpriced_rows = checked_add(unpriced_rows, outcome.unpriced_rows)?;
+        assumptions.extend(outcome.assumptions.iter().copied());
+        truncated = truncated || outcome.unpriced_truncated;
+        for item in &outcome.unpriced {
+            let key = (item.billing_channel, item.model.clone(), item.reason);
+            let count = unpriced.entry(key).or_default();
+            *count = checked_add(*count, item.rows)?;
+        }
+    }
+    let priced_rows = checked_add(calculated_rows, reported_rows)?;
+    let basis = if calculated_rows > 0 && reported_rows > 0 {
+        UsageCostBasis::Mixed
+    } else if calculated_rows > 0 {
+        UsageCostBasis::Calculated
+    } else if reported_rows > 0 {
+        UsageCostBasis::Reported
+    } else {
+        UsageCostBasis::None
+    };
+    let status = if unpriced_rows == 0 {
+        UsageCostStatus::Complete
+    } else if priced_rows > 0 {
+        UsageCostStatus::Partial
+    } else {
+        UsageCostStatus::Unavailable
+    };
+    let unpriced_truncated = truncated || unpriced.len() > MAX_UNPRICED_ITEMS;
+    let mut assumptions = assumptions.into_iter().collect::<Vec<_>>();
+    assumptions.sort_by_key(|value| assumption_key(*value));
+    let mut unpriced = unpriced
+        .into_iter()
+        .map(
+            |((billing_channel, model, reason), rows)| UsageUnpricedItem {
+                billing_channel,
+                model,
+                reason,
+                rows,
+            },
+        )
+        .collect::<Vec<_>>();
+    unpriced.sort_by(|left, right| {
+        (
+            left.billing_channel.as_str(),
+            left.model.as_str(),
+            reason_key(left.reason),
+        )
+            .cmp(&(
+                right.billing_channel.as_str(),
+                right.model.as_str(),
+                reason_key(right.reason),
+            ))
+    });
+    let amount_microusd = if priced_any && priced_rows > 0 {
+        let value = amount.to_string();
+        if value.len() > 32 {
+            return Err(UsageError(
+                "Usage cost amount exceeds protocol bound".into(),
+            ));
+        }
+        Some(value)
+    } else {
+        None
+    };
+    Ok(UsageCostOutcome {
+        mode,
+        basis,
+        status,
+        amount_microusd,
+        catalog_revision,
+        calculated_rows,
+        reported_rows,
+        unpriced_rows,
+        assumptions,
+        unpriced: unpriced.into_iter().take(MAX_UNPRICED_ITEMS).collect(),
+        unpriced_truncated,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub enum CalculatedUsageRowCost {
     Priced {
@@ -569,15 +683,15 @@ pub enum CalculatedUsageRowCost {
 
 pub fn calculate_usage_row_cost(
     catalog: &PricingCatalog,
-    row: &UsageHourlyFact,
+    row: &DatedUsageRow,
 ) -> Result<CalculatedUsageRowCost, UsageError> {
-    super::usage::validate_fact(row)?;
+    super::usage::validate_dated_row(row)?;
     Ok(calculate_row_from_catalog(catalog, row))
 }
 
 fn calculate_row_from_catalog(
     catalog: &PricingCatalog,
-    row: &UsageHourlyFact,
+    row: &DatedUsageRow,
 ) -> CalculatedUsageRowCost {
     let resolution = resolve_pricing_entry(catalog, row);
     let (entry, mut assumptions) = match resolution {
@@ -925,7 +1039,7 @@ mod tests {
         .expect("pricing catalog")
     }
 
-    fn row(root: &Value, name: &str) -> UsageHourlyFact {
+    fn row(root: &Value, name: &str) -> DatedUsageRow {
         serde_json::from_value(
             root.get("rows")
                 .and_then(Value::as_object)
@@ -942,6 +1056,23 @@ mod tests {
             PricingCatalogValidationIssue::DuplicateEntryId { .. } => "duplicate_entry_id",
             PricingCatalogValidationIssue::AmbiguousEntries { .. } => "ambiguous_entries",
         }
+    }
+
+    /// A catalog from a Relay newer than this build still prices what this build understands.
+    #[test]
+    fn a_catalog_naming_a_field_this_build_does_not_read_is_still_a_catalog() {
+        let root = fixture();
+        let mut document = root
+            .get("catalogs")
+            .and_then(Value::as_object)
+            .and_then(|catalogs| catalogs.get("exact"))
+            .cloned()
+            .expect("catalog fixture");
+        document["issued_by"] = json!("a Relay from 2027");
+        document["entries"][0]["notes"] = json!("why this rate moved");
+        let result = validate_pricing_catalog(&document);
+        assert!(result.catalog.is_some(), "{:?}", result.issues);
+        assert!(result.issues.is_empty(), "{:?}", result.issues);
     }
 
     #[test]
@@ -1008,6 +1139,48 @@ mod tests {
         }
     }
 
+    /// A catalog this device has not fetched yet is no reason to say nothing about money
+    /// the provider has already charged for.  `auto` used to require a valid catalog before
+    /// it would look at the source's own figure, so a device with no catalog reported no
+    /// cost at all while every row it held carried one.
+    #[test]
+    fn auto_uses_the_source_cost_when_no_catalog_can_price_the_row() {
+        let root = fixture();
+        let reported = row(&root, "cost_reported");
+        let outcome =
+            calculate_usage_cost(std::slice::from_ref(&reported), None, UsageCostMode::Auto)
+                .expect("cost outcome");
+        assert_eq!(outcome.basis, UsageCostBasis::Reported);
+        assert_ne!(outcome.status, UsageCostStatus::Unavailable);
+        assert_eq!(outcome.status, UsageCostStatus::Complete);
+        assert_eq!(outcome.amount_microusd.as_deref(), Some("1234"));
+        assert_eq!(outcome.catalog_revision, None);
+        assert_eq!(outcome.assumptions, [UsageCostAssumption::SourceReported]);
+
+        // A catalog that does not validate is the same situation as none at all.
+        let invalid = catalog(&root, "duplicate");
+        assert!(!validate_catalog(&invalid).valid);
+        assert_eq!(
+            calculate_usage_cost(
+                std::slice::from_ref(&reported),
+                Some(&invalid),
+                UsageCostMode::Auto
+            )
+            .expect("cost outcome")
+            .amount_microusd
+            .as_deref(),
+            Some("1234")
+        );
+
+        // `calculate` still refuses to report a figure it did not compute.
+        assert_eq!(
+            calculate_usage_cost(&[reported], None, UsageCostMode::Calculate)
+                .expect("cost outcome")
+                .status,
+            UsageCostStatus::Unavailable
+        );
+    }
+
     #[test]
     fn pricing_cost_matches_shared_fixture() {
         let root = fixture();
@@ -1017,10 +1190,12 @@ mod tests {
             .expect("cost cases")
         {
             let name = case.get("name").and_then(Value::as_str).expect("cost name");
-            let catalog_name = case
+            // A case with no catalog states the one thing a catalog cannot: what the
+            // source itself reported.
+            let catalog = case
                 .get("catalog")
                 .and_then(Value::as_str)
-                .expect("cost catalog");
+                .map(|name| catalog(&root, name));
             let mode: UsageCostMode =
                 serde_json::from_value(case.get("mode").cloned().expect("cost mode"))
                     .expect("cost mode value");
@@ -1033,8 +1208,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let expected = case.get("expected").expect("cost expected");
             let actual = serde_json::to_value(
-                calculate_usage_cost(&rows, Some(&catalog(&root, catalog_name)), mode)
-                    .expect("cost outcome"),
+                calculate_usage_cost(&rows, catalog.as_ref(), mode).expect("cost outcome"),
             )
             .expect("serialize cost outcome");
             assert_eq!(&actual, expected, "{name}");

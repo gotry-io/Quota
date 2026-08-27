@@ -5,7 +5,6 @@ use std::fs;
 
 use super::identity::mask_secret;
 use super::io::{LOCAL_FILE_LIMIT, read_bounded_file_inner};
-use super::json::provider_source;
 use super::types::{CollectionContext, ErrorCategory, ProviderError};
 
 #[derive(Clone, Debug)]
@@ -47,15 +46,20 @@ impl<'de> Deserialize<'de> for ConfigBaseUrl {
     }
 }
 
+/// The API key a provider is configured with here, and where it came from.
+///
+/// `source_id` is the rung this answers for: a provider names its own, because the id a failure
+/// travels under is the provider's fact, not a table this module keeps a second copy of.
 pub fn resolve_api_key(
     context: &CollectionContext,
     provider: ProviderId,
+    source_id: &'static str,
 ) -> Result<ApiKeyCredentials, ProviderError> {
     let metadata = provider.metadata();
     let provider = provider.as_str();
     let config = metadata
         .credential_config
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, provider_source(provider)))?;
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Error, source_id))?;
     let env_keys = metadata.environment_keys;
     let default_base_url = metadata.default_base_url;
     let base_url_env_key = metadata.base_url_environment_key;
@@ -91,10 +95,7 @@ pub fn resolve_api_key(
         match found {
             Some((key, env_key)) => (key, format!("env:{env_key}"), None),
             None => {
-                return Err(ProviderError::new(
-                    ErrorCategory::AuthRequired,
-                    provider_source(provider),
-                ));
+                return Err(ProviderError::new(ErrorCategory::AuthRequired, source_id));
             }
         }
     };
@@ -110,29 +111,20 @@ pub fn resolve_api_key(
     };
     let base_url = match raw_base {
         Some(value) => validate_base_url(&value, config.allow_private_http)
-            .map_err(|_| ProviderError::new(ErrorCategory::Error, provider_source(provider)))?,
+            .map_err(|_| ProviderError::new(ErrorCategory::Error, source_id))?,
         None if config.requires_base_url => {
-            return Err(ProviderError::new(
-                ErrorCategory::AuthRequired,
-                provider_source(provider),
-            ));
+            return Err(ProviderError::new(ErrorCategory::AuthRequired, source_id));
         }
         None => {
-            return Err(ProviderError::new(
-                ErrorCategory::Error,
-                provider_source(provider),
-            ));
+            return Err(ProviderError::new(ErrorCategory::Error, source_id));
         }
     };
 
     if !config.supports_base_url {
-        let expected = default_base_url
-            .ok_or_else(|| ProviderError::new(ErrorCategory::Error, provider_source(provider)))?;
+        let expected =
+            default_base_url.ok_or_else(|| ProviderError::new(ErrorCategory::Error, source_id))?;
         if base_url.trim_end_matches('/') != expected.trim_end_matches('/') {
-            return Err(ProviderError::new(
-                ErrorCategory::Error,
-                provider_source(provider),
-            ));
+            return Err(ProviderError::new(ErrorCategory::Error, source_id));
         }
     }
 
@@ -238,6 +230,9 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
@@ -268,7 +263,7 @@ mod tests {
             r#"{"schema_version":1,"providers":{"openrouter":{"api_key":"sk-config","base_url":"https://old.invalid/v1"}}}"#,
         );
         let context = context_with_config(path.clone(), &[("OPENROUTER_API_KEY", "sk-env")]);
-        let credentials = resolve_api_key(&context, ProviderId::OpenRouter).unwrap();
+        let credentials = resolve_api_key(&context, ProviderId::OpenRouter, "test_source").unwrap();
         assert_eq!(credentials.api_key, "sk-config");
         assert_eq!(credentials.source, "config:openrouter");
         assert_eq!(credentials.base_url, "https://openrouter.ai/api/v1");
@@ -281,7 +276,7 @@ mod tests {
         let path = temp_path("config/providers.json");
         let context =
             context_with_config(path, &[("LITELLM_BASE_URL", "https://proxy.example.test")]);
-        let error = resolve_api_key(&context, ProviderId::LiteLlm).unwrap_err();
+        let error = resolve_api_key(&context, ProviderId::LiteLlm, "test_source").unwrap_err();
         assert_eq!(error.category, ErrorCategory::AuthRequired);
     }
 
@@ -293,7 +288,7 @@ mod tests {
             r#"{"schema_version":1,"providers":{"not-a-provider":{"api_key":"secret"}}}"#,
         );
         let context = context_with_config(path.clone(), &[("OPENROUTER_API_KEY", "sk-env")]);
-        let credentials = resolve_api_key(&context, ProviderId::OpenRouter).unwrap();
+        let credentials = resolve_api_key(&context, ProviderId::OpenRouter, "test_source").unwrap();
         assert_eq!(credentials.api_key, "sk-env");
         assert_eq!(credentials.source, "env:OPENROUTER_API_KEY");
         let _ = fs::remove_file(path);
@@ -316,7 +311,8 @@ mod tests {
                     ("LITELLM_BASE_URL", "https://proxy.example.test"),
                 ],
             );
-            let credentials = resolve_api_key(&context, ProviderId::LiteLlm).unwrap();
+            let credentials =
+                resolve_api_key(&context, ProviderId::LiteLlm, "test_source").unwrap();
             assert_eq!(credentials.api_key, "sk-env");
             let _ = fs::remove_file(path);
         }
@@ -354,7 +350,8 @@ mod tests {
             let link = config_root.join("link");
             symlink(&target, &link).unwrap();
             let context = context_with_config(link.clone(), &environment);
-            let credentials = resolve_api_key(&context, ProviderId::OpenRouter).unwrap();
+            let credentials =
+                resolve_api_key(&context, ProviderId::OpenRouter, "test_source").unwrap();
             assert_eq!(credentials.source, "env:OPENROUTER_API_KEY");
 
             let oversized = temp_path("config-oversized");
@@ -362,6 +359,7 @@ mod tests {
             let credentials = resolve_api_key(
                 &context_with_config(oversized.clone(), &environment),
                 ProviderId::OpenRouter,
+                "test_source",
             )
             .unwrap();
             assert_eq!(credentials.source, "env:OPENROUTER_API_KEY");
@@ -375,6 +373,7 @@ mod tests {
             let credentials = resolve_api_key(
                 &context_with_config(permissive.clone(), &environment),
                 ProviderId::OpenRouter,
+                "test_source",
             )
             .unwrap();
             assert_eq!(credentials.source, "env:OPENROUTER_API_KEY");

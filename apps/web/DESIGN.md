@@ -17,6 +17,14 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
 - Product names are Quota, QuotaBar, and QuotaRelay.
 
+## Shared product vocabulary
+
+Freshness copy, the one no-reset phrase, provider display names, and Devices copy follow
+**Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
+and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
+`src/lib/format.ts` answers in its tests. The site does not restate those rules and does not keep a
+provider or agent name table of its own.
+
 ## Information architecture
 
 The site has four surfaces:
@@ -26,8 +34,8 @@ The site has four surfaces:
    secondary install under that CTA: a Homebrew label, a short tap note, the
    `brew install gotry-io/tap/quotabar` command, and a Copy control with brief Copied feedback.
    GitHub sign-in lives only in the site header. The appearance control lives in the footer.
-2. `/my` is the signed-in dashboard: compact remaining-quota cards, account totals, cost coverage,
-   Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
+2. `/my` is the signed-in dashboard, quota first: compact remaining-quota cards, then account
+   totals, Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
    has no "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only
    windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
@@ -39,21 +47,11 @@ The site has four surfaces:
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
-   Worker starts `GET /api/v5/account/summary` internally, reuses the resolved Better Auth session,
+   Worker starts `GET /api/v6/account/summary` internally, reuses the resolved session,
    and streams the typed result into the page. The browser fetch is only a development or retry
    path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
-   `/`. A successful `/u/{slug}` page view consumes two `public-profile` limiter tokens (document
-   existence plus the JSON payload); after 60 views / 10 minutes the HTML can remain 200 while the
-   JSON returns 429. The shipped `/app`
-   bookmark is a single redirect to `/my`. Every signed-in GitHub account is public at
-   `/u/{github-username}`. The dashboard has no public-page visibility control.
-3. `/u/{username}` is the public remaining-quota and usage view for that GitHub username. It shows
-   one card per subscription, the same unit the dashboard shows, so a provider with two accounts
-   reads as two cards rather than one silently chosen for the viewer; a reading that is no longer
-   current is not published at all. It never includes device ids, fingerprints, credentials, or
-   private identifiers, so two cards of one provider are told apart by their plan and numbers.
-   Unknown usernames show a plain unavailable state.
-4. `/activate` approves or denies a released native-client device authorization code.
+   `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
+   without a session.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -105,8 +103,9 @@ choosing System removes it. Do not render three permanent footer buttons.
 
 The hero headline is “Know what you have left.” Its primary action is the QuotaBar `.dmg`
 download and its secondary action scrolls to the product explanation. GitHub sign-in is only
-in the header. The product preview may show representative account Usage, but it must label the
-cost as API-equivalent and state that unknown prices remain unpriced.
+in the header. The product preview shows what the product is for: representative remaining quota —
+provider, plan, window, percent, meter, reset, and freshness — with one quiet Today line under it.
+It does not lead with a monthly spend figure.
 
 The explanation follows this order:
 
@@ -126,9 +125,10 @@ toggle in a controls group. The toggle keeps a visible focus ring and a 42 px ta
 
 ## Account dashboard
 
-The dashboard leads with input tokens, output tokens, and API-equivalent cost. Cost always shows its
-coverage/basis; unavailable cost renders as an em dash plus “Unpriced”, and partial cost uses a lower
-bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
+The dashboard leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
+cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
+Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
+partial cost uses a lower bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
 shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
@@ -144,36 +144,25 @@ it cannot overflow the page. Leave and blur hide it. Narrow viewports scroll the
 so weekday labels stay readable and the page does not overflow.
 
 Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
-owns selected, loading, error, and data state and fetches
-`GET /api/v5/account/usage/summary?usage_agents=all&cost_mode=calculate&model_catalog=1&from=YYYY-MM-DD&to=YYYY-MM-DD`,
-reusing the existing `usage_date` timezone. A 401 starts GitHub sign-in. Failures stay on the
-page with a retry control. The panel can be closed. It shows that day's date, input, output,
-requests, estimated cost, coverage, and compact agent and model splits, with honest empty,
-truncated, partial, and unpriced copy. The dashboard does not repeat the GitHub username in the
-page heading.
+owns selected, loading, error, and data state and reads that day from the activity range it already
+holds, which `GET /api/v6/account/usage/activity` answers in UTC days. A 401 starts GitHub sign-in.
+Failures stay on the page with a retry control. The panel can be closed. It shows that day's date,
+input, output, requests, estimated cost, and whether any hour behind it was scanned incompletely,
+with honest empty, partial, and unpriced copy. The dashboard does not repeat the GitHub username in
+the page heading.
 
 Quota cards show one subscription, not one upload: an account collected on several Macs is one card
-carrying the reading that still describes it, with the reporting device and observation time below
-it and the other reporting devices named on a second line. The status pill uses the shared
-observation vocabulary, so a reading that aged out reads as Stale rather than as a current number.
+carrying the reading that still describes it, with the reporting device and the shared freshness
+line below it and the other reporting devices named on a second line. That line is the whole
+sentence — a reading that aged out reads **Not current — last reading 2d ago** rather than as a
+current number — so the card needs no separate status pill.
 
-Device cards show display name, platform, app product/version, and compact last
-report/refresh/sync. A server-fresh healthy/current-or-empty report with no required or optional
-attention is **Healthy**; fresh problem states are **Needs attention** or **Check device** and direct
-the user to Diagnostics on that Device. Expired or absent reports are **Not recently active** or
-**Unknown**, not an assertion that a sleeping or closed app failed. Lifecycle **Signed out** remains
-explicit. Never show raw Device IDs or ask the viewing browser/device to fix another Device's
-provider credentials. Deletion copy must say that both the Device and its Quota/Usage data are
-removed. Agent Usage uses a semantic table with real column headers. Empty, loading,
+Device cards show display name, an **Active** / **Idle** / **Not reporting** pill, and one line of
+platform plus the age that verdict came from. Never a claim that a sleeping or closed app failed,
+never raw Device IDs, and never a request that the viewing browser fix another Device's provider
+credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with real column headers. Empty, loading,
 unauthenticated, recent-auth-required, and service-error states use plain explanatory text and one
 next action.
-
-## Device authorization
-
-`/activate` is a single-task form. It explains that approval issues Account-read and current-Device
-upload sessions without sharing provider credentials. The code input supports one-time-code
-autofill. Approve is primary; Deny is secondary. Success tells the user to return to the requesting
-Quota client.
 
 ## Responsive behavior
 
@@ -199,8 +188,8 @@ Quota client.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/my` (and the shipped `/app` redirect), and `/activate` at desktop and narrow mobile
-  widths in both light and dark appearance when browser tooling is available;
+- inspect `/` and `/my` (and the shipped `/app` redirect) at desktop and narrow mobile widths in
+  both light and dark appearance when browser tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

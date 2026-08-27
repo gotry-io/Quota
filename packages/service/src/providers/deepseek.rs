@@ -61,7 +61,7 @@ pub fn collect(
 }
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
-    resolve_api_key(context, ProviderId::DeepSeek)
+    resolve_api_key(context, ProviderId::DeepSeek, SOURCE)
 }
 
 #[derive(Clone, Debug)]

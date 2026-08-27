@@ -109,7 +109,7 @@ pub fn collect(
 }
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
-    resolve_api_key(context, ProviderId::LiteLlm)
+    resolve_api_key(context, ProviderId::LiteLlm, SOURCE)
 }
 
 #[derive(Clone, Debug, Default)]

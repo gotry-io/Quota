@@ -1,7 +1,6 @@
-import { AccountSummarySchema } from "@gotry-io/quota-protocol";
-import { createWebAccountAuth, memoizeWebAccountAuthSession } from "./account/better-auth.ts";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
+import { GitHubWebSessions, memoizeWebSessionAuthorization } from "./account/web-session.ts";
 import { accountMaintenanceInput, createRelayApp } from "./app.ts";
 import { CANONICAL_ORIGIN } from "./config.ts";
 import { isRelayApiPath } from "./relay-paths.ts";
@@ -18,7 +17,6 @@ export interface CloudflareBindings {
   GITHUB_SUBJECT_KEY: string;
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
-  BETTER_AUTH_SECRET: string;
 }
 
 export default {
@@ -26,13 +24,13 @@ export default {
     const pathname = new URL(request.url).pathname;
     const state = new D1AccountState(environment.DB);
     const hasher = new SecretHasher(environment.QUOTA_SESSION_HASH_KEY);
-    const webAuth = memoizeWebAccountAuthSession(
-      createWebAccountAuth({
-        database: environment.DB,
+    const webSessions = memoizeWebSessionAuthorization(
+      new GitHubWebSessions({
+        state,
+        hasher,
         githubClientId: environment.GITHUB_CLIENT_ID,
         githubClientSecret: environment.GITHUB_CLIENT_SECRET,
         githubSubjectKey: environment.GITHUB_SUBJECT_KEY,
-        authSecret: environment.BETTER_AUTH_SECRET,
         origin: CANONICAL_ORIGIN,
       }),
     );
@@ -41,7 +39,7 @@ export default {
       state,
       usageState,
       accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
-      webAuth,
+      webSessions,
       hasher,
     });
 
@@ -50,26 +48,7 @@ export default {
     }
 
     return respondWithWebDocument(request, environment, context, {
-      document: createWebDocumentPort({
-        webAuth,
-        state,
-        hasher,
-        async getAccountSummary(headers) {
-          try {
-            const url = new URL(
-              "/api/v5/account/summary?cost_mode=auto&usage_agents=all",
-              request.url,
-            );
-            const response = await relay.fetch(new Request(url, { headers }));
-            if (response.status === 401) return { status: "unauthorized" };
-            if (!response.ok) return { status: "error" };
-            const parsed = AccountSummarySchema.safeParse(await response.json());
-            return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
-          } catch {
-            return { status: "error" };
-          }
-        },
-      }),
+      document: createWebDocumentPort({ webSessions, state }),
     });
   },
   async scheduled(_controller, environment): Promise<void> {

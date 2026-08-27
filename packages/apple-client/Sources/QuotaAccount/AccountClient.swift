@@ -60,10 +60,6 @@ public actor AccountClient {
     try sessionStore.load() != nil
   }
 
-  public func currentSession() throws -> AccountSession? {
-    try sessionStore.load()
-  }
-
   public func loadCachedSummary() throws -> CachedAccountSummary? {
     try loadBoundCachedSummary()
   }
@@ -101,12 +97,12 @@ public actor AccountClient {
           error: .notSignedIn
         )
       }
-      let summary = try await fetchSummary(allowRefresh: true)
+      let read = try await fetchSummary(cached: cached, allowRefresh: true)
       let fetchedAt = now()
-      let snapshot = CachedAccountSummary(summary: summary, fetchedAt: fetchedAt)
-      try summaryStore.save(snapshot)
+      try summaryStore.save(
+        CachedAccountSummary(summary: read.summary, fetchedAt: fetchedAt, etag: read.etag))
       return AccountRefreshResult(
-        summary: summary,
+        summary: read.summary,
         fetchedAt: fetchedAt,
         fromCache: false
       )
@@ -154,46 +150,54 @@ public actor AccountClient {
     }
   }
 
-  public func todayDate() -> String {
-    Self.calendarDate(now(), calendar: calendar)
-  }
-
-  public static func calendarDate(_ date: Date, calendar: Calendar) -> String {
-    var calendar = calendar
-    calendar.locale = Locale(identifier: "en_US_POSIX")
-    let components = calendar.dateComponents([.year, .month, .day], from: date)
-    return String(
-      format: "%04d-%02d-%02d",
-      components.year ?? 0,
-      components.month ?? 0,
-      components.day ?? 0
-    )
-  }
-
-  private func fetchSummary(allowRefresh: Bool) async throws -> AccountSummary {
+  /// The summary this read leaves current, and the validator it is current at.
+  ///
+  /// `cached` is the account-bound stored read, so its validator is only ever offered back for
+  /// the account the session belongs to.
+  private func fetchSummary(
+    cached: CachedAccountSummary?,
+    allowRefresh: Bool
+  ) async throws -> (summary: AccountSummary, etag: String?) {
     guard let session = try sessionStore.load() else {
       throw AccountClientError.notSignedIn
     }
-    let today = todayDate()
+    let held = cached?.summary.account.accountID == session.accountID ? cached : nil
+    let timeZone = calendar.timeZone.identifier
     do {
-      let summary = try await relay.fetchAccountSummary(
-        from: today,
-        to: today,
-        accessToken: session.accessToken
+      let read = try await relay.fetchAccountSummary(
+        timeZone: timeZone,
+        accessToken: session.accessToken,
+        etag: held?.etag
       )
-      return try bound(summary, to: session)
+      return try resolve(read, held: held, session: session)
     } catch RelayClientError.unauthorized where allowRefresh {
       let refreshed = try await refreshSessionAfterUnauthorized()
-      let summary = try await relay.fetchAccountSummary(
-        from: today,
-        to: today,
-        accessToken: refreshed.accessToken
+      let read = try await relay.fetchAccountSummary(
+        timeZone: timeZone,
+        accessToken: refreshed.accessToken,
+        etag: held?.etag
       )
-      return try bound(summary, to: refreshed)
+      return try resolve(read, held: held, session: refreshed)
     } catch let error as AccountClientError {
       throw error
     } catch let error as RelayClientError {
       throw AccountClientError.relay(error)
+    }
+  }
+
+  private func resolve(
+    _ read: AccountSummaryRead,
+    held: CachedAccountSummary?,
+    session: AccountSession
+  ) throws -> (summary: AccountSummary, etag: String?) {
+    switch read {
+    case .modified(let summary, let etag):
+      return (try bound(summary, to: session), etag)
+    case .unchanged(let etag):
+      // A 304 the caller cannot honour would be answering from nothing; it can only happen if
+      // the stored read was dropped between offering its validator and reading the reply.
+      guard let held else { throw AccountClientError.relay(.invalidResponse) }
+      return (try bound(held.summary, to: session), etag)
     }
   }
 
@@ -230,7 +234,7 @@ public actor AccountClient {
       throw AccountClientError.notSignedIn
     }
     do {
-      let rotated = try await relay.refreshAccountSession(refreshToken: current.refreshToken)
+      let rotated = try await relay.refreshSession(refreshToken: current.refreshToken)
       guard rotated.accountID == current.accountID else {
         throw AccountClientError.accountMismatch
       }

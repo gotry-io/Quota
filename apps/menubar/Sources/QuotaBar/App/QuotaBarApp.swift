@@ -2,27 +2,6 @@ import SwiftUI
 
 import AppKit
 
-#if !VISUAL_TEST
-  @MainActor
-  final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: MenuBarViewModel?
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-      guard let model, model.repairBlocksQuit else { return .terminateNow }
-      model.presentRepairPageFromQuitAttempt()
-      NSAccessibility.post(
-        element: sender,
-        notification: .announcementRequested,
-        userInfo: [
-          .announcement: "QuotaBar is repairing local data. Keep the app open.",
-          .priority: NSAccessibilityPriorityLevel.high.rawValue,
-        ]
-      )
-      return .terminateCancel
-    }
-  }
-#endif
-
 @main
 struct QuotaBarApp: App {
   #if VISUAL_TEST
@@ -49,8 +28,8 @@ struct QuotaBarApp: App {
           model: model,
           initialPath: visualTestConfiguration.initialPath,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
-          performsDiagnosticsCheckOnEntry: visualTestConfiguration.dataSource == .live,
-          diagnosticsModel: visualTestConfiguration.makeDiagnosticsModel(),
+          performsSupportCheckOnEntry: visualTestConfiguration.dataSource == .live,
+          supportModel: visualTestConfiguration.makeSupportModel(),
           seedsLaunchAtLogin: false
         )
         .preferredColorScheme(visualTestConfiguration.colorScheme)
@@ -72,11 +51,16 @@ struct QuotaBarApp: App {
   #else
     @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
     @State private var model: MenuBarViewModel
+    @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
+      MenuBarStylePreference.fallback
+    @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
+      MenuBarProviderPreference.fallback
 
     init() {
       let model = MenuBarViewModel()
       model.start()
       _model = State(initialValue: model)
+      appDelegate.model = model
       Task { @MainActor in
         QuotaBarUpdater.start()
       }
@@ -85,9 +69,17 @@ struct QuotaBarApp: App {
     var body: some Scene {
       MenuBarExtra {
         MenuBarContentView(model: model)
-          .onAppear { appDelegate.model = model }
       } label: {
-        QuotaMenuBarIcon()
+        // The item is drawn for the model's coarse clock rather than for `Date()`: reading it
+        // here is what makes the item re-evaluate when a reading ages out with nothing else
+        // happening. The clock only moves when that verdict does.
+        QuotaMenuBarLabel(
+          label: model.menuBarLabel(
+            style: menuBarStyle,
+            provider: menuBarProvider,
+            now: model.menuBarClock
+          )
+        )
       }
       .menuBarExtraStyle(.window)
     }

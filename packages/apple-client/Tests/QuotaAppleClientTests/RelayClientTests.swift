@@ -10,7 +10,7 @@ struct RelayClientTests {
       Set(RelayRoute.allCases.map(\.path)) == [
         "/oauth/v2/token",
         "/oauth/v2/revoke",
-        "/api/v5/account/summary",
+        "/api/v6/account/summary",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/") })
     #expect(RelayRoute.allCases.allSatisfy { $0.method == "GET" || $0.method == "POST" })
@@ -29,14 +29,12 @@ struct RelayClientTests {
     ])
     let client = RelayClient(transport: transport)
     _ = try await client.fetchAccountSummary(
-      from: "2026-08-14",
-      to: "2026-08-14",
+      timeZone: "UTC",
       accessToken: Fixtures.accessToken
     )
     await #expect(throws: RelayClientError.redirectRefused) {
       _ = try await client.fetchAccountSummary(
-        from: "2026-08-14",
-        to: "2026-08-14",
+        timeZone: "UTC",
         accessToken: Fixtures.accessToken
       )
     }
@@ -46,20 +44,19 @@ struct RelayClientTests {
         url.scheme == "https" && url.host == "quota.gotry.io"
           && (url.port == nil || url.port == 443)
       })
-    #expect(transport.recordedURLs.first?.path == "/api/v5/account/summary")
+    #expect(transport.recordedURLs.first?.path == "/api/v6/account/summary")
     let query =
       URLComponents(url: transport.recordedURLs[0], resolvingAgainstBaseURL: false)?
       .queryItems ?? []
     let items = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
-    #expect(items["usage_agents"] == "all")
-    // One contract: the summary carries client groups, the catalog revision, and Device
-    // Health without being asked, so the request has no negotiation keys.
-    for retired in ["usage_clients", "model_catalog", "device_health", "usage_channels"] {
+    // One read, one contract: the calendar this device keeps and nothing to negotiate.
+    #expect(items["tz"] == "UTC")
+    for retired in [
+      "usage_agents", "usage_clients", "model_catalog", "usage_channels", "cost_mode", "from",
+      "to",
+    ] {
       #expect(items[retired] == nil)
     }
-    #expect(items["cost_mode"] == "auto")
-    #expect(items["from"] == "2026-08-14")
-    #expect(items["to"] == "2026-08-14")
     #expect(transport.recordedAuthorization.first == "Bearer \(Fixtures.accessToken)")
   }
 
@@ -70,8 +67,7 @@ struct RelayClientTests {
     let client = RelayClient(transport: transport)
     await #expect(throws: RelayClientError.responseTooLarge) {
       _ = try await client.fetchAccountSummary(
-        from: "2026-08-14",
-        to: "2026-08-14",
+        timeZone: "UTC",
         accessToken: Fixtures.accessToken
       )
     }
@@ -90,8 +86,8 @@ struct RelayClientTests {
       verifier: String(repeating: "a", count: 43)
     )
     #expect(exchanged.accountID == "account_01")
-    let refreshed = try await client.refreshAccountSession(refreshToken: Fixtures.refreshToken)
-    #expect(refreshed.accountSession.accessToken == Fixtures.rotatedAccess)
+    let refreshed = try await client.refreshSession(refreshToken: Fixtures.refreshToken)
+    #expect(refreshed.session.accessToken == Fixtures.rotatedAccess)
     try await client.revokeSession(refreshToken: Fixtures.rotatedRefresh)
     #expect(
       transport.recordedURLs.map(\.path) == [

@@ -27,6 +27,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: false
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -41,6 +42,7 @@ extension ProviderID {
     case .`kimi`: "Configure in QuotaBar"
     case .`litellm`: "Configure in QuotaBar"
     case .`cursor`: "Sign in with browser"
+    case .unknown(let rawValue): rawValue
     }
   }
 
@@ -54,6 +56,7 @@ extension ProviderID {
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
+    case .unknown(let rawValue): rawValue
     }
   }
 
@@ -76,6 +79,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -89,19 +93,7 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
-    }
-  }
-
-  var allowsPrivateHttpBaseURL: Bool {
-    switch self {
-    case .`codex`: false
-    case .`claude`: false
-    case .`grok`: false
-    case .`openrouter`: false
-    case .`deepseek`: false
-    case .`kimi`: false
-    case .`litellm`: true
-    case .`cursor`: false
+    case .unknown: false
     }
   }
 
@@ -137,9 +129,10 @@ extension ProviderID {
     case .`cursor`: BrowserSessionSpec(
       loginURL: "https://authenticator.cursor.sh/",
       cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
-      cookieNames: ["WorkosCursorSessionToken", "__Secure-next-auth.session-token", "next-auth.session-token", "wos-session", "__Secure-wos-session", "authjs.session-token", "__Secure-authjs.session-token"],
+      cookieNames: ["WorkosCursorSessionToken", "wos-session", "__Secure-wos-session"],
       browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
       exclusive: true)
+    case .unknown: nil
     }
   }
 }

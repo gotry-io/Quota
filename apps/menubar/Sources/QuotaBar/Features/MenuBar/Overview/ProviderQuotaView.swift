@@ -5,7 +5,6 @@ import SwiftUI
 struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
   let now: Date
-  @State private var isHovered = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
@@ -19,12 +18,7 @@ struct ProviderQuotaView: View {
       }
 
       ForEach(Array(presentation.accounts.enumerated()), id: \.element.id) { index, account in
-        AccountQuotaView(
-          presentation: account,
-          accountIndex: index,
-          now: now,
-          emphasizesMetadata: isHovered
-        )
+        AccountQuotaView(presentation: account, accountIndex: index, now: now)
 
         if index < presentation.accounts.count - 1 {
           Divider()
@@ -32,23 +26,8 @@ struct ProviderQuotaView: View {
             .padding(.vertical, 2)
         }
       }
-
-      if presentation.accounts.isEmpty, presentation.status != nil {
-        SourceLabel(
-          symbolName: "laptopcomputer",
-          displayName: "This Mac",
-          accessibilityLabel: "Source: This Mac"
-        )
-        .foregroundStyle(isHovered ? QuotaPalette.body : QuotaPalette.mute)
-      }
     }
     .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
-    .contentShape(Rectangle())
-    .onHover { hovering in
-      withAnimation(.easeOut(duration: 0.1)) {
-        isHovered = hovering
-      }
-    }
     .accessibilityElement(children: .combine)
   }
 
@@ -88,7 +67,6 @@ private struct AccountQuotaView: View {
   let presentation: AccountQuotaPresentation
   let accountIndex: Int
   let now: Date
-  let emphasizesMetadata: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.iconLabel) {
@@ -101,8 +79,6 @@ private struct AccountQuotaView: View {
           isStale: presentation.state != .available
         )
       }
-
-      accountFooter
     }
   }
 
@@ -115,8 +91,7 @@ private struct AccountQuotaView: View {
         .truncationMode(.middle)
         .layoutPriority(1)
         .accessibilityLabel(
-          presentation.accountLabelDisplay.map { "Account: \($0)" }
-            ?? "Account \(accountIndex + 1)"
+          presentation.accessibilityLabel(accountIndex: accountIndex, now: now)
         )
 
       Spacer(minLength: 8)
@@ -129,45 +104,7 @@ private struct AccountQuotaView: View {
           .fixedSize()
           .accessibilityLabel("Plan: \(plan)")
       }
-
     }
-  }
-
-  private var accountFooter: some View {
-    HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.iconLabel) {
-      SourceLabel(
-        symbolName: presentation.sourceSymbolName,
-        displayName: presentation.selectedSourceDisplayName,
-        accessibilityLabel: presentation.sourceAccessibilityLabel
-      )
-
-      Spacer(minLength: 8)
-
-      Text(observationLabel)
-        .lineLimit(1)
-        .fixedSize()
-        .accessibilityLabel(observationAccessibilityLabel)
-    }
-    .quotaFont(.meta)
-    .foregroundStyle(emphasizesMetadata ? QuotaPalette.body : QuotaPalette.mute)
-  }
-
-  private var stateLabel: String? {
-    presentation.state == .available ? nil : presentation.state.label
-  }
-
-  private var observationLabel: String {
-    [stateLabel, "\(observedAge) ago"].compactMap { $0 }.joined(separator: " · ")
-  }
-
-  private var observationAccessibilityLabel: String {
-    let observed = presentation.snapshot.observedAt.formatted(.relative(presentation: .named))
-    guard let stateLabel else { return "Observed \(observed)" }
-    return "\(stateLabel). Observed \(observed)"
-  }
-
-  private var observedAge: String {
-    CompactAgeFormat.string(since: presentation.snapshot.observedAt, now: now)
   }
 }
 
@@ -211,31 +148,11 @@ private struct QuotaWindowRow: View {
         Text("Resets \(ResetDateFormatter.string(from: resetsAt))")
           .quotaMetaStyle()
       } else if window.showsPercentMeter {
-        Text("Reset time unavailable")
+        Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
       }
     }
     .padding(.top, 2)
-  }
-}
-
-/// Selected-source provenance: icon + device name. No tooltip (name is visible).
-private struct SourceLabel: View {
-  let symbolName: String
-  let displayName: String
-  let accessibilityLabel: String
-
-  var body: some View {
-    HStack(spacing: 3) {
-      Image(systemName: symbolName)
-        .symbolRenderingMode(.monochrome)
-      Text(displayName)
-        .lineLimit(1)
-        .truncationMode(.tail)
-    }
-    .quotaFont(.meta)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(accessibilityLabel)
   }
 }
 

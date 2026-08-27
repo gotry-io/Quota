@@ -15,7 +15,7 @@ struct ProviderQuotaCard: View {
         if index > 0 {
           Divider()
         }
-        observationBlock(subscription.reading, index: index)
+        observationBlock(subscription.snapshot, index: index)
       }
     }
     .padding(16)

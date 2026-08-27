@@ -1,29 +1,28 @@
 use crate::catalog::ProviderId;
-use serde_json::{Value, json};
-use std::fs::{self, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use serde_json::Value;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
-    is_executable_file, mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, slug, string,
+    mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
+    slug, string,
 };
 
-mod web;
+mod billing_rpc;
+pub mod refresh;
 
 pub const SOURCE: &str = "grok_billing_api";
+pub const WEB_SOURCE: &str = billing_rpc::WEB_SOURCE;
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
 const PLAN_SLUG_LIMIT: usize = 64;
 const OIDC_PREFIX: &str = "https://auth.x.ai::";
+const AUTH_REFRESH_SKEW: i64 = 60;
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
 
 #[derive(Clone, Debug)]
@@ -55,9 +54,11 @@ pub fn validate_browser_session(
     cookie_header: &str,
     context: &CollectionContext,
 ) -> Result<ValidatedBrowserSession, ProviderError> {
-    web::validate_browser_session(cookie_header, context)
+    billing_rpc::validate_browser_session(cookie_header, context)
 }
 
+/// The CLI proxy's billing, then grok.com's own RPC with the same token, then the stored
+/// grok.com session.
 pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -68,34 +69,40 @@ pub fn collect(
         ProviderId::Grok,
         SOURCE,
         || collect_local(context),
-        || web::collect(context),
+        || billing_rpc::collect(context),
     )
 }
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let mut credentials = load_credentials(context)
+    let credentials = load_credentials(context)
         .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
-    let mut refresh_succeeded = false;
-    if credentials
+    // The Grok CLI owns this token. The refresh worker already gave it its one chance to
+    // renew an expired one ([`refresh`]); a grant still out of time here is a sign-in only
+    // the reader can restore, by opening Grok.
+    if expiring(&credentials, context) {
+        return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
+    }
+    collect_with_credentials(&credentials, context)
+}
+
+/// Whether this device's Grok grant is out of time, or close enough that a billing request
+/// made with it would be answered `401` before it arrived.
+fn expiring(credentials: &Credentials, context: &CollectionContext) -> bool {
+    credentials
         .expires_at
-        .map(|expiry| expiry <= context.observed_unix() + 60)
-        .unwrap_or(false)
-        && let Some(refreshed) = refresh_and_reload(&credentials, context)
-    {
-        credentials = refreshed;
-        refresh_succeeded = true;
-    }
-    match collect_with_credentials(&credentials, context) {
-        Ok(snapshot) => Ok(snapshot),
-        Err(error) if error.category == ErrorCategory::AuthRequired && !refresh_succeeded => {
-            if let Some(refreshed) = refresh_and_reload(&credentials, context) {
-                collect_with_credentials(&refreshed, context)
-            } else {
-                Err(error)
-            }
-        }
-        Err(error) => Err(error),
-    }
+        .is_some_and(|expiry| expiry <= context.observed_unix() + AUTH_REFRESH_SKEW)
+}
+
+/// Whether the sign-in on disk is the thing standing between this refresh and a reading.
+/// A device holding no Grok grant at all has no sign-in to renew and answers `false`.
+fn sign_in_expiring(context: &CollectionContext) -> bool {
+    load_credentials(context).is_some_and(|credentials| expiring(&credentials, context))
+}
+
+/// Whether the file now holds a grant this refresh can spend. Not the negation of
+/// [`sign_in_expiring`]: a file that is gone or unreadable is neither expiring nor usable.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    load_credentials(context).is_some_and(|credentials| !expiring(&credentials, context))
 }
 
 fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
@@ -182,246 +189,6 @@ fn newest<'a>(
     })
 }
 
-fn refresh_and_reload(previous: &Credentials, context: &CollectionContext) -> Option<Credentials> {
-    let executable = resolve_executable(context)?;
-    let (path, backup) = snapshot_auth(context)?;
-    let mut child = Command::new(executable)
-        .args(["agent", "stdio"])
-        .envs(&context.environment)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    };
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    };
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let auth_method = loop {
-            let Some(value) = read_rpc_line(&mut reader) else {
-                break None;
-            };
-            let method = value
-                .get("result")
-                .and_then(|value| value.get("authMethods"))
-                .and_then(Value::as_array)
-                .and_then(|methods| {
-                    methods.iter().find_map(|method| {
-                        (string(obj_get(method, "id")).as_deref() == Some("cached_token"))
-                            .then(|| "cached_token".to_owned())
-                    })
-                });
-            if method.is_some()
-                || value
-                    .get("result")
-                    .and_then(|v| v.get("authMethods"))
-                    .is_some()
-            {
-                break method;
-            }
-        };
-        let _ = sender.send(auth_method);
-    });
-    let initialize = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "1",
-            "clientCapabilities": {
-                "fs": { "readTextFile": false, "writeTextFile": false },
-                "terminal": false
-            }
-        }
-    });
-    let Some(initialize) = serde_json::to_string(&initialize).ok() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        restore_if_missing(&path, &backup);
-        return None;
-    };
-    if stdin.write_all(initialize.as_bytes()).is_err() || stdin.write_all(b"\n").is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        restore_if_missing(&path, &backup);
-        return None;
-    }
-    let started = std::time::Instant::now();
-    let method_id = loop {
-        if context.cancelled() || started.elapsed() >= Duration::from_secs(20) {
-            let _ = child.kill();
-            let _ = child.wait();
-            restore_if_missing(&path, &backup);
-            return None;
-        }
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(method_id) => break method_id,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                restore_if_missing(&path, &backup);
-                return None;
-            }
-        }
-    };
-    if let Some(method_id) = method_id {
-        let authenticate = json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "authenticate",
-            "params": { "methodId": method_id, "_meta": { "headless": true } }
-        });
-        let Some(text) = serde_json::to_string(&authenticate).ok() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            restore_if_missing(&path, &backup);
-            return None;
-        };
-        if stdin.write_all(text.as_bytes()).is_err() || stdin.write_all(b"\n").is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-            restore_if_missing(&path, &backup);
-            return None;
-        }
-    }
-    drop(stdin);
-    if !wait_child(&mut child, Duration::from_secs(20), context) {
-        restore_if_missing(&path, &backup);
-        return None;
-    }
-    if let Some(current) = read_credentials(&path) {
-        if current.access_token != previous.access_token
-            || current.expires_at != previous.expires_at
-        {
-            return Some(current);
-        }
-        return None;
-    }
-    restore_if_missing(&path, &backup);
-    None
-}
-
-fn wait_child(
-    child: &mut std::process::Child,
-    timeout: Duration,
-    context: &CollectionContext,
-) -> bool {
-    let started = std::time::Instant::now();
-    loop {
-        if context.cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return false;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(25)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-}
-
-fn read_rpc_line(reader: &mut BufReader<impl std::io::Read>) -> Option<Value> {
-    let mut line = Vec::new();
-    let mut byte = [0_u8; 1];
-    loop {
-        line.clear();
-        loop {
-            let size = reader.read(&mut byte).ok()?;
-            if size == 0 {
-                if line.is_empty() {
-                    return None;
-                }
-                break;
-            }
-            line.push(byte[0]);
-            if line.len() > 1_048_576 {
-                return None;
-            }
-            if byte[0] == b'\n' {
-                break;
-            }
-        }
-        if let Ok(value) = serde_json::from_slice(&line) {
-            return Some(value);
-        }
-    }
-}
-
-fn snapshot_auth(context: &CollectionContext) -> Option<(PathBuf, Vec<u8>)> {
-    let mut paths = Vec::new();
-    if let Some(home) = context
-        .env("GROK_HOME")
-        .filter(|value| !value.trim().is_empty())
-    {
-        paths.push(PathBuf::from(home).join("auth.json"));
-    }
-    paths.push(context.home_directory.join(".grok/auth.json"));
-    paths.into_iter().find_map(|path| {
-        let bytes = read_bounded_file(&path, LOCAL_FILE_LIMIT)?;
-        let value: Value = serde_json::from_slice(&bytes).ok()?;
-        parse_credentials(&value, &path.to_string_lossy())?;
-        Some((path, bytes))
-    })
-}
-
-fn restore_if_missing(path: &Path, bytes: &[u8]) {
-    if path.exists() {
-        return;
-    }
-    #[cfg(unix)]
-    let options = {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        options
-    };
-    #[cfg(not(unix))]
-    let mut options = {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        options
-    };
-    if let Ok(mut file) = options.open(path) {
-        let _ = file.write_all(bytes);
-        let _ = file.sync_all();
-    }
-}
-
-fn resolve_executable(context: &CollectionContext) -> Option<String> {
-    if let Some(path) = context
-        .env("GROK_CLI_PATH")
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Some(path.to_owned());
-    }
-    let paths = [
-        context.home_directory.join(".grok/bin/grok"),
-        context.home_directory.join(".local/bin/grok"),
-        PathBuf::from("/usr/local/bin/grok"),
-        PathBuf::from("/opt/homebrew/bin/grok"),
-    ];
-    paths
-        .into_iter()
-        .find(|path| is_executable_file(path))
-        .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| Some("grok".to_owned()))
-}
-
 fn collect_with_credentials(
     credentials: &Credentials,
     context: &CollectionContext,
@@ -436,7 +203,7 @@ fn collect_with_credentials(
         // Rejected or malformed proxy answers are final. When the proxy is merely
         // unreachable, grok.com's own billing RPC accepts the same OAuth token.
         Err(error) if error.category != ErrorCategory::Unavailable => return Err(error),
-        Err(proxy_error) => web::bearer_billing_window(&credentials.access_token, context)
+        Err(proxy_error) => billing_rpc::bearer_billing_window(&credentials.access_token, context)
             .map_err(|_| proxy_error)?,
     };
     // The tier lives behind the same host as billing, so an unreachable proxy
@@ -593,8 +360,10 @@ fn grok_plan(credentials: &Credentials) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The Grok CLI owns this token. A Mac without one has only the stored grok.com session
+    /// to try, and without that too there is nothing at all.
     #[test]
-    fn discovers_browser_session_when_oauth_is_absent() {
+    fn the_browser_session_is_discovered_only_without_a_local_grant() {
         let mut context = CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
             environment: std::collections::HashMap::new(),
@@ -604,6 +373,9 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         assert!(discover(&context).is_empty());
         context
@@ -611,7 +383,61 @@ mod tests {
             .insert(ProviderId::Grok, "sso=session-value".to_owned());
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].credential_source, "browser_session");
+        assert_eq!(
+            sessions[0].credential_source,
+            super::super::BROWSER_SESSION_SOURCE
+        );
+    }
+
+    /// The stored session is the last rung, and only the last rung.
+    ///
+    /// It answers when this Mac's own grant said "sign in again"; it never answers first, it
+    /// is not reached at all when nothing was stored, and a cancelled refresh reads neither.
+    #[test]
+    fn the_stored_session_is_reached_only_after_the_grant_says_sign_in_again() {
+        let mut context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
+            environment: std::collections::HashMap::new(),
+            config_path: None,
+            browser_sessions: std::collections::HashMap::new(),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-10T00:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        };
+        let official = ProviderSession {
+            provider: ProviderId::Grok,
+            credential_source: "auth.json".to_owned(),
+        };
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("no credential")
+                .source_id,
+            SOURCE
+        );
+        // The header is one the browser rung rejects without a request; reaching it at all is
+        // what this asserts.
+        context
+            .browser_sessions
+            .insert(ProviderId::Grok, "sessionKey=sk-ant-ok".to_owned());
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("stored session")
+                .source_id,
+            WEB_SOURCE
+        );
+        let cancelled = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..context.clone()
+        };
+        let error = collect(&official, &cancelled).expect_err("cancelled");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.source_id, SOURCE);
     }
 
     #[test]
@@ -699,14 +525,5 @@ mod tests {
         assert!(plan_slug(Some("---")).is_none());
         assert!(plan_slug(None).is_none());
         assert!(plan_slug(Some(&"x".repeat(65))).is_none());
-    }
-
-    #[test]
-    fn skips_non_json_cli_noise_before_rpc_response() {
-        let mut reader = BufReader::new(std::io::Cursor::new(
-            b"startup banner\n{\"jsonrpc\":\"2.0\",\"id\":1}\n".to_vec(),
-        ));
-        let value = read_rpc_line(&mut reader).unwrap();
-        assert_eq!(value.get("id").and_then(Value::as_u64), Some(1));
     }
 }

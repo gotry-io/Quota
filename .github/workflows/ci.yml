@@ -43,6 +43,7 @@ jobs:
           set -euo pipefail
           pnpm format:check:js
           pnpm check:provider-catalog
+          pnpm check:schema
           pnpm -r --if-present check
           pnpm -r --if-present test
 
@@ -55,6 +56,8 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       # Only main writes the cache. Feature branches restore from it but never save, which
       # keeps a busy PR queue from evicting main's entry out of the 10 GB repository limit.
@@ -67,11 +70,12 @@ jobs:
       # This job runs the root `test` script's Rust and Swift halves without pnpm, because it
       # installs no node. `cargo test` supersedes the `cargo check --all-targets` that root
       # `check` runs first, and the packaging step below links QuotaBar in release, so neither
-      # belongs here.
+      # belongs here. rustfmt covers the whole workspace and this is the only Rust runner.
       - name: Verify Rust and Swift
         run: |
           set -euo pipefail
           swift --version
+          cargo fmt --all -- --check
           cargo test --locked --package quota-service --package quota-menubar-helper
           ./scripts/test-swift.sh
 
@@ -80,32 +84,3 @@ jobs:
 
       - name: Test packaged helper with isolated local state
         run: ./scripts/test-menubar-helper.sh
-
-  verify-linux-cli:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # rustfmt covers the whole workspace, so it runs once here instead of on the macOS runner.
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      # The release build is deliberate PR signal: `lto = "thin"` with `codegen-units = 1` is
-      # the profile QuotaCLI ships, and release-cli.yml would otherwise only find a break at
-      # tag time. The version smoke test runs against that binary.
-      - name: Build and test Linux QuotaCLI
-        run: |
-          set -euo pipefail
-          cargo test --locked --package quotacli
-          cargo build --locked --release --package quotacli
-          CLI_VERSION="$(cargo metadata --locked --no-deps --format-version 1 | jq -er \
-            '.packages[] | select(.name == "quotacli") | .version')"
-          test "$(target/release/quotacli version)" = "QuotaCLI ${CLI_VERSION}"

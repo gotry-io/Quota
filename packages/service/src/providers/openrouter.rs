@@ -138,7 +138,7 @@ fn get_meter(
 }
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
-    resolve_api_key(context, ProviderId::OpenRouter)
+    resolve_api_key(context, ProviderId::OpenRouter, SOURCE)
 }
 
 #[derive(Clone, Copy, Debug)]

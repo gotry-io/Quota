@@ -1,46 +1,74 @@
 //! The sole local persistence owner.
+//!
+//! Two SQLite files sit side by side in one owner-only directory. `identity.sqlite` holds what
+//! this device cannot regenerate: who it is, who it is signed in as, what it still owes an
+//! Account, and the preferences a person set. `cache.sqlite` holds everything derived from
+//! somewhere else. A cache this service cannot read is deleted and rebuilt from the next refresh;
+//! an identity it cannot read means this device starts over as a new installation. Neither file
+//! is ever salvaged, and nothing is ever copied out of a damaged one.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, SecondsFormat, Timelike};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension, Transaction, params,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::protocol::{
-    ComponentName, ComponentState, ComponentStatus, DiagnosticAttempt, DiagnosticAttemptCode,
-    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticMode,
-    DiagnosticRecentActivity, DiagnosticRecovery, DiagnosticReport, DiagnosticSource, ErrorCode,
-    IPC_VERSION, IpcError, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
+    BrowserAccessDenialReason, CacheState, ComponentName, ComponentState, ComponentStatus,
+    DiagnosticAttempt, DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
+    DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, IPC_VERSION, IpcError,
+    MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
     RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
-use crate::usage::{NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageScanResult};
-
-mod repair;
-mod salvage;
-
-pub use repair::{
-    RepairAction, RepairClass, RepairDisposition, RepairReport, RepairSite,
-    sqlite_durable_corruption, sqlite_durable_corruption_error, sqlite_io_or_full,
-    sqlite_io_or_full_error,
+use crate::usage::{
+    DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
 };
 
+mod legacy_import;
+
+use legacy_import::LegacyImport;
+
 const PROVIDER_CONFIG_NAME: &str = "providers.json";
-const MAX_USAGE_OUTBOX_ENTRIES: i64 = 64;
-const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 50_000;
-const MAX_SUPPORT_ATTEMPTS: usize = 512;
+const IDENTITY_NAME: &str = "identity.sqlite";
+const CACHE_NAME: &str = "cache.sqlite";
+const CACHE_RESET_KEY: &str = "cache_reset_at";
+const IDENTITY_RESET_KEY: &str = "identity_reset_at";
+const REBUILDING_KEY: &str = "rebuilding";
+/// The browsers this Mac was refused, by provider.
+const BROWSER_ACCESS_DENIED_KEY: &str = "browser_access_denied";
+/// The monotonic revision each rescanned hour is stamped with.
+const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
+/// The last `--version` this device read out of each installed provider CLI.
+const CLI_VERSION_KEY: &str = "provider_cli_versions";
+/// The last time this device asked each provider's own CLI to renew the sign-in it owns.
+const RENEWAL_ATTEMPT_KEY: &str = "provider_refresh_attempts";
+const PROVEN_CREDENTIAL_KEY: &str = "provider_proven_credentials";
+const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
+const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
+/// The write-ahead log is truncated back to this after each checkpoint. Without a limit the file
+/// keeps whatever high-water mark one large transaction reached, for the life of the image: a
+/// rescan of this device's Usage had left 213MB of empty log on disk.
+const MAXIMUM_WAL_BYTES: i64 = 16 * 1024 * 1024;
+/// Pages freed by deletes are handed back to the filesystem once this much has accumulated.
+/// Re-scanning a Usage file deletes and reinserts every record it holds, so an image that is
+/// never compacted keeps growing: this device reached 411MB holding 218MB of records.
+const COMPACT_FREE_BYTES: i64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiagnosticAttemptHandle(i64);
@@ -49,15 +77,26 @@ pub struct DiagnosticAttemptHandle(i64);
 pub struct DiagnosticAttemptCompletion {
     pub outcome: DiagnosticAttemptOutcome,
     pub code: Option<DiagnosticAttemptCode>,
-    pub recovery: DiagnosticRecovery,
-    pub metrics: BTreeMap<String, i64>,
 }
 
-#[derive(Debug, Clone)]
+impl DiagnosticAttemptCompletion {
+    pub const fn new(
+        outcome: DiagnosticAttemptOutcome,
+        code: Option<DiagnosticAttemptCode>,
+    ) -> Self {
+        Self { outcome, code }
+    }
+}
+
+/// What the journal knows about one kind of work.
+#[derive(Debug, Clone, Default)]
 pub struct DiagnosticAttemptFacts {
-    pub latest_completed: Option<DiagnosticAttempt>,
-    pub latest_success: Option<DiagnosticAttempt>,
-    pub latest_problem_after_success: Option<DiagnosticAttempt>,
+    pub last_attempt_at: Option<String>,
+    pub last_outcome: Option<DiagnosticAttemptOutcome>,
+    pub last_success_at: Option<String>,
+    /// The newest failure, partial run, or interruption that no later success has answered.
+    pub unresolved_at: Option<String>,
+    pub unresolved_code: Option<DiagnosticAttemptCode>,
 }
 
 #[derive(Debug, Error)]
@@ -76,14 +115,6 @@ pub enum StateError {
     Json(#[from] serde_json::Error),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthEvidenceTrust {
-    TrustedSnapshot,
-    EvaluateLive,
-    FailClosed,
-    PersistRetry,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderSecret {
@@ -97,6 +128,15 @@ pub struct ProviderBrowserSession {
     pub cookie_header: String,
     pub account_fingerprint: String,
     pub account_label: Option<String>,
+}
+
+/// One browser cookie store this Mac was refused, and when.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserAccessDenial {
+    pub browser: String,
+    pub reason: BrowserAccessDenialReason,
+    pub denied_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +167,8 @@ impl ComponentRecord {
     }
 }
 
-/// A process-lifetime service lock.  It intentionally does not use the released `state.lock`
-/// directory name: QuotaCLI still creates that directory for short provider/config mutations.
+/// A process-lifetime service lock.  It intentionally does not use the `state.lock` directory
+/// name, which the provider-config writer below still creates for short mutations.
 /// `flock` makes ownership kernel-backed and is released by the kernel on crash/SIGKILL.
 pub struct OwnerLock {
     file: File,
@@ -167,9 +207,9 @@ impl Drop for OwnerLock {
     }
 }
 
-/// Short critical-section lock shared with the released QuotaCLI providers.json writer.  The
-/// directory/owner shape is retained at this published file boundary; only this tiny config
-/// mutation uses stale-owner recovery, while the service lifetime lock above remains flock-backed.
+/// Short critical-section lock over the owner-only `providers.json`.  The directory/owner shape
+/// is retained at this published file boundary; only this tiny config mutation uses stale-owner
+/// recovery, while the service lifetime lock above remains flock-backed.
 struct ProviderConfigLock {
     path: PathBuf,
 }
@@ -302,10 +342,18 @@ fn provider_lock_is_stale(path: &Path, owner: &Path) -> Result<bool, StateError>
 
 pub struct StateStore {
     root: PathBuf,
-    db: Mutex<Connection>,
+    identity: Mutex<Connection>,
+    cache: Mutex<Connection>,
     // Kept in this object for the entire service lifetime.
     _owner_lock: OwnerLock,
-    repair: repair::RepairRuntime,
+    /// The last change counter this process saw. A rebuilt cache starts above it so QuotaBar,
+    /// which ignores an event whose revision is not newer than the state it holds, keeps
+    /// following along instead of going quiet until the count catches up.
+    remembered_revision: AtomicU64,
+    /// Unix seconds of the last attempt-journal prune. Retention runs once at open, and after
+    /// that at most once an hour, in the transaction that records the attempt which found it
+    /// due — so the row and the prune commit together, and no refresh pays for it twice.
+    last_attempt_prune: AtomicU64,
 }
 
 impl StateStore {
@@ -317,24 +365,23 @@ impl StateStore {
         // state-root boundary; the database filename itself remains protected by NOFOLLOW.
         let root = fs::canonicalize(root)?;
         let owner_lock = OwnerLock::acquire(&root)?;
-        let (mut connection, salvaged) = salvage::open_or_salvage(&root)?;
-        recover_interrupted_attempts(&mut connection)?;
-        // Every way of arriving at a live image converges here, so this is where the image is
-        // compacted: the open paths each build their own connection and one of them not doing
-        // it is exactly how it gets missed.
-        salvage::reclaim_unused_pages(&connection)?;
-        let persisted = repair::read_persisted_repair(&connection).unwrap_or_default();
+        let identity = open_identity(&root)?;
+        let (cache, rebuilt) = open_cache(&root, 0)?;
+        if rebuilt {
+            write_preference(&identity, CACHE_RESET_KEY, &now_rfc3339())?;
+            write_metadata_flag(&cache, REBUILDING_KEY, true)?;
+        }
+        checkpoint(&identity);
         let store = Self {
             root,
-            db: Mutex::new(connection),
+            identity: Mutex::new(identity),
+            cache: Mutex::new(cache),
             _owner_lock: owner_lock,
-            repair: repair::RepairRuntime::from_persisted(persisted),
+            remembered_revision: AtomicU64::new(0),
+            last_attempt_prune: AtomicU64::new(unix_seconds()),
         };
-        let _ = store.remembered_revision();
-        store.persist_reconciled_repair()?;
-        if salvaged {
-            store.record_open_salvage_session()?;
-        }
+        store.recover_interrupted_work()?;
+        let _ = store.current_revision();
         Ok(store)
     }
 
@@ -342,82 +389,124 @@ impl StateStore {
         &self.root
     }
 
-    pub(super) fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, StateError> {
-        self.db.lock().map_err(|_| StateError::Unavailable)
+    /// Finishes what a previous run was in the middle of.
+    ///
+    /// A process that went away mid-refresh leaves two marks behind, and neither can clear
+    /// itself: components still flagged as refreshing, and attempts with no outcome. Both are
+    /// process-local claims, so the only run that can retire them is the next one.
+    fn recover_interrupted_work(&self) -> Result<(), StateError> {
+        let completed_at = now_rfc3339();
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE components SET refreshing = 0 WHERE refreshing = 1",
+                [],
+            )?;
+            tx.execute(
+                "UPDATE diagnostic_attempts SET
+                   completed_at = ?1,
+                   duration_ms = MIN(86400000, MAX(0,
+                     CAST((julianday(?1) - julianday(started_at)) * 86400000 AS INTEGER))),
+                   outcome = 'interrupted', code = 'process_interrupted'
+                 WHERE outcome IS NULL",
+                params![completed_at],
+            )?;
+            prune_diagnostic_attempts(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
-    pub(super) fn try_lock_conn(&self) -> Result<MutexGuard<'_, Connection>, StateError> {
-        let deadline = Instant::now() + std::time::Duration::from_millis(150);
-        loop {
-            match self.db.try_lock() {
-                Ok(conn) => return Ok(conn),
-                Err(TryLockError::Poisoned(_)) => return Err(StateError::Unavailable),
-                Err(TryLockError::WouldBlock) => {
-                    if Instant::now() >= deadline {
-                        return Err(StateError::Unavailable);
-                    }
-                    thread::sleep(std::time::Duration::from_millis(10));
-                }
-            }
-        }
+    /// Throws the cache away at the person's request and rebuilds it empty.
+    pub fn reset_cache(&self) {
+        self.rebuild_cache();
     }
 
-    pub(super) fn with_conn_mut<T>(
-        &self,
-        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
-    ) -> Result<T, StateError> {
-        self.with_conn_mut_mode(false, f)
-    }
-
-    fn with_conn_mut_try<T>(
-        &self,
-        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
-    ) -> Result<T, StateError> {
-        self.with_conn_mut_mode(true, f)
-    }
-
-    fn with_conn_mut_mode<T>(
-        &self,
-        request_thread: bool,
-        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
-    ) -> Result<T, StateError> {
-        if !request_thread && self.image_unwritable() {
-            return Err(StateError::Unavailable);
-        }
-        let mut conn = match if request_thread {
-            self.try_lock_conn()
-        } else {
-            self.lock_conn()
-        } {
-            Ok(conn) => conn,
-            Err(error) => {
-                if !request_thread {
-                    self.note_persistence_failure(&error);
-                }
-                return Err(error);
-            }
+    /// Deletes the cache and builds an empty one in its place.
+    ///
+    /// The reset marker is written to identity first so the lock order is always identity then
+    /// cache, and so a crash between the two leaves a device that says it rebuilt rather than one
+    /// silently missing history.
+    fn rebuild_cache(&self) {
+        let seed = self
+            .remembered_revision
+            .load(Ordering::Acquire)
+            .saturating_add(1);
+        let reset_at = now_rfc3339();
+        let _ = self.with_identity_mut(|conn| write_preference(conn, CACHE_RESET_KEY, &reset_at));
+        let Ok(mut guard) = self.cache.lock() else {
+            return;
         };
+        let Ok(placeholder) = Connection::open_in_memory() else {
+            return;
+        };
+        drop(std::mem::replace(&mut *guard, placeholder));
+        remove_sqlite_image(&self.root.join(CACHE_NAME));
+        if let Ok((conn, _)) = open_cache(&self.root, seed) {
+            let _ = write_metadata_flag(&conn, REBUILDING_KEY, true);
+            *guard = conn;
+        }
+    }
+
+    fn with_identity<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        let conn = lock_with_deadline(&self.identity)?;
+        f(&conn)
+    }
+
+    fn with_identity_mut<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
+    ) -> Result<T, StateError> {
+        let mut conn = self.identity.lock().map_err(|_| StateError::Unavailable)?;
         let result = f(&mut conn);
-        if let Err(ref error) = result {
-            self.note_write_failure(&conn, error);
+        if result.is_ok() {
+            // The file is a few kilobytes and is written rarely, so the log is folded back in
+            // immediately.
+            checkpoint(&conn);
         }
         result
     }
 
-    pub(super) fn with_conn<T>(
+    fn with_cache<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StateError>,
     ) -> Result<T, StateError> {
-        let conn = self.lock_conn()?;
-        f(&conn)
+        let result = {
+            let conn = lock_with_deadline(&self.cache)?;
+            f(&conn)
+        };
+        self.answer_for_cache(result)
     }
 
-    pub(super) fn with_conn_try<T>(
+    fn with_cache_mut<T>(
         &self,
-        f: impl FnOnce(&Connection) -> Result<T, StateError>,
+        f: impl FnOnce(&mut Connection) -> Result<T, StateError>,
     ) -> Result<T, StateError> {
-        let conn = self.try_lock_conn()?;
-        f(&conn)
+        let result = {
+            let mut conn = self.cache.lock().map_err(|_| StateError::Unavailable)?;
+            f(&mut conn)
+        };
+        self.answer_for_cache(result)
+    }
+
+    /// A cache SQLite cannot read is not a cache worth keeping.
+    ///
+    /// A full disk or an I/O error is the machine, not the file, so the caller is told to retry.
+    /// Anything else means the image no longer describes what this device collected, and the only
+    /// honest answer is to throw it away rather than guess which rows survived.
+    fn answer_for_cache<T>(&self, result: Result<T, StateError>) -> Result<T, StateError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
+            Err(error) if cache_needs_rebuild(&error) => {
+                self.rebuild_cache();
+                Err(StateError::Unavailable)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn snapshot(&self) -> Result<StateSnapshot, StateError> {
@@ -432,9 +521,12 @@ impl StateStore {
         &self,
         tolerate_invalid_provider_config: bool,
     ) -> Result<StateSnapshot, StateError> {
-        self.with_conn_try(|conn| {
+        let usage_upload_enabled = self.usage_upload_enabled()?;
+        let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
+        let cache_reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
+        self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
-            let usage_upload_enabled = metadata_bool(conn, "usage_upload_enabled")?;
+            self.remembered_revision.store(revision, Ordering::Release);
             let quota = read_component(conn, ComponentName::Quota)?;
             let usage = read_component(conn, ComponentName::Usage)?;
             let account =
@@ -443,6 +535,7 @@ impl StateStore {
                     value: Some(serde_json::json!({
                         "auth_status": "signed_out",
                         "account_id": null,
+                        "display_label": null,
                         "device_id": null,
                         "device_generation": null,
                         "account_summary": null
@@ -468,7 +561,6 @@ impl StateStore {
                 Err(_) if tolerate_invalid_provider_config => Vec::new(),
                 Err(error) => return Err(error),
             };
-            let provider_browser_sessions = read_provider_browser_session_views(conn)?;
             let overview = read_overview(conn)?;
             Ok(StateSnapshot {
                 ipc_version: IPC_VERSION,
@@ -488,9 +580,18 @@ impl StateStore {
                 providers,
                 provider_browser_sessions,
                 overview,
-                repair: self.repair_session(),
+                cache: CacheState {
+                    rebuilding: metadata_flag(conn, REBUILDING_KEY)?,
+                    reset_at: cache_reset_at.clone(),
+                },
             })
         })
+    }
+
+    /// When this device last had to start over as a new installation, if that is recent enough
+    /// for the person in front of it to still be missing what it lost.
+    pub fn identity_reset_at(&self) -> Result<Option<String>, StateError> {
+        self.with_identity(|conn| preference(conn, IDENTITY_RESET_KEY))
     }
 
     pub fn provider_config_status(&self) -> (bool, bool) {
@@ -502,7 +603,7 @@ impl StateStore {
     }
 
     pub fn component(&self, name: ComponentName) -> Result<Option<ComponentRecord>, StateError> {
-        self.with_conn_try(|conn| read_component(conn, name))
+        self.with_cache(|conn| read_component(conn, name))
     }
 
     pub fn replace_usage_periods(
@@ -521,7 +622,7 @@ impl StateStore {
         {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let source = usage_source_key(source);
             tx.execute("DELETE FROM usage_period_cache WHERE source = ?1", [source])?;
@@ -542,6 +643,74 @@ impl StateStore {
         })
     }
 
+    /// The stored answer to one Account read, if this installation already holds one.
+    pub fn account_read_cache(
+        &self,
+        account_id: &str,
+        query: &str,
+    ) -> Result<Option<(String, Value)>, StateError> {
+        self.with_cache(|conn| {
+            let row: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT etag, body_json FROM account_read_cache
+                     WHERE account_id = ?1 AND query = ?2",
+                    params![account_id, query],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            row.map(|(etag, raw)| Ok((etag, serde_json::from_str(&raw)?)))
+                .transpose()
+        })
+    }
+
+    /// Records the response and the validator it is current at together.
+    ///
+    /// One row, one statement: a stored validator that does not describe the stored body would
+    /// make the next 304 answer with the wrong summary, which is worse than not caching at all.
+    /// A response the server did not tag drops any row we held, so the next read is
+    /// unconditional rather than validated against something stale.
+    pub fn commit_account_read(
+        &self,
+        account_id: &str,
+        query: &str,
+        etag: Option<&str>,
+        body: &Value,
+    ) -> Result<(), StateError> {
+        if account_id.is_empty() || account_id.len() > 128 || query.len() > 512 {
+            return Err(StateError::InvalidState);
+        }
+        let Some(etag) = etag else {
+            return self.forget_account_read(account_id, query);
+        };
+        if etag.len() > 256 || etag.trim() != etag {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(body)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO account_read_cache(account_id, query, etag, body_json, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(account_id, query) DO UPDATE SET etag = excluded.etag,
+                 body_json = excluded.body_json, updated_at = excluded.updated_at",
+                params![account_id, query, etag, raw, now_rfc3339()],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn forget_account_read(&self, account_id: &str, query: &str) -> Result<(), StateError> {
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "DELETE FROM account_read_cache WHERE account_id = ?1 AND query = ?2",
+                params![account_id, query],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn write_usage_scan_diagnostics(
         &self,
         agent: UsageAgent,
@@ -551,7 +720,7 @@ impl StateStore {
         if raw.len() > 64 * 1024 {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             conn.execute(
                 "INSERT INTO usage_scan_diagnostics(agent, payload_json, updated_at)
              VALUES (?1, ?2, ?3)
@@ -564,7 +733,7 @@ impl StateStore {
     }
 
     pub fn usage_scan_diagnostics(&self) -> Result<Vec<(UsageAgent, Value, String)>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let mut statement = conn.prepare(
                 "SELECT agent, payload_json, updated_at FROM usage_scan_diagnostics ORDER BY agent",
             )?;
@@ -595,192 +764,25 @@ impl StateStore {
         })
     }
 
-    pub fn write_sync_diagnostic(&self, value: &Value) -> Result<(), StateError> {
-        let raw = serde_json::to_string(value)?;
-        if raw.len() > 64 * 1024 {
-            return Err(StateError::InvalidState);
-        }
-        self.with_conn_mut(|conn| {
-            conn.execute(
-                "INSERT INTO sync_diagnostics(id, payload_json, updated_at)
-             VALUES (1, ?1, ?2)
-             ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
-             updated_at = excluded.updated_at",
-                params![raw, now_rfc3339()],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn sync_diagnostic(&self) -> Result<Option<(Value, String)>, StateError> {
-        self.with_conn_try(|conn| {
-            let raw: Option<(String, String)> = conn
-                .query_row(
-                    "SELECT payload_json, updated_at FROM sync_diagnostics WHERE id = 1",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?;
-            raw.map(|(value, updated_at)| Ok((serde_json::from_str(&value)?, updated_at)))
-                .transpose()
-        })
-    }
-
     pub fn write_diagnostic_snapshot(&self, report: &DiagnosticReport) -> Result<(), StateError> {
         let raw = serde_json::to_string(report)?;
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             conn.execute(
                 "INSERT INTO diagnostic_snapshot(id, payload_json, completed_at)
              VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json,
              completed_at = excluded.completed_at",
-                params![raw, report.refresh.as_of],
-            )?;
-            write_metadata_flag(conn, "snapshot_untrusted", false)?;
-            Ok(())
-        })
-    }
-
-    pub fn persist_probe(&self) -> Result<(), StateError> {
-        let result = self.with_conn_mut_try(|conn| salvage::persist_probe_on(conn));
-        if result.is_ok() {
-            self.clear_image_unwritable();
-        }
-        result
-    }
-
-    pub fn usage_reindex_pending(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| metadata_flag(conn, "usage_reindex_pending"))
-    }
-
-    pub fn snapshot_untrusted(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| metadata_flag(conn, "snapshot_untrusted"))
-    }
-
-    pub fn state_salvaged_at(&self) -> Result<Option<String>, StateError> {
-        self.with_conn_try(|conn| metadata_value(conn, "state_salvaged_at"))
-    }
-
-    pub fn diagnose_forces_usage_partial(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| diagnose_forces_usage_partial_on(conn))
-    }
-
-    pub fn health_evidence_trust(&self) -> HealthEvidenceTrust {
-        match self.persist_probe() {
-            Err(error) if salvage::sqlite_durable_corruption_error(&error) => {
-                HealthEvidenceTrust::FailClosed
-            }
-            Err(_) => HealthEvidenceTrust::PersistRetry,
-            Ok(()) => match self.trusted_snapshot_ready() {
-                Ok(true) => HealthEvidenceTrust::TrustedSnapshot,
-                Err(StateError::Unavailable) => HealthEvidenceTrust::PersistRetry,
-                _ => HealthEvidenceTrust::EvaluateLive,
-            },
-        }
-    }
-
-    fn trusted_snapshot_ready(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| {
-            if diagnose_forces_usage_partial_on(conn)? {
-                return Ok(false);
-            }
-            let completed_at: Option<String> = conn
-                .query_row(
-                    "SELECT completed_at FROM diagnostic_snapshot WHERE id = 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(completed_at) = completed_at else {
-                return Ok(false);
-            };
-            if let Some(salvaged_at) = metadata_value(conn, "state_salvaged_at")?
-                && completed_at < salvaged_at
-            {
-                return Ok(false);
-            }
-            Ok(true)
-        })
-    }
-
-    pub fn derived_drop_pending(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| metadata_flag(conn, "derived_drop_pending"))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_usage_reindex_pending(&self, pending: bool) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| write_metadata_flag(conn, "usage_reindex_pending", pending))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_snapshot_untrusted(&self, untrusted: bool) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| write_metadata_flag(conn, "snapshot_untrusted", untrusted))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_state_salvaged_at(&self, value: Option<&str>) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| {
-            match value {
-                Some(value) => {
-                    conn.execute(
-                        "INSERT INTO metadata(key, value) VALUES ('state_salvaged_at', ?1)
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        params![value],
-                    )?;
-                }
-                None => {
-                    conn.execute("DELETE FROM metadata WHERE key = 'state_salvaged_at'", [])?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_persist_probe_with_corruption_for_test(&self) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| {
-            conn.execute_batch(
-                "CREATE TRIGGER diagnostics_persist_probe_insert
-             BEFORE INSERT ON metadata
-             WHEN NEW.key = 'diagnostics_persist_probe'
-             BEGIN
-               SELECT RAISE(ABORT, 'database disk image is malformed');
-             END;
-             CREATE TRIGGER diagnostics_persist_probe_update
-             BEFORE UPDATE ON metadata
-             WHEN NEW.key = 'diagnostics_persist_probe'
-             BEGIN
-               SELECT RAISE(ABORT, 'database disk image is malformed');
-             END;",
-            )?;
-            Ok(())
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn insert_usage_file_record_for_test(&self) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO usage_file_index(
-               agent, source_file_id, identity, size, modified_ns, parser_revision
-             ) VALUES ('codex', 'source-1', 'identity-1', 1, '1', 'test')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT OR REPLACE INTO usage_file_records(
-               agent, source_file_id, record_index, occurred_at, event_json, record_key
-             ) VALUES ('codex', 'source-1', 0, '2026-08-10T12:15:00Z', '{}', 'line:0:0')",
-                [],
+                params![raw, report.generated_at],
             )?;
             Ok(())
         })
     }
 
     pub fn diagnostic_snapshot(&self) -> Result<Option<DiagnosticReport>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let raw: Option<String> = conn
                 .query_row(
                     "SELECT payload_json FROM diagnostic_snapshot WHERE id = 1",
@@ -793,48 +795,68 @@ impl StateStore {
         })
     }
 
+    /// Records that a piece of work started, or says it could not.
+    ///
+    /// The journal is evidence, not a permit. A cache that cannot take the row still has to let
+    /// the collection, scan, upload, or sync run, so the caller gets `None` and carries on
+    /// without a handle to finish.
     pub fn begin_diagnostic_attempt(
         &self,
         kind: DiagnosticAttemptKind,
         trigger: DiagnosticAttemptTrigger,
-        source: DiagnosticSource,
         subject: Option<&str>,
-        mode: DiagnosticMode,
         parent_refresh: Option<DiagnosticAttemptHandle>,
-    ) -> Result<DiagnosticAttemptHandle, StateError> {
+    ) -> Option<DiagnosticAttemptHandle> {
         if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
-            return Err(StateError::InvalidState);
+            return None;
         }
-        self.with_conn_mut(|conn| {
+        let prune = self.attempt_prune_is_due();
+        let written = self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
-            prune_diagnostic_attempts(&tx)?;
-            let revision = metadata_u64(&tx, "revision")?;
+            if prune {
+                prune_diagnostic_attempts(&tx)?;
+            }
             tx.execute(
                 "INSERT INTO diagnostic_attempts(
-               parent_refresh_id, kind, trigger, source, subject, mode, started_at,
-               recovery, metrics_json, start_revision
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'none', '{}', ?8)",
+               parent_refresh_id, kind, trigger, subject, started_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     parent_refresh.map(|value| value.0),
                     diagnostic_attempt_kind_key(kind),
                     diagnostic_attempt_trigger_key(trigger),
-                    diagnostic_source_key(source),
                     subject,
-                    diagnostic_mode_key(mode),
                     now_rfc3339(),
-                    revision,
                 ],
             )?;
             let handle = DiagnosticAttemptHandle(tx.last_insert_rowid());
             tx.commit()?;
             Ok(handle)
-        })
+        });
+        match written {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                report_journal_write_failure(&error);
+                None
+            }
+        }
+    }
+
+    /// True at most once an hour. Retention is housekeeping; it does not belong in the path a
+    /// refresh takes to record that it started.
+    fn attempt_prune_is_due(&self) -> bool {
+        let now = unix_seconds();
+        let last = self.last_attempt_prune.load(Ordering::Acquire);
+        now.saturating_sub(last) >= ATTEMPT_PRUNE_INTERVAL_SECONDS
+            && self
+                .last_attempt_prune
+                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
     }
 
     pub fn running_refresh_attempt(
         &self,
     ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             conn.query_row(
                 "SELECT id, trigger FROM diagnostic_attempts
              WHERE kind = 'refresh' AND outcome IS NULL ORDER BY id DESC LIMIT 1",
@@ -850,326 +872,151 @@ impl StateStore {
         })
     }
 
-    pub fn latest_refresh_attempt(
-        &self,
-    ) -> Result<Option<(DiagnosticAttemptHandle, DiagnosticAttemptTrigger)>, StateError> {
-        self.with_conn_try(|conn| {
-            conn.query_row(
-                "SELECT id, trigger FROM diagnostic_attempts
-             WHERE kind = 'refresh' ORDER BY id DESC LIMIT 1",
-                [],
-                |row| {
-                    let handle = DiagnosticAttemptHandle(row.get(0)?);
-                    let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
-                    Ok((handle, trigger))
-                },
-            )
-            .optional()
-            .map_err(StateError::from)
-        })
-    }
-
-    pub fn device_health_upload_due(
-        &self,
-        digest: &str,
-        now: DateTime<chrono::Utc>,
-    ) -> Result<bool, StateError> {
-        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(StateError::InvalidState);
-        }
-        self.with_conn_try(|conn| {
-            let previous_digest = metadata_value(conn, "device_health_last_digest")?;
-            let previous_at = metadata_value(conn, "device_health_last_uploaded_at")?
-                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-                .map(|value| value.with_timezone(&chrono::Utc));
-            Ok(previous_digest.as_deref() != Some(digest)
-                || previous_at.is_none_or(|value| now - value >= Duration::minutes(15)))
-        })
-    }
-
-    pub fn record_device_health_upload(
-        &self,
-        revision: u64,
-        digest: &str,
-        uploaded_at: &str,
-    ) -> Result<(), StateError> {
-        if digest.len() != 64
-            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || DateTime::parse_from_rfc3339(uploaded_at).is_err()
-        {
-            return Err(StateError::InvalidState);
-        }
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            for (key, value) in [
-                ("device_health_last_revision", revision.to_string()),
-                ("device_health_last_digest", digest.to_owned()),
-                ("device_health_last_uploaded_at", uploaded_at.to_owned()),
-            ] {
-                tx.execute(
-                    "INSERT INTO metadata(key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    params![key, value],
-                )?;
-            }
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
     pub fn finish_diagnostic_attempt(
         &self,
-        handle: DiagnosticAttemptHandle,
+        handle: Option<DiagnosticAttemptHandle>,
         completion: &DiagnosticAttemptCompletion,
-    ) -> Result<bool, StateError> {
-        self.finish_diagnostic_attempt_internal(handle, completion, false)
+    ) {
+        self.finish_diagnostic_attempt_internal(handle, completion, false);
     }
 
     pub fn finish_diagnostic_attempt_with_interrupted_children(
         &self,
-        handle: DiagnosticAttemptHandle,
+        handle: Option<DiagnosticAttemptHandle>,
         completion: &DiagnosticAttemptCompletion,
-    ) -> Result<bool, StateError> {
-        self.finish_diagnostic_attempt_internal(handle, completion, true)
+    ) {
+        self.finish_diagnostic_attempt_internal(handle, completion, true);
     }
 
     fn finish_diagnostic_attempt_internal(
         &self,
-        handle: DiagnosticAttemptHandle,
+        handle: Option<DiagnosticAttemptHandle>,
         completion: &DiagnosticAttemptCompletion,
         interrupt_running_children: bool,
-    ) -> Result<bool, StateError> {
-        if completion.outcome == DiagnosticAttemptOutcome::Running
-            || completion.metrics.len() > 16
-            || completion.metrics.iter().any(|(key, value)| {
-                !valid_diagnostic_label(key) || *value < 0 || *value > 9_007_199_254_740_991
-            })
-        {
-            return Err(StateError::InvalidState);
-        }
-        let metrics_json = serde_json::to_string(&completion.metrics)?;
-        if metrics_json.len() > 2_048 {
-            return Err(StateError::InvalidState);
+    ) {
+        let Some(handle) = handle else { return };
+        if completion.outcome == DiagnosticAttemptOutcome::Running {
+            return;
         }
         let completed_at = now_rfc3339();
-        self.with_conn_mut(|conn| {
+        let written = self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
-            let revision = metadata_u64(&tx, "revision")?;
             if interrupt_running_children {
                 tx.execute(
                     "UPDATE diagnostic_attempts SET
                    completed_at = ?2,
                    duration_ms = MIN(86400000, MAX(0,
                      CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
-                   outcome = 'interrupted', code = 'process_interrupted', recovery = 'retry',
-                   end_revision = ?3
+                   outcome = 'interrupted', code = 'process_interrupted'
                  WHERE parent_refresh_id = ?1 AND outcome IS NULL",
-                    params![handle.0, completed_at, revision],
+                    params![handle.0, completed_at],
                 )?;
             }
-            let changed = tx.execute(
+            tx.execute(
                 "UPDATE diagnostic_attempts SET
                completed_at = ?2,
                duration_ms = MIN(86400000, MAX(0,
                  CAST((julianday(?2) - julianday(started_at)) * 86400000 AS INTEGER))),
-               outcome = ?3, code = ?4, recovery = ?5, metrics_json = ?6, end_revision = ?7
+               outcome = ?3, code = ?4
              WHERE id = ?1 AND outcome IS NULL",
                 params![
                     handle.0,
                     completed_at,
                     diagnostic_attempt_outcome_key(completion.outcome),
                     completion.code.map(diagnostic_attempt_code_key),
-                    diagnostic_recovery_key(completion.recovery),
-                    metrics_json,
-                    revision,
                 ],
-            )? > 0;
-            prune_diagnostic_attempts(&tx)?;
-            if changed
-                && matches!(
-                    completion.outcome,
-                    DiagnosticAttemptOutcome::Success | DiagnosticAttemptOutcome::Partial
-                )
-            {
-                let kind: Option<String> = tx
-                    .query_row(
-                        "SELECT kind FROM diagnostic_attempts WHERE id = ?1",
-                        [handle.0],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if kind.as_deref() == Some("usage_scan") {
-                    write_metadata_flag(&tx, "usage_reindex_pending", false)?;
-                }
-            }
+            )?;
             tx.commit()?;
-            Ok(changed)
-        })
+            Ok(())
+        });
+        if let Err(error) = written {
+            report_journal_write_failure(&error);
+        }
     }
 
-    pub fn diagnostic_recent_activity(&self) -> Result<DiagnosticRecentActivity, StateError> {
-        self.with_conn_try(|conn| {
-            let failure_cutoff = (chrono::Utc::now() - Duration::hours(24))
-                .to_rfc3339_opts(SecondsFormat::Secs, true);
+    /// The newest work this device did, oldest first, for the copied report.
+    pub fn diagnostic_recent_attempts(&self) -> Result<Vec<DiagnosticAttempt>, StateError> {
+        self.with_cache(|conn| {
             let mut statement = conn.prepare(
-                "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
-                    attempts.mode, attempts.started_at, attempts.completed_at,
-                    attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
-                    attempts.metrics_json, attempts.start_revision, attempts.end_revision,
-                    parent.started_at
-             FROM diagnostic_attempts AS attempts
-             LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
-             WHERE attempts.outcome IS NULL
-                OR attempts.id IN (
-                  SELECT id FROM diagnostic_attempts WHERE kind = 'refresh'
-                  ORDER BY id DESC LIMIT 20
-                )
-                OR attempts.parent_refresh_id IN (
-                  SELECT id FROM diagnostic_attempts WHERE kind = 'refresh'
-                  ORDER BY id DESC LIMIT 20
-                )
-                OR (attempts.outcome IN ('failed', 'interrupted') AND attempts.started_at >= ?1)
-             ORDER BY attempts.id DESC LIMIT 513",
+                "SELECT kind, subject, started_at, duration_ms, outcome, code
+             FROM diagnostic_attempts ORDER BY id DESC LIMIT ?1",
             )?;
-            let rows = statement.query_map([failure_cutoff], diagnostic_attempt_from_row)?;
+            let rows = statement.query_map(
+                [MAXIMUM_DIAGNOSTIC_RECENT as i64],
+                diagnostic_attempt_from_row,
+            )?;
             let mut attempts = Vec::new();
             for row in rows {
                 attempts.push(row?);
             }
-            let capped = attempts.len() > MAX_SUPPORT_ATTEMPTS;
-            attempts.truncate(MAX_SUPPORT_ATTEMPTS);
             attempts.reverse();
-            let history_truncated = capped || metadata_bool(conn, "attempt_history_truncated")?;
-            Ok(DiagnosticRecentActivity {
-                attempts,
-                history_truncated,
-            })
+            Ok(attempts)
         })
     }
 
+    /// What the journal knows about one kind of work: when it last ran, when it last worked, and
+    /// the newest problem no later success has answered.
     pub fn diagnostic_attempt_facts(
         &self,
         kind: DiagnosticAttemptKind,
-        source: DiagnosticSource,
         subject: Option<&str>,
     ) -> Result<DiagnosticAttemptFacts, StateError> {
         if subject.is_some_and(|value| !valid_diagnostic_subject(value)) {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_try(|conn| {
-            let read = |success_only: bool| -> Result<Option<DiagnosticAttempt>, StateError> {
-                conn.query_row(
-                    "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
-                        attempts.mode, attempts.started_at, attempts.completed_at,
-                        attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
-                        attempts.metrics_json, attempts.start_revision, attempts.end_revision,
-                        parent.started_at
-                 FROM diagnostic_attempts AS attempts
-                 LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
-                 WHERE attempts.kind = ?1 AND attempts.source = ?2
-                   AND ((?3 IS NULL AND attempts.subject IS NULL) OR attempts.subject = ?3)
-                   AND attempts.outcome IS NOT NULL
-                   AND (?4 = 0 OR attempts.outcome = 'success')
-                 ORDER BY attempts.id DESC LIMIT 1",
-                    params![
-                        diagnostic_attempt_kind_key(kind),
-                        diagnostic_source_key(source),
-                        subject,
-                        i64::from(success_only),
-                    ],
-                    diagnostic_attempt_from_row,
-                )
-                .optional()
-                .map_err(StateError::from)
-            };
-            let latest_problem_after_success = conn
+        let kind = diagnostic_attempt_kind_key(kind);
+        self.with_cache(|conn| {
+            let latest = conn
                 .query_row(
-                    "SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
-                        attempts.mode, attempts.started_at, attempts.completed_at,
-                        attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
-                        attempts.metrics_json, attempts.start_revision, attempts.end_revision,
-                        parent.started_at
-                 FROM diagnostic_attempts AS attempts
-                 LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
-                 WHERE attempts.kind = ?1 AND attempts.source = ?2
-                   AND ((?3 IS NULL AND attempts.subject IS NULL) OR attempts.subject = ?3)
-                   AND attempts.outcome IN ('partial', 'failed', 'interrupted')
-                   AND attempts.id > COALESCE((
-                     SELECT MAX(success.id) FROM diagnostic_attempts AS success
-                     WHERE success.kind = ?1 AND success.source = ?2
-                       AND ((?3 IS NULL AND success.subject IS NULL) OR success.subject = ?3)
-                       AND success.outcome = 'success'
+                    "SELECT completed_at, started_at, outcome, code FROM diagnostic_attempts
+                 WHERE kind = ?1 AND ((?2 IS NULL AND subject IS NULL) OR subject = ?2)
+                   AND outcome IS NOT NULL
+                 ORDER BY id DESC LIMIT 1",
+                    params![kind, subject],
+                    diagnostic_attempt_outcome_row,
+                )
+                .optional()?;
+            let last_success_at = conn
+                .query_row(
+                    "SELECT completed_at, started_at FROM diagnostic_attempts
+                 WHERE kind = ?1 AND ((?2 IS NULL AND subject IS NULL) OR subject = ?2)
+                   AND outcome = 'success'
+                 ORDER BY id DESC LIMIT 1",
+                    params![kind, subject],
+                    |row| {
+                        Ok(row
+                            .get::<_, Option<String>>(0)?
+                            .unwrap_or(row.get::<_, String>(1)?))
+                    },
+                )
+                .optional()?;
+            let unresolved = conn
+                .query_row(
+                    "SELECT completed_at, started_at, outcome, code FROM diagnostic_attempts
+                 WHERE kind = ?1 AND ((?2 IS NULL AND subject IS NULL) OR subject = ?2)
+                   AND outcome IN ('partial', 'failed', 'interrupted')
+                   AND id > COALESCE((
+                     SELECT MAX(id) FROM diagnostic_attempts
+                     WHERE kind = ?1 AND ((?2 IS NULL AND subject IS NULL) OR subject = ?2)
+                       AND outcome = 'success'
                    ), 0)
-                 ORDER BY attempts.id DESC LIMIT 1",
-                    params![
-                        diagnostic_attempt_kind_key(kind),
-                        diagnostic_source_key(source),
-                        subject,
-                    ],
-                    diagnostic_attempt_from_row,
+                 ORDER BY id DESC LIMIT 1",
+                    params![kind, subject],
+                    diagnostic_attempt_outcome_row,
                 )
                 .optional()?;
             Ok(DiagnosticAttemptFacts {
-                latest_completed: read(false)?,
-                latest_success: read(true)?,
-                latest_problem_after_success,
+                last_attempt_at: latest.as_ref().map(|value| value.0.clone()),
+                last_outcome: latest.as_ref().map(|value| value.1),
+                last_success_at,
+                unresolved_at: unresolved.as_ref().map(|value| value.0.clone()),
+                unresolved_code: unresolved.and_then(|value| value.2),
             })
         })
     }
 
-    pub fn latest_diagnostic_problem(
-        &self,
-        include_usage: bool,
-    ) -> Result<Option<DiagnosticAttempt>, StateError> {
-        self.with_conn_try(|conn| {
-            conn.query_row(
-                "WITH latest AS (
-               SELECT MAX(id) AS id
-               FROM diagnostic_attempts
-               WHERE outcome IS NOT NULL AND kind != 'device_health_upload'
-                 AND (?1 != 0 OR kind NOT IN ('usage_scan', 'usage_upload'))
-               GROUP BY kind, source, COALESCE(subject, '')
-             )
-             SELECT attempts.kind, attempts.trigger, attempts.source, attempts.subject,
-                    attempts.mode, attempts.started_at, attempts.completed_at,
-                    attempts.duration_ms, attempts.outcome, attempts.code, attempts.recovery,
-                    attempts.metrics_json, attempts.start_revision, attempts.end_revision,
-                    parent.started_at
-             FROM diagnostic_attempts AS attempts
-             LEFT JOIN diagnostic_attempts AS parent ON parent.id = attempts.parent_refresh_id
-             WHERE attempts.id IN (SELECT id FROM latest)
-               AND attempts.outcome IN ('partial', 'failed', 'interrupted')
-             ORDER BY attempts.id DESC LIMIT 1",
-                [i64::from(include_usage)],
-                diagnostic_attempt_from_row,
-            )
-            .optional()
-            .map_err(StateError::from)
-        })
-    }
-
-    pub fn consecutive_refresh_failures(&self) -> Result<u64, StateError> {
-        self.with_conn_try(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT outcome FROM diagnostic_attempts
-             WHERE kind = 'refresh' AND outcome IS NOT NULL
-             ORDER BY id DESC LIMIT 1001",
-            )?;
-            let outcomes = statement.query_map([], |row| row.get::<_, String>(0))?;
-            let mut failures = 0_u64;
-            for outcome in outcomes {
-                if matches!(outcome?.as_str(), "failed" | "interrupted") {
-                    failures += 1;
-                } else {
-                    break;
-                }
-            }
-            Ok(failures.min(1_000))
-        })
-    }
-
     pub fn pricing_etag(&self) -> Result<Option<String>, StateError> {
-        self.with_conn_try(|conn| metadata_value(conn, "pricing_etag"))
+        self.with_cache(|conn| metadata_value(conn, "pricing_etag"))
     }
 
     pub fn commit_pricing_catalog(
@@ -1184,7 +1031,7 @@ impl StateStore {
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO components(name,status,value_json,updated_at,last_error_code,last_error_action,refreshing)
@@ -1212,7 +1059,7 @@ impl StateStore {
     }
 
     pub fn model_catalog_etag(&self) -> Result<Option<String>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             conn.query_row(
                 "SELECT etag FROM model_catalog_cache WHERE id = 1",
                 [],
@@ -1225,7 +1072,7 @@ impl StateStore {
     }
 
     pub fn model_catalog(&self) -> Result<Option<Value>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let raw: Option<String> = conn
                 .query_row(
                     "SELECT payload_json FROM model_catalog_cache WHERE id = 1",
@@ -1256,7 +1103,7 @@ impl StateStore {
         if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             tx.execute(
                 "INSERT INTO model_catalog_cache(id, payload_json, etag)
@@ -1280,7 +1127,7 @@ impl StateStore {
         last_error: Option<IpcError>,
         refreshing: bool,
     ) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO components(name,status,value_json,updated_at,last_error_code,last_error_action,refreshing)
@@ -1324,7 +1171,7 @@ impl StateStore {
 
     pub fn set_overview(&self, overview: &[QuotaOverviewItem]) -> Result<u64, StateError> {
         let value = serde_json::to_string(overview)?;
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             tx.execute(
                 "INSERT INTO metadata(key,value) VALUES ('overview_json',?1)
@@ -1338,35 +1185,61 @@ impl StateStore {
     }
 
     pub fn current_revision(&self) -> Result<u64, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
-            self.store_remembered_revision(revision);
+            self.remembered_revision.store(revision, Ordering::Release);
             Ok(revision)
         })
+    }
+
+    /// The change counter every surface reads. It lives in the cache because almost everything
+    /// that moves it does; identity writes reach it through here rather than through a
+    /// transaction that would have to span both files.
+    fn bump_revision(&self) -> Result<u64, StateError> {
+        let revision = self.with_cache_mut(|conn| bump_revision(conn))?;
+        self.remembered_revision.store(revision, Ordering::Release);
+        Ok(revision)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_cache_rebuilding_for_test(&self, value: bool) -> Result<(), StateError> {
+        self.with_cache_mut(|conn| write_metadata_flag(conn, REBUILDING_KEY, value))
+    }
+
+    /// The last revision this process observed, without touching SQLite.
+    /// Folds the cache's write-ahead log back into the image and hands freed pages back to the
+    /// filesystem. A refresh rewrites every Usage record it re-reads, so without this the file
+    /// keeps whatever size its largest transaction reached.
+    pub fn checkpoint_cache(&self) {
+        let _ = self.with_cache(reclaim_unused_pages);
     }
 
     pub fn usage_upload_enabled(&self) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| metadata_bool(conn, "usage_upload_enabled"))
+        self.with_identity(
+            |conn| match preference(conn, "usage_upload_enabled")?.as_deref() {
+                Some("1") => Ok(true),
+                Some("0") => Ok(false),
+                _ => Err(StateError::InvalidState),
+            },
+        )
     }
 
     pub fn set_usage_upload_enabled(&self, enabled: bool) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            if metadata_bool(&tx, "usage_upload_enabled")? == enabled {
-                return metadata_u64(&tx, "revision");
-            }
-            tx.execute(
-                "UPDATE metadata SET value = ?1 WHERE key = 'usage_upload_enabled'",
-                params![if enabled { "1" } else { "0" }],
-            )?;
-            let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(revision)
-        })
+        if self.usage_upload_enabled()? == enabled {
+            return self.current_revision();
+        }
+        self.with_identity_mut(|conn| {
+            write_preference(
+                conn,
+                "usage_upload_enabled",
+                if enabled { "1" } else { "0" },
+            )
+        })?;
+        self.bump_revision()
     }
 
     pub fn session_json(&self) -> Result<Option<Value>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_identity(|conn| {
             let raw: Option<String> = conn
                 .query_row("SELECT payload_json FROM session WHERE id = 1", [], |row| {
                     row.get::<_, String>(0)
@@ -1381,7 +1254,7 @@ impl StateStore {
     /// outside the JSON payload so imported released sessions remain wire-compatible while every
     /// local transition gets a monotonic identity.
     pub fn session_snapshot(&self) -> Result<Option<(Value, u64)>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_identity(|conn| {
             let raw: Option<(String, i64)> = conn
                 .query_row(
                     "SELECT payload_json, epoch FROM session WHERE id = 1",
@@ -1400,7 +1273,7 @@ impl StateStore {
     /// Returns true only while the same active session is still installed.  Callers use this
     /// immediately before a Relay write so a logout transition cannot revive an old session.
     pub fn active_session_at_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_identity(|conn| {
             let raw: Option<(String, i64)> = conn
                 .query_row(
                     "SELECT payload_json, epoch FROM session WHERE id = 1",
@@ -1428,7 +1301,7 @@ impl StateStore {
 
     pub fn write_session_json(&self, value: &Value) -> Result<u64, StateError> {
         let raw = serde_json::to_string(value)?;
-        self.with_conn_mut(|conn| {
+        self.with_identity_mut(|conn| {
         let tx = conn.transaction()?;
         let epoch: Option<i64> = tx
             .query_row("SELECT epoch FROM session WHERE id = 1", [], |row| {
@@ -1446,10 +1319,13 @@ impl StateStore {
              ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json, epoch=excluded.epoch",
             params![raw, i64::try_from(next_epoch).map_err(|_| StateError::InvalidState)?],
         )?;
-        let revision = bump_revision(&tx)?;
+        // Signing in again is the recovery this device asked for after starting over, so the
+        // notice retires itself rather than waiting out a clock.
+        tx.execute("DELETE FROM preferences WHERE key = ?1", params![IDENTITY_RESET_KEY])?;
         tx.commit()?;
-        Ok(revision)
-        })
+        Ok(())
+        })?;
+        self.bump_revision()
     }
 
     /// Replaces the session only if its epoch is unchanged.  The returned epoch is the new
@@ -1460,7 +1336,7 @@ impl StateStore {
         expected_epoch: u64,
     ) -> Result<Option<u64>, StateError> {
         let raw = serde_json::to_string(value)?;
-        self.with_conn_mut(|conn| {
+        let next = self.with_identity_mut(|conn| {
             let tx = conn.transaction()?;
             let next_epoch = expected_epoch
                 .checked_add(1)
@@ -1477,42 +1353,41 @@ impl StateStore {
                 tx.rollback()?;
                 return Ok(None);
             }
-            let _ = bump_revision(&tx)?;
             tx.commit()?;
             Ok(Some(next_epoch))
-        })
+        })?;
+        if next.is_some() {
+            let _ = self.bump_revision();
+        }
+        Ok(next)
     }
 
     /// Deletes the session only if the caller still owns the pending epoch.
     pub fn clear_session_if_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let changed = tx.execute(
+        let cleared = self.with_identity_mut(|conn| {
+            Ok(conn.execute(
                 "DELETE FROM session WHERE id = 1 AND epoch = ?1",
                 params![i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?],
-            )?;
-            if changed == 0 {
-                tx.rollback()?;
-                return Ok(false);
-            }
-            let _ = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(true)
-        })
+            )? > 0)
+        })?;
+        if cleared {
+            self.forget_account_reads();
+            let _ = self.bump_revision();
+        }
+        Ok(cleared)
     }
 
-    pub fn clear_session(&self) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            tx.execute("DELETE FROM session WHERE id = 1", [])?;
-            let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(revision)
-        })
+    /// Stored Account responses end with the session that was allowed to read them. They are a
+    /// cache, so a cache this service cannot write is not a reason to refuse the sign-out.
+    fn forget_account_reads(&self) {
+        let _ = self.with_cache_mut(|conn| {
+            conn.execute("DELETE FROM account_read_cache", [])?;
+            Ok(())
+        });
     }
 
     pub fn installation_id(&self) -> Result<String, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_identity(|conn| {
             conn.query_row(
                 "SELECT installation_id FROM installation WHERE id = 1",
                 [],
@@ -1535,7 +1410,7 @@ impl StateStore {
         if account_id.is_empty() {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
+        self.with_identity_mut(|conn| {
             let tx = conn.transaction()?;
             let (installation_id, payload_json): (String, Option<String>) = tx.query_row(
                 "SELECT installation_id, payload_json FROM installation WHERE id = 1",
@@ -1585,8 +1460,8 @@ impl StateStore {
                 "UPDATE installation SET payload_json = ?1 WHERE id = 1",
                 params![serde_json::to_string(&payload)?],
             )?;
-            bump_revision(&tx)?;
             tx.commit()?;
+            let _ = self.bump_revision();
             Ok(lower_bound)
         })
     }
@@ -1619,7 +1494,7 @@ impl StateStore {
             },
         );
         write_provider_file(&self.root, &file)?;
-        self.with_conn_mut(|conn| bump_revision(conn))
+        self.bump_revision()
     }
 
     pub fn remove_provider_config(&self, provider: &str) -> Result<u64, StateError> {
@@ -1628,7 +1503,7 @@ impl StateStore {
         let removed = file.providers.remove(provider).is_some();
         if removed {
             write_provider_file(&self.root, &file)?;
-            return self.with_conn_mut(|conn| bump_revision(conn));
+            return self.bump_revision();
         }
         self.current_revision()
     }
@@ -1637,7 +1512,7 @@ impl StateStore {
         &self,
         provider: &str,
     ) -> Result<Option<ProviderBrowserSession>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_identity(|conn| {
             let session = conn
                 .query_row(
                     "SELECT cookie_header, account_fingerprint, account_label
@@ -1661,7 +1536,7 @@ impl StateStore {
     pub fn provider_browser_sessions(
         &self,
     ) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
-        self.with_conn_try(|conn| read_provider_browser_sessions(conn))
+        self.with_identity(read_provider_browser_sessions)
     }
 
     pub fn set_provider_browser_session(
@@ -1670,9 +1545,8 @@ impl StateStore {
         session: &ProviderBrowserSession,
     ) -> Result<u64, StateError> {
         validate_browser_session(provider, session.clone())?;
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
+        self.with_identity_mut(|conn| {
+            conn.execute(
                 "INSERT INTO provider_browser_sessions(
                 provider, cookie_header,
                 account_fingerprint, account_label, updated_at
@@ -1690,40 +1564,137 @@ impl StateStore {
                     now_rfc3339()
                 ],
             )?;
-            let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(revision)
-        })
+            Ok(())
+        })?;
+        self.bump_revision()
     }
 
     pub fn remove_provider_browser_session(&self, provider: &str) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let removed = tx.execute(
+        let removed = self.with_identity_mut(|conn| {
+            Ok(conn.execute(
                 "DELETE FROM provider_browser_sessions WHERE provider = ?1",
                 [provider],
+            )? > 0)
+        })?;
+        if removed {
+            self.bump_revision()
+        } else {
+            self.current_revision()
+        }
+    }
+
+    /// Records that macOS refused this Mac a browser's cookie store.
+    ///
+    /// This lives in the cache, not in identity: it is a fact about the last attempt, and the
+    /// next attempt produces it again. Losing it to a cache rebuild costs nothing.
+    pub fn set_browser_access_denial(
+        &self,
+        provider: &str,
+        denial: &BrowserAccessDenial,
+    ) -> Result<u64, StateError> {
+        let mut denials = self.browser_access_denials()?;
+        denials.insert(provider.to_owned(), denial.clone());
+        self.write_browser_access_denials(&denials)?;
+        self.bump_revision()
+    }
+
+    /// What the last `--version` read out of each installed provider CLI, as the collection
+    /// layer wrote it.  Derived from binaries this device can re-read, so it lives in the
+    /// disposable cache: a reset costs one `--version` per installed CLI and nothing else.
+    pub fn provider_cli_versions(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, CLI_VERSION_KEY))
+    }
+
+    pub fn write_provider_cli_versions(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(CLI_VERSION_KEY, encoded)
+    }
+
+    /// The last time this device asked each provider's own CLI to renew its sign-in, against
+    /// which binary, and how it went.  This is what keeps a CLI that cannot renew from being
+    /// started every five minutes, so it must outlive the process; it lives in the disposable
+    /// cache because losing it costs one extra attempt per provider and nothing else.  One
+    /// map rather than one key each, so a refresh reads and writes it once.
+    pub fn provider_refresh_attempts(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, RENEWAL_ATTEMPT_KEY))
+    }
+
+    pub fn write_provider_refresh_attempts(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(RENEWAL_ATTEMPT_KEY, encoded)
+    }
+
+    /// For each provider, the irreversible name of the credential that last produced a
+    /// reading on this device.  It is what tells a token this build cannot judge on its own —
+    /// an access token whose expiry it cannot decode — from one that has never worked; without
+    /// it, an undatable token bought a provider CLI spawn every hour forever.  Disposable:
+    /// losing it to a cache reset costs one extra renewal attempt per provider.
+    pub fn proven_provider_credentials(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, PROVEN_CREDENTIAL_KEY))
+    }
+
+    pub fn write_proven_provider_credentials(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(PROVEN_CREDENTIAL_KEY, encoded)
+    }
+
+    fn write_cache_metadata(&self, key: &str, encoded: &str) -> Result<(), StateError> {
+        if encoded.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, encoded],
             )?;
-            let revision = if removed == 0 {
-                metadata_u64(&tx, "revision")?
-            } else {
-                bump_revision(&tx)?
-            };
-            tx.commit()?;
-            Ok(revision)
+            Ok(())
         })
     }
 
-    pub fn outbox_entries(&self) -> Result<Vec<Value>, StateError> {
-        self.with_conn_try(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT payload_json FROM usage_outbox ORDER BY account_id, device_id, generation, sequence",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        let mut values = Vec::new();
-        for row in rows {
-            values.push(serde_json::from_str(&row?)?);
+    /// Clears a recorded refusal. A stored session, or a disconnect, both answer it.
+    pub fn clear_browser_access_denial(&self, provider: &str) -> Result<(), StateError> {
+        let mut denials = self.browser_access_denials()?;
+        if denials.remove(provider).is_none() {
+            return Ok(());
         }
-        Ok(values)
+        self.write_browser_access_denials(&denials)
+    }
+
+    pub fn browser_access_denials(
+        &self,
+    ) -> Result<BTreeMap<String, BrowserAccessDenial>, StateError> {
+        let raw = self.with_cache(|conn| metadata_value(conn, BROWSER_ACCESS_DENIED_KEY))?;
+        let Some(raw) = raw else {
+            return Ok(BTreeMap::new());
+        };
+        // A cache row this process cannot read is a cache row: it is thrown away, not salvaged.
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    }
+
+    fn write_browser_access_denials(
+        &self,
+        denials: &BTreeMap<String, BrowserAccessDenial>,
+    ) -> Result<(), StateError> {
+        let encoded = serde_json::to_string(denials)?;
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![BROWSER_ACCESS_DENIED_KEY, encoded],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Everything this device still owes an Account, oldest hour first.
+    pub fn outbox_entries(&self) -> Result<Vec<UsageOutboxEntry>, StateError> {
+        self.with_identity(|conn| read_outbox(conn, None))
+    }
+
+    /// How many hours are staged. Counted in SQL, because the callers that ask this were
+    /// deserializing every staged hour's rows to call `len()` on the result.
+    pub fn outbox_len(&self) -> Result<i64, StateError> {
+        self.with_identity(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))
+                .map_err(StateError::from)
         })
     }
 
@@ -1732,321 +1703,119 @@ impl StateStore {
         account_id: &str,
         device_id: &str,
         generation: u64,
-    ) -> Result<Vec<Value>, StateError> {
-        self.with_conn_try(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT payload_json FROM usage_outbox
-             WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3
-             ORDER BY sequence, submission_id",
-            )?;
-            let rows = statement.query_map(params![account_id, device_id, generation], |row| {
-                row.get::<_, String>(0)
-            })?;
-            let mut values = Vec::new();
-            for row in rows {
-                values.push(serde_json::from_str(&row?)?);
-            }
-            Ok(values)
-        })
+    ) -> Result<Vec<UsageOutboxEntry>, StateError> {
+        self.with_identity(|conn| read_outbox(conn, Some((account_id, device_id, generation))))
     }
 
-    /// Atomically reserves an immutable Usage submission and consumes the exact dirty range that
-    /// produced it.  A crash can therefore leave either both rows or neither row; a retry with the
-    /// same deterministic submission id is idempotent and still consumes any range left by an
-    /// earlier version of the service.
-    pub fn stage_outbox_entry(
-        &self,
-        account_id: &str,
-        value: &Value,
-        consumed: &UsageDirtyRange,
-    ) -> Result<bool, StateError> {
-        if account_id.is_empty() {
-            return Err(StateError::InvalidState);
-        }
-        let object = value.as_object().ok_or(StateError::InvalidState)?;
-        let submission_id = object
-            .get("submission_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or(StateError::InvalidState)?;
-        let device_id = object
-            .get("device_id")
-            .and_then(Value::as_str)
-            .ok_or(StateError::InvalidState)?;
-        let generation = object
-            .get("generation")
-            .and_then(Value::as_i64)
-            .filter(|value| *value > 0)
-            .ok_or(StateError::InvalidState)?;
-        let sequence = object
-            .get("sequence")
-            .and_then(Value::as_i64)
-            .filter(|value| *value >= 0)
-            .ok_or(StateError::InvalidState)?;
-        let raw = serde_json::to_string(value)?;
-        if raw.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-            return Err(StateError::InvalidState);
-        }
-        self.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
-        let existing: Option<(String, String, i64, i64, String)> = tx
-            .query_row(
-                "SELECT account_id, device_id, generation, sequence, payload_json
-                 FROM usage_outbox WHERE submission_id = ?1",
-                params![submission_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-        if let Some((
-            stored_account,
-            stored_device,
-            stored_generation,
-            stored_sequence,
-            stored_raw,
-        )) = existing
-        {
-            if stored_account != account_id
-                || stored_device != device_id
-                || stored_generation != generation
-                || stored_sequence != sequence
-                || stored_raw != raw
-            {
-                return Err(StateError::InvalidState);
-            }
-            let changed = consume_dirty_usage_range_tx(&tx, consumed)?;
-            if changed > 0 {
-                bump_revision(&tx)?;
-            }
-            tx.commit()?;
-            return Ok(false);
-        }
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
-        if count >= MAX_USAGE_OUTBOX_ENTRIES {
-            return Err(StateError::Unavailable);
-        }
-        tx.execute(
-            "INSERT INTO usage_outbox(submission_id,account_id,device_id,generation,sequence,payload_json)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-            params![submission_id, account_id, device_id, generation, sequence, raw],
-        )?;
-        consume_dirty_usage_range_tx(&tx, consumed)?;
-        bump_revision(&tx)?;
-        tx.commit()?;
-        Ok(true)
-        })
-    }
-
-    /// Acknowledges a successful/duplicate Relay response and removes the immutable request in one
-    /// SQLite transaction. Relay deduplicates retries by the immutable submission id. Multipart
-    /// requests have already consumed their dirty range when all parts are staged, so an ACK never
-    /// changes dirty state.
-    pub fn acknowledge_outbox_entry(&self, submission_id: &str) -> Result<bool, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let exists: Option<i64> = tx
-                .query_row(
-                    "SELECT 1
-                 FROM usage_outbox WHERE submission_id = ?1",
-                    params![submission_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(_) = exists else {
-                tx.commit()?;
-                return Ok(false);
-            };
-            let changed = tx.execute(
-                "DELETE FROM usage_outbox WHERE submission_id = ?1",
-                params![submission_id],
-            )?;
-            if changed > 0 {
-                bump_revision(&tx)?;
-            }
-            tx.commit()?;
-            Ok(changed > 0)
-        })
-    }
-
-    /// Stage every part of one atomic UTC-hour batch in one SQLite transaction. The complete set
-    /// of immutable outbox entries and consumption of the source dirty range commit together, so
-    /// a crash can recover solely from the durable entries. ACKs only remove those entries.
-    pub fn stage_multipart_outbox_entries(
+    /// Stages the hours a scan changed and retires the dirty marks that produced them.
+    ///
+    /// The entries are written before the marks are cleared. A crash in between leaves the hour
+    /// dirty, so the next refresh stages the same key again with the same or a newer scan
+    /// version — an hour is replaced by version, so restaging it is not a second write.
+    pub fn stage_outbox_entries(
         &self,
         account_id: &str,
         device_id: &str,
         generation: u64,
-        batch_id: &str,
-        consumed: &UsageDirtyRange,
-        submissions: &[Value],
+        entries: &[UsageOutboxEntry],
     ) -> Result<bool, StateError> {
-        if account_id.is_empty()
-            || device_id.is_empty()
-            || generation == 0
-            || batch_id.is_empty()
-            || submissions.len() < 2
-        {
+        if account_id.is_empty() || device_id.is_empty() || generation == 0 {
             return Err(StateError::InvalidState);
         }
-        let first = submissions.first().ok_or(StateError::InvalidState)?;
-        let first_info = multipart_info(first).ok_or(StateError::InvalidState)?;
-        if first_info.0 != batch_id || first_info.2 != submissions.len() as u64 {
-            return Err(StateError::InvalidState);
+        if entries.is_empty() {
+            return Ok(false);
         }
-        let first_coverage = first
-            .get("coverage")
-            .and_then(Value::as_object)
-            .ok_or(StateError::InvalidState)?;
-        if first_coverage.get("agent").and_then(Value::as_str) != Some(consumed.agent.as_str())
-            || first_coverage.get("start_at").and_then(Value::as_str)
-                != Some(consumed.start_at.as_str())
-            || first_coverage.get("end_at").and_then(Value::as_str)
-                != Some(consumed.end_at.as_str())
-        {
-            return Err(StateError::InvalidState);
-        }
-        for (index, submission) in submissions.iter().enumerate() {
-            let Some((part_batch, part_index, part_count)) = multipart_info(submission) else {
-                return Err(StateError::InvalidState);
-            };
-            if part_batch != batch_id
-                || part_index != index as u64
-                || part_count != submissions.len() as u64
-                || submission.get("device_id").and_then(Value::as_str) != Some(device_id)
-                || submission.get("generation").and_then(Value::as_u64) != Some(generation)
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("agent"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.agent.as_str())
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("start_at"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.start_at.as_str())
-                || submission
-                    .get("coverage")
-                    .and_then(Value::as_object)
-                    .and_then(|coverage| coverage.get("end_at"))
-                    .and_then(Value::as_str)
-                    != Some(consumed.end_at.as_str())
-            {
-                return Err(StateError::InvalidState);
-            }
-            if serde_json::to_string(submission)?.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                return Err(StateError::InvalidState);
-            }
-        }
-        self.with_conn_mut(|conn| {
+        self.with_identity_mut(|conn| {
             let tx = conn.transaction()?;
-            let existing_count: i64 =
-                tx.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))?;
-            let mut missing = 0i64;
-            let mut pending = Vec::with_capacity(submissions.len());
-            let mut submission_ids = HashSet::with_capacity(submissions.len());
-            for submission in submissions {
-                let submission_id = submission
-                    .get("submission_id")
-                    .and_then(Value::as_str)
-                    .ok_or(StateError::InvalidState)?;
-                if !submission_ids.insert(submission_id.to_owned()) {
+            for entry in entries {
+                let rows = serde_json::to_string(&entry.rows)?;
+                if rows.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
                     return Err(StateError::InvalidState);
                 }
-                let raw = serde_json::to_string(submission)?;
-                let existing: Option<(String, String, i64, i64, String)> = tx
-                    .query_row(
-                        "SELECT account_id, device_id, generation, sequence, payload_json
-                     FROM usage_outbox WHERE submission_id = ?1",
-                        params![submission_id],
-                        |row| {
-                            Ok((
-                                row.get(0)?,
-                                row.get(1)?,
-                                row.get(2)?,
-                                row.get(3)?,
-                                row.get(4)?,
-                            ))
-                        },
-                    )
-                    .optional()?;
-                if let Some((
-                    stored_account,
-                    stored_device,
-                    stored_generation,
-                    stored_sequence,
-                    stored_raw,
-                )) = existing
-                {
-                    if stored_account != account_id
-                        || stored_device != device_id
-                        || stored_generation != generation as i64
-                        || stored_sequence
-                            != submission
-                                .get("sequence")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(-1)
-                        || stored_raw != raw
-                    {
-                        return Err(StateError::InvalidState);
-                    }
-                    continue;
-                }
-                missing = missing.saturating_add(1);
-                pending.push((
-                    submission_id.to_owned(),
-                    submission
-                        .get("sequence")
-                        .and_then(Value::as_i64)
-                        .ok_or(StateError::InvalidState)?,
-                    raw,
-                ));
-            }
-            if existing_count.saturating_add(missing) > MAX_USAGE_OUTBOX_ENTRIES {
-                return Err(StateError::Unavailable);
-            }
-            for (submission_id, sequence, raw) in pending {
                 tx.execute(
-                    "INSERT INTO usage_outbox(submission_id, account_id, device_id, generation,
-                    sequence, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO usage_outbox(
+                        agent, bucket_start_utc, account_id, device_id, generation,
+                        scan_version, partial, rows_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(agent, bucket_start_utc) DO UPDATE SET
+                        account_id = excluded.account_id,
+                        device_id = excluded.device_id,
+                        generation = excluded.generation,
+                        scan_version = excluded.scan_version,
+                        partial = excluded.partial,
+                        rows_json = excluded.rows_json",
                     params![
-                        submission_id,
+                        entry.agent.as_str(),
+                        entry.bucket_start_utc,
                         account_id,
                         device_id,
                         generation as i64,
-                        sequence,
-                        raw,
+                        entry.scan_version as i64,
+                        i64::from(entry.partial),
+                        rows,
                     ],
                 )?;
             }
-            // A rescan may dirty an interval while an earlier batch is still in the outbox. In that
-            // case all parts can already exist, but this call must still consume the new dirty range
-            // atomically with the idempotent staging transaction.
-            let consumed_dirty = consume_dirty_usage_range_tx(&tx, consumed)?;
-            let changed = missing > 0 || consumed_dirty > 0;
-            if changed {
-                bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            for entry in entries {
+                tx.execute(
+                    "DELETE FROM usage_dirty_hours
+                     WHERE agent = ?1 AND bucket_start_utc = ?2 AND scan_version <= ?3",
+                    params![
+                        entry.agent.as_str(),
+                        entry.bucket_start_utc,
+                        entry.scan_version as i64
+                    ],
+                )?;
             }
             tx.commit()?;
-            Ok(changed)
-        })
+            Ok(())
+        })?;
+        self.bump_revision()?;
+        Ok(true)
+    }
+
+    /// Forgets hours Relay has answered for. Accepted and ignored are the same move here: an
+    /// ignored hour is one a newer scan already replaced or one before this device's deletion
+    /// watermark, and either way this device is done with it.
+    pub fn forget_outbox_hours(
+        &self,
+        agent: UsageAgent,
+        buckets: &[String],
+    ) -> Result<bool, StateError> {
+        if buckets.is_empty() {
+            return Ok(false);
+        }
+        let removed = self.with_identity_mut(|conn| {
+            let tx = conn.transaction()?;
+            let mut removed = 0usize;
+            for bucket in buckets {
+                removed += tx.execute(
+                    "DELETE FROM usage_outbox WHERE agent = ?1 AND bucket_start_utc = ?2",
+                    params![agent.as_str(), bucket],
+                )?;
+            }
+            tx.commit()?;
+            Ok(removed > 0)
+        })?;
+        if removed {
+            let _ = self.bump_revision();
+        }
+        Ok(removed)
     }
 
     pub fn usage_file_index(
         &self,
         agent: UsageAgent,
     ) -> Result<HashMap<String, UsageFileIndex>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let mut statement = conn.prepare(
-                "SELECT source_file_id, identity, size, modified_ns, parser_revision
+                "SELECT source_file_id, identity, size, modified_ns, parser_revision,
+                        parsed_offset, prefix_hash
              FROM usage_file_index WHERE agent = ?1",
             )?;
             let rows = statement.query_map(params![agent.as_str()], |row| {
@@ -2067,6 +1836,8 @@ impl StateStore {
                         size: row.get::<_, i64>(2)? as u64,
                         modified_ns,
                         parser_revision: row.get(4)?,
+                        parsed_offset: row.get::<_, i64>(5)? as u64,
+                        prefix_hash: row.get(6)?,
                     },
                 ))
             })?;
@@ -2080,29 +1851,27 @@ impl StateStore {
     }
 
     #[cfg(test)]
+    /// Removes the attempt journal so every journal write fails.
+    ///
+    /// Used to prove that collection, scanning, uploading, and syncing do not depend on the
+    /// journal being writable.
+    pub fn make_diagnostic_journal_unwritable_for_test(&self) -> Result<(), StateError> {
+        self.with_cache_mut(|conn| {
+            conn.execute("DROP TABLE diagnostic_attempts", [])?;
+            Ok(())
+        })
+    }
+
+    #[cfg(test)]
     pub fn make_usage_file_index_unreadable_for_test(&self) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             conn.execute("DROP TABLE usage_file_index", [])?;
             Ok(())
         })
     }
 
-    pub fn usage_events(&self) -> Result<Vec<NormalizedUsageEvent>, StateError> {
-        self.with_conn_try(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT event_json FROM usage_file_records ORDER BY occurred_at, agent, source_file_id, record_index",
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(serde_json::from_str(&row?)?);
-        }
-        Ok(events)
-        })
-    }
-
     pub fn usage_event_count(&self) -> Result<u64, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let count = conn.query_row("SELECT COUNT(*) FROM usage_file_records", [], |row| {
                 row.get::<_, i64>(0)
             })?;
@@ -2110,53 +1879,9 @@ impl StateStore {
         })
     }
 
-    pub fn dirty_usage_ranges(&self) -> Result<Vec<UsageDirtyRange>, StateError> {
-        self.with_conn_try(|conn| {
-        let mut statement = conn.prepare(
-            "SELECT agent, start_at, end_at FROM usage_dirty_ranges ORDER BY start_at, end_at, agent",
-        )?;
-        let rows = statement.query_map([], |row| {
-            let agent: String = row.get(0)?;
-            let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(
-                    0,
-                    "agent".to_owned(),
-                    rusqlite::types::Type::Text,
-                )
-            })?;
-            Ok(UsageDirtyRange {
-                agent,
-                start_at: row.get(1)?,
-                end_at: row.get(2)?,
-            })
-        })?;
-        let mut ranges = Vec::new();
-        for row in rows {
-            ranges.push(row?);
-        }
-        Ok(ranges)
-        })
-    }
-
-    #[cfg(test)]
-    pub fn insert_usage_dirty_range_for_test(
-        &self,
-        range: &UsageDirtyRange,
-    ) -> Result<(), StateError> {
-        self.with_conn_mut(|conn| {
-            conn.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at)
-             VALUES (?1, ?2, ?3)",
-                params![range.agent.as_str(), range.start_at, range.end_at],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Returns UTC hours whose indexed source is known to be partial. These markers prevent a
-    /// complete upload from replacing remote facts that may be absent from an incomplete source.
+    /// UTC hours whose indexed source came up short, so every read of them says so.
     pub fn partial_usage_hours(&self) -> Result<HashSet<(UsageAgent, String)>, StateError> {
-        self.with_conn_try(|conn| {
+        self.with_cache(|conn| {
             let mut statement = conn.prepare(
                 "SELECT agent, start_at FROM usage_partial_sources ORDER BY agent, start_at",
             )?;
@@ -2179,15 +1904,203 @@ impl StateStore {
         })
     }
 
-    /// Switches the upload identity atomically.  A new account/device generation gets a fresh
-    /// sequence stream and is seeded only with retained local events at or after its privacy lower
-    /// bound; old account requests and receipts cannot be replayed under the new identity.
+    /// The hours this device still owes its Account, oldest first, with the rows each is made
+    /// of.
+    ///
+    /// One transaction, and bounded. Reading the list of dirty hours and then reading each
+    /// hour's rows under a lock of its own let a cache reset land in between: the hour was
+    /// staged empty under the scan version that produced it, and an hour is replaced by
+    /// version, so the Account applied the emptiness.
+    ///
+    /// `lower_bound` is the privacy watermark this device may not upload before and
+    /// `upper_bound` the hour still being written to. Both are canonical UTC hours, which is
+    /// the form `bucket_start_utc` holds, so the comparison is the column's own order.
+    pub fn dirty_usage_hour_batch(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+        limit: usize,
+    ) -> Result<Vec<UsageOutboxEntry>, StateError> {
+        self.with_cache(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let hours = {
+                let mut statement = tx.prepare(
+                    "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
+                     WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2
+                     ORDER BY bucket_start_utc, agent LIMIT ?3",
+                )?;
+                let rows = statement.query_map(
+                    params![lower_bound, upper_bound, limit as i64],
+                    |row| {
+                        let agent: String = row.get(0)?;
+                        let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                            rusqlite::Error::InvalidColumnType(
+                                0,
+                                "agent".to_owned(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })?;
+                        Ok((
+                            agent,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)? as u64,
+                            row.get::<_, i64>(3)? != 0,
+                        ))
+                    },
+                )?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let mut entries = Vec::with_capacity(hours.len());
+            {
+                let mut statement = tx.prepare(FACT_ROW_QUERY)?;
+                for (agent, bucket_start_utc, scan_version, partial) in hours {
+                    let rows = statement
+                        .query_map(params![agent.as_str(), &bucket_start_utc], read_fact_row)?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    entries.push(UsageOutboxEntry {
+                        agent,
+                        bucket_start_utc,
+                        scan_version,
+                        partial,
+                        rows,
+                    });
+                }
+            }
+            tx.commit()?;
+            Ok(entries)
+        })
+    }
+
+    /// How many recomputed hours are ready to leave, under the same bounds that decide what
+    /// [`Self::dirty_usage_hour_batch`] stages. Counted in SQL: the answer is a number for a
+    /// diagnostic line, not a reason to read a year of rows.
+    pub fn uploadable_dirty_hour_count(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+    ) -> Result<i64, StateError> {
+        self.with_cache(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_dirty_hours
+                 WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                params![lower_bound, upper_bound],
+                |row| row.get(0),
+            )
+            .map_err(StateError::from)
+        })
+    }
+
+    /// Retires the dirty marks for hours this device may never upload.
+    ///
+    /// An hour before the privacy watermark is not waiting for anything: staging skips it, so
+    /// left alone its mark would sit in the cache forever and count as work owed.
+    pub fn forget_dirty_usage_hours_before(&self, lower_bound: &str) -> Result<bool, StateError> {
+        let removed = self.with_cache_mut(|conn| {
+            Ok(conn.execute(
+                "DELETE FROM usage_dirty_hours WHERE bucket_start_utc < ?1",
+                params![lower_bound],
+            )?)
+        })?;
+        Ok(removed > 0)
+    }
+
+    /// Marks an hour dirty without a scan behind it, for tests that only need the mark.
+    #[cfg(test)]
+    pub fn insert_usage_dirty_hour_for_test(
+        &self,
+        agent: UsageAgent,
+        bucket_start_utc: &str,
+        scan_version: u64,
+    ) -> Result<(), StateError> {
+        self.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO usage_dirty_hours(
+                    agent, bucket_start_utc, scan_version, partial
+                 ) VALUES (?1, ?2, ?3, 0)",
+                params![agent.as_str(), bucket_start_utc, scan_version as i64],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The rows of one hour, as the upload carries them.
+    pub fn usage_hour_rows(
+        &self,
+        agent: UsageAgent,
+        bucket_start_utc: &str,
+    ) -> Result<Vec<UsageRow>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(FACT_ROW_QUERY)?;
+            let rows = statement
+                .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Folds the stored hours into the rows one period is computed from.
+    ///
+    /// `range` is the half-open instant span the period covers — a local day begins at local
+    /// midnight, not at a UTC one — and `None` is everything retained. An hour is the finest
+    /// fact stored, so comparing its start against the span rounds an edge that falls inside an
+    /// hour up to the next one, which keeps two periods from claiming the same hour.
+    ///
+    /// The date each row carries is still the UTC date of the hours behind it, because that is
+    /// what prices a row and resolves a model alias, not what the period names.
+    pub fn usage_period_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<(Vec<DatedUsageRow>, bool), StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT substr(bucket_start_utc, 1, 10) AS date, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests),
+                        MAX(partial)
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY date, agent, billing_channel, channel_source, model, context_bucket,
+                          service_tier, speed, inference_geo
+                 ORDER BY date, agent, billing_channel, model"
+            ))?;
+            let mut partial = false;
+            let mut rows = Vec::new();
+            let mapped = statement.query_map(params![from, to], |row| {
+                let date: String = row.get(0)?;
+                let hour_partial: i64 = row.get(21)?;
+                Ok((date, read_grouped_row(row)?, hour_partial != 0))
+            })?;
+            for entry in mapped {
+                let (date, row, row_partial) = entry?;
+                partial = partial || row_partial;
+                rows.push(DatedUsageRow { date, row });
+            }
+            Ok((rows, partial))
+        })
+    }
+
+    /// Switches the upload identity atomically.
+    ///
+    /// A new account or device generation owes that Account every hour this device still holds
+    /// at or after its privacy lower bound, so the dirty set is rebuilt from the stored facts
+    /// and the old queue is dropped: requests staged for one identity cannot be replayed under
+    /// another.
     pub fn ensure_usage_context(
         &self,
         account_id: &str,
         device_id: &str,
         generation: u64,
-        aggregation_timezone: &str,
         lower_bound: &str,
     ) -> Result<u64, StateError> {
         let lower_bound =
@@ -2195,168 +2108,125 @@ impl StateStore {
         if account_id.is_empty() || device_id.is_empty() || generation == 0 {
             return Err(StateError::InvalidState);
         }
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let current: Option<(String, String, i64, String, String)> = tx
+        let unchanged = self.with_identity(|conn| {
+            let current: Option<(String, String, i64, String)> = conn
                 .query_row(
-                    "SELECT account_id, device_id, generation, aggregation_timezone, lower_bound
-                 FROM usage_upload_context WHERE id = 1",
+                    "SELECT account_id, device_id, generation, lower_bound
+                     FROM usage_upload_context WHERE id = 1",
                     [],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
-            let unchanged = current.as_ref().is_some_and(|current| {
+            Ok(current.is_some_and(|current| {
                 current.0 == account_id
                     && current.1 == device_id
                     && current.2 == generation as i64
-                    && current.3 == aggregation_timezone
-                    && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-            });
-            if unchanged {
-                let removed = tx.execute(
+                    && current.3 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+            }))
+        })?;
+        if unchanged {
+            let removed = self.with_identity_mut(|conn| {
+                Ok(conn.execute(
                     "DELETE FROM usage_outbox
-                 WHERE account_id != ?1 OR device_id != ?2 OR generation != ?3",
+                     WHERE account_id != ?1 OR device_id != ?2 OR generation != ?3",
                     params![account_id, device_id, generation as i64],
-                )?;
-                let revision = if removed > 0 {
-                    bump_revision(&tx)?
-                } else {
-                    metadata_u64(&tx, "revision")?
-                };
-                tx.commit()?;
-                return Ok(revision);
-            }
+                )? > 0)
+            })?;
+            return if removed {
+                self.bump_revision()
+            } else {
+                self.current_revision()
+            };
+        }
+        // The dirty set is re-seeded before the identity that owns it is written. A crash in
+        // between leaves the old identity in place, and the next call sees it unchanged and does
+        // both steps again; the other order would leave a new identity pointing at an old queue.
+        let floor = floor_hour(lower_bound).to_rfc3339_opts(SecondsFormat::Secs, true);
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM usage_dirty_hours", [])?;
+            tx.execute(
+                "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
+                 SELECT agent, bucket_start_utc, MAX(scan_version), MAX(partial)
+                 FROM usage_hourly_facts WHERE bucket_start_utc >= ?1
+                 GROUP BY agent, bucket_start_utc",
+                params![floor],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        self.with_identity_mut(|conn| {
+            let tx = conn.transaction()?;
             tx.execute("DELETE FROM usage_outbox", [])?;
-            tx.execute("DELETE FROM usage_dirty_ranges", [])?;
             tx.execute(
                 "INSERT INTO usage_upload_context(
-                id, account_id, device_id, generation, aggregation_timezone, lower_bound
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                id, account_id, device_id, generation, lower_bound
+             ) VALUES (1, ?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
                 device_id = excluded.device_id,
                 generation = excluded.generation,
-                aggregation_timezone = excluded.aggregation_timezone,
                 lower_bound = excluded.lower_bound",
                 params![
                     account_id,
                     device_id,
                     generation,
-                    aggregation_timezone,
                     lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
                 ],
             )?;
-            let mut statement = tx.prepare("SELECT agent, occurred_at FROM usage_file_records")?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            drop(statement);
-            let mut hours_by_agent: BTreeMap<UsageAgent, Vec<String>> = BTreeMap::new();
-            for (agent_raw, occurred_at) in rows {
-                let Some(agent) = parse_usage_agent(&agent_raw) else {
-                    continue;
-                };
-                let Ok(occurred_at) = DateTime::parse_from_rfc3339(&occurred_at) else {
-                    continue;
-                };
-                if occurred_at < lower_bound {
-                    continue;
-                }
-                hours_by_agent
-                    .entry(agent)
-                    .or_default()
-                    .push(floor_hour(occurred_at).to_rfc3339_opts(SecondsFormat::Secs, true));
-            }
-            for (agent, mut hours) in hours_by_agent {
-                hours.sort_unstable();
-                hours.dedup();
-                mark_dirty_hours(&tx, agent, hours)?;
-            }
-            let revision = bump_revision(&tx)?;
             tx.commit()?;
-            Ok(revision)
+            Ok(())
+        })?;
+        self.bump_revision()
+    }
+
+    /// The revision this scan's hours are stamped with.
+    ///
+    /// Relay keeps the version of the scan behind each stored hour and replaces an hour only
+    /// for a strictly newer one, so this counter has to keep climbing across a cache rebuild.
+    /// It lives in identity, which is the file this device never regenerates.
+    pub fn next_usage_scan_version(&self) -> Result<u64, StateError> {
+        self.with_identity_mut(|conn| {
+            let current = preference(conn, USAGE_SCAN_VERSION_KEY)?
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let next = current.saturating_add(1);
+            write_preference(conn, USAGE_SCAN_VERSION_KEY, &next.to_string())?;
+            Ok(next)
         })
     }
 
-    /// Removes only an uploaded portion of a dirty range.  Any not-yet-complete tail is put back
-    /// in the table so a refresh before the next UTC hour cannot lose the active hour.
-    #[cfg(test)]
-    pub fn consume_dirty_usage_range(&self, consumed: &UsageDirtyRange) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
-            let tx = conn.transaction()?;
-            let changed = consume_dirty_usage_range_tx(&tx, consumed)?;
-            if changed == 0 {
-                let revision = metadata_u64(&tx, "revision")?;
-                tx.commit()?;
-                return Ok(revision);
-            }
-            let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(revision)
-        })
-    }
-
+    /// Applies one agent's scan and recomputes only the hours it changed.
+    ///
+    /// A source is replaced whole, or appended to when the bytes already parsed are still
+    /// there. Either way the hours whose events moved are recomputed from the retained record
+    /// history, which is what makes an hour a single fact rather than a running merge.
     pub fn apply_usage_scan(
         &self,
         agent: UsageAgent,
         scan: &UsageScanResult,
+        scan_version: u64,
     ) -> Result<u64, StateError> {
-        self.with_conn_mut(|conn| {
+        self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let mut changed = 0usize;
+            let mut dirty_hours: BTreeSet<String> = BTreeSet::new();
             for source in &scan.sources {
                 if source.coverage.status != crate::usage::CoverageStatus::Complete {
                     // Preserve the last successful rows and merge newly valid records. This keeps
                     // data useful without allowing an incomplete scan to delete facts. The old file
                     // index remains untouched so the source is retried on the next refresh.
-                    let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-                    let mut merged = BTreeMap::<String, NormalizedUsageEvent>::new();
-                    for stored in &old_events {
-                        let event: NormalizedUsageEvent = serde_json::from_str(&stored.event_json)?;
-                        merged.insert(stored.record_key.clone(), event);
-                    }
+                    let mut hours = Vec::new();
                     for (record_index, event) in source.records.iter().enumerate() {
-                        merged.insert(source_record_key(source, record_index), event.clone());
+                        let key = source_record_key(source, record_index);
+                        hours.push(insert_record(
+                            &tx,
+                            agent,
+                            &source.source.source_file_id,
+                            &key,
+                            event,
+                        )?);
                     }
-                    let merged_events = merged.into_iter().collect::<Vec<_>>();
-                    tx.execute(
-                        "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                        params![agent.as_str(), source.source.source_file_id],
-                    )?;
-                    for (record_index, (record_key, event)) in merged_events.iter().enumerate() {
-                        let event_json = serde_json::to_string(event)?;
-                        if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                            return Err(StateError::InvalidState);
-                        }
-                        tx.execute(
-                            "INSERT INTO usage_file_records(
-                            agent, source_file_id, record_index, record_key, occurred_at, event_json
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                            params![
-                                agent.as_str(),
-                                source.source.source_file_id,
-                                record_index as i64,
-                                record_key,
-                                event.occurred_at,
-                                event_json,
-                            ],
-                        )?;
-                    }
-                    let hours = merged_events
-                        .iter()
-                        .filter_map(|(_, event)| event_hour(&event.occurred_at).ok())
-                        .collect::<Vec<_>>();
-                    let mut hours = hours;
                     if source.coverage.reasons.iter().any(|reason| {
                         reason.code == crate::usage::CoverageReasonCode::InvalidTimestamp
                     }) && let Ok(start) = event_hour(&source.coverage.start_at)
@@ -2372,53 +2242,51 @@ impl StateStore {
                         &source.source.source_file_id,
                         hours.clone(),
                     )?;
-                    mark_dirty_hours(&tx, agent, hours)?;
+                    remember_partial_progress(&tx, agent, source)?;
+                    dirty_hours.extend(hours);
                     changed += 1;
                     continue;
                 }
-                let old_events = record_events(&tx, agent, &source.source.source_file_id)?;
-                // A complete rescan also restores the remote replace semantics for every hour that
-                // was previously merged as partial. Even if the repaired rows are byte-identical,
-                // the interval must be uploaded once with `coverage.status=complete` so Relay can
-                // retire its partial marker.
-                let prior_partial_hours =
-                    partial_source_hours_tx(&tx, agent, &source.source.source_file_id)?;
+                // A complete rescan also restores replace semantics for every hour that was
+                // previously merged as partial, so those hours are recomputed once more.
+                dirty_hours.extend(partial_source_hours_tx(
+                    &tx,
+                    agent,
+                    &source.source.source_file_id,
+                )?);
                 tx.execute(
                     "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source.source.source_file_id],
                 )?;
-                tx.execute(
-                    "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
-                    params![agent.as_str(), source.source.source_file_id],
-                )?;
-                for (record_index, event) in source.records.iter().enumerate() {
-                    let event_json = serde_json::to_string(event)?;
-                    if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
-                        return Err(StateError::InvalidState);
-                    }
+                if !source.append {
+                    dirty_hours.extend(record_hours(&tx, agent, &source.source.source_file_id)?);
                     tx.execute(
-                        "INSERT INTO usage_file_records(
-                        agent, source_file_id, record_index, record_key, occurred_at, event_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![
-                            agent.as_str(),
-                            source.source.source_file_id,
-                            record_index as i64,
-                            source_record_key(source, record_index),
-                            event.occurred_at,
-                            event_json,
-                        ],
+                        "DELETE FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+                        params![agent.as_str(), source.source.source_file_id],
                     )?;
+                }
+                for (record_index, event) in source.records.iter().enumerate() {
+                    let key = source_record_key(source, record_index);
+                    dirty_hours.insert(insert_record(
+                        &tx,
+                        agent,
+                        &source.source.source_file_id,
+                        &key,
+                        event,
+                    )?);
                 }
                 changed += tx.execute(
                     "INSERT INTO usage_file_index(
-                    agent, source_file_id, identity, size, modified_ns, parser_revision
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    agent, source_file_id, identity, size, modified_ns, parser_revision,
+                    parsed_offset, prefix_hash
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(agent, source_file_id) DO UPDATE SET
                     identity = excluded.identity,
                     size = excluded.size,
                     modified_ns = excluded.modified_ns,
-                    parser_revision = excluded.parser_revision",
+                    parser_revision = excluded.parser_revision,
+                    parsed_offset = excluded.parsed_offset,
+                    prefix_hash = excluded.prefix_hash",
                     params![
                         agent.as_str(),
                         source.source.source_file_id,
@@ -2426,16 +2294,13 @@ impl StateStore {
                         source.source.size as i64,
                         source.source.modified_ns.to_string(),
                         source.index.parser_revision,
+                        source.index.parsed_offset as i64,
+                        source.index.prefix_hash,
                     ],
                 )?;
-                let mut dirty_hours = changed_event_hours(&old_events, &source.records)?;
-                dirty_hours.extend(prior_partial_hours);
-                dirty_hours.sort_unstable();
-                dirty_hours.dedup();
-                mark_dirty_hours(&tx, agent, dirty_hours)?;
             }
             for source_file_id in &scan.deleted_source_file_ids {
-                let old_events = record_events(&tx, agent, source_file_id)?;
+                dirty_hours.extend(record_hours(&tx, agent, source_file_id)?);
                 tx.execute(
                     "DELETE FROM usage_partial_sources WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
@@ -2448,9 +2313,19 @@ impl StateStore {
                     "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
                 )?;
-                mark_dirty_hours(&tx, agent, changed_event_hours(&old_events, &[])?)?;
             }
-            if changed == 0 {
+            let mut recomputed = 0usize;
+            for hour in &dirty_hours {
+                if recompute_hour(&tx, agent, hour, scan_version)? {
+                    recomputed += 1;
+                }
+            }
+            // One complete scan is what the cache was waiting for: from here on the local Usage
+            // it reports is this device's own history again, not a hole left by a rebuild.
+            if scan.coverage.status == crate::usage::CoverageStatus::Complete {
+                write_metadata_flag(&tx, REBUILDING_KEY, false)?;
+            }
+            if changed == 0 && recomputed == 0 {
                 let revision = metadata_u64(&tx, "revision")?;
                 tx.commit()?;
                 return Ok(revision);
@@ -2460,6 +2335,45 @@ impl StateStore {
             Ok(revision)
         })
     }
+}
+
+/// Remembers how far a source this scan could not finish was read.
+///
+/// The size and modification time are deliberately not stored: they are what makes the next
+/// scan skip a source it already read, and a source that came up short has to be tried again.
+/// What is worth keeping is the byte the last clean record ended on and the digest of
+/// everything before it, so the retry reads the part that was never read rather than the whole
+/// log, every refresh, forever.
+fn remember_partial_progress(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source: &crate::usage::UsageSourceScan,
+) -> Result<(), StateError> {
+    if source.index.parsed_offset == 0 || source.index.prefix_hash.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO usage_file_index(
+            agent, source_file_id, identity, size, modified_ns, parser_revision,
+            parsed_offset, prefix_hash
+         ) VALUES (?1, ?2, ?3, 0, '0', ?4, ?5, ?6)
+         ON CONFLICT(agent, source_file_id) DO UPDATE SET
+            identity = excluded.identity,
+            size = 0,
+            modified_ns = '0',
+            parser_revision = excluded.parser_revision,
+            parsed_offset = excluded.parsed_offset,
+            prefix_hash = excluded.prefix_hash",
+        params![
+            agent.as_str(),
+            source.source.source_file_id,
+            source.source.identity,
+            source.index.parser_revision,
+            source.index.parsed_offset as i64,
+            source.index.prefix_hash,
+        ],
+    )?;
+    Ok(())
 }
 
 fn validate_browser_session(
@@ -2491,79 +2405,138 @@ fn validate_browser_session(
     Ok(session)
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct UsageDirtyRange {
+/// One staged upload: an hour, the version of the scan behind it, and its rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageOutboxEntry {
     pub agent: UsageAgent,
-    pub start_at: String,
-    pub end_at: String,
+    pub bucket_start_utc: String,
+    pub scan_version: u64,
+    pub partial: bool,
+    pub rows: Vec<UsageRow>,
 }
 
-#[derive(Debug, Clone)]
-struct StoredUsageEvent {
-    record_key: String,
-    occurred_at: String,
-    event_json: String,
+const FACT_ROW_QUERY: &str = "SELECT agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+            cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+            output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+            source_cost_microusd, source_cost_covered_requests
+     FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+
+fn read_outbox(
+    conn: &Connection,
+    scope: Option<(&str, &str, u64)>,
+) -> Result<Vec<UsageOutboxEntry>, StateError> {
+    let (clause, account_id, device_id, generation) = match scope {
+        Some((account_id, device_id, generation)) => (
+            "WHERE account_id = ?1 AND device_id = ?2 AND generation = ?3",
+            account_id.to_owned(),
+            device_id.to_owned(),
+            generation as i64,
+        ),
+        None => (
+            "WHERE ?1 = ?1 AND ?2 = ?2 AND ?3 = ?3",
+            String::new(),
+            String::new(),
+            0,
+        ),
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT agent, bucket_start_utc, scan_version, partial, rows_json FROM usage_outbox
+         {clause} ORDER BY bucket_start_utc, agent"
+    ))?;
+    let rows = statement.query_map(params![account_id, device_id, generation], |row| {
+        let agent: String = row.get(0)?;
+        let agent = parse_usage_agent(&agent).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "agent".to_owned(), rusqlite::types::Type::Text)
+        })?;
+        Ok((
+            agent,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)? as u64,
+            row.get::<_, i64>(3)? != 0,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (agent, bucket_start_utc, scan_version, partial, rows_json) = row?;
+        entries.push(UsageOutboxEntry {
+            agent,
+            bucket_start_utc,
+            scan_version,
+            partial,
+            rows: serde_json::from_str(&rows_json)?,
+        });
+    }
+    Ok(entries)
 }
 
-fn consume_dirty_usage_range_tx(
-    tx: &rusqlite::Transaction<'_>,
-    consumed: &UsageDirtyRange,
-) -> Result<usize, StateError> {
-    let consumed_start =
-        DateTime::parse_from_rfc3339(&consumed.start_at).map_err(|_| StateError::InvalidState)?;
-    let consumed_end =
-        DateTime::parse_from_rfc3339(&consumed.end_at).map_err(|_| StateError::InvalidState)?;
-    if consumed_start >= consumed_end {
-        return Ok(0);
-    }
-    let mut changed = 0usize;
-    let mut statement =
-        tx.prepare("SELECT start_at, end_at FROM usage_dirty_ranges WHERE agent = ?1")?;
-    let rows = statement
-        .query_map(params![consumed.agent.as_str()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(statement);
-    for (old_start_raw, old_end_raw) in rows {
-        let (Ok(old_start), Ok(old_end)) = (
-            DateTime::parse_from_rfc3339(&old_start_raw),
-            DateTime::parse_from_rfc3339(&old_end_raw),
-        ) else {
-            continue;
-        };
-        if old_end <= consumed_start || old_start >= consumed_end {
-            continue;
-        }
-        tx.execute(
-            "DELETE FROM usage_dirty_ranges WHERE agent = ?1 AND start_at = ?2 AND end_at = ?3",
-            params![consumed.agent.as_str(), old_start_raw, old_end_raw],
-        )?;
-        changed += 1;
-        let overlap_start = old_start.max(consumed_start);
-        let overlap_end = old_end.min(consumed_end);
-        if old_start < overlap_start {
-            tx.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-                params![
-                    consumed.agent.as_str(),
-                    old_start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    overlap_start.to_rfc3339_opts(SecondsFormat::Secs, true)
-                ],
-            )?;
-        }
-        if overlap_end < old_end {
-            tx.execute(
-                "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-                params![
-                    consumed.agent.as_str(),
-                    overlap_end.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    old_end.to_rfc3339_opts(SecondsFormat::Secs, true)
-                ],
-            )?;
-        }
-    }
-    Ok(changed)
+fn read_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
+    read_row_at(row, 0)
+}
+
+/// The grouped period projection names the date first, so its row columns start one later.
+fn read_grouped_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
+    read_row_at(row, 1)
+}
+
+fn read_row_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<UsageRow> {
+    let column = |index: usize, name: &str| {
+        rusqlite::Error::InvalidColumnType(index, name.to_owned(), rusqlite::types::Type::Text)
+    };
+    let agent: String = row.get(offset)?;
+    let agent = parse_usage_agent(&agent).ok_or_else(|| column(offset, "agent"))?;
+    let billing_channel: String = row.get(offset + 1)?;
+    let billing_channel = crate::usage::BillingChannel::ALL
+        .into_iter()
+        .find(|value| value.as_str() == billing_channel)
+        .ok_or_else(|| column(offset + 1, "billing_channel"))?;
+    let channel_source: String = row.get(offset + 2)?;
+    let channel_source = match channel_source.as_str() {
+        "explicit" => crate::usage::ChannelSource::Explicit,
+        "agent_default" => crate::usage::ChannelSource::AgentDefault,
+        "unknown" => crate::usage::ChannelSource::Unknown,
+        _ => return Err(column(offset + 2, "channel_source")),
+    };
+    let context_bucket: String = row.get(offset + 4)?;
+    let context_bucket = [
+        crate::usage::ContextBucket::Le128k,
+        crate::usage::ContextBucket::Gt128kLe200k,
+        crate::usage::ContextBucket::Gt200kLe256k,
+        crate::usage::ContextBucket::Gt256kLe272k,
+        crate::usage::ContextBucket::Gt272k,
+    ]
+    .into_iter()
+    .find(|value| value.as_str() == context_bucket)
+    .ok_or_else(|| column(offset + 4, "context_bucket"))?;
+    let count = |index: usize| -> rusqlite::Result<u64> {
+        Ok(row.get::<_, i64>(offset + index)?.max(0) as u64)
+    };
+    Ok(UsageRow {
+        agent,
+        billing_channel,
+        channel_source,
+        model: row.get(offset + 3)?,
+        context_bucket,
+        service_tier: row.get(offset + 5)?,
+        speed: row.get(offset + 6)?,
+        inference_geo: row.get(offset + 7)?,
+        input_tokens: count(8)?,
+        cache_read_tokens: count(9)?,
+        cache_write_5m_tokens: count(10)?,
+        cache_write_1h_tokens: count(11)?,
+        cache_write_inferred_tokens: count(12)?,
+        output_tokens: count(13)?,
+        reasoning_tokens: count(14)?,
+        requests: count(15)?,
+        web_search_requests: count(16)?,
+        web_fetch_requests: count(17)?,
+        source_cost_microusd: row
+            .get::<_, Option<i64>>(offset + 18)?
+            .map(|value| value.max(0).to_string()),
+        source_cost_covered_requests: count(19)?,
+    })
 }
 
 fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
@@ -2578,85 +2551,177 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
     })
 }
 
-fn multipart_info(value: &Value) -> Option<(String, u64, u64)> {
-    let multipart = value.get("multipart")?.as_object()?;
-    if multipart.len() != 3 {
-        return None;
-    }
-    let batch_id = multipart.get("batch_id")?.as_str()?.to_owned();
-    if batch_id.is_empty() {
-        return None;
-    }
-    let part_index = multipart.get("part_index")?.as_u64()?;
-    let part_count = multipart.get("part_count")?.as_u64()?;
-    ((2..=64).contains(&part_count) && part_index < part_count)
-        .then_some((batch_id, part_index, part_count))
-}
-
-fn record_events(
+/// Stores one parsed record and answers the UTC hour it belongs to.
+fn insert_record(
     tx: &rusqlite::Transaction<'_>,
     agent: UsageAgent,
     source_file_id: &str,
-) -> Result<Vec<StoredUsageEvent>, StateError> {
+    record_key: &str,
+    event: &NormalizedUsageEvent,
+) -> Result<String, StateError> {
+    let event_json = serde_json::to_string(event)?;
+    if event_json.len() > crate::relay::MAXIMUM_REQUEST_BYTES {
+        return Err(StateError::InvalidState);
+    }
+    let occurred_at =
+        crate::usage::canonical_instant(&event.occurred_at).ok_or(StateError::InvalidState)?;
+    tx.execute(
+        "INSERT INTO usage_file_records(
+            agent, source_file_id, record_key, occurred_at, event_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(agent, source_file_id, record_key) DO UPDATE SET
+            occurred_at = excluded.occurred_at,
+            event_json = excluded.event_json",
+        params![
+            agent.as_str(),
+            source_file_id,
+            record_key,
+            occurred_at,
+            event_json
+        ],
+    )?;
+    event_hour(&occurred_at)
+}
+
+/// Every UTC hour one source currently has records in.
+fn record_hours(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+) -> Result<Vec<String>, StateError> {
     let mut statement = tx.prepare(
-        "SELECT record_index, record_key, occurred_at, event_json FROM usage_file_records
+        "SELECT DISTINCT substr(occurred_at, 1, 13) FROM usage_file_records
          WHERE agent = ?1 AND source_file_id = ?2",
     )?;
     let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| {
-        let record_index: i64 = row.get(0)?;
-        let record_key: String = row.get(1)?;
-        Ok(StoredUsageEvent {
-            record_key: if record_key.is_empty() {
-                format!("legacy:{record_index}")
-            } else {
-                record_key
-            },
-            occurred_at: row.get(2)?,
-            event_json: row.get(3)?,
-        })
+        row.get::<_, String>(0)
     })?;
-    let mut events = Vec::new();
+    let mut hours = Vec::new();
     for row in rows {
-        events.push(row?);
+        hours.push(format!("{}:00:00Z", row?));
     }
-    Ok(events)
+    Ok(hours)
 }
 
-fn changed_event_hours(
-    old_events: &[StoredUsageEvent],
-    new_events: &[NormalizedUsageEvent],
-) -> Result<Vec<String>, StateError> {
-    let mut old_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut new_by_hour: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for stored in old_events {
-        let hour = event_hour(&stored.occurred_at)?;
-        old_by_hour
-            .entry(hour)
-            .or_default()
-            .push(stored.event_json.clone());
+/// Rebuilds one hour's facts from the records this device currently retains for it.
+///
+/// The hour is the unit: what is stored is replaced outright rather than merged, so a record
+/// that moved out of the hour leaves no trace of itself behind.
+fn recompute_hour(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    bucket_start_utc: &str,
+    scan_version: u64,
+) -> Result<bool, StateError> {
+    let start =
+        DateTime::parse_from_rfc3339(bucket_start_utc).map_err(|_| StateError::InvalidState)?;
+    let end = (start + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let start_key = start.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut statement = tx.prepare(
+        "SELECT event_json FROM usage_file_records
+         WHERE agent = ?1 AND occurred_at >= ?2 AND occurred_at < ?3",
+    )?;
+    let stored = statement
+        .query_map(params![agent.as_str(), start_key, end], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut events = Vec::with_capacity(stored.len());
+    for value in &stored {
+        events.push(serde_json::from_str::<NormalizedUsageEvent>(value)?);
     }
-    for event in new_events {
-        let event_json = serde_json::to_string(event)?;
-        let hour = event_hour(&event.occurred_at)?;
-        new_by_hour.entry(hour).or_default().push(event_json);
+    let rows = crate::usage::aggregate_hour_rows(&events)
+        .and_then(|rows| {
+            crate::usage::fold_rows_into_other(rows, crate::usage::MAX_USAGE_ROWS_PER_HOUR)
+        })
+        .map_err(|_| StateError::InvalidState)?;
+    let partial: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM usage_partial_sources WHERE agent = ?1 AND start_at = ?2",
+        params![agent.as_str(), bucket_start_utc],
+        |row| row.get(0),
+    )?;
+    let partial = partial > 0;
+    // An hour whose facts came out the same is the same hour. Restamping it would spend a
+    // scan version and send an upload that says nothing.
+    let mut stored = tx.prepare(FACT_ROW_QUERY)?;
+    let previous = stored
+        .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stored);
+    let previous_partial: Option<i64> = tx
+        .query_row(
+            "SELECT MAX(partial) FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
+            params![agent.as_str(), bucket_start_utc],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if previous == rows && previous_partial.map(|value| value != 0).unwrap_or(false) == partial {
+        return Ok(false);
     }
-    for values in old_by_hour.values_mut() {
-        values.sort_unstable();
+    tx.execute(
+        "DELETE FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
+        params![agent.as_str(), bucket_start_utc],
+    )?;
+    for row in &rows {
+        let source_cost = match &row.source_cost_microusd {
+            Some(value) => Some(value.parse::<i64>().map_err(|_| StateError::InvalidState)?),
+            None => None,
+        };
+        tx.execute(
+            "INSERT INTO usage_hourly_facts(
+                agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+                service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+                cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+                output_tokens, reasoning_tokens, requests, web_search_requests,
+                web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
+                partial, scan_version
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+            params![
+                agent.as_str(),
+                bucket_start_utc,
+                row.billing_channel.as_str(),
+                serde_json::to_value(row.channel_source)?
+                    .as_str()
+                    .unwrap_or_default(),
+                row.model,
+                row.context_bucket.as_str(),
+                row.service_tier,
+                row.speed,
+                row.inference_geo,
+                row.input_tokens as i64,
+                row.cache_read_tokens as i64,
+                row.cache_write_5m_tokens as i64,
+                row.cache_write_1h_tokens as i64,
+                row.cache_write_inferred_tokens as i64,
+                row.output_tokens as i64,
+                row.reasoning_tokens as i64,
+                row.requests as i64,
+                row.web_search_requests as i64,
+                row.web_fetch_requests as i64,
+                source_cost,
+                row.source_cost_covered_requests as i64,
+                i64::from(partial),
+                scan_version as i64,
+            ],
+        )?;
     }
-    for values in new_by_hour.values_mut() {
-        values.sort_unstable();
-    }
-    let mut hours = old_by_hour
-        .keys()
-        .chain(new_by_hour.keys())
-        .cloned()
-        .collect::<Vec<_>>();
-    hours.sort_unstable();
-    hours.dedup();
-    Ok(hours
-        .into_iter()
-        .filter(|hour| old_by_hour.get(hour) != new_by_hour.get(hour))
-        .collect())
+    tx.execute(
+        "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(agent, bucket_start_utc) DO UPDATE SET
+            scan_version = excluded.scan_version,
+            partial = excluded.partial",
+        params![
+            agent.as_str(),
+            bucket_start_utc,
+            scan_version as i64,
+            i64::from(partial)
+        ],
+    )?;
+    Ok(true)
 }
 
 fn source_record_key(source: &crate::usage::UsageSourceScan, record_index: usize) -> String {
@@ -2665,24 +2730,12 @@ fn source_record_key(source: &crate::usage::UsageSourceScan, record_index: usize
         .get(record_index)
         .filter(|key| !key.is_empty())
         .cloned()
-        .unwrap_or_else(|| format!("legacy:{record_index}"))
+        .unwrap_or_else(|| format!("record:{record_index}"))
 }
 
 fn event_hour(value: &str) -> Result<String, StateError> {
     let instant = DateTime::parse_from_rfc3339(value).map_err(|_| StateError::InvalidState)?;
     Ok(floor_hour(instant).to_rfc3339_opts(SecondsFormat::Secs, true))
-}
-
-fn mark_dirty_hours(
-    tx: &rusqlite::Transaction<'_>,
-    agent: UsageAgent,
-    hours: Vec<String>,
-) -> Result<(), StateError> {
-    for hour in hours {
-        let start = DateTime::parse_from_rfc3339(&hour).map_err(|_| StateError::InvalidState)?;
-        merge_dirty_range(tx, agent, start, start + Duration::hours(1))?;
-    }
-    Ok(())
 }
 
 fn mark_partial_source_hours_tx(
@@ -2724,54 +2777,6 @@ fn partial_source_hours_tx(
     let rows = statement.query_map(params![agent.as_str(), source_file_id], |row| row.get(0))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(StateError::from)
-}
-
-fn merge_dirty_range(
-    tx: &rusqlite::Transaction<'_>,
-    agent: UsageAgent,
-    mut start: DateTime<chrono::FixedOffset>,
-    mut end: DateTime<chrono::FixedOffset>,
-) -> Result<(), StateError> {
-    let mut statement =
-        tx.prepare("SELECT start_at, end_at FROM usage_dirty_ranges WHERE agent = ?1")?;
-    let rows = statement.query_map(params![agent.as_str()], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    let mut overlaps = Vec::new();
-    for row in rows {
-        let (old_start, old_end) = row?;
-        let (Ok(old_start), Ok(old_end)) = (
-            DateTime::parse_from_rfc3339(&old_start),
-            DateTime::parse_from_rfc3339(&old_end),
-        ) else {
-            continue;
-        };
-        if old_end >= start && old_start <= end {
-            start = start.min(old_start);
-            end = end.max(old_end);
-            overlaps.push((old_start, old_end));
-        }
-    }
-    drop(statement);
-    for (old_start, old_end) in &overlaps {
-        tx.execute(
-            "DELETE FROM usage_dirty_ranges WHERE agent = ?1 AND start_at = ?2 AND end_at = ?3",
-            params![
-                agent.as_str(),
-                old_start.to_rfc3339_opts(SecondsFormat::Secs, true),
-                old_end.to_rfc3339_opts(SecondsFormat::Secs, true)
-            ],
-        )?;
-    }
-    tx.execute(
-        "INSERT OR IGNORE INTO usage_dirty_ranges(agent, start_at, end_at) VALUES (?1, ?2, ?3)",
-        params![
-            agent.as_str(),
-            start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            end.to_rfc3339_opts(SecondsFormat::Secs, true)
-        ],
-    )?;
-    Ok(())
 }
 
 fn floor_hour(value: DateTime<chrono::FixedOffset>) -> DateTime<chrono::FixedOffset> {
@@ -2895,6 +2900,12 @@ fn read_usage_periods(conn: &Connection) -> Result<UsagePeriodCache, StateError>
     Ok(cache)
 }
 
+/// The Overview rows the last refresh wrote, or none.
+///
+/// A row this build cannot read is answered the way [`read_component`] answers one: as a
+/// statement about the image rather than about this query, so the cache is thrown away and
+/// rebuilt. Returning the decode error instead left `get_state` failing on every call with
+/// nothing able to clear it.
 fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError> {
     let raw: Option<String> = conn
         .query_row(
@@ -2903,8 +2914,16 @@ fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError
             |row| row.get(0),
         )
         .optional()?;
-    raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-        .unwrap_or_else(|| Ok(Vec::new()))
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&raw).map_err(|_| {
+        StateError::Sql(rusqlite::Error::InvalidColumnType(
+            0,
+            "overview_json".to_owned(),
+            rusqlite::types::Type::Text,
+        ))
+    })
 }
 
 fn read_provider_views(root: &Path) -> Result<Vec<ProviderConfigView>, StateError> {
@@ -3096,14 +3115,6 @@ pub(super) fn metadata_value(conn: &Connection, key: &str) -> Result<Option<Stri
     .map_err(StateError::from)
 }
 
-fn metadata_bool(conn: &Connection, key: &str) -> Result<bool, StateError> {
-    match metadata_value(conn, key)?.as_deref() {
-        Some("1") => Ok(true),
-        Some("0") => Ok(false),
-        _ => Err(StateError::InvalidState),
-    }
-}
-
 pub(super) fn metadata_flag(conn: &Connection, key: &str) -> Result<bool, StateError> {
     match metadata_value(conn, key)?.as_deref() {
         Some("1") => Ok(true),
@@ -3125,29 +3136,6 @@ pub(super) fn write_metadata_flag(
     Ok(())
 }
 
-fn diagnose_forces_usage_partial_on(conn: &Connection) -> Result<bool, StateError> {
-    if metadata_flag(conn, "usage_reindex_pending")? || metadata_flag(conn, "snapshot_untrusted")? {
-        return Ok(true);
-    }
-    let Some(salvaged_at) = metadata_value(conn, "state_salvaged_at")? else {
-        return Ok(false);
-    };
-    let completed = conn
-        .query_row(
-            "SELECT 1 FROM diagnostic_attempts
-             WHERE kind = 'usage_scan'
-               AND outcome IN ('success', 'partial')
-               AND completed_at IS NOT NULL
-               AND completed_at >= ?1
-             LIMIT 1",
-            params![salvaged_at],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
-    Ok(!completed)
-}
-
 pub(super) fn bump_revision(conn: &Connection) -> Result<u64, StateError> {
     let current = metadata_u64(conn, "revision")?;
     let next = current.checked_add(1).ok_or(StateError::InvalidState)?;
@@ -3165,7 +3153,6 @@ fn component_key(value: ComponentName) -> &'static str {
         ComponentName::Account => "account",
         ComponentName::Pricing => "pricing",
         ComponentName::Providers => "providers",
-        ComponentName::Repair => "repair",
     }
 }
 
@@ -3209,7 +3196,6 @@ fn status_key(value: ComponentStatus) -> &'static str {
         ComponentStatus::Stale => "stale",
         ComponentStatus::AuthRequired => "auth_required",
         ComponentStatus::Unavailable => "unavailable",
-        ComponentStatus::Unsupported => "unsupported",
         ComponentStatus::Error => "error",
         ComponentStatus::SignedOut => "signed_out",
     }
@@ -3221,7 +3207,6 @@ fn parse_status(value: &str) -> Option<ComponentStatus> {
         "stale" => ComponentStatus::Stale,
         "auth_required" => ComponentStatus::AuthRequired,
         "unavailable" => ComponentStatus::Unavailable,
-        "unsupported" => ComponentStatus::Unsupported,
         "error" => ComponentStatus::Error,
         "signed_out" => ComponentStatus::SignedOut,
         _ => return None,
@@ -3321,154 +3306,355 @@ fn ensure_owner_only_directory(path: &Path) -> Result<(), StateError> {
     Ok(())
 }
 
-pub(super) fn recover_interrupted_attempts(conn: &mut Connection) -> Result<(), StateError> {
-    let completed_at = now_rfc3339();
-    let tx = conn.transaction()?;
-    let revision = metadata_u64(&tx, "revision")?;
-    tx.execute(
-        "UPDATE diagnostic_attempts SET
-           completed_at = ?1,
-           duration_ms = MIN(86400000, MAX(0,
-             CAST((julianday(?1) - julianday(started_at)) * 86400000 AS INTEGER))),
-           outcome = 'interrupted', code = 'process_interrupted', recovery = 'retry',
-           end_revision = ?2
-         WHERE outcome IS NULL",
-        params![completed_at, revision],
+/// Opens `identity.sqlite`, starting this device over if it cannot be read.
+///
+/// There is no salvage: a partially readable identity is a device that could claim to be one
+/// installation while owing an Account work under another. A fresh installation id and a signed-out
+/// device is the smaller loss, and it is one the person in front of the app can undo by signing in.
+fn open_identity(root: &Path) -> Result<Connection, StateError> {
+    let path = root.join(IDENTITY_NAME);
+    let existed = fs::symlink_metadata(&path).is_ok_and(|value| value.is_file() && value.len() > 0);
+    let opened = match open_identity_image(&path) {
+        Ok(conn) => conn,
+        Err(error) if sqlite_io_or_full_error(&error) => return Err(StateError::Unavailable),
+        Err(StateError::ClientUpgradeRequired) => return Err(StateError::ClientUpgradeRequired),
+        Err(_) => {
+            remove_sqlite_image(&path);
+            let conn = open_identity_image(&path)?;
+            write_preference(&conn, IDENTITY_RESET_KEY, &now_rfc3339())?;
+            return Ok(conn);
+        }
+    };
+    if existed {
+        return Ok(opened);
+    }
+    let mut opened = opened;
+    if legacy_import::take(root, &mut opened) == LegacyImport::Unreadable {
+        write_preference(&opened, IDENTITY_RESET_KEY, &now_rfc3339())?;
+    }
+    Ok(opened)
+}
+
+/// Folds the identity log back into the image. Every write transaction ends this way, including
+/// the ones that build the schema, so a crash never leaves a log this device has to replay.
+fn checkpoint(conn: &Connection) {
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+}
+
+fn open_identity_image(path: &Path) -> Result<Connection, StateError> {
+    create_owner_only_file_if_missing(path)?;
+    let mut connection = open_writable_connection(path)?;
+    crate::migration::identity::apply(&mut connection)?;
+    // The one row that makes this an identity at all.  Its absence is the same answer as a file
+    // SQLite refuses to read: this device does not know who it is.
+    let _: String = connection.query_row(
+        "SELECT installation_id FROM installation WHERE id = 1",
+        [],
+        |row| row.get(0),
     )?;
-    prune_diagnostic_attempts(&tx)?;
-    tx.commit()?;
+    Ok(connection)
+}
+
+/// Opens `cache.sqlite`, replacing it with an empty one if it cannot be read.
+///
+/// Returns whether the file had to be replaced. `revision_seed` only applies to a schema this
+/// call creates.
+fn open_cache(root: &Path, revision_seed: u64) -> Result<(Connection, bool), StateError> {
+    let path = root.join(CACHE_NAME);
+    let existed = fs::symlink_metadata(&path).is_ok_and(|value| value.is_file() && value.len() > 0);
+    match open_cache_image(&path, revision_seed) {
+        Ok(connection) => Ok((connection, false)),
+        Err(error) if sqlite_io_or_full_error(&error) => Err(StateError::Unavailable),
+        Err(_) => {
+            remove_sqlite_image(&path);
+            let seed = revision_seed.max(unix_seconds());
+            Ok((open_cache_image(&path, seed)?, existed))
+        }
+    }
+}
+
+fn open_cache_image(path: &Path, revision_seed: u64) -> Result<Connection, StateError> {
+    create_owner_only_file_if_missing(path)?;
+    let mut connection = open_writable_connection(path)?;
+    crate::migration::cache::apply(&mut connection, revision_seed)?;
+    metadata_u64(&connection, "revision")?;
+    reclaim_unused_pages(&connection)?;
+    Ok(connection)
+}
+
+fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
+    connection.execute_batch(&format!(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};
+         PRAGMA journal_mode = WAL;"
+    ))?;
+    connection.pragma_update(None, "journal_size_limit", MAXIMUM_WAL_BYTES)?;
+    Ok(connection)
+}
+
+/// Returns free pages to the filesystem, converting the image to incremental reclaim the first
+/// time so later deletes cost a truncation rather than a full rewrite.
+///
+/// The full rewrite runs only for an image that predates the conversion and has already grown past
+/// the threshold, so it happens once, and it is the price of never paying it again: measured at
+/// 3.2s on a 411MB image holding 193MB of free pages, against 1.9s for the incremental pass that
+/// replaces it.  Neither step is required for correctness, and an image that cannot be compacted
+/// right now is left exactly as it is.
+fn reclaim_unused_pages(conn: &Connection) -> Result<(), StateError> {
+    let free_bytes = conn.query_row(
+        "SELECT (SELECT * FROM pragma_freelist_count()) * (SELECT * FROM pragma_page_size())",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let incremental = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0))? == 2;
+    if incremental {
+        // Each step of this pragma moves one page, so it has to be run to completion rather than
+        // executed once.
+        if let Ok(mut statement) = conn.prepare("PRAGMA incremental_vacuum")
+            && let Ok(mut rows) = statement.query([])
+        {
+            while matches!(rows.next(), Ok(Some(_))) {}
+        }
+    } else if free_bytes >= COMPACT_FREE_BYTES {
+        let _ = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+    }
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     Ok(())
+}
+
+fn create_owner_only_file_if_missing(path: &Path) -> Result<(), StateError> {
+    match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => {
+            if !file.metadata()?.is_file() {
+                return Err(StateError::InvalidState);
+            }
+            file.set_permissions(Permissions::from_mode(0o600))?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            set_owner_permissions(path)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// How long a connection waits behind another writer before answering busy.
+///
+/// Shortened under test so the case proving that a busy image is not a damaged one does not
+/// spend the whole wait proving it.
+const BUSY_TIMEOUT_MS: u64 = if cfg!(test) { 100 } else { 5_000 };
+
+fn remove_sqlite_image(path: &Path) {
+    let _ = fs::remove_file(path);
+    for suffix in ["-wal", "-shm"] {
+        let mut raw = path.as_os_str().to_os_string();
+        raw.push(suffix);
+        let _ = fs::remove_file(PathBuf::from(raw));
+    }
+}
+
+/// A cache error the service answers by throwing the file away.
+///
+/// Contention, a machine that cannot write right now, and a statement this build got wrong are
+/// not the file's fault, so they are reported as they are. A read-only image, a refused
+/// permission, an allocation that failed, a row over a limit, and a violated constraint all say
+/// something about this moment or about what was being written, never that the bytes on disk
+/// stopped describing what this device collected. Everything else does mean exactly that.
+fn cache_needs_rebuild(error: &StateError) -> bool {
+    match error {
+        StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => !matches!(
+            code.code,
+            SqliteErrorCode::DatabaseBusy
+                | SqliteErrorCode::DatabaseLocked
+                | SqliteErrorCode::DiskFull
+                | SqliteErrorCode::SystemIoFailure
+                | SqliteErrorCode::CannotOpen
+                | SqliteErrorCode::OperationInterrupted
+                | SqliteErrorCode::ReadOnly
+                | SqliteErrorCode::OutOfMemory
+                | SqliteErrorCode::PermissionDenied
+                | SqliteErrorCode::TooBig
+                | SqliteErrorCode::ConstraintViolation
+        ),
+        // The image no longer holds the shape this build reads: a column of the wrong type or
+        // name, or a statement SQLite will not prepare against it.
+        StateError::Sql(
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::InvalidColumnName(_)
+            | rusqlite::Error::InvalidQuery
+            | rusqlite::Error::SqlInputError { .. },
+        ) => true,
+        // A row that is simply not there, and a value this build could not convert, are answers
+        // about one query. They are not a verdict on the file.
+        StateError::Sql(_) => false,
+        _ => false,
+    }
+}
+
+/// A failure that is about this machine right now rather than about the image.
+///
+/// Contention is the reason `DatabaseBusy` and `DatabaseLocked` are here: a second helper
+/// holding the write lock is not a damaged file, and deleting one because another process was
+/// mid-write is how a working device loses its cache.  The caller retries instead.
+fn sqlite_io_or_full_error(error: &StateError) -> bool {
+    match error {
+        StateError::Io(_) => true,
+        StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => matches!(
+            code.code,
+            SqliteErrorCode::DatabaseBusy
+                | SqliteErrorCode::DatabaseLocked
+                | SqliteErrorCode::DiskFull
+                | SqliteErrorCode::SystemIoFailure
+                | SqliteErrorCode::CannotOpen
+        ),
+        _ => false,
+    }
+}
+
+/// Waits a request's worth of time for a connection and no longer.  A reader that blocks behind a
+/// refresh is a panel that never opens.
+fn lock_with_deadline(lock: &Mutex<Connection>) -> Result<MutexGuard<'_, Connection>, StateError> {
+    let deadline = Instant::now() + std::time::Duration::from_millis(150);
+    loop {
+        match lock.try_lock() {
+            Ok(conn) => return Ok(conn),
+            Err(TryLockError::Poisoned(_)) => return Err(StateError::Unavailable),
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(StateError::Unavailable);
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+fn preference(conn: &Connection, key: &str) -> Result<Option<String>, StateError> {
+    conn.query_row(
+        "SELECT value FROM preferences WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(StateError::from)
+}
+
+fn write_preference(conn: &Connection, key: &str, value: &str) -> Result<(), StateError> {
+    conn.execute(
+        "INSERT INTO preferences(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn prune_diagnostic_attempts(tx: &Transaction<'_>) -> Result<(), StateError> {
     let cutoff = (chrono::Utc::now() - Duration::days(DIAGNOSTIC_ATTEMPT_RETENTION_DAYS))
         .to_rfc3339_opts(SecondsFormat::Secs, true);
-    let expired = tx.execute(
+    tx.execute(
         "DELETE FROM diagnostic_attempts WHERE outcome IS NOT NULL AND started_at < ?1",
         [cutoff],
     )?;
-    let overflow = tx.execute(
+    tx.execute(
         "DELETE FROM diagnostic_attempts WHERE id IN (
            SELECT id FROM diagnostic_attempts WHERE outcome IS NOT NULL
            ORDER BY id DESC LIMIT -1 OFFSET ?1
          )",
         [MAX_DIAGNOSTIC_ATTEMPTS],
     )?;
-    if expired + overflow > 0 {
-        tx.execute(
-            "INSERT INTO metadata(key, value) VALUES ('attempt_history_truncated', '1')
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [],
-        )?;
-    }
     Ok(())
+}
+
+/// A journal write that failed is counted on stderr and nowhere else. The work it was recording
+/// has already happened, or is about to, and neither depends on the row landing.
+fn report_journal_write_failure(error: &StateError) {
+    let kind = match error {
+        StateError::Unavailable => "unavailable",
+        StateError::InvalidState => "invalid_state",
+        StateError::ClientUpgradeRequired => "client_upgrade_required",
+        _ => "error",
+    };
+    eprintln!("quota-service: diagnostic attempt journal write skipped ({kind})");
 }
 
 fn diagnostic_attempt_from_row(
     row: &rusqlite::Row<'_>,
 ) -> Result<DiagnosticAttempt, rusqlite::Error> {
     let kind = parse_diagnostic_attempt_kind(&row.get::<_, String>(0)?)?;
-    let trigger = parse_diagnostic_attempt_trigger(&row.get::<_, String>(1)?)?;
-    let source = parse_diagnostic_source(&row.get::<_, String>(2)?)?;
-    let mode = parse_diagnostic_mode(&row.get::<_, String>(4)?)?;
-    let outcome = match row.get::<_, Option<String>>(8)? {
-        Some(value) => parse_diagnostic_attempt_outcome(&value)?,
-        None => DiagnosticAttemptOutcome::Running,
-    };
-    let code = row
-        .get::<_, Option<String>>(9)?
-        .map(|value| parse_diagnostic_attempt_code(&value))
-        .transpose()?;
-    let recovery = parse_diagnostic_recovery(&row.get::<_, String>(10)?)?;
-    let raw_metrics = row.get::<_, String>(11)?;
-    let metrics = serde_json::from_str::<BTreeMap<String, i64>>(&raw_metrics).map_err(|_| {
-        rusqlite::Error::InvalidColumnType(11, "metrics_json".into(), rusqlite::types::Type::Text)
-    })?;
-    let subject = row.get::<_, Option<String>>(3)?;
+    let subject = row.get::<_, Option<String>>(1)?;
     if subject
         .as_deref()
         .is_some_and(|value| !valid_diagnostic_subject(value))
     {
-        return Err(rusqlite::Error::InvalidColumnType(
-            3,
-            "subject".into(),
-            rusqlite::types::Type::Text,
-        ));
+        return Err(invalid_diagnostic_column(1, "subject"));
     }
-    if metrics.len() > 16
-        || metrics.iter().any(|(key, value)| {
-            !valid_diagnostic_label(key) || *value < 0 || *value > 9_007_199_254_740_991
-        })
-    {
-        return Err(rusqlite::Error::InvalidColumnType(
-            11,
-            "metrics_json".into(),
-            rusqlite::types::Type::Text,
-        ));
-    }
-    let started_at = row.get::<_, String>(5)?;
-    let completed_at = row.get::<_, Option<String>>(6)?;
-    let parent_refresh_started_at = row.get::<_, Option<String>>(14)?;
-    if DateTime::parse_from_rfc3339(&started_at).is_err()
-        || completed_at
-            .as_deref()
-            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
-        || parent_refresh_started_at
-            .as_deref()
-            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
-    {
-        return Err(rusqlite::Error::InvalidColumnType(
-            5,
-            "started_at".into(),
-            rusqlite::types::Type::Text,
-        ));
+    let started_at = row.get::<_, String>(2)?;
+    if DateTime::parse_from_rfc3339(&started_at).is_err() {
+        return Err(invalid_diagnostic_column(2, "started_at"));
     }
     let duration_ms = row
-        .get::<_, Option<i64>>(7)?
+        .get::<_, Option<i64>>(3)?
         .map(|value| {
-            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(7, value))
+            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, value))
         })
         .transpose()?;
-    let end_revision = row
-        .get::<_, Option<i64>>(13)?
-        .map(|value| {
-            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(13, value))
-        })
+    let outcome = match row.get::<_, Option<String>>(4)? {
+        Some(value) => parse_diagnostic_attempt_outcome(&value)?,
+        None => DiagnosticAttemptOutcome::Running,
+    };
+    let code = row
+        .get::<_, Option<String>>(5)?
+        .map(|value| parse_diagnostic_attempt_code(&value))
         .transpose()?;
-    let running = outcome == DiagnosticAttemptOutcome::Running;
-    if running != (completed_at.is_none() && duration_ms.is_none() && end_revision.is_none()) {
-        return Err(rusqlite::Error::InvalidColumnType(
-            8,
-            "outcome".into(),
-            rusqlite::types::Type::Text,
-        ));
+    if (outcome == DiagnosticAttemptOutcome::Running) != duration_ms.is_none() {
+        return Err(invalid_diagnostic_column(4, "outcome"));
     }
     Ok(DiagnosticAttempt {
         kind,
-        trigger,
-        source,
         subject,
-        mode,
         started_at,
-        completed_at,
         duration_ms,
         outcome,
         code,
-        recovery,
-        metrics,
-        start_revision: u64::try_from(row.get::<_, i64>(12)?)
-            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(12, -1))?,
-        end_revision,
-        parent_refresh_started_at,
     })
 }
 
-fn valid_diagnostic_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 96
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'-'))
+/// `(completed_at or started_at, outcome, code)` for a finished attempt.
+fn diagnostic_attempt_outcome_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<
+    (
+        String,
+        DiagnosticAttemptOutcome,
+        Option<DiagnosticAttemptCode>,
+    ),
+    rusqlite::Error,
+> {
+    let at = row
+        .get::<_, Option<String>>(0)?
+        .unwrap_or(row.get::<_, String>(1)?);
+    let outcome = parse_diagnostic_attempt_outcome(&row.get::<_, String>(2)?)?;
+    let code = row
+        .get::<_, Option<String>>(3)?
+        .map(|value| parse_diagnostic_attempt_code(&value))
+        .transpose()?;
+    Ok((at, outcome, code))
 }
 
 fn valid_diagnostic_subject(value: &str) -> bool {
@@ -3496,7 +3682,6 @@ fn diagnostic_attempt_kind_key(value: DiagnosticAttemptKind) -> &'static str {
         DiagnosticAttemptKind::UsageUpload => "usage_upload",
         DiagnosticAttemptKind::AccountSync => "account_sync",
         DiagnosticAttemptKind::PricingRefresh => "pricing_refresh",
-        DiagnosticAttemptKind::DeviceHealthUpload => "device_health_upload",
     }
 }
 
@@ -3508,7 +3693,6 @@ fn parse_diagnostic_attempt_kind(value: &str) -> Result<DiagnosticAttemptKind, r
         "usage_upload" => Ok(DiagnosticAttemptKind::UsageUpload),
         "account_sync" => Ok(DiagnosticAttemptKind::AccountSync),
         "pricing_refresh" => Ok(DiagnosticAttemptKind::PricingRefresh),
-        "device_health_upload" => Ok(DiagnosticAttemptKind::DeviceHealthUpload),
         _ => Err(invalid_diagnostic_column(0, value)),
     }
 }
@@ -3535,40 +3719,6 @@ fn parse_diagnostic_attempt_trigger(
         "settings_change" => Ok(DiagnosticAttemptTrigger::SettingsChange),
         "account_change" => Ok(DiagnosticAttemptTrigger::AccountChange),
         _ => Err(invalid_diagnostic_column(1, value)),
-    }
-}
-
-fn diagnostic_source_key(value: DiagnosticSource) -> &'static str {
-    match value {
-        DiagnosticSource::ThisDevice => "this_device",
-        DiagnosticSource::Account => "account",
-        DiagnosticSource::System => "system",
-    }
-}
-
-fn parse_diagnostic_source(value: &str) -> Result<DiagnosticSource, rusqlite::Error> {
-    match value {
-        "this_device" => Ok(DiagnosticSource::ThisDevice),
-        "account" => Ok(DiagnosticSource::Account),
-        "system" => Ok(DiagnosticSource::System),
-        _ => Err(invalid_diagnostic_column(2, value)),
-    }
-}
-
-fn diagnostic_mode_key(value: DiagnosticMode) -> &'static str {
-    match value {
-        DiagnosticMode::Inactive => "inactive",
-        DiagnosticMode::Opportunistic => "opportunistic",
-        DiagnosticMode::Required => "required",
-    }
-}
-
-fn parse_diagnostic_mode(value: &str) -> Result<DiagnosticMode, rusqlite::Error> {
-    match value {
-        "inactive" => Ok(DiagnosticMode::Inactive),
-        "opportunistic" => Ok(DiagnosticMode::Opportunistic),
-        "required" => Ok(DiagnosticMode::Required),
-        _ => Err(invalid_diagnostic_column(4, value)),
     }
 }
 
@@ -3614,11 +3764,7 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::PartialSource => "partial_source",
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
-        DiagnosticAttemptCode::InvalidUsageBatch => "invalid_usage_batch",
-        DiagnosticAttemptCode::UnrepresentableHour => "unrepresentable_hour",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
 }
 
@@ -3638,43 +3784,8 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "partial_source" => Ok(DiagnosticAttemptCode::PartialSource),
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
-        "invalid_usage_batch" => Ok(DiagnosticAttemptCode::InvalidUsageBatch),
-        "unrepresentable_hour" => Ok(DiagnosticAttemptCode::UnrepresentableHour),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
-        "upload_disabled" => Ok(DiagnosticAttemptCode::UploadDisabled),
-        "signed_out" => Ok(DiagnosticAttemptCode::SignedOut),
         _ => Err(invalid_diagnostic_column(9, value)),
-    }
-}
-
-fn diagnostic_recovery_key(value: DiagnosticRecovery) -> &'static str {
-    match value {
-        DiagnosticRecovery::None => "none",
-        DiagnosticRecovery::Automatic => "automatic",
-        DiagnosticRecovery::Login => "login",
-        DiagnosticRecovery::ConfigureProvider => "configure_provider",
-        DiagnosticRecovery::Retry => "retry",
-        DiagnosticRecovery::UpdateSource => "update_source",
-        DiagnosticRecovery::CheckAccess => "check_access",
-        DiagnosticRecovery::Upgrade => "upgrade",
-        DiagnosticRecovery::Reinstall => "reinstall",
-        DiagnosticRecovery::Feedback => "feedback",
-    }
-}
-
-fn parse_diagnostic_recovery(value: &str) -> Result<DiagnosticRecovery, rusqlite::Error> {
-    match value {
-        "none" => Ok(DiagnosticRecovery::None),
-        "automatic" => Ok(DiagnosticRecovery::Automatic),
-        "login" => Ok(DiagnosticRecovery::Login),
-        "configure_provider" => Ok(DiagnosticRecovery::ConfigureProvider),
-        "retry" => Ok(DiagnosticRecovery::Retry),
-        "update_source" => Ok(DiagnosticRecovery::UpdateSource),
-        "check_access" => Ok(DiagnosticRecovery::CheckAccess),
-        "upgrade" => Ok(DiagnosticRecovery::Upgrade),
-        "reinstall" => Ok(DiagnosticRecovery::Reinstall),
-        "feedback" => Ok(DiagnosticRecovery::Feedback),
-        _ => Err(invalid_diagnostic_column(10, value)),
     }
 }
 
@@ -3745,94 +3856,63 @@ mod tests {
                 .begin_diagnostic_attempt(
                     DiagnosticAttemptKind::UsageScan,
                     DiagnosticAttemptTrigger::Scheduled,
-                    DiagnosticSource::ThisDevice,
                     Some("agent:/Users/private"),
-                    DiagnosticMode::Required,
                     None,
                 )
-                .is_err()
+                .is_none()
         );
-        let account = store
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::AccountSync,
-                DiagnosticAttemptTrigger::Startup,
-                DiagnosticSource::Account,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("account attempt");
-        store
-            .finish_diagnostic_attempt(
-                account,
-                &DiagnosticAttemptCompletion {
-                    outcome: DiagnosticAttemptOutcome::Success,
-                    code: None,
-                    recovery: DiagnosticRecovery::None,
-                    metrics: BTreeMap::new(),
-                },
-            )
-            .expect("account success");
-        for _ in 0..21 {
-            let refresh = store
-                .begin_diagnostic_attempt(
-                    DiagnosticAttemptKind::Refresh,
-                    DiagnosticAttemptTrigger::Scheduled,
-                    DiagnosticSource::System,
-                    None,
-                    DiagnosticMode::Required,
-                    None,
-                )
-                .expect("refresh");
-            store
-                .finish_diagnostic_attempt(
-                    refresh,
-                    &DiagnosticAttemptCompletion {
-                        outcome: DiagnosticAttemptOutcome::Success,
-                        code: None,
-                        recovery: DiagnosticRecovery::None,
-                        metrics: BTreeMap::new(),
-                    },
-                )
-                .expect("refresh success");
-        }
-        let facts = store
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::AccountSync,
-                DiagnosticSource::Account,
-                None,
-            )
-            .expect("facts");
-        assert_eq!(
-            facts.latest_success.as_ref().map(|value| value.kind),
-            Some(DiagnosticAttemptKind::AccountSync)
+        let account = store.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::AccountSync,
+            DiagnosticAttemptTrigger::Startup,
+            None,
+            None,
         );
-        assert!(
-            !store
-                .diagnostic_recent_activity()
-                .expect("support projection")
-                .attempts
-                .iter()
-                .any(|attempt| attempt.kind == DiagnosticAttemptKind::AccountSync)
+        assert!(account.is_some());
+        store.finish_diagnostic_attempt(
+            account,
+            &DiagnosticAttemptCompletion::new(DiagnosticAttemptOutcome::Success, None),
+        );
+        let failed = store.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::UsageUpload,
+            DiagnosticAttemptTrigger::Scheduled,
+            None,
+            None,
+        );
+        store.finish_diagnostic_attempt(
+            failed,
+            &DiagnosticAttemptCompletion::new(
+                DiagnosticAttemptOutcome::Failed,
+                Some(DiagnosticAttemptCode::NetworkError),
+            ),
         );
 
-        store
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticAttemptTrigger::Manual,
-                DiagnosticSource::System,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("running attempt");
+        let facts = store
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
+            .expect("facts");
+        assert!(facts.last_success_at.is_some());
+        assert_eq!(facts.unresolved_code, None);
+        let upload = store
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
+            .expect("upload facts");
+        assert_eq!(upload.last_success_at, None);
+        assert_eq!(
+            upload.unresolved_code,
+            Some(DiagnosticAttemptCode::NetworkError)
+        );
+
+        store.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::Refresh,
+            DiagnosticAttemptTrigger::Manual,
+            None,
+            None,
+        );
         drop(store);
 
         let reopened = StateStore::open(&root).expect("reopen");
         let recent = reopened
-            .diagnostic_recent_activity()
+            .diagnostic_recent_attempts()
             .expect("recovered activity");
-        assert!(recent.attempts.iter().any(|attempt| {
+        assert!(recent.iter().any(|attempt| {
             attempt.kind == DiagnosticAttemptKind::Refresh
                 && attempt.outcome == DiagnosticAttemptOutcome::Interrupted
                 && attempt.code == Some(DiagnosticAttemptCode::ProcessInterrupted)
@@ -3843,28 +3923,57 @@ mod tests {
                 .expect("running")
                 .is_none()
         );
-        let conn = reopened.db.lock().expect("database");
+        let conn = reopened.cache.lock().expect("database");
         conn.execute("PRAGMA ignore_check_constraints = ON", [])
             .expect("test corruption mode");
         conn.execute(
             "INSERT INTO diagnostic_attempts(
-                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
-                   outcome, code, recovery, metrics_json, start_revision, end_revision
-                 ) VALUES ('usage_scan','scheduled','this_device','agent:/Users/private',
-                   'required',?1,?1,0,'failed','malformed_data','update_source','{}',0,0)",
+                   kind, trigger, subject, started_at, completed_at, duration_ms, outcome, code
+                 ) VALUES ('usage_scan','scheduled','agent:/Users/private',?1,?1,0,'failed',
+                   'malformed_data')",
             [now_rfc3339()],
         )
         .expect("corrupt unsafe subject");
         conn.execute("PRAGMA ignore_check_constraints = OFF", [])
             .expect("restore constraints");
         drop(conn);
-        assert!(reopened.diagnostic_recent_activity().is_err());
+        assert!(reopened.diagnostic_recent_attempts().is_err());
         drop(reopened);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
-    fn diagnostic_retention_keeps_running_marks_truncation_and_detaches_children() {
+    fn a_journal_this_device_cannot_write_never_blocks_the_work_it_describes() {
+        let root = std::env::temp_dir().join(format!("quota-journal-ro-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        // A cache that refuses the insert is the machine, not the file: the store answers with
+        // no handle and the caller carries on.
+        {
+            let conn = store.cache.lock().expect("database");
+            conn.execute("DROP TABLE diagnostic_attempts", [])
+                .expect("remove the journal");
+        }
+        assert!(
+            store
+                .begin_diagnostic_attempt(
+                    DiagnosticAttemptKind::QuotaCollection,
+                    DiagnosticAttemptTrigger::Manual,
+                    Some("provider:codex"),
+                    None,
+                )
+                .is_none()
+        );
+        store.finish_diagnostic_attempt(
+            None,
+            &DiagnosticAttemptCompletion::new(DiagnosticAttemptOutcome::Success, None),
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn diagnostic_retention_keeps_running_rows_and_detaches_children() {
         let root = std::env::temp_dir().join(format!("quota-attempt-cap-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
@@ -3873,62 +3982,53 @@ mod tests {
         let current = now_rfc3339();
         let child_id;
         {
-            let conn = store.db.lock().expect("database");
+            let conn = store.cache.lock().expect("database");
             conn.execute(
                 "INSERT INTO diagnostic_attempts(
-                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
-                   outcome, code, recovery, metrics_json, start_revision, end_revision
-                 ) VALUES ('refresh','scheduled','system',NULL,'required',?1,?1,0,
-                   'success',NULL,'none','{}',0,0)",
+                   kind, trigger, subject, started_at, completed_at, duration_ms, outcome, code
+                 ) VALUES ('refresh','scheduled',NULL,?1,?1,0,'success',NULL)",
                 [&old],
             )
             .expect("old parent");
             let parent_id = conn.last_insert_rowid();
             conn.execute(
                 "INSERT INTO diagnostic_attempts(
-                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
-                   outcome, code, recovery, metrics_json, start_revision, end_revision
-                 ) VALUES ('refresh','manual','system',NULL,'required',?1,NULL,NULL,
-                   NULL,NULL,'none','{}',0,NULL)",
+                   kind, trigger, subject, started_at, completed_at, duration_ms, outcome, code
+                 ) VALUES ('refresh','manual',NULL,?1,NULL,NULL,NULL,NULL)",
                 [&old],
             )
             .expect("old running");
             conn.execute(
                 "WITH RECURSIVE counter(value) AS (
-                   VALUES(1) UNION ALL SELECT value + 1 FROM counter WHERE value < 50001
+                   VALUES(1) UNION ALL SELECT value + 1 FROM counter WHERE value < 5001
                  )
                  INSERT INTO diagnostic_attempts(
-                   kind, trigger, source, subject, mode, started_at, completed_at, duration_ms,
-                   outcome, code, recovery, metrics_json, start_revision, end_revision
-                 ) SELECT 'quota_collection','scheduled','this_device','provider:codex',
-                   'opportunistic',?1,?1,0,'success',NULL,'none','{}',0,0 FROM counter",
+                   kind, trigger, subject, started_at, completed_at, duration_ms, outcome, code
+                 ) SELECT 'quota_collection','scheduled','provider:codex',?1,?1,0,'success',NULL
+                 FROM counter",
                 [&current],
             )
             .expect("bounded history seed");
             conn.execute(
                 "INSERT INTO diagnostic_attempts(
-                   parent_refresh_id, kind, trigger, source, subject, mode, started_at,
-                   completed_at, duration_ms, outcome, code, recovery, metrics_json,
-                   start_revision, end_revision
-                 ) VALUES (?1,'pricing_refresh','scheduled','system',NULL,'required',?2,?2,0,
-                   'success',NULL,'none','{}',0,0)",
+                   parent_refresh_id, kind, trigger, subject, started_at,
+                   completed_at, duration_ms, outcome, code
+                 ) VALUES (?1,'pricing_refresh','scheduled',NULL,?2,?2,0,'success',NULL)",
                 params![parent_id, current],
             )
             .expect("current child");
             child_id = conn.last_insert_rowid();
         }
 
-        store
-            .begin_diagnostic_attempt(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticAttemptTrigger::Scheduled,
-                DiagnosticSource::System,
-                None,
-                DiagnosticMode::Required,
-                None,
-            )
-            .expect("trigger prune");
-        let conn = store.db.lock().expect("database");
+        // Retention runs at open and hourly, so an insert only prunes once the clock says so.
+        store.last_attempt_prune.store(0, Ordering::Release);
+        store.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::Refresh,
+            DiagnosticAttemptTrigger::Scheduled,
+            None,
+            None,
+        );
+        let conn = store.cache.lock().expect("database");
         assert_eq!(
             conn.query_row(
                 "SELECT COUNT(*) FROM diagnostic_attempts WHERE outcome IS NOT NULL",
@@ -3958,10 +4058,7 @@ mod tests {
         );
         drop(conn);
         assert!(
-            store
-                .diagnostic_recent_activity()
-                .expect("recent")
-                .history_truncated
+            store.diagnostic_recent_attempts().expect("recent").len() <= MAXIMUM_DIAGNOSTIC_RECENT
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
@@ -4037,7 +4134,7 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
         {
-            let conn = store.db.lock().expect("db");
+            let conn = store.identity.lock().expect("db");
             conn.execute(
                 "INSERT INTO provider_browser_sessions(
                     provider, cookie_header, account_fingerprint, account_label, updated_at
@@ -4053,7 +4150,7 @@ mod tests {
         ));
 
         {
-            let conn = store.db.lock().expect("db");
+            let conn = store.identity.lock().expect("db");
             conn.execute("DELETE FROM provider_browser_sessions", [])
                 .expect("clear invalid row");
             conn.execute(
@@ -4067,7 +4164,7 @@ mod tests {
         assert!(matches!(store.snapshot(), Err(StateError::InvalidState)));
 
         {
-            let conn = store.db.lock().expect("db");
+            let conn = store.identity.lock().expect("db");
             conn.execute("DELETE FROM provider_browser_sessions", [])
                 .expect("clear noncanonical row");
             conn.execute(
@@ -4104,8 +4201,7 @@ mod tests {
                 "status": "logout_pending",
                 "account_id": "account",
                 "device_id": "device",
-                "account_refresh_token": "account-refresh",
-                "device_refresh_token": "device-refresh"
+                "refresh_token": "session-refresh"
             }))
             .expect("pending");
         assert!(
@@ -4259,44 +4355,100 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Every dirty hour, whatever its bound, as the tests below read them.
+    fn dirty_hours(store: &StateStore) -> Vec<UsageOutboxEntry> {
+        store
+            .dirty_usage_hour_batch("1970-01-01T00:00:00Z", "9999-12-31T23:00:00Z", 1_000)
+            .expect("dirty")
+    }
+
+    fn outbox_entry(bucket: &str, scan_version: u64) -> UsageOutboxEntry {
+        UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: bucket.into(),
+            scan_version,
+            partial: false,
+            rows: Vec::new(),
+        }
+    }
+
+    /// Staging is keyed by the hour, so restaging one replaces what stood there.
     #[test]
-    fn usage_outbox_is_bounded_without_consuming_more_dirty_state() {
-        let root = std::env::temp_dir().join(format!("quota-outbox-cap-{}", Uuid::new_v4()));
+    fn staging_an_hour_again_replaces_the_entry_and_retires_its_dirty_mark() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-stage-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let consumed = UsageDirtyRange {
-            agent: UsageAgent::Codex,
-            start_at: "2026-08-10T12:00:00Z".into(),
-            end_at: "2026-08-10T13:00:00Z".into(),
-        };
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                7,
+            )
+            .expect("initial scan");
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        assert_eq!(dirty[0].scan_version, 7);
 
-        for sequence in 0..MAX_USAGE_OUTBOX_ENTRIES {
-            let value = serde_json::json!({
-                "submission_id": format!("submission_{sequence}"),
-                "device_id": "device_test",
-                "generation": 1,
-                "sequence": sequence
-            });
-            assert!(
-                store
-                    .stage_outbox_entry("account_test", &value, &consumed)
-                    .expect("stage")
-            );
-        }
-        let overflow = serde_json::json!({
-            "submission_id": "submission_overflow",
-            "device_id": "device_test",
-            "generation": 1,
-            "sequence": MAX_USAGE_OUTBOX_ENTRIES
-        });
-        assert!(matches!(
-            store.stage_outbox_entry("account_test", &overflow, &consumed),
-            Err(StateError::Unavailable)
-        ));
-        assert_eq!(
-            store.outbox_entries().expect("entries").len(),
-            MAX_USAGE_OUTBOX_ENTRIES as usize
+        let rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 1);
+
+        let entry = UsageOutboxEntry {
+            agent: UsageAgent::Codex,
+            bucket_start_utc: "2026-08-10T12:00:00Z".into(),
+            scan_version: 7,
+            partial: false,
+            rows,
+        };
+        assert!(
+            store
+                .stage_outbox_entries("account_test", "device_test", 1, &[entry])
+                .expect("stage")
         );
+        assert!(dirty_hours(&store).is_empty());
+        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
+
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 9)], 2),
+                8,
+            )
+            .expect("rescan");
+        let rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("rows");
+        assert!(
+            store
+                .stage_outbox_entries(
+                    "account_test",
+                    "device_test",
+                    1,
+                    &[UsageOutboxEntry {
+                        agent: UsageAgent::Codex,
+                        bucket_start_utc: "2026-08-10T12:00:00Z".into(),
+                        scan_version: 8,
+                        partial: false,
+                        rows,
+                    }]
+                )
+                .expect("restage")
+        );
+        let entries = store.outbox_entries().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].scan_version, 8);
+        assert_eq!(entries[0].rows[0].input_tokens, 9);
+
+        // Accepted and ignored are the same move: both mean the hour is answered for.
+        assert!(
+            store
+                .forget_outbox_hours(UsageAgent::Codex, &["2026-08-10T12:00:00Z".to_owned()])
+                .expect("forget")
+        );
+        assert!(store.outbox_entries().expect("entries").is_empty());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4307,156 +4459,93 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
         store
-            .ensure_usage_context(
+            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
+            .expect("context");
+        store
+            .stage_outbox_entries(
                 "account_test",
                 "device_test",
                 1,
-                "UTC",
-                "2026-08-10T00:00:00Z",
-            )
-            .expect("context");
-        {
-            let conn = store.db.lock().expect("database");
-            conn.execute(
-                "INSERT INTO usage_outbox(
-                    submission_id, account_id, device_id, generation, sequence, payload_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    "submission_current",
-                    "account_test",
-                    "device_test",
-                    1,
-                    0,
-                    r#"{"submission_id":"submission_current"}"#
-                ],
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
             )
             .expect("current entry");
+        {
+            let conn = store.identity.lock().expect("database");
             conn.execute(
                 "INSERT INTO usage_outbox(
-                    submission_id, account_id, device_id, generation, sequence, payload_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    "submission_foreign",
-                    "account_old",
-                    "device_old",
-                    1,
-                    0,
-                    r#"{"submission_id":"submission_foreign"}"#
-                ],
+                    agent, bucket_start_utc, account_id, device_id, generation,
+                    scan_version, partial, rows_json
+                 ) VALUES ('codex', '2026-08-10T13:00:00Z', 'account_old', 'device_old', 1,
+                           1, 0, '[]')",
+                [],
             )
             .expect("foreign entry");
         }
 
         let revision = store
-            .ensure_usage_context(
-                "account_test",
-                "device_test",
-                1,
-                "UTC",
-                "2026-08-10T00:00:00Z",
-            )
+            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
             .expect("unchanged context");
-
-        assert_eq!(revision, 2);
-        assert_eq!(store.outbox_entries().expect("entries").len(), 1);
+        assert!(revision > 0);
+        let entries = store.outbox_entries().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
             store
                 .outbox_entries_for("account_test", "device_test", 1)
                 .expect("current entries"),
-            vec![serde_json::json!({"submission_id": "submission_current"})]
+            entries
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A new upload identity owes the Account every hour this device still holds after its
+    /// privacy lower bound, and nothing it staged for the previous one.
     #[test]
-    fn multipart_staging_consumes_dirty_atomically_and_ack_never_deletes_new_dirty() {
-        let root = std::env::temp_dir().join(format!("quota-multipart-state-{}", Uuid::new_v4()));
+    fn a_new_upload_identity_reseeds_every_retained_hour() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-reseed-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let event = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event.clone()], 1))
-            .expect("initial scan");
-        let consumed = UsageDirtyRange {
-            agent: UsageAgent::Codex,
-            start_at: "2026-08-10T12:00:00Z".into(),
-            end_at: "2026-08-10T13:00:00Z".into(),
-        };
-        let submission = |index: u64, sequence: u64| {
-            serde_json::json!({
-                "submission_id": format!("multipart-{index}"),
-                "device_id": "device_test",
-                "generation": 1,
-                "sequence": sequence,
-                "coverage": {
-                    "agent": "codex",
-                    "start_at": "2026-08-10T12:00:00Z",
-                    "end_at": "2026-08-10T13:00:00Z"
-                },
-                "multipart": {
-                    "batch_id": "batch-test",
-                    "part_index": index,
-                    "part_count": 2
-                }
-            })
-        };
-        let parts = vec![submission(0, 0), submission(1, 1)];
-        assert!(
-            store
-                .stage_multipart_outbox_entries(
-                    "account_test",
-                    "device_test",
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(
+                    vec![
+                        usage_event("2026-08-09T12:15:00Z", 1),
+                        usage_event("2026-08-10T12:15:00Z", 2),
+                    ],
                     1,
-                    "batch-test",
-                    &consumed,
-                    &parts,
-                )
-                .expect("stage multipart")
-        );
-        assert!(store.dirty_usage_ranges().expect("dirty").is_empty());
-        assert_eq!(store.outbox_entries().expect("outbox").len(), 2);
-        assert!(
-            !store
-                .stage_multipart_outbox_entries(
-                    "account_test",
-                    "device_test",
-                    1,
-                    "batch-test",
-                    &consumed,
-                    &parts,
-                )
-                .expect("idempotent stage")
-        );
-        assert!(
-            store
-                .acknowledge_outbox_entry("multipart-0")
-                .expect("ack first")
-        );
+                ),
+                3,
+            )
+            .expect("scan");
+        store
+            .ensure_usage_context("account_a", "device_a", 1, "2026-08-10T00:00:00Z")
+            .expect("first identity");
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        store
+            .stage_outbox_entries(
+                "account_a",
+                "device_a",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 3)],
+            )
+            .expect("stage");
 
-        let changed = usage_event("2026-08-10T12:15:00Z", 9);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![changed], 2))
-            .expect("new scan");
-        assert_eq!(store.dirty_usage_ranges().expect("new dirty").len(), 1);
-        assert!(
-            store
-                .acknowledge_outbox_entry("multipart-1")
-                .expect("ack final")
-        );
-        assert_eq!(
-            store
-                .dirty_usage_ranges()
-                .expect("new dirty survives")
-                .len(),
-            1
-        );
+            .ensure_usage_context("account_b", "device_b", 2, "1970-01-01T00:00:00Z")
+            .expect("second identity");
+        assert!(store.outbox_entries().expect("entries").is_empty());
+        assert_eq!(dirty_hours(&store).len(), 2);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A rescan recomputes only the hours whose records moved, and leaves the rest alone.
     #[test]
-    fn usage_dirty_hours_compare_canonical_old_and_new_file_rows() {
+    fn a_rescan_recomputes_only_the_hours_it_changed() {
         let root = std::env::temp_dir().join(format!("quota-usage-state-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
@@ -4466,54 +4555,54 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![first.clone(), second.clone()], 1),
+                1,
             )
             .expect("initial scan");
-        assert_eq!(store.dirty_usage_ranges().expect("dirty").len(), 1);
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 2);
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &dirty
+                    .iter()
+                    .map(|hour| outbox_entry(&hour.bucket_start_utc, hour.scan_version))
+                    .collect::<Vec<_>>(),
+            )
             .expect("clear initial");
+        assert!(dirty_hours(&store).is_empty());
 
         let appended = usage_event("2026-08-10T14:15:00Z", 3);
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
-                &usage_scan(vec![first.clone(), second.clone(), appended], 2),
+                &usage_scan(vec![first.clone(), second.clone(), appended.clone()], 2),
+                2,
             )
             .expect("append scan");
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T14:00:00Z".into(),
-                end_at: "2026-08-10T15:00:00Z".into(),
-            }]
-        );
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T14:00:00Z");
+        assert_eq!(dirty[0].scan_version, 2);
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T14:00:00Z".into(),
-                end_at: "2026-08-10T15:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T14:00:00Z", 2)],
+            )
             .expect("clear append");
 
+        // The same bytes again: every record lands where it already was, and nothing is dirty.
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
-                &usage_scan(
-                    vec![
-                        first.clone(),
-                        second.clone(),
-                        usage_event("2026-08-10T14:15:00Z", 3),
-                    ],
-                    2,
-                ),
+                &usage_scan(vec![first, second.clone(), appended], 3),
+                3,
             )
             .expect("equivalent rewrite");
-        assert!(store.dirty_usage_ranges().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
 
         store
             .apply_usage_scan(
@@ -4524,17 +4613,58 @@ mod tests {
                         second,
                         usage_event("2026-08-10T14:15:00Z", 3),
                     ],
-                    3,
+                    4,
                 ),
+                4,
             )
             .expect("old hour edit");
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            }]
+            store
+                .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+                .expect("rows")[0]
+                .input_tokens,
+            9
+        );
+        assert_eq!(
+            store
+                .usage_hour_rows(UsageAgent::Codex, "2026-08-10T14:00:00Z")
+                .expect("rows")[0]
+                .input_tokens,
+            3
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An appended tail adds to what is stored instead of replacing it, and the hours it lands
+    /// in are the only ones recomputed.
+    #[test]
+    fn an_appended_tail_keeps_the_records_already_indexed() {
+        let root = std::env::temp_dir().join(format!("quota-usage-append-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("initial scan");
+        let mut appended = usage_scan(vec![usage_event("2026-08-10T13:15:00Z", 2)], 2);
+        appended.sources[0].append = true;
+        appended.sources[0].record_keys = vec!["line:64:0".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &appended, 2)
+            .expect("append scan");
+        assert_eq!(store.usage_event_count().expect("count"), 2);
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(
+            rows.iter().map(|row| row.input_tokens).sum::<u64>(),
+            3,
+            "{rows:?}"
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
@@ -4547,14 +4677,15 @@ mod tests {
         let store = StateStore::open(&root).expect("state");
         let first = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first.clone()], 1))
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first.clone()], 1), 1)
             .expect("initial scan");
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
+            )
             .expect("clear initial");
 
         let second = usage_event("2026-08-10T13:15:00Z", 2);
@@ -4566,36 +4697,35 @@ mod tests {
             count: 1,
         }];
         store
-            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .apply_usage_scan(UsageAgent::Codex, &partial, 2)
             .expect("partial scan");
-        assert_eq!(store.usage_events().expect("events").len(), 2);
+        assert_eq!(store.usage_event_count().expect("count"), 2);
         assert!(
             store
                 .partial_usage_hours()
                 .expect("partial hours")
                 .contains(&(UsageAgent::Codex, "2026-08-10T12:00:00Z".into()))
         );
-        assert!(
-            store
-                .dirty_usage_ranges()
-                .expect("dirty")
-                .iter()
-                .any(|range| {
-                    range.start_at == "2026-08-10T12:00:00Z"
-                        && range.end_at == "2026-08-10T14:00:00Z"
-                })
-        );
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.iter().all(|hour| hour.partial));
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &dirty
+                    .iter()
+                    .map(|hour| outbox_entry(&hour.bucket_start_utc, hour.scan_version))
+                    .collect::<Vec<_>>(),
+            )
             .expect("clear partial upload");
+
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![first, usage_event("2026-08-10T13:15:00Z", 2)], 3),
+                3,
             )
             .expect("complete repair");
         assert!(
@@ -4604,14 +4734,47 @@ mod tests {
                 .expect("partial hours")
                 .is_empty()
         );
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T14:00:00Z".into(),
-            }]
-        );
+        // A repaired source restates its hours once so the reader stops calling them partial,
+        // even when the numbers behind them did not move.
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.iter().all(|hour| !hour.partial));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A source that came up short still says how far it was read, so the next refresh reads
+    /// the part that was never read instead of the whole log again, every five minutes,
+    /// forever. What it must not say is that the file is unchanged: that is what would make
+    /// the next scan skip it.
+    #[test]
+    fn a_partial_source_remembers_how_far_it_was_read_without_claiming_to_be_finished() {
+        let root = std::env::temp_dir().join(format!("quota-partial-resume-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let mut partial = usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 7);
+        partial.coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.reasons = vec![crate::usage::CoverageReason {
+            code: crate::usage::CoverageReasonCode::MalformedJson,
+            count: 1,
+        }];
+        partial.sources[0].index.parsed_offset = 4_096;
+        partial.sources[0].index.prefix_hash = "a".repeat(64);
+
+        store
+            .apply_usage_scan(UsageAgent::Codex, &partial, 1)
+            .expect("partial scan");
+
+        let index = store
+            .usage_file_index(UsageAgent::Codex)
+            .expect("file index");
+        let entry = index.get("source-1").expect("row for the partial source");
+        assert_eq!(entry.parsed_offset, 4_096);
+        assert_eq!(entry.prefix_hash, "a".repeat(64));
+        // Not the size or the modification time the scan saw: the next scan has to look again.
+        assert_eq!(entry.size, 0);
+        assert_eq!(entry.modified_ns, 0);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4624,15 +4787,8 @@ mod tests {
         let first = usage_event("2026-08-10T12:15:00Z", 1);
         let second = usage_event("2026-08-10T12:30:00Z", 2);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first, second], 1))
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![first, second], 1), 1)
             .expect("initial scan");
-        store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
-            .expect("clear initial");
 
         let updated = usage_event("2026-08-10T12:15:00Z", 9);
         let added = usage_event("2026-08-10T12:45:00Z", 3);
@@ -4647,39 +4803,97 @@ mod tests {
         // replaced and line 2 is inserted.
         partial.sources[0].record_keys = vec!["line:0:0".into(), "line:2:0".into()];
         store
-            .apply_usage_scan(UsageAgent::Codex, &partial)
+            .apply_usage_scan(UsageAgent::Codex, &partial, 2)
             .expect("partial scan");
 
-        let mut inputs = store
-            .usage_events()
-            .expect("events")
-            .into_iter()
-            .map(|event| event.input_tokens)
-            .collect::<Vec<_>>();
-        inputs.sort_unstable();
-        assert_eq!(inputs, vec![2, 3, 9]);
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 14);
+        assert_eq!(rows[0].requests, 3);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Today begins at local midnight, so the hours it folds depend on where this Mac is.
+    ///
+    /// The three events are 23:30 and 00:30 by a Singapore clock on either side of its own
+    /// midnight, and midday after it. A device keeping that calendar leaves the first out of
+    /// Today and takes the other two; a device keeping UTC does the opposite with the first.
     #[test]
-    fn usage_parser_upgrade_replaces_unreadable_old_event_json() {
+    fn today_folds_the_hours_its_local_day_covers() {
+        let root = std::env::temp_dir().join(format!("quota-usage-period-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(
+                    vec![
+                        usage_event("2026-08-09T15:30:00Z", 1),
+                        usage_event("2026-08-09T16:30:00Z", 2),
+                        usage_event("2026-08-10T04:15:00Z", 4),
+                    ],
+                    1,
+                ),
+                1,
+            )
+            .expect("scan");
+        let now = DateTime::parse_from_rfc3339("2026-08-10T06:00:00Z")
+            .expect("instant")
+            .with_timezone(&chrono::Utc);
+        let today = |timezone: &str| {
+            let span = crate::service::backend::usage_period_window(
+                crate::protocol::UsagePeriod::Today,
+                timezone,
+                now,
+            )
+            .expect("window")
+            .1
+            .expect("span");
+            store
+                .usage_period_rows(Some((&span.start, &span.end)))
+                .expect("today")
+                .0
+        };
+
+        let local = today("Asia/Singapore");
+        assert_eq!(local.iter().map(|row| row.input_tokens).sum::<u64>(), 6);
+        assert_eq!(local.iter().map(|row| row.requests).sum::<u64>(), 2);
+        let utc = today("UTC");
+        assert_eq!(utc.iter().map(|row| row.input_tokens).sum::<u64>(), 4);
+        assert_eq!(utc.iter().map(|row| row.requests).sum::<u64>(), 1);
+
+        let (all, partial) = store.usage_period_rows(None).expect("all");
+        assert!(!partial);
+        assert_eq!(all.iter().map(|row| row.input_tokens).sum::<u64>(), 7);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A stored record body this build can no longer read is replaced by the rescan that
+    /// found it, and the hour it belongs to is folded from the readable value.
+    #[test]
+    fn a_rescan_replaces_a_record_body_this_build_cannot_read() {
         let root = std::env::temp_dir().join(format!("quota-usage-upgrade-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
-        let event = usage_event("2026-08-10T12:15:00Z", 1);
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event.clone()], 1))
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
             .expect("initial scan");
         store
-            .consume_dirty_usage_range(&UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            })
+            .stage_outbox_entries(
+                "account_test",
+                "device_test",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 1)],
+            )
             .expect("clear initial");
         store
-            .db
+            .cache
             .lock()
             .expect("database")
             .execute(
@@ -4689,16 +4903,17 @@ mod tests {
             .expect("corrupt old wire value");
 
         store
-            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![event], 2))
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 9)], 2),
+                2,
+            )
             .expect("parser upgrade");
-        assert_eq!(
-            store.dirty_usage_ranges().expect("dirty"),
-            vec![UsageDirtyRange {
-                agent: UsageAgent::Codex,
-                start_at: "2026-08-10T12:00:00Z".into(),
-                end_at: "2026-08-10T13:00:00Z".into(),
-            }]
-        );
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
+        let (rows, _) = store.usage_period_rows(None).expect("rows");
+        assert_eq!(rows[0].input_tokens, 9);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4712,10 +4927,11 @@ mod tests {
             .apply_usage_scan(
                 UsageAgent::Codex,
                 &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
             )
             .expect("initial scan");
         store
-            .db
+            .cache
             .lock()
             .expect("database")
             .execute(
@@ -4725,7 +4941,347 @@ mod tests {
             .expect("replace event body");
 
         assert_eq!(store.usage_event_count().expect("count"), 1);
-        assert!(store.usage_events().is_err());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// `NOFOLLOW` rejects a symlink anywhere in the path and the macOS temporary directory
+    /// reaches through one, so a test root is resolved the way the service resolves its own.
+    fn temp_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("quota-{name}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        fs::canonicalize(&root).expect("canonical root")
+    }
+
+    fn active_session() -> Value {
+        serde_json::json!({
+            "status": "active",
+            "account_id": "account",
+            "device_id": "device"
+        })
+    }
+
+    /// The whole point of the split: a cache nothing can read costs this device its history for
+    /// one refresh, and costs it nothing else.
+    #[test]
+    fn a_cache_written_over_with_garbage_is_rebuilt_and_identity_is_untouched() {
+        let root = temp_root("cache-garbage");
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store
+            .set_usage_upload_enabled(false)
+            .expect("upload preference");
+        store
+            .set_provider_browser_session(
+                "cursor",
+                &ProviderBrowserSession {
+                    cookie_header: "wos-session=secret".into(),
+                    account_fingerprint: "a".repeat(64),
+                    account_label: None,
+                },
+            )
+            .expect("browser session");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+        let revision = store.current_revision().expect("revision");
+        drop(store);
+
+        fs::write(root.join(CACHE_NAME), b"this is not a database").expect("garbage");
+        let store = StateStore::open(&root).expect("reopen");
+
+        let snapshot = store.snapshot().expect("snapshot");
+        assert!(snapshot.cache.rebuilding);
+        assert!(snapshot.cache.reset_at.is_some());
+        // The change counter keeps climbing, so a panel that is already following along does not
+        // go quiet waiting for a count that restarted.
+        assert!(snapshot.revision > revision);
+        assert_eq!(store.installation_id().expect("installation"), installation);
+        assert!(store.session_json().expect("session").is_some());
+        assert!(!store.usage_upload_enabled().expect("upload preference"));
+        assert!(
+            store
+                .provider_browser_session("cursor")
+                .expect("browser session")
+                .is_some()
+        );
+        assert_eq!(store.usage_event_count().expect("records"), 0);
+
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("rebuild scan");
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A cache that breaks while the service is running gets the same answer as one that was
+    /// already broken at launch: the caller is told to retry, and the retry finds an empty cache.
+    #[test]
+    fn a_cache_that_breaks_mid_run_is_rebuilt_on_the_spot() {
+        let root = temp_root("cache-midrun");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store
+            .cache
+            .lock()
+            .expect("cache")
+            .execute("DROP TABLE components", [])
+            .expect("break the cache");
+
+        assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+
+        let snapshot = store.snapshot().expect("rebuilt");
+        assert!(snapshot.cache.rebuilding);
+        assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An Overview row this build cannot read is a cache row: thrown away, not carried as an
+    /// error every `get_state` call answers with.
+    #[test]
+    fn an_unreadable_overview_row_rebuilds_the_cache_rather_than_wedging_state() {
+        let root = temp_root("overview-garbage");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store.snapshot().expect("snapshot");
+        store
+            .with_cache_mut(|conn| {
+                conn.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('overview_json', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params!["not json"],
+                )?;
+                Ok(())
+            })
+            .expect("garbage row");
+
+        assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+
+        let snapshot = store.snapshot().expect("rebuilt");
+        assert!(snapshot.overview.is_empty());
+        assert!(snapshot.cache.rebuilding);
+        assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Contention is not corruption (ADR 0021). A second process holding the write lock costs
+    /// this one a retry; it must never cost the device the file.
+    #[test]
+    fn an_open_another_writer_holds_leaves_both_images_where_they_are() {
+        let root = temp_root("open-busy");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+        drop(store);
+
+        for name in [CACHE_NAME, IDENTITY_NAME] {
+            let path = root.join(name);
+            let before = fs::metadata(&path).expect("image").len();
+            let blocker = Connection::open(&path).expect("second writer");
+            blocker
+                .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;")
+                .expect("write lock");
+
+            let answer = if name == CACHE_NAME {
+                open_cache(&root, 0).map(|_| ())
+            } else {
+                open_identity(&root).map(|_| ())
+            };
+            assert!(matches!(answer, Err(StateError::Unavailable)), "{name}");
+            assert_eq!(
+                fs::metadata(&path).expect("image is still there").len(),
+                before,
+                "{name}"
+            );
+            drop(blocker);
+        }
+
+        // And the device that waited its turn still holds everything it had.
+        let store = StateStore::open(&root).expect("reopen");
+        assert!(store.session_json().expect("session").is_some());
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A statement SQLite refused is an answer about that statement. The cache is only thrown
+    /// away when the bytes on disk stopped describing what this device collected.
+    #[test]
+    fn a_refused_write_is_never_a_verdict_on_the_cache() {
+        let root = temp_root("cache-refused");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+
+        // An outcome the journal's CHECK constraint refuses.
+        let refused = store.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome)
+                 VALUES ('refresh', 'manual', '2026-08-10T00:00:00Z', 'nonsense')",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(matches!(refused, Err(StateError::Sql(_))));
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+
+        // The codes a test cannot provoke on demand, answered from the same rule.
+        for code in [
+            SqliteErrorCode::ReadOnly,
+            SqliteErrorCode::OutOfMemory,
+            SqliteErrorCode::PermissionDenied,
+            SqliteErrorCode::TooBig,
+            SqliteErrorCode::ConstraintViolation,
+        ] {
+            let error = StateError::Sql(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code,
+                    extended_code: 0,
+                },
+                None,
+            ));
+            assert!(!cache_needs_rebuild(&error), "{code:?}");
+            assert!(!sqlite_io_or_full_error(&error), "{code:?}");
+        }
+        // A shape this build cannot read still is.
+        assert!(cache_needs_rebuild(&StateError::Sql(
+            rusqlite::Error::InvalidQuery
+        )));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// There is no salvage. A device that cannot read who it is becomes a new installation, and
+    /// says so, because signing in again is the only thing that puts it back.
+    #[test]
+    fn an_identity_written_over_with_garbage_starts_this_device_over() {
+        let root = temp_root("identity-garbage");
+        let store = StateStore::open(&root).expect("state");
+        let installation = store.installation_id().expect("installation");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        drop(store);
+
+        fs::write(root.join(IDENTITY_NAME), b"not a database").expect("garbage");
+        let store = StateStore::open(&root).expect("reopen");
+
+        assert_ne!(store.installation_id().expect("installation"), installation);
+        assert!(store.session_json().expect("session").is_none());
+        assert!(store.identity_reset_at().expect("marker").is_some());
+        // Signing in again is the recovery the notice asks for, so it retires itself.
+        store
+            .write_session_json(&active_session())
+            .expect("sign in");
+        assert!(store.identity_reset_at().expect("marker").is_none());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A device upgrading from the released single-file image keeps who it is and who it is
+    /// signed in as. What it still owes an Account is recomputed rather than carried across.
+    #[test]
+    fn a_released_image_is_imported_once_and_then_gone() {
+        let root = temp_root("released-image");
+        let legacy = root.join("state.sqlite");
+        let conn = Connection::open(&legacy).expect("released image");
+        conn.execute_batch(
+            "CREATE TABLE installation(id INTEGER PRIMARY KEY, installation_id TEXT NOT NULL,
+                payload_json TEXT);
+             CREATE TABLE session(id INTEGER PRIMARY KEY, payload_json TEXT NOT NULL,
+                epoch INTEGER NOT NULL);
+             CREATE TABLE usage_upload_context(id INTEGER PRIMARY KEY, account_id TEXT NOT NULL,
+                device_id TEXT NOT NULL, generation INTEGER NOT NULL,
+                aggregation_timezone TEXT NOT NULL, lower_bound TEXT NOT NULL);
+             CREATE TABLE provider_browser_sessions(provider TEXT PRIMARY KEY,
+                cookie_header TEXT NOT NULL, account_fingerprint TEXT NOT NULL,
+                account_label TEXT, updated_at TEXT NOT NULL);
+             CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO installation VALUES (1, 'released-installation', NULL);
+             INSERT INTO session VALUES (1, '{\"status\":\"active\"}', 4);
+             INSERT INTO metadata VALUES ('usage_upload_enabled', '0');",
+        )
+        .expect("released rows");
+        drop(conn);
+
+        let store = StateStore::open(&root).expect("state");
+        assert_eq!(
+            store.installation_id().expect("installation"),
+            "released-installation"
+        );
+        assert!(store.session_json().expect("session").is_some());
+        assert!(store.outbox_entries().expect("outbox").is_empty());
+        assert!(!store.usage_upload_enabled().expect("upload preference"));
+        assert!(store.identity_reset_at().expect("marker").is_none());
+        assert!(!legacy.exists());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A process that went away mid-refresh leaves marks only its successor can retire.
+    #[test]
+    fn reopening_clears_leftover_refreshing_flags_and_finishes_running_attempts() {
+        let root = temp_root("interrupted");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .set_component(
+                ComponentName::Quota,
+                ComponentStatus::Ready,
+                Some(serde_json::json!({})),
+                None,
+                None,
+                true,
+            )
+            .expect("refreshing component");
+        store.begin_diagnostic_attempt(
+            DiagnosticAttemptKind::Refresh,
+            DiagnosticAttemptTrigger::Manual,
+            None,
+            None,
+        );
+        drop(store);
+
+        let store = StateStore::open(&root).expect("reopen");
+        assert!(!store.snapshot().expect("snapshot").quota.refreshing);
+        assert!(
+            store
+                .running_refresh_attempt()
+                .expect("running attempt")
+                .is_none()
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4778,12 +5334,14 @@ mod tests {
             unchanged_source_file_ids: Vec::new(),
             deleted_source_file_ids: Vec::new(),
             sources: vec![UsageSourceScan {
+                append: false,
                 index: UsageFileIndex {
                     source_file_id: "source-1".into(),
                     identity: "identity-1".into(),
                     size: events.len() as u64,
                     modified_ns,
                     parser_revision: "usage-rust-v4".into(),
+                    ..UsageFileIndex::default()
                 },
                 source,
                 record_keys: (0..events.len())

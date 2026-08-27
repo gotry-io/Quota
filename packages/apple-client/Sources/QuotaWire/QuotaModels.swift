@@ -1,24 +1,27 @@
 import Foundation
 import QuotaPresentation
 
-public enum QuotaStatus: String, Codable, Sendable {
+public enum QuotaStatus: String, Codable, Sendable, TolerantWireEnum {
   case available
   case stale
   case authRequired = "auth_required"
   case unavailable
   case unsupported
   case error
+  case unknown
 }
 
-public enum FingerprintScope: String, Codable, Sendable {
+public enum FingerprintScope: String, Codable, Sendable, TolerantWireEnum {
   case global
   case source
+  case unknown
 }
 
-public enum QuotaValueUnit: String, Codable, Equatable, Sendable {
+public enum QuotaValueUnit: String, Codable, Equatable, Sendable, TolerantWireEnum {
   case usd
   case credits
   case count
+  case unknown
 }
 
 public struct QuotaAccount: Codable, Equatable, Sendable {
@@ -40,7 +43,6 @@ public struct QuotaAccount: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["fingerprint", "label", "plan", "fingerprintScope"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     fingerprint = try container.decode(String.self, forKey: .fingerprint)
     label = try container.decodeIfPresent(String.self, forKey: .label)
@@ -97,10 +99,6 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "id", "title", "usedPercent", "resetsAt", "durationSeconds", "remainingValue", "limitValue",
-      "valueUnit",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
     title = try container.decode(String.self, forKey: .title)
@@ -163,9 +161,6 @@ public struct QuotaSnapshot: Codable, Equatable, Sendable {
   }
 
   public init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "provider", "account", "windows", "status", "observedAt",
-    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     provider = try container.decode(ProviderID.self, forKey: .provider)
     account = try container.decode(QuotaAccount.self, forKey: .account)
@@ -213,6 +208,9 @@ extension QuotaStatus {
     case .unavailable: .unavailable
     case .unsupported: .unsupported
     case .error: .failed
+    // A status this build has never heard of is one it cannot place: it says so rather than
+    // claiming the reading is current.
+    case .unknown: .unavailable
     }
   }
 }
@@ -220,11 +218,13 @@ extension QuotaStatus {
 // Derivations both Apple products need from a window. The rules live in QuotaPresentation;
 // these name them on the type so neither app restates them.
 extension QuotaValueUnit {
-  public var remainingUnit: RemainingQuotaUnit {
+  /// `nil` for a unit this build cannot name, which formats the number without a unit.
+  public var remainingUnit: RemainingQuotaUnit? {
     switch self {
     case .usd: .usd
     case .credits: .credits
     case .count: .count
+    case .unknown: nil
     }
   }
 }

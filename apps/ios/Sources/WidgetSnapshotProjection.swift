@@ -5,34 +5,30 @@ import QuotaWire
 
 enum WidgetSnapshotProjection {
   static func make(summary: AccountSummary, fetchedAt: Date) -> WidgetSnapshot {
-    let items = projectItems(from: summary.quota)
+    let items = projectItems(from: summary.subscriptions)
     let today = WidgetTodayUsage(
-      inputTokens: summary.usage.totals.inputTokens,
-      outputTokens: summary.usage.totals.outputTokens,
-      cost: mapCost(summary.usage.cost)
+      inputTokens: summary.usage.today.totals.inputTokens,
+      outputTokens: summary.usage.today.totals.outputTokens,
+      cost: mapCost(summary.usage.today.cost)
     )
     return WidgetSnapshot(fetchedAt: fetchedAt, items: items, today: today)
   }
 
-  static func projectItems(
-    from observations: [AccountQuotaObservation],
-    now: Date = Date()
-  ) -> [WidgetQuotaItem] {
-    // The app and the widget answer for the same subscriptions, so both resolve the
-    // reporting devices with the shared rule instead of ranking them by upload time.
-    let candidates = AccountQuotaSubscriptions.resolve(observations, now: now)
-      .flatMap { subscription in
-        subscription.reading.windows.map { window in
-          WidgetSnapshotCandidate(
-            snapshot: subscription.reading,
-            window: window,
-            providerID: subscription.identity.provider,
-            fingerprint: subscription.identity.fingerprint,
-            sourceID: subscription.identity.sourceID ?? "",
-            windowID: window.id
-          )
-        }
+  /// Relay resolves an account's readings into one row per subscription, so the widget ranks
+  /// those rows rather than one card per reporting device.
+  static func projectItems(from subscriptions: [QuotaSubscription]) -> [WidgetQuotaItem] {
+    let candidates = subscriptions.flatMap { subscription in
+      subscription.snapshot.windows.map { window in
+        WidgetSnapshotCandidate(
+          snapshot: subscription.snapshot,
+          window: window,
+          providerID: subscription.snapshot.provider.rawValue,
+          fingerprint: subscription.snapshot.account.fingerprint,
+          sourceID: subscription.key,
+          windowID: window.id
+        )
       }
+    }
 
     let percentage = candidates.filter { !$0.isBalanceOnly }.sorted(by: percentageSort)
     let balanceOnly = candidates.filter(\.isBalanceOnly).sorted(by: balanceOnlySort)
@@ -140,7 +136,7 @@ private struct WidgetSnapshotCandidate {
       windowTitle: windowTitle,
       remainingPercent: remainingPercent,
       remainingValue: window.remainingValue,
-      unit: window.valueUnit.map(mapUnit),
+      unit: window.valueUnit.flatMap(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
       state: WidgetQuotaState(snapshot.reportedState),
@@ -148,11 +144,13 @@ private struct WidgetSnapshotCandidate {
     )
   }
 
-  private func mapUnit(_ unit: QuotaValueUnit) -> WidgetQuotaUnit {
+  /// `nil` for a unit this build cannot name; the widget then shows the number without one.
+  private func mapUnit(_ unit: QuotaValueUnit) -> WidgetQuotaUnit? {
     switch unit {
     case .usd: .usd
     case .credits: .credits
     case .count: .count
+    case .unknown: nil
     }
   }
 }

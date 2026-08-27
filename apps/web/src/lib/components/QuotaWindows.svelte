@@ -1,6 +1,6 @@
 <script lang="ts">
 import { remainingPercent } from "@gotry-io/quota-model";
-import { formatDate, formatQuotaRemaining } from "$lib/format";
+import { NO_RESET_TIME_COPY, formatDate, formatQuotaRemaining } from "$lib/format";
 
 type WindowItem = {
   id?: string | undefined;
@@ -40,7 +40,7 @@ function isBalanceOnly(window: WindowItem): boolean {
         {/if}
         {#if window.resets_at || !balanceOnly}
           <p class="quota-window-meta">
-            {window.resets_at ? `Resets ${formatDate(window.resets_at)}` : "No reset time reported"}
+            {window.resets_at ? `Resets ${formatDate(window.resets_at)}` : NO_RESET_TIME_COPY}
           </p>
         {/if}
       </div>

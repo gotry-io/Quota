@@ -1,18 +1,14 @@
 import { IOS_OAUTH_CLIENT_ID, IOS_OAUTH_REDIRECT_URI } from "@gotry-io/quota-protocol";
 import type {
-  AccountPrincipal,
   AccountState,
-  DeviceGrantDecisionOutcome,
-  DevicePrincipal,
   LoginGrantRecord,
   SessionCredentialHashes,
+  SessionPrincipal,
 } from "@gotry-io/relay-core";
 import {
   constantTimeEqual,
   hmacSha256Hex,
-  normalizeUserCode,
   randomOpaqueSecret,
-  randomUserCode,
   type SecretHasher,
   sha256Base64Url,
 } from "../security.ts";
@@ -20,19 +16,57 @@ import {
 const grantLifetimeMilliseconds = 10 * 60 * 1000;
 const accessLifetimeMilliseconds = 15 * 60 * 1000;
 const refreshLifetimeMilliseconds = 90 * 24 * 60 * 60 * 1000;
-const devicePollIntervalSeconds = 5;
-export const nativeClientId = "quotacli";
+export const nativeClientId = "quotabar";
 export const iosClientId = IOS_OAUTH_CLIENT_ID;
 export const iosRedirectUri = IOS_OAUTH_REDIRECT_URI;
-const nativeAccountAccessPrefix = "qa_";
-const nativeAccountRefreshPrefix = "qar_";
-const nativeDeviceAccessPrefix = "qd_";
-const nativeDeviceRefreshPrefix = "qdr_";
-const iosAccountAccessPrefix = "qia_";
-const iosAccountRefreshPrefix = "qiar_";
-const nativeAccountRefreshPattern = /^qar_[A-Za-z0-9_-]{43}$/;
-const nativeDeviceRefreshPattern = /^qdr_[A-Za-z0-9_-]{43}$/;
-const iosAccountRefreshPattern = /^qiar_[A-Za-z0-9_-]{43}$/;
+
+/**
+ * What each client's one token looks like, and the HMAC domain it is stored under.
+ *
+ * One session table does not mean one credential domain. A token is hashed under the domain its
+ * prefix names, so a token issued to QuotaBar cannot be presented as the iOS viewer's, and
+ * neither can be presented as the browser cookie, which has its own domain again
+ * ([ADR 0025](../../../../docs/decisions/0025-one-session-system.md)). The prefix is what selects
+ * the domain, so one lookup answers for every Bearer token.
+ */
+export const CLIENT_CREDENTIALS = {
+  [nativeClientId]: {
+    accessPrefix: "qb_",
+    refreshPrefix: "qbr_",
+    accessDomain: "quotabar-access",
+    refreshDomain: "quotabar-refresh",
+    refreshPattern: /^qbr_[A-Za-z0-9_-]{43}$/,
+  },
+  [iosClientId]: {
+    accessPrefix: "qia_",
+    refreshPrefix: "qiar_",
+    accessDomain: "ios-access",
+    refreshDomain: "ios-refresh",
+    refreshPattern: /^qiar_[A-Za-z0-9_-]{43}$/,
+  },
+} as const;
+
+type RegisteredClientId = keyof typeof CLIENT_CREDENTIALS;
+
+/** The domain a Bearer access token is checked under, or null when no client issues that shape. */
+export function accessTokenDomain(token: string): string | null {
+  for (const credentials of Object.values(CLIENT_CREDENTIALS)) {
+    if (new RegExp(`^${credentials.accessPrefix}[A-Za-z0-9_-]{43}$`).test(token)) {
+      return credentials.accessDomain;
+    }
+  }
+  return null;
+}
+
+/** The domain a refresh token is checked under, or null when no client issues that shape. */
+export function refreshTokenDomain(token: string): string | null {
+  for (const credentials of Object.values(CLIENT_CREDENTIALS)) {
+    if (credentials.refreshPattern.test(token)) {
+      return credentials.refreshDomain;
+    }
+  }
+  return null;
+}
 
 interface PlainSessionCredentials extends SessionCredentialHashes {
   access_token: string;
@@ -45,13 +79,6 @@ export interface BrowserAuthorizationInput {
   state: string;
   code_challenge: string;
   code_challenge_method: string;
-}
-
-export interface DeviceAuthorizationInput {
-  client_id: string;
-  installation_id: string;
-  device_display_name: string;
-  platform: string;
 }
 
 export interface AuthorizationCodeExchangeInput {
@@ -71,32 +98,29 @@ export interface IosAuthorizationCodeExchangeInput {
   code_verifier: string;
 }
 
+export interface IssuedSession {
+  access_token: string;
+  refresh_token: string;
+  access_expires_at: string;
+  refresh_expires_at: string;
+}
+
 export interface NativeTokenResponse {
   token_type: "Bearer";
   account_id: string;
+  display_label: string | null;
   device_id: string;
   device_generation: number;
-  next_snapshot_sequence: number;
-  next_usage_sequence: number;
   usage_deleted_before: string | null;
   usage_sync_revision: number;
-  account_access_token: string;
-  account_refresh_token: string;
-  account_access_expires_at: string;
-  account_refresh_expires_at: string;
-  device_access_token: string;
-  device_refresh_token: string;
-  device_access_expires_at: string;
-  device_refresh_expires_at: string;
+  session: IssuedSession;
 }
 
 export interface AccountTokenResponse {
   token_type: "Bearer";
   account_id: string;
-  account_access_token: string;
-  account_refresh_token: string;
-  account_access_expires_at: string;
-  account_refresh_expires_at: string;
+  display_label: string | null;
+  session: IssuedSession;
 }
 
 export interface BrowserLoginCompletion {
@@ -104,13 +128,6 @@ export interface BrowserLoginCompletion {
   client_state: string;
   code: string;
 }
-
-export type DeviceTokenPoll =
-  | { outcome: "issued"; response: NativeTokenResponse }
-  | {
-      outcome: "authorization_pending" | "slow_down" | "access_denied" | "expired_token";
-      interval: number;
-    };
 
 export class AccountService {
   constructor(
@@ -138,56 +155,15 @@ export class AccountService {
     const loginToken = randomOpaqueSecret("qlg_");
     await this.state.createLoginGrant({
       id: `grant_${crypto.randomUUID()}`,
-      grant_kind: "browser_pkce",
       client_id: input.client_id,
       login_token_hash: await this.hasher.hash("login-token", loginToken),
-      device_code_hash: null,
-      user_code_hash: null,
-      installation_id_hash: null,
-      device_display_name: null,
-      platform: null,
       pkce_challenge: input.code_challenge,
       redirect_uri: input.redirect_uri,
       client_state: input.state,
-      poll_interval_seconds: null,
       expires_at: expiresAt(now, grantLifetimeMilliseconds),
       created_at: now.toISOString(),
     });
     return { login_token: loginToken };
-  }
-
-  async beginDeviceLogin(input: DeviceAuthorizationInput, now: Date) {
-    if (input.client_id !== nativeClientId) {
-      throw new AccountFlowError("invalid_client");
-    }
-    const deviceCode = randomOpaqueSecret("qdc_");
-    const userCode = randomUserCode();
-    const expires = expiresAt(now, grantLifetimeMilliseconds);
-    await this.state.createLoginGrant({
-      id: `grant_${crypto.randomUUID()}`,
-      grant_kind: "device_code",
-      client_id: input.client_id,
-      login_token_hash: null,
-      device_code_hash: await this.hasher.hash("device-code", deviceCode),
-      user_code_hash: await this.hasher.hash("user-code", normalizeUserCode(userCode)),
-      installation_id_hash: await this.installationDigest(input.installation_id),
-      device_display_name: sanitizeLabel(input.device_display_name, 128),
-      platform: sanitizeLabel(input.platform, 64),
-      pkce_challenge: null,
-      redirect_uri: null,
-      client_state: null,
-      poll_interval_seconds: devicePollIntervalSeconds,
-      expires_at: expires,
-      created_at: now.toISOString(),
-    });
-    return {
-      device_code: deviceCode,
-      user_code: userCode,
-      verification_uri: "https://quota.gotry.io/activate",
-      verification_uri_complete: `https://quota.gotry.io/activate?user_code=${encodeURIComponent(userCode)}`,
-      expires_at: expires,
-      interval: devicePollIntervalSeconds,
-    };
   }
 
   async completeBrowserLogin(
@@ -199,7 +175,7 @@ export class AccountService {
     const tokenHash = await this.hasher.hash("login-token", loginToken);
     const grant = await this.state.getLoginGrantByLoginTokenHash(tokenHash, now.toISOString());
     if (
-      grant?.grant_kind !== "browser_pkce" ||
+      !grant ||
       !grant.redirect_uri ||
       !grant.client_state ||
       !isRegisteredPublicClient(grant.client_id, grant.redirect_uri)
@@ -224,20 +200,6 @@ export class AccountService {
       client_state: grant.client_state,
       code: authorizationCode,
     };
-  }
-
-  async decideDeviceGrant(
-    userCode: string,
-    accountId: string,
-    decision: "approve" | "deny",
-    now: Date,
-  ): Promise<DeviceGrantDecisionOutcome> {
-    return this.state.authorizeDeviceGrant({
-      user_code_hash: await this.hasher.hash("user-code", normalizeUserCode(userCode)),
-      account_id: accountId,
-      decision,
-      decided_at: now.toISOString(),
-    });
   }
 
   async exchangeAuthorizationCode(
@@ -273,96 +235,38 @@ export class AccountService {
       throw new AccountFlowError("invalid_client");
     }
     const { grant, codeHash } = await this.loadAuthorizationCodeGrant(input, now);
-    if (grant.installation_id_hash) {
-      throw new AccountFlowError("invalid_grant");
-    }
     return this.consumeAccountOnlyGrant(grant, codeHash, now);
   }
 
-  async pollDeviceToken(deviceCode: string, clientId: string, now: Date): Promise<DeviceTokenPoll> {
-    if (clientId !== nativeClientId) {
-      throw new AccountFlowError("invalid_client");
-    }
-    const codeHash = await this.hasher.hash("device-code", deviceCode);
-    const polled = await this.state.pollDeviceGrant(codeHash, now.toISOString());
-    switch (polled.outcome) {
-      case "pending":
-        return { outcome: "authorization_pending", interval: polled.poll_interval_seconds };
-      case "slow_down":
-        return { outcome: "slow_down", interval: polled.poll_interval_seconds };
-      case "denied":
-        return { outcome: "access_denied", interval: polled.poll_interval_seconds };
-      case "expired":
-      case "consumed":
-      case "not_found":
-        return { outcome: "expired_token", interval: polled.poll_interval_seconds };
-      case "ready": {
-        const grant = polled.grant;
-        if (!grant.account_id || !grant.installation_id_hash) {
-          throw new AccountFlowError("invalid_grant");
-        }
-        const installationHash = await this.accountInstallationHash(
-          grant.account_id,
-          grant.installation_id_hash,
-        );
-        return {
-          outcome: "issued",
-          response: await this.consumeNativeGrant(
-            grant,
-            codeHash,
-            installationHash,
-            grant.device_display_name ?? "Quota client",
-            grant.platform ?? "unknown",
-            now,
-          ),
-        };
-      }
-    }
-  }
-
+  /**
+   * Rotate one client's one token.
+   *
+   * The refresh token must carry the shape its own client issues, so a token cannot be rotated
+   * into another client's credential domain. Rotation itself is one compare-and-swap in the
+   * session table, whichever client asked.
+   */
   async refresh(
     refreshToken: string,
-    tokenClass: "account" | "device",
     clientId: string,
     now: Date,
-  ): Promise<{
-    access_token: string;
-    refresh_token: string;
-    access_expires_at: string;
-    refresh_expires_at: string;
-    principal: AccountPrincipal | DevicePrincipal;
-  }> {
-    const prefixes = refreshPrefixesForClient(clientId, tokenClass, refreshToken);
-    const credentials = await this.newSessionCredentials(
-      prefixes.accessPrefix,
-      prefixes.refreshPrefix,
-      tokenClass,
-      now,
-    );
-    const input = {
-      refresh_token_hash: await this.hasher.hash(`${tokenClass}-refresh`, refreshToken),
-      new_access_token_hash: await this.hasher.hash(
-        `${tokenClass}-access`,
-        credentials.access_token,
-      ),
-      new_refresh_token_hash: await this.hasher.hash(
-        `${tokenClass}-refresh`,
-        credentials.refresh_token,
-      ),
+  ): Promise<IssuedSession & { principal: SessionPrincipal }> {
+    const client = registeredClient(clientId);
+    if (!client.refreshPattern.test(refreshToken)) {
+      throw new AccountFlowError("invalid_grant");
+    }
+    const credentials = await this.newSessionCredentials(client, now);
+    const principal = await this.state.refreshSession({
+      refresh_token_hash: await this.hasher.hash(client.refreshDomain, refreshToken),
+      new_access_token_hash: credentials.access_token_hash,
+      new_refresh_token_hash: credentials.refresh_token_hash,
       access_expires_at: credentials.access_expires_at,
       refresh_expires_at: credentials.refresh_expires_at,
       refreshed_at: now.toISOString(),
-    };
-    const principal =
-      clientId === iosClientId
-        ? await this.state.refreshAccountOnlySession(input)
-        : tokenClass === "account"
-          ? await this.state.refreshAccountSession(input)
-          : await this.state.refreshDeviceSession(input);
+    });
     if (!principal) {
       throw new AccountFlowError("invalid_grant");
     }
-    return { ...credentials, principal };
+    return { ...issued(credentials), principal };
   }
 
   private async loadAuthorizationCodeGrant(
@@ -403,18 +307,7 @@ export class AccountService {
     platform: string,
     now: Date,
   ): Promise<NativeTokenResponse> {
-    const accountCredentials = await this.newSessionCredentials(
-      nativeAccountAccessPrefix,
-      nativeAccountRefreshPrefix,
-      "account",
-      now,
-    );
-    const deviceCredentials = await this.newSessionCredentials(
-      nativeDeviceAccessPrefix,
-      nativeDeviceRefreshPrefix,
-      "device",
-      now,
-    );
+    const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[nativeClientId], now);
     const result = await this.state.consumeLoginGrant({
       grant_id: grant.id,
       credential_hash: credentialHash,
@@ -424,8 +317,7 @@ export class AccountService {
       display_name: displayName,
       platform,
       family_id: `family_${crypto.randomUUID()}`,
-      account_session: hashes(accountCredentials),
-      device_session: hashes(deviceCredentials),
+      session: hashes(credentials),
       consumed_at: now.toISOString(),
     });
     if (result.outcome !== "issued") {
@@ -434,20 +326,12 @@ export class AccountService {
     return {
       token_type: "Bearer",
       account_id: result.account_id,
+      display_label: result.display_label,
       device_id: result.device.id,
       device_generation: result.device.generation,
-      next_snapshot_sequence: result.device.last_sequence + 1,
-      next_usage_sequence: result.device.last_usage_sequence + 1,
       usage_deleted_before: result.device.deleted_before,
       usage_sync_revision: result.device.usage_sync_revision,
-      account_access_token: accountCredentials.access_token,
-      account_refresh_token: accountCredentials.refresh_token,
-      account_access_expires_at: accountCredentials.access_expires_at,
-      account_refresh_expires_at: accountCredentials.refresh_expires_at,
-      device_access_token: deviceCredentials.access_token,
-      device_refresh_token: deviceCredentials.refresh_token,
-      device_access_expires_at: deviceCredentials.access_expires_at,
-      device_refresh_expires_at: deviceCredentials.refresh_expires_at,
+      session: issued(credentials),
     };
   }
 
@@ -456,18 +340,13 @@ export class AccountService {
     credentialHash: string,
     now: Date,
   ): Promise<AccountTokenResponse> {
-    const accountCredentials = await this.newSessionCredentials(
-      iosAccountAccessPrefix,
-      iosAccountRefreshPrefix,
-      "account",
-      now,
-    );
+    const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[iosClientId], now);
     const result = await this.state.consumeAccountLoginGrant({
       grant_id: grant.id,
       credential_hash: credentialHash,
       completion_nonce_hash: await this.hasher.hash("consume", randomOpaqueSecret()),
       family_id: `family_${crypto.randomUUID()}`,
-      account_session: hashes(accountCredentials),
+      session: hashes(credentials),
       consumed_at: now.toISOString(),
     });
     if (result.outcome !== "issued") {
@@ -476,10 +355,8 @@ export class AccountService {
     return {
       token_type: "Bearer",
       account_id: result.account_id,
-      account_access_token: accountCredentials.access_token,
-      account_refresh_token: accountCredentials.refresh_token,
-      account_access_expires_at: accountCredentials.access_expires_at,
-      account_refresh_expires_at: accountCredentials.refresh_expires_at,
+      display_label: result.display_label,
+      session: issued(credentials),
     };
   }
 
@@ -495,19 +372,17 @@ export class AccountService {
   }
 
   private async newSessionCredentials(
-    accessPrefix: string,
-    refreshPrefix: string,
-    tokenClass: "account" | "device",
+    client: (typeof CLIENT_CREDENTIALS)[RegisteredClientId],
     now: Date,
   ): Promise<PlainSessionCredentials> {
-    const accessToken = randomOpaqueSecret(accessPrefix);
-    const refreshToken = randomOpaqueSecret(refreshPrefix);
+    const accessToken = randomOpaqueSecret(client.accessPrefix);
+    const refreshToken = randomOpaqueSecret(client.refreshPrefix);
     return {
       session_id: `session_${crypto.randomUUID()}`,
       access_token: accessToken,
       refresh_token: refreshToken,
-      access_token_hash: await this.hasher.hash(`${tokenClass}-access`, accessToken),
-      refresh_token_hash: await this.hasher.hash(`${tokenClass}-refresh`, refreshToken),
+      access_token_hash: await this.hasher.hash(client.accessDomain, accessToken),
+      refresh_token_hash: await this.hasher.hash(client.refreshDomain, refreshToken),
       access_expires_at: expiresAt(now, accessLifetimeMilliseconds),
       refresh_expires_at: expiresAt(now, refreshLifetimeMilliseconds),
     };
@@ -542,30 +417,14 @@ export function isIosRedirect(value: string): boolean {
   return value === iosRedirectUri;
 }
 
-function refreshPrefixesForClient(
-  clientId: string,
-  tokenClass: "account" | "device",
-  refreshToken: string,
-): { accessPrefix: string; refreshPrefix: string } {
-  if (clientId === iosClientId) {
-    if (tokenClass !== "account" || !iosAccountRefreshPattern.test(refreshToken)) {
-      throw new AccountFlowError("invalid_grant");
-    }
-    return { accessPrefix: iosAccountAccessPrefix, refreshPrefix: iosAccountRefreshPrefix };
-  }
-  if (clientId !== nativeClientId) {
+function registeredClient(clientId: string): (typeof CLIENT_CREDENTIALS)[RegisteredClientId] {
+  const client = Object.hasOwn(CLIENT_CREDENTIALS, clientId)
+    ? CLIENT_CREDENTIALS[clientId as RegisteredClientId]
+    : undefined;
+  if (!client) {
     throw new AccountFlowError("invalid_client");
   }
-  if (tokenClass === "account") {
-    if (!nativeAccountRefreshPattern.test(refreshToken)) {
-      throw new AccountFlowError("invalid_grant");
-    }
-    return { accessPrefix: nativeAccountAccessPrefix, refreshPrefix: nativeAccountRefreshPrefix };
-  }
-  if (!nativeDeviceRefreshPattern.test(refreshToken)) {
-    throw new AccountFlowError("invalid_grant");
-  }
-  return { accessPrefix: nativeDeviceAccessPrefix, refreshPrefix: nativeDeviceRefreshPrefix };
+  return client;
 }
 
 export function isRegisteredPublicClient(clientId: string, redirectUri: string): boolean {
@@ -576,6 +435,15 @@ export function isRegisteredPublicClient(clientId: string, redirectUri: string):
     return isIosRedirect(redirectUri);
   }
   return false;
+}
+
+function issued(credentials: PlainSessionCredentials): IssuedSession {
+  return {
+    access_token: credentials.access_token,
+    refresh_token: credentials.refresh_token,
+    access_expires_at: credentials.access_expires_at,
+    refresh_expires_at: credentials.refresh_expires_at,
+  };
 }
 
 function hashes(credentials: PlainSessionCredentials): SessionCredentialHashes {

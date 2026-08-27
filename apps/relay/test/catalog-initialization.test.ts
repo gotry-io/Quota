@@ -30,7 +30,7 @@ function appOptions(): RelayAppOptions {
     state: {} as RelayAppOptions["state"],
     usageState: {} as RelayAppOptions["usageState"],
     accountService: {} as RelayAppOptions["accountService"],
-    webAuth: {} as RelayAppOptions["webAuth"],
+    webSessions: {} as RelayAppOptions["webSessions"],
     hasher: {} as RelayAppOptions["hasher"],
   };
 }

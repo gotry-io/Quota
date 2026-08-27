@@ -8,20 +8,10 @@ import Testing
 
 struct WidgetSnapshotProjectionTests {
   @Test
-  func projectsOneItemPerSubscriptionAndKeepsTheNewestObservation() throws {
-    // One account collected on two Macs. The reading each device took decides which one
-    // speaks, not the order Relay happened to write the rows in: the device that wrote
-    // last here is the one holding the older reading.
-    let older = observation(
-      provider: "codex",
-      fingerprint: "fp_codex_01",
-      windowID: "weekly",
-      title: "Weekly",
-      usedPercent: 40,
-      observedAt: "2026-08-14T15:00:00Z",
-      deviceID: "device_01"
-    )
-    let newer = observation(
+  func projectsOneItemPerWindowOfEachResolvedSubscription() throws {
+    // Relay resolves an account's readings into one row per subscription, so the widget shows
+    // one item per window of each row rather than one per reporting device.
+    let subscription = observation(
       provider: "codex",
       fingerprint: "fp_codex_01",
       windowID: "weekly",
@@ -37,11 +27,8 @@ struct WidgetSnapshotProjectionTests {
       title: "Weekly",
       usedPercent: 50,
     )
-    let summary = try decodeSummary(quota: [older, newer, otherFingerprint])
-    let items = WidgetSnapshotProjection.projectItems(
-      from: summary.quota,
-      now: date("2026-08-14T16:05:00Z")
-    )
+    let summary = try decodeSummary(subscriptions: [subscription, otherFingerprint])
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
     #expect(items.count == 2)
     #expect(items.map(\.remainingPercent).sorted() == [50, 90])
     #expect(items.allSatisfy { $0.providerID == "codex" })
@@ -51,7 +38,7 @@ struct WidgetSnapshotProjectionTests {
   @Test
   func sortsPercentageLowestRemainingThenProviderThenBalanceOnly() throws {
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "claude",
           fingerprint: "fp_claude",
@@ -79,7 +66,7 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.quota)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
     #expect(items.count == 4)
     // Percentage first: lowest remainingPercent, then provider sortOrder, then title.
     #expect(items[0].providerID == "codex")
@@ -102,7 +89,7 @@ struct WidgetSnapshotProjectionTests {
     // One account reporting several windows is one observation carrying all of them, so
     // the tie-breaks have to order windows within a subscription as well as across them.
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "codex",
           fingerprint: "fp_b",
@@ -119,12 +106,12 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.quota)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
     #expect(items.count == 4)
     // Same remaining percent and provider: title, then fingerprint, then window id.
     #expect(items.map(\.windowTitle) == ["Daily", "Daily", "Weekly", "Weekly"])
     // Fingerprint is not published; order is still stable across runs.
-    let again = WidgetSnapshotProjection.projectItems(from: summary.quota)
+    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
     #expect(items == again)
   }
 
@@ -133,38 +120,32 @@ struct WidgetSnapshotProjectionTests {
     // A source-scoped fingerprint means nothing outside its source, so two Macs collecting
     // the same provider share it. The source is what tells the two subscriptions apart.
     let observation = { (deviceID: String, usedPercent: Double) in
-      [
-        "device_id": deviceID,
-        "snapshot": [
-          "provider": "litellm",
-          "account": ["fingerprint": "fp_source", "fingerprint_scope": "source"],
-          "windows": [
-            ["id": "weekly", "title": "Weekly", "used_percent": usedPercent] as [String: Any]
-          ],
-          "status": "available",
-          "observed_at": "2026-08-14T15:00:00Z",
-        ] as [String: Any],
-      ] as [String: Any]
+      self.subscriptionPayload(
+        provider: "litellm",
+        fingerprint: "fp_source",
+        scope: "source",
+        windows: [
+          ["id": "weekly", "title": "Weekly", "used_percent": usedPercent] as [String: Any]
+        ],
+        status: "available",
+        observedAt: "2026-08-14T15:00:00Z",
+        deviceID: deviceID
+      )
     }
-    let summary = try decodeSummary(quota: [observation("device_b", 40), observation("device_a", 40)])
+    let summary = try decodeSummary(
+      subscriptions: [observation("device_b", 40), observation("device_a", 40)])
 
-    let items = WidgetSnapshotProjection.projectItems(
-      from: summary.quota,
-      now: date("2026-08-14T15:05:00Z")
-    )
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
 
     #expect(items.count == 2)
     #expect(
-      WidgetSnapshotProjection.projectItems(
-        from: summary.quota,
-        now: date("2026-08-14T15:05:00Z")
-      ) == items
+      WidgetSnapshotProjection.projectItems(from: summary.subscriptions) == items
     )
   }
 
   @Test
   func capsAtSixteenItems() throws {
-    let quota = (0..<20).map { index in
+    let subscriptions = (0..<20).map { index in
       observation(
         provider: "codex",
         fingerprint: "fp_\(index)",
@@ -173,15 +154,15 @@ struct WidgetSnapshotProjectionTests {
         usedPercent: Double(index),
       )
     }
-    let summary = try decodeSummary(quota: quota)
-    let items = WidgetSnapshotProjection.projectItems(from: summary.quota)
+    let summary = try decodeSummary(subscriptions: subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
     #expect(items.count == 16)
   }
 
   @Test
   func mapsTodayCostAndTheReportedState() throws {
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "codex",
           fingerprint: "fp_codex_01",
@@ -206,7 +187,7 @@ struct WidgetSnapshotProjectionTests {
   @Test
   func carriesTheFreshnessFactsSoTheWidgetCanJudgeAtRenderTime() throws {
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "codex",
           fingerprint: "fp_codex_01",
@@ -217,19 +198,19 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.quota).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions).first)
 
     #expect(item.state == .available)
     #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
     // The widget re-renders long after the app published this.
-    #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Stale")
+    #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Not current")
     #expect(item.stateLabel(now: date("2026-08-14T15:59:59Z")) == nil)
   }
 
   @Test
   func aReportedFailureReachesTheWidgetAsItsOwnWord() throws {
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "codex",
           fingerprint: "fp_codex_01",
@@ -240,7 +221,7 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.quota).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions).first)
 
     // The wire status, the payload state, and the shared vocabulary have to agree; the
     // reading has not aged out, so only what the source reported can say otherwise.
@@ -251,7 +232,7 @@ struct WidgetSnapshotProjectionTests {
   @Test
   func encodedProjectionOmitsFixtureSecrets() throws {
     let summary = try decodeSummary(
-      quota: [
+      subscriptions: [
         observation(
           provider: "codex",
           fingerprint: "fp_codex_01",
@@ -293,10 +274,10 @@ struct WidgetSnapshotProjectionTests {
   }
 
   private func decodeSummary(
-    quota: [[String: Any]],
+    subscriptions: [[String: Any]],
     accountID: String = "account_01"
   ) throws -> AccountSummary {
-    let data = try accountSummaryJSON(accountID: accountID, quota: quota)
+    let data = try accountSummaryJSON(accountID: accountID, subscriptions: subscriptions)
     return try WireCodec.decode(AccountSummary.self, from: data)
   }
 
@@ -307,20 +288,40 @@ struct WidgetSnapshotProjectionTests {
     deviceID: String = "device_01",
     observedAt: String = "2026-08-14T15:00:00Z"
   ) -> [String: Any] {
+    subscriptionPayload(
+      provider: provider,
+      fingerprint: fingerprint,
+      scope: "global",
+      windows: windows.map {
+        ["id": $0.id, "title": $0.title, "used_percent": $0.usedPercent] as [String: Any]
+      },
+      status: "available",
+      observedAt: observedAt,
+      deviceID: deviceID
+    )
+  }
+
+  /// One subscription, as Relay already resolved it.
+  private func subscriptionPayload(
+    provider: String,
+    fingerprint: String,
+    scope: String,
+    windows: [[String: Any]],
+    status: String,
+    observedAt: String,
+    deviceID: String
+  ) -> [String: Any] {
     [
-      "device_id": deviceID,
+      "key": "\(provider)|\(fingerprint)|\(scope)|\(scope == "source" ? deviceID : "")",
+      "provider": provider,
       "snapshot": [
         "provider": provider,
-        "account": [
-          "fingerprint": fingerprint,
-          "fingerprint_scope": "global",
-        ],
-        "windows": windows.map {
-          ["id": $0.id, "title": $0.title, "used_percent": $0.usedPercent] as [String: Any]
-        },
-        "status": "available",
+        "account": ["fingerprint": fingerprint, "fingerprint_scope": scope],
+        "windows": windows,
+        "status": status,
         "observed_at": observedAt,
       ] as [String: Any],
+      "sources": [["device_id": deviceID, "observed_at": observedAt]],
     ]
   }
 
@@ -356,65 +357,65 @@ struct WidgetSnapshotProjectionTests {
     if let resetsAt {
       window["resets_at"] = resetsAt
     }
-    var snapshot: [String: Any] = [
-      "provider": provider,
-      "account": [
-        "fingerprint": fingerprint,
-        "fingerprint_scope": "global",
-      ],
-      "windows": [window],
-      "status": status,
-      "observed_at": observedAt,
-    ]
-    return ["device_id": deviceID, "snapshot": snapshot]
+    return subscriptionPayload(
+      provider: provider,
+      fingerprint: fingerprint,
+      scope: "global",
+      windows: [window],
+      status: status,
+      observedAt: observedAt,
+      deviceID: deviceID
+    )
   }
 
   private func accountSummaryJSON(
     accountID: String,
-    quota: [[String: Any]]
+    subscriptions: [[String: Any]]
   ) throws -> Data {
-    try JSONSerialization.data(
+    let period: [String: Any] = [
+      "totals": [
+        "total_tokens": 1200,
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "cache_read_input_tokens": 100,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 50,
+        "messages": 1,
+      ] as [String: Any],
+      "cost": [
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "3138",
+        "catalog_revision": "pricing_1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": ["agent_default_channel"],
+        "unpriced": [],
+      ] as [String: Any],
+      "partial": false,
+      "agents": [],
+    ]
+    return try JSONSerialization.data(
       withJSONObject: [
-        "protocol_version": 5,
+        "protocol_version": 6,
         "account": [
           "account_id": accountID,
           "display_label": "octocat",
           "created_at": "2026-07-01T00:00:00Z",
         ],
         "devices": [],
-        "quota": quota,
+        "subscriptions": subscriptions,
         "usage": [
-          "range": ["from": "2026-08-14", "to": "2026-08-14"],
-          "totals": [
-            "input_tokens": 1000,
-            "cache_read_tokens": 100,
-            "cache_write_5m_tokens": 0,
-            "cache_write_1h_tokens": 0,
-            "cache_write_inferred_tokens": 0,
-            "output_tokens": 200,
-            "reasoning_tokens": 50,
-            "requests": 1,
-            "web_search_requests": 0,
-            "web_fetch_requests": 0,
-            "source_cost_microusd": NSNull(),
-            "source_cost_covered_requests": 0,
-          ],
-          "cost": [
-            "mode": "calculate",
-            "basis": "calculated",
-            "status": "complete",
-            "amount_microusd": "3138",
-            "catalog_revision": "pricing_1",
-            "calculated_rows": 1,
-            "reported_rows": 0,
-            "unpriced_rows": 0,
-            "assumptions": ["agent_default_channel"],
-            "unpriced": [],
-          ],
-          "coverage": "complete",
-          "breakdowns": [],
+          "today": period,
+          "last_7_days": period,
+          "last_30_days": period,
+          "all": period,
         ],
-      ]
+        "pricing_revision": "pricing_1",
+        "model_catalog_revision": "models_1",
+      ] as [String: Any]
     )
   }
 

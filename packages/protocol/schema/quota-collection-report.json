@@ -5,10 +5,6 @@
   "$comment": "Success snapshots must use the same provider as their collection result.",
   "type": "object",
   "properties": {
-    "protocol_version": {
-      "type": "number",
-      "const": 3
-    },
     "captured_at": {
       "$ref": "#/$defs/__schema0"
     },
@@ -20,7 +16,7 @@
       }
     }
   },
-  "required": ["protocol_version", "captured_at", "results"],
+  "required": ["captured_at", "results"],
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
@@ -35,7 +31,7 @@
           "$ref": "#/$defs/__schema2"
         },
         {
-          "$ref": "#/$defs/__schema11"
+          "$ref": "#/$defs/__schema12"
         }
       ]
     },
@@ -49,13 +45,13 @@
           "$ref": "#/$defs/__schema4"
         },
         "message": {
-          "$ref": "#/$defs/__schema5"
-        },
-        "sources": {
           "$ref": "#/$defs/__schema6"
         },
+        "sources": {
+          "$ref": "#/$defs/__schema7"
+        },
         "access_denied": {
-          "$ref": "#/$defs/__schema8"
+          "$ref": "#/$defs/__schema9"
         },
         "outcome": {
           "type": "string",
@@ -66,11 +62,11 @@
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema9"
+            "$ref": "#/$defs/__schema10"
           }
         }
       },
-      "required": ["provider", "outcome", "snapshots"],
+      "required": ["provider", "sources", "outcome", "snapshots"],
       "additionalProperties": false
     },
     "__schema3": {
@@ -78,29 +74,56 @@
       "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm", "cursor"]
     },
     "__schema4": {
+      "$ref": "#/$defs/__schema5"
+    },
+    "__schema5": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
     },
-    "__schema5": {
+    "__schema6": {
       "type": "string",
       "minLength": 1,
       "maxLength": 512
     },
-    "__schema6": {
-      "$ref": "#/$defs/__schema7"
-    },
     "__schema7": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 9007199254740991
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema8"
+      }
     },
     "__schema8": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["success", "auth_required", "unavailable", "unsupported", "error"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "success",
+            "auth_required",
+            "access_denied",
+            "unavailable",
+            "unsupported",
+            "error"
+          ]
+        }
+      },
+      "required": ["source_id", "outcome", "category"],
+      "additionalProperties": false
+    },
+    "__schema9": {
       "type": "boolean",
       "const": true
     },
-    "__schema9": {
+    "__schema10": {
       "type": "object",
       "properties": {
         "provider": {
@@ -137,7 +160,7 @@
           "maxItems": 16,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema10"
+            "$ref": "#/$defs/__schema11"
           }
         },
         "status": {
@@ -151,7 +174,7 @@
       "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
-    "__schema10": {
+    "__schema11": {
       "type": "object",
       "properties": {
         "id": {
@@ -174,7 +197,9 @@
           "$ref": "#/$defs/__schema0"
         },
         "duration_seconds": {
-          "$ref": "#/$defs/__schema7"
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "remaining_value": {
           "type": "number"
@@ -191,7 +216,7 @@
       "required": ["id", "title", "used_percent"],
       "additionalProperties": false
     },
-    "__schema11": {
+    "__schema12": {
       "type": "object",
       "properties": {
         "provider": {
@@ -201,13 +226,13 @@
           "$ref": "#/$defs/__schema4"
         },
         "message": {
-          "$ref": "#/$defs/__schema5"
-        },
-        "sources": {
           "$ref": "#/$defs/__schema6"
         },
+        "sources": {
+          "$ref": "#/$defs/__schema7"
+        },
         "access_denied": {
-          "$ref": "#/$defs/__schema8"
+          "$ref": "#/$defs/__schema9"
         },
         "outcome": {
           "type": "string",
@@ -217,11 +242,11 @@
           "maxItems": 0,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema9"
+            "$ref": "#/$defs/__schema10"
           }
         }
       },
-      "required": ["provider", "outcome", "snapshots"],
+      "required": ["provider", "sources", "outcome", "snapshots"],
       "additionalProperties": false
     }
   }

@@ -29,21 +29,22 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     switch self {
     case .token: "/oauth/v2/token"
     case .revoke: "/oauth/v2/revoke"
-    case .accountSummary: "/api/v5/account/summary"
-    }
-  }
-
-  public var usesBearer: Bool {
-    switch self {
-    case .token: false
-    case .revoke, .accountSummary: true
+    case .accountSummary: "/api/v6/account/summary"
     }
   }
 }
 
+/// The outcome of a conditional Account summary read.
+///
+/// `unchanged` is an answer, not a failure: the server has confirmed the caller's stored
+/// summary is still current, and the caller keeps showing it.
+public enum AccountSummaryRead: Sendable {
+  case modified(AccountSummary, etag: String?)
+  case unchanged(etag: String?)
+}
+
 public struct RelayClient: Sendable {
   public static let origin = URL(string: "https://quota.gotry.io")!
-  public static let requestTimeout = Duration.seconds(20)
   public static let maximumResponseBytes = WireCodec.maximumResponseBytes
 
   private let transport: any HTTPTransport
@@ -74,8 +75,8 @@ public struct RelayClient: Sendable {
     )
   }
 
-  public func refreshAccountSession(refreshToken: String) async throws
-    -> AccountSessionRefreshResponse
+  public func refreshSession(refreshToken: String) async throws
+    -> SessionRefreshResponse
   {
     guard WireValidation.isIOSRefreshToken(refreshToken) else {
       throw RelayClientError.invalidGrant
@@ -87,7 +88,7 @@ public struct RelayClient: Sendable {
       body: body,
       bearer: nil,
       expectedStatus: 200,
-      decode: AccountSessionRefreshResponse.self
+      decode: SessionRefreshResponse.self
     )
   }
 
@@ -104,28 +105,41 @@ public struct RelayClient: Sendable {
     )
   }
 
-  public func fetchAccountSummary(from: String, to: String, accessToken: String) async throws
-    -> AccountSummary
-  {
-    guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to), from <= to else {
+  /// Reads the Account, offering the validator the caller already holds.
+  ///
+  /// One read answers the whole account: the devices, the resolved subscriptions, and the four
+  /// periods in the calendar `timeZone` names. Passing `etag` turns the read conditional: an
+  /// account that has not changed answers 304 and sends no body.
+  public func fetchAccountSummary(
+    timeZone: String,
+    accessToken: String,
+    etag: String? = nil
+  ) async throws -> AccountSummaryRead {
+    guard WireValidation.isTimezone(timeZone), TimeZone(identifier: timeZone) != nil else {
       throw RelayClientError.invalidResponse
     }
     guard WireValidation.isIOSAccessToken(accessToken) else {
       throw RelayClientError.unauthorized
     }
-    return try await send(
+    let (data, response) = try await perform(
       route: .accountSummary,
-      query: [
-        ("from", from),
-        ("to", to),
-        ("cost_mode", "auto"),
-        ("usage_agents", "all"),
-      ],
+      query: [("tz", timeZone)],
       body: nil,
       bearer: accessToken,
       expectedStatus: 200,
-      decode: AccountSummary.self
+      ifNoneMatch: etag
     )
+    let nextETag = Self.entityTag(response)
+    if response.statusCode == 304 {
+      return .unchanged(etag: nextETag ?? etag)
+    }
+    do {
+      return .modified(try WireCodec.decode(AccountSummary.self, from: data), etag: nextETag)
+    } catch is WireLimitError {
+      throw RelayClientError.responseTooLarge
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
   }
 
   private func send<T: Decodable>(
@@ -136,7 +150,7 @@ public struct RelayClient: Sendable {
     expectedStatus: Int,
     decode: T.Type
   ) async throws -> T {
-    let data = try await perform(
+    let (data, _) = try await perform(
       route: route,
       query: query,
       body: body,
@@ -152,14 +166,22 @@ public struct RelayClient: Sendable {
     }
   }
 
+  @discardableResult
   private func perform(
     route: RelayRoute,
     query: [(String, String)],
     body: Data?,
     bearer: String?,
-    expectedStatus: Int
-  ) async throws -> Data {
-    let request = try makeRequest(route: route, query: query, body: body, bearer: bearer)
+    expectedStatus: Int,
+    ifNoneMatch: String? = nil
+  ) async throws -> (Data, HTTPURLResponse) {
+    let request = try makeRequest(
+      route: route,
+      query: query,
+      body: body,
+      bearer: bearer,
+      ifNoneMatch: ifNoneMatch
+    )
     let data: Data
     let response: HTTPURLResponse
     do {
@@ -172,24 +194,39 @@ public struct RelayClient: Sendable {
       throw RelayClientError.unavailable
     }
 
-    if (300...399).contains(response.statusCode) {
+    // 304 shares the 3xx range with the redirects this client refuses, but it is the answer to
+    // the question this request asked rather than a request to go somewhere else.
+    let notModified = response.statusCode == 304 && ifNoneMatch != nil
+    if (300...399).contains(response.statusCode) && !notModified {
       throw RelayClientError.redirectRefused
     }
     if data.count > Self.maximumResponseBytes {
       throw RelayClientError.responseTooLarge
     }
 
-    if response.statusCode == expectedStatus {
-      return data
+    if response.statusCode == expectedStatus || notModified {
+      return (data, response)
     }
     throw mapStatus(response.statusCode, body: data)
+  }
+
+  private static func entityTag(_ response: HTTPURLResponse) -> String? {
+    guard let value = response.value(forHTTPHeaderField: "ETag"),
+      !value.isEmpty,
+      value.count <= 256,
+      value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+    else {
+      return nil
+    }
+    return value
   }
 
   private func makeRequest(
     route: RelayRoute,
     query: [(String, String)],
     body: Data?,
-    bearer: String?
+    bearer: String?,
+    ifNoneMatch: String? = nil
   ) throws -> URLRequest {
     guard var components = URLComponents(url: Self.origin, resolvingAgainstBaseURL: false) else {
       throw RelayClientError.invalidOrigin
@@ -210,6 +247,9 @@ public struct RelayClient: Sendable {
     request.httpBody = body
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.httpShouldHandleCookies = false
+    if let ifNoneMatch, !ifNoneMatch.isEmpty, ifNoneMatch.count <= 256 {
+      request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+    }
 
     if let bearer {
       try Self.attachBearer(&request, token: bearer)

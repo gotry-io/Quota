@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::*;
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, RepairAction, RepairSite, StateError,
-    StateStore, now_rfc3339, sqlite_durable_corruption_error, sqlite_io_or_full_error,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
 };
 use serde_json::Value;
 
@@ -52,6 +51,24 @@ pub struct RefreshOutcome {
     pub overview: Option<Vec<QuotaOverviewItem>>,
 }
 
+/// Where a refresh hands over a component the moment it has it, rather than at its end.
+///
+/// The Account read needs nothing but the session, so it lands in well under a second while
+/// provider collection can take twenty seconds per provider. Publishing it here is what lets the
+/// panel name the account and show its totals while the rest of the refresh is still running.
+/// Whatever is published this way is also carried in the `RefreshOutcome`, so a caller that only
+/// wants the end of the refresh discards these and loses nothing.
+pub trait RefreshSink: Sync {
+    fn account(&self, result: Result<Value, BackendError>);
+}
+
+/// A sink for a caller that wants only the finished `RefreshOutcome`.
+pub struct DiscardedRefreshUpdates;
+
+impl RefreshSink for DiscardedRefreshUpdates {
+    fn account(&self, _: Result<Value, BackendError>) {}
+}
+
 /// Catalog is generated from the language-neutral provider JSON.  Keeping this policy at the
 /// service boundary prevents arbitrary providers, ambient credentials, and private URLs from
 /// being created through IPC.
@@ -89,18 +106,33 @@ fn provider_mask_label(provider: &str) -> &'static str {
         .unwrap_or("API")
 }
 
+/// A provider the catalog says has a browser session at all. Every other id is a request this
+/// service will not answer, whatever the payload carries.
+fn browser_session_provider(provider: &str) -> Result<crate::catalog::ProviderId, IpcError> {
+    crate::catalog::ProviderId::parse(provider)
+        .filter(|provider| provider.metadata().browser_session.is_some())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))
+}
+
+/// The browser's display name, kept short and free of control characters. It is the only part
+/// of a refusal that came from outside this process, and it is rendered to a person.
+fn bounded_browser_name(value: &str) -> Result<String, IpcError> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))
+}
+
 /// Adapter boundary for the provider, usage, pricing, and Relay implementations.  It lives here
 /// so those modules can be developed independently without making the IPC layer know their types.
 pub trait LocalBackend: Send + Sync {
-    /// One refresh transaction.  Implementations may collect quota/Usage in parallel, but must
-    /// order pricing/control, upload/outbox, account summary, and overview merging explicitly.
-    fn refresh(&self, cancel: Arc<AtomicBool>) -> RefreshOutcome;
+    /// One refresh transaction.  Implementations may collect quota/Usage and read the Account in
+    /// parallel, but must order pricing/control, upload/outbox, and overview merging explicitly.
+    /// Anything handed to `updates` before this returns is still named in the outcome.
+    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome;
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
-    }
-    fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
-        Ok(())
     }
     fn login(
         &self,
@@ -120,7 +152,7 @@ struct UnavailableBackend;
 
 #[cfg(test)]
 impl LocalBackend for UnavailableBackend {
-    fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+    fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
         let unavailable = || Err(BackendError::unavailable());
         RefreshOutcome {
             quota: unavailable(),
@@ -154,19 +186,6 @@ struct RefreshState {
     pending_trigger: Option<DiagnosticAttemptTrigger>,
 }
 
-/// How a refresh ended, which is what decides whether its outcome is worth
-/// reporting. `run_refresh` knows this directly; the worker used to re-derive a
-/// weaker answer from a flag it had itself written a few frames earlier.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RefreshEnd {
-    /// A repair took the refresh over. The components were left as they were, so
-    /// a report would describe the repair rather than a refresh.
-    Aborted,
-    /// The refresh reached its end, whether it completed, was cancelled, or
-    /// failed loudly. Its outcome is worth reporting.
-    Ran,
-}
-
 fn coalesce_refresh_trigger(
     current: Option<DiagnosticAttemptTrigger>,
     incoming: DiagnosticAttemptTrigger,
@@ -181,9 +200,15 @@ fn coalesce_refresh_trigger(
         .unwrap_or(incoming)
 }
 
+/// How long a reset waits for the refresh it cancelled to let go of the cache.
+///
+/// A cancelled refresh unwinds at the next thing it checks, and the longest of those is one
+/// provider request already in flight.
+const REFRESH_HANDOVER_DEADLINE: Duration = Duration::from_secs(30);
+const REFRESH_HANDOVER_POLL: Duration = Duration::from_millis(25);
+
 struct ActiveRefresh {
     cancel: Arc<AtomicBool>,
-    started_at: String,
 }
 
 struct LoginState {
@@ -199,7 +224,6 @@ struct ServiceInner {
     login: Mutex<LoginState>,
     scheduler_wakeup: Condvar,
     scheduler_signal: Mutex<bool>,
-    repair_watchdog_started: AtomicBool,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
 }
@@ -229,7 +253,6 @@ impl LocalService {
                 login: Mutex::new(LoginState { active: None }),
                 scheduler_wakeup: Condvar::new(),
                 scheduler_signal: Mutex::new(false),
-                repair_watchdog_started: AtomicBool::new(false),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
             }),
@@ -237,7 +260,6 @@ impl LocalService {
     }
 
     pub fn start_scheduler(&self) {
-        self.start_repair_watchdog();
         let service = self.clone();
         service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
         thread::Builder::new()
@@ -275,17 +297,22 @@ impl LocalService {
                 IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None),
             );
         }
-        if self.is_shutdown() && !matches!(request.operation, Operation::Shutdown) {
+        // `ping` is answered while shutting down too: it reports that this process is still
+        // there to answer, which stays true until the loop leaves.
+        if self.is_shutdown() && !matches!(request.operation, Operation::Shutdown | Operation::Ping)
+        {
             return IpcResponse::error(
                 &request.request_id,
                 IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
             );
         }
         let result: Result<Value, IpcError> = match request.operation {
+            Operation::Ping => Self::ping(&request).map(as_json),
             Operation::GetState => self.get_state(&request).map(as_json),
             Operation::Diagnose => self.diagnose(&request).map(as_json),
             Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
+            Operation::ResetCache => self.reset_cache(&request).map(as_json),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
@@ -333,6 +360,13 @@ impl LocalService {
         }
     }
 
+    /// Takes no lock and touches no state, so the stdin thread can answer it while a long
+    /// operation holds the worker.
+    fn ping(request: &IpcRequest) -> Result<PingResult, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        Ok(PingResult { ok: true })
+    }
+
     fn get_state(&self, request: &IpcRequest) -> Result<StateSnapshot, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
         self.inner.state.snapshot().map_err(state_error)
@@ -345,27 +379,56 @@ impl LocalService {
 
     fn diagnose(&self, request: &IpcRequest) -> Result<DiagnosticReport, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        let _ = self.inner.state.run_repair(RepairSite::DiagnoseRead);
-        let mut report = self.inner.backend.diagnose().map_err(|error| error.error)?;
-        if let Ok(refresh) = self.inner.refresh.lock()
-            && let Some(active) = &refresh.active
+        self.inner.backend.diagnose().map_err(|error| error.error)
+    }
+
+    /// Throws this device's cache away and starts filling it in again.
+    ///
+    /// Identity — the session, the upload queue, saved browser sessions — is a different file and
+    /// is untouched.
+    fn reset_cache(&self, request: &IpcRequest) -> Result<EmptyResult, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        self.reset_cache_within(REFRESH_HANDOVER_DEADLINE)
+    }
+
+    /// Deletes the cache once the refresh in flight has let go of it.
+    ///
+    /// A refresh reads the cache to decide what this device owes its Account, so a reset that
+    /// landed in the middle of one would delete the rows it was about to hand over. The refresh
+    /// is cancelled first and this call waits for it, and a refresh still holding on when the
+    /// wait runs out is answered `Busy` rather than raced.
+    fn reset_cache_within(&self, deadline: Duration) -> Result<EmptyResult, IpcError> {
+        if !self.cancel_refresh_and_wait(deadline) {
+            return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
+        }
+        self.inner.state.reset_cache();
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual);
+        Ok(EmptyResult {})
+    }
+
+    /// Stops the refresh in flight and answers whether it let go before the deadline.
+    fn cancel_refresh_and_wait(&self, deadline: Duration) -> bool {
         {
-            report.refresh.phase = DiagnosticRefreshPhase::Running;
-            report.refresh.started_at = Some(active.started_at.clone());
-            report.refresh.next_due_at = None;
+            let Ok(refresh) = self.inner.refresh.lock() else {
+                return false;
+            };
+            let Some(active) = &refresh.active else {
+                return true;
+            };
+            active.cancel.store(true, Ordering::Release);
         }
-        let repair = self.inner.state.repair_session();
-        if matches!(
-            repair.status,
-            crate::protocol::RepairStatus::Repairing | crate::protocol::RepairStatus::Checking
-        ) {
-            report.refresh.phase = DiagnosticRefreshPhase::Running;
-            if report.refresh.started_at.is_none() {
-                report.refresh.started_at = repair.started_at;
+        let deadline = Instant::now() + deadline;
+        loop {
+            thread::sleep(REFRESH_HANDOVER_POLL);
+            match self.inner.refresh.lock() {
+                Ok(refresh) if refresh.active.is_none() => return true,
+                Ok(_) => {}
+                Err(_) => return false,
             }
-            report.refresh.next_due_at = None;
+            if Instant::now() >= deadline {
+                return false;
+            }
         }
-        Ok(report)
     }
 
     fn recheck_diagnostics(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
@@ -468,7 +531,6 @@ impl LocalService {
 
     fn logout(&self, request: &IpcRequest) -> Result<LogoutResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        self.reject_if_durable_repair()?;
         if self
             .inner
             .login
@@ -538,7 +600,6 @@ impl LocalService {
 
     fn set_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
         let payload: SetProviderConfigPayload = request.decode_payload()?;
-        self.reject_if_durable_repair()?;
         validate_provider_config(&payload.provider, payload.base_url.as_deref())?;
         self.inner
             .state
@@ -577,7 +638,6 @@ impl LocalService {
 
     fn remove_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
         let payload: ProviderPayload = request.decode_payload()?;
-        self.reject_if_durable_repair()?;
         provider_credential_config(&payload.provider)?;
         self.inner
             .state
@@ -604,12 +664,34 @@ impl LocalService {
         })
     }
 
+    /// Ends one sign-in attempt, whichever way it went.
+    ///
+    /// A session is validated again and stored. A refusal stores no session and records why the
+    /// store could not be read, so the Support page can say so instead of leaving the reader to
+    /// conclude they are not signed in.
     fn commit_provider_browser_session(
         &self,
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
-        self.reject_if_durable_repair()?;
-        let (provider, validated) = self.validated_provider_browser_session(request)?;
+        let payload: CommitProviderBrowserSessionPayload = request.decode_payload()?;
+        let provider = browser_session_provider(&payload.provider)?;
+        match (payload.cookie_header.as_deref(), payload.access_denied) {
+            (Some(cookie_header), None) => self.commit_browser_session(provider, cookie_header),
+            (None, Some(denial)) => self.record_browser_access_denial(provider, denial),
+            // Naming both, or neither, is not an attempt this service can answer.
+            _ => Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            )),
+        }
+    }
+
+    fn commit_browser_session(
+        &self,
+        provider: crate::catalog::ProviderId,
+        cookie_header: &str,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let validated = self.validate_browser_session(provider, cookie_header)?;
         self.inner
             .state
             .set_provider_browser_session(
@@ -621,6 +703,11 @@ impl LocalService {
                 },
             )
             .map_err(state_error)?;
+        // A stored session is proof the store was readable, so any refusal on record is stale.
+        let _ = self
+            .inner
+            .state
+            .clear_browser_access_denial(provider.as_str());
         self.emit(vec![ComponentName::Providers]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
@@ -628,6 +715,37 @@ impl LocalService {
             configured: true,
             account_fingerprint: Some(validated.account_fingerprint),
             account_label: validated.account_label,
+        })
+    }
+
+    fn record_browser_access_denial(
+        &self,
+        provider: crate::catalog::ProviderId,
+        denial: crate::protocol::ProviderBrowserAccessDenial,
+    ) -> Result<ProviderBrowserSessionView, IpcError> {
+        let browser = bounded_browser_name(&denial.browser)?;
+        self.inner
+            .state
+            .set_browser_access_denial(
+                provider.as_str(),
+                &crate::state::BrowserAccessDenial {
+                    browser,
+                    reason: denial.reason,
+                    denied_at: crate::state::now_rfc3339(),
+                },
+            )
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Providers]);
+        let stored = self
+            .inner
+            .state
+            .provider_browser_session(provider.as_str())
+            .map_err(state_error)?;
+        Ok(ProviderBrowserSessionView {
+            provider: provider.as_str().to_owned(),
+            configured: stored.is_some(),
+            account_fingerprint: stored.as_ref().map(|s| s.account_fingerprint.clone()),
+            account_label: stored.and_then(|s| s.account_label),
         })
     }
 
@@ -642,35 +760,40 @@ impl LocalService {
         IpcError,
     > {
         let payload: ProviderBrowserSessionPayload = request.decode_payload()?;
-        let provider = crate::catalog::ProviderId::parse(&payload.provider)
-            .filter(|provider| provider.metadata().browser_session.is_some())
-            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
-        let cookie_header = crate::providers::common::normalize_browser_cookie_header(
-            provider,
-            &payload.cookie_header,
-        )
-        .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
-        let validated = self
-            .inner
+        let provider = browser_session_provider(&payload.provider)?;
+        let validated = self.validate_browser_session(provider, &payload.cookie_header)?;
+        Ok((provider, validated))
+    }
+
+    fn validate_browser_session(
+        &self,
+        provider: crate::catalog::ProviderId,
+        cookie_header: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, IpcError> {
+        let cookie_header =
+            crate::providers::common::normalize_browser_cookie_header(provider, cookie_header)
+                .map_err(|_| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        self.inner
             .backend
             .validate_provider_browser_session(provider, &cookie_header)
-            .map_err(|error| error.error)?;
-        Ok((provider, validated))
+            .map_err(|error| error.error)
     }
 
     fn remove_provider_browser_session(
         &self,
         request: &IpcRequest,
     ) -> Result<ProviderBrowserSessionView, IpcError> {
-        self.reject_if_durable_repair()?;
         let payload: ProviderPayload = request.decode_payload()?;
-        let provider = crate::catalog::ProviderId::parse(&payload.provider)
-            .filter(|provider| provider.metadata().browser_session.is_some())
-            .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None))?;
+        let provider = browser_session_provider(&payload.provider)?;
         self.inner
             .state
             .remove_provider_browser_session(provider.as_str())
             .map_err(state_error)?;
+        // Nothing is being read here any more, so a refusal recorded against it says nothing.
+        let _ = self
+            .inner
+            .state
+            .clear_browser_access_denial(provider.as_str());
         self.emit(vec![ComponentName::Providers]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(ProviderBrowserSessionView {
@@ -712,62 +835,10 @@ impl LocalService {
                 revision: self.inner.state.current_revision().unwrap_or(0),
             };
         }
-        self.start_repair_watchdog();
-        match self.inner.state.run_repair(RepairSite::RefreshStart) {
-            Ok(report) if report.fail_closed => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::InvalidState,
-                    RecoveryAction::Reinstall,
-                ));
-                return RefreshResult {
-                    accepted: false,
-                    pending: false,
-                    revision: self.inner.state.current_revision().unwrap_or(0),
-                };
-            }
-            Err(error) if sqlite_io_or_full_error(&error) => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::Unavailable,
-                    RecoveryAction::Retry,
-                ));
-                return RefreshResult {
-                    accepted: false,
-                    pending: false,
-                    revision: self.inner.state.current_revision().unwrap_or(0),
-                };
-            }
-            Err(error) if sqlite_durable_corruption_error(&error) => {
-                return RefreshResult {
-                    accepted: false,
-                    pending: false,
-                    revision: self.inner.state.current_revision().unwrap_or(0),
-                };
-            }
-            Err(_) => {
-                return RefreshResult {
-                    accepted: false,
-                    pending: false,
-                    revision: self.inner.state.current_revision().unwrap_or(0),
-                };
-            }
-            Ok(_) => {
-                if self.inner.state.repair_session().status != crate::protocol::RepairStatus::Idle {
-                    self.emit_repair();
-                }
-            }
-        }
         let cancel = Arc::new(AtomicBool::new(false));
-        let attempt = match self.begin_refresh_attempt(trigger) {
-            Ok(handle) => Some(handle),
-            Err(error) if sqlite_durable_corruption_error(&error) => {
-                let _ = self.inner.state.run_repair(RepairSite::WriteFailure);
-                self.begin_refresh_attempt(trigger).ok()
-            }
-            Err(_) => None,
-        };
+        let attempt = self.begin_refresh_attempt(trigger);
         refresh.active = Some(ActiveRefresh {
             cancel: cancel.clone(),
-            started_at: now_rfc3339(),
         });
         drop(refresh);
 
@@ -799,7 +870,6 @@ impl LocalService {
                     }));
                     // A panicking refresh still has an outcome worth reporting: the
                     // recovery below marks every component unavailable.
-                    let end = *result.as_ref().unwrap_or(&RefreshEnd::Ran);
                     if result.is_err() {
                         let unavailable = || Err(BackendError::unavailable());
                         for (component, error) in [
@@ -810,35 +880,24 @@ impl LocalService {
                         ] {
                             service.apply_component_result(component, error);
                         }
-                        if let Some(attempt) = attempt {
-                            let _ = service
-                                .inner
-                                .state
-                                .finish_diagnostic_attempt_with_interrupted_children(
-                                    attempt,
-                                    &DiagnosticAttemptCompletion {
-                                        outcome: DiagnosticAttemptOutcome::Failed,
-                                        code: Some(DiagnosticAttemptCode::Unavailable),
-                                        recovery: DiagnosticRecovery::Retry,
-                                        metrics: [("failed_components".to_owned(), 4)].into(),
-                                    },
-                                );
-                        }
+                        service
+                            .inner
+                            .state
+                            .finish_diagnostic_attempt_with_interrupted_children(
+                                attempt,
+                                &DiagnosticAttemptCompletion::new(
+                                    DiagnosticAttemptOutcome::Failed,
+                                    Some(DiagnosticAttemptCode::Unavailable),
+                                ),
+                            );
                     }
-                    if end == RefreshEnd::Ran {
-                        // Building a report and publishing device health is outbound work,
-                        // which a service that is tearing down skips. The post-refresh
-                        // repair is local durability -- it holds the service's only WAL
-                        // checkpoint and refreshes the last-good snapshot -- so it runs
-                        // either way, and after the report so the checkpoint covers it.
-                        let report = (!service.is_shutdown())
-                            .then(|| service.inner.backend.complete_diagnostics().ok())
-                            .flatten();
-                        let _ = service.inner.state.run_repair(RepairSite::PostRefresh);
-                        if let Some(report) = report {
-                            let _ = service.inner.backend.publish_device_health(&report);
-                        }
+                    // Building a report is work a service that is tearing down skips. Folding
+                    // the cache's log back in is local, so it runs either way, and after the
+                    // report so it covers it.
+                    if !service.is_shutdown() {
+                        let _ = service.inner.backend.complete_diagnostics();
                     }
+                    service.inner.state.checkpoint_cache();
                     let rerun = service
                         .inner
                         .refresh
@@ -869,17 +928,13 @@ impl LocalService {
                 })
                 .is_ok();
         if !spawned {
-            if let Some(attempt) = attempt {
-                let _ = self.inner.state.finish_diagnostic_attempt(
-                    attempt,
-                    &DiagnosticAttemptCompletion {
-                        outcome: DiagnosticAttemptOutcome::Failed,
-                        code: Some(DiagnosticAttemptCode::Unavailable),
-                        recovery: DiagnosticRecovery::Retry,
-                        metrics: Default::default(),
-                    },
-                );
-            }
+            self.inner.state.finish_diagnostic_attempt(
+                attempt,
+                &DiagnosticAttemptCompletion::new(
+                    DiagnosticAttemptOutcome::Failed,
+                    Some(DiagnosticAttemptCode::Unavailable),
+                ),
+            );
             if let Ok(mut refresh) = self.inner.refresh.lock() {
                 refresh.active = None;
             }
@@ -902,144 +957,20 @@ impl LocalService {
     fn begin_refresh_attempt(
         &self,
         trigger: DiagnosticAttemptTrigger,
-    ) -> Result<DiagnosticAttemptHandle, StateError> {
+    ) -> Option<DiagnosticAttemptHandle> {
         self.inner.state.begin_diagnostic_attempt(
             DiagnosticAttemptKind::Refresh,
             trigger,
-            DiagnosticSource::System,
             None,
-            DiagnosticMode::Required,
             None,
         )
     }
 
-    fn persist_refresh_last_error(&self, error: IpcError) {
-        for component in [
-            ComponentName::Quota,
-            ComponentName::Usage,
-            ComponentName::Account,
-            ComponentName::Pricing,
-        ] {
-            let current = self.inner.state.component(component).ok().flatten();
-            let status = if current
-                .as_ref()
-                .is_some_and(|record| record.value.is_some())
-            {
-                ComponentStatus::Stale
-            } else {
-                ComponentStatus::Error
-            };
-            let _ = self.inner.state.set_component(
-                component,
-                status,
-                current.as_ref().and_then(|record| record.value.clone()),
-                current
-                    .as_ref()
-                    .and_then(|record| record.updated_at.clone()),
-                Some(error.clone()),
-                false,
-            );
-        }
-    }
-
-    fn finish_aborted_refresh_attempt(&self, attempt: Option<DiagnosticAttemptHandle>) {
-        if let Some(attempt) = attempt {
-            let _ = self
-                .inner
-                .state
-                .finish_diagnostic_attempt_with_interrupted_children(
-                    attempt,
-                    &DiagnosticAttemptCompletion {
-                        outcome: DiagnosticAttemptOutcome::Interrupted,
-                        code: Some(DiagnosticAttemptCode::ProcessInterrupted),
-                        recovery: DiagnosticRecovery::Retry,
-                        metrics: Default::default(),
-                    },
-                );
-        }
-    }
-
-    /// Records whether an aborted refresh should be retried once its repair lands.
-    fn set_refresh_rerun(&self, pending: bool) {
-        if let Ok(mut refresh) = self.inner.refresh.lock() {
-            if pending {
-                refresh.pending = true;
-                if refresh.pending_trigger.is_none() {
-                    refresh.pending_trigger = Some(DiagnosticAttemptTrigger::Scheduled);
-                }
-            } else {
-                refresh.pending = false;
-                refresh.pending_trigger = None;
-            }
-        }
-    }
-
-    fn abort_refresh_on_write_failure(&self, attempt: Option<DiagnosticAttemptHandle>) -> bool {
-        if !self.inner.state.last_persistence_requires_abort() {
-            return false;
-        }
-        match self.inner.state.run_repair(RepairSite::WriteFailure) {
-            Ok(report) if report.fail_closed => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::InvalidState,
-                    RecoveryAction::Reinstall,
-                ));
-                self.finish_aborted_refresh_attempt(attempt);
-                self.set_refresh_rerun(false);
-                true
-            }
-            Ok(report)
-                if report.executed.iter().any(|action| {
-                    matches!(
-                        action,
-                        RepairAction::DiscardUnreadableDerivedIndex
-                            | RepairAction::SalvageDurableImage
-                    )
-                }) =>
-            {
-                self.finish_aborted_refresh_attempt(attempt);
-                self.set_refresh_rerun(true);
-                true
-            }
-            Err(error) if sqlite_io_or_full_error(&error) => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::Unavailable,
-                    RecoveryAction::Retry,
-                ));
-                self.finish_aborted_refresh_attempt(attempt);
-                self.set_refresh_rerun(true);
-                true
-            }
-            Err(error) if sqlite_durable_corruption_error(&error) => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::InvalidState,
-                    RecoveryAction::Reinstall,
-                ));
-                self.finish_aborted_refresh_attempt(attempt);
-                self.set_refresh_rerun(false);
-                true
-            }
-            Ok(_) | Err(_) => {
-                self.persist_refresh_last_error(IpcError::new(
-                    ErrorCode::Unavailable,
-                    RecoveryAction::Retry,
-                ));
-                self.finish_aborted_refresh_attempt(attempt);
-                self.set_refresh_rerun(false);
-                true
-            }
-        }
-    }
-
-    fn run_refresh(
-        &self,
-        cancel: Arc<AtomicBool>,
-        attempt: Option<DiagnosticAttemptHandle>,
-    ) -> RefreshEnd {
-        let _ = self.inner.state.run_repair(RepairSite::RefreshWorker);
-        if self.abort_refresh_on_write_failure(attempt) {
-            return RefreshEnd::Aborted;
-        }
+    fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
+        let updates = RefreshUpdates {
+            service: self.clone(),
+            account: Mutex::new(None),
+        };
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -1050,11 +981,8 @@ impl LocalService {
                 overview: None,
             }
         } else {
-            self.inner.backend.refresh(cancel.clone())
+            self.inner.backend.refresh(cancel.clone(), &updates)
         };
-        if self.abort_refresh_on_write_failure(attempt) {
-            return RefreshEnd::Aborted;
-        }
         let session_required = self
             .inner
             .state
@@ -1065,7 +993,28 @@ impl LocalService {
         let completion = refresh_attempt_completion(&outcome, session_required, cancel.as_ref());
         self.apply_component_result(ComponentName::Quota, outcome.quota);
         self.apply_component_result(ComponentName::Usage, outcome.usage);
-        let account_result = match self.inner.state.session_json().ok().flatten() {
+        // The Account is usually already applied, from the read that finished long before this
+        // refresh did. Writing the identical value again would only restate it, so the end of a
+        // refresh applies the Account exactly when it differs from what was published.
+        let account_result = self.account_result_for_session(outcome.account);
+        if !updates.already_applied_account(&account_result) {
+            self.apply_component_result(ComponentName::Account, account_result);
+        }
+        self.apply_component_result(ComponentName::Pricing, outcome.pricing);
+        if let Some(overview) = outcome.overview {
+            let _ = self.inner.state.set_overview(&overview);
+        }
+        self.inner
+            .state
+            .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
+    }
+
+    /// A session being signed out never has its Account overwritten by a read taken before it.
+    fn account_result_for_session(
+        &self,
+        result: Result<Value, BackendError>,
+    ) -> Result<Value, BackendError> {
+        match self.inner.state.session_json().ok().flatten() {
             Some(session)
                 if session.get("status").and_then(Value::as_str) == Some("logout_pending") =>
             {
@@ -1073,23 +1022,8 @@ impl LocalService {
                     error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry),
                 })
             }
-            _ => outcome.account,
-        };
-        self.apply_component_result(ComponentName::Account, account_result);
-        self.apply_component_result(ComponentName::Pricing, outcome.pricing);
-        if let Some(overview) = outcome.overview {
-            let _ = self.inner.state.set_overview(&overview);
+            _ => result,
         }
-        if self.abort_refresh_on_write_failure(attempt) {
-            return RefreshEnd::Aborted;
-        }
-        if let Some(attempt) = attempt {
-            let _ = self
-                .inner
-                .state
-                .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
-        }
-        RefreshEnd::Ran
     }
 
     fn apply_component_result(
@@ -1170,6 +1104,7 @@ impl LocalService {
                         Some(account_value_json(&AccountComponentValue {
                             auth_status: AuthStatus::SignedOut,
                             account_id: None,
+                            display_label: None,
                             device_id: None,
                             device_generation: None,
                             account_summary: None,
@@ -1370,6 +1305,7 @@ impl LocalService {
                     Some(account_value_json(&AccountComponentValue {
                         auth_status: AuthStatus::SignedOut,
                         account_id: None,
+                        display_label: None,
                         device_id: None,
                         device_generation: None,
                         account_summary: None,
@@ -1444,6 +1380,7 @@ impl LocalService {
         let value = AccountComponentValue {
             auth_status: AuthStatus::SignedOut,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1481,72 +1418,56 @@ impl LocalService {
             .sink
             .event(IpcEvent::state_changed(revision, components));
     }
+}
 
-    fn emit_repair(&self) {
-        self.inner.sink.event(IpcEvent::state_changed(
-            self.inner.state.remembered_revision(),
-            vec![ComponentName::Repair],
-        ));
+/// The running refresh's half of [`RefreshSink`].
+///
+/// It applies and announces what it is handed, and remembers it: a refresh can read the Account
+/// twice — once before it uploads and once after, when the upload changed it — and the end of
+/// the refresh restates it again. Only a value that differs from the one standing is applied, so
+/// a conditional read answered 304 costs nothing and announces nothing.
+struct RefreshUpdates {
+    service: LocalService,
+    account: Mutex<Option<Result<Value, BackendError>>>,
+}
+
+impl RefreshUpdates {
+    fn already_applied_account(&self, result: &Result<Value, BackendError>) -> bool {
+        self.account
+            .lock()
+            .ok()
+            .and_then(|applied| {
+                applied
+                    .as_ref()
+                    .map(|previous| same_component_result(previous, result))
+            })
+            .unwrap_or(false)
     }
+}
 
-    fn reject_if_durable_repair(&self) -> Result<(), IpcError> {
-        let repair = self.inner.state.repair_session();
-        if repair.severity == crate::protocol::RepairSeverity::Durable
-            && matches!(
-                repair.status,
-                crate::protocol::RepairStatus::Repairing | crate::protocol::RepairStatus::Checking
-            )
-        {
-            return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
-        }
-        Ok(())
-    }
-
-    fn start_repair_watchdog(&self) {
-        if self
-            .inner
-            .repair_watchdog_started
-            .swap(true, Ordering::AcqRel)
-        {
+impl RefreshSink for RefreshUpdates {
+    fn account(&self, result: Result<Value, BackendError>) {
+        let result = self.service.account_result_for_session(result);
+        if self.already_applied_account(&result) {
             return;
         }
-        let service = self.clone();
-        let _ = thread::Builder::new()
-            .name("quota-repair-watchdog".to_owned())
-            .spawn(move || {
-                let stuck_after = Duration::from_secs(45);
-                let failed_after = Duration::from_secs(30);
-                let completed_flash = Duration::from_millis(1500);
-                let tick = Duration::from_millis(200);
-                loop {
-                    thread::sleep(tick);
-                    if service.is_shutdown() {
-                        break;
-                    }
-                    let now = Instant::now();
-                    if service
-                        .inner
-                        .state
-                        .mark_repair_stuck_if_silent(now, stuck_after)
-                    {
-                        service.emit_repair();
-                    }
-                    if service
-                        .inner
-                        .state
-                        .mark_repair_failed_if_stuck_expired(now, failed_after)
-                    {
-                        service.emit_repair();
-                    }
-                    if service
-                        .inner
-                        .state
-                        .mark_repair_idle_if_completed_expired(now, completed_flash)
-                    {
-                        service.emit_repair();
-                    }
-                }
-            });
+        if let Ok(mut applied) = self.account.lock() {
+            *applied = Some(result.clone());
+        }
+        self.service
+            .apply_component_result(ComponentName::Account, result);
+        self.service.emit(vec![ComponentName::Account]);
+    }
+}
+
+fn same_component_result(
+    left: &Result<Value, BackendError>,
+    right: &Result<Value, BackendError>,
+) -> bool {
+    match (left, right) {
+        (Ok(left), Ok(right)) => left == right,
+        (Err(left), Err(right)) => left.error == right.error,
+        _ => false,
     }
 }
 
@@ -1566,31 +1487,20 @@ fn refresh_attempt_completion(
         || errors
             .iter()
             .any(|error| error.error.code == ErrorCode::Cancelled);
-    let (outcome, code, recovery) = if cancelled {
+    let (outcome, code) = if cancelled {
         (
             DiagnosticAttemptOutcome::Cancelled,
             Some(DiagnosticAttemptCode::Cancelled),
-            DiagnosticRecovery::None,
         )
     } else if let Some(error) = errors.first() {
         (
             DiagnosticAttemptOutcome::Failed,
             Some(diagnostic_attempt_code(error.error.code)),
-            diagnostic_recovery(error.error.recovery_action),
         )
     } else {
-        (
-            DiagnosticAttemptOutcome::Success,
-            None,
-            DiagnosticRecovery::None,
-        )
+        (DiagnosticAttemptOutcome::Success, None)
     };
-    DiagnosticAttemptCompletion {
-        outcome,
-        code,
-        recovery,
-        metrics: [("failed_components".to_owned(), errors.len() as i64)].into(),
-    }
+    DiagnosticAttemptCompletion::new(outcome, code)
 }
 
 fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
@@ -1611,17 +1521,6 @@ fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
         | ErrorCode::Busy
         | ErrorCode::Unavailable
         | ErrorCode::Internal => DiagnosticAttemptCode::Unavailable,
-    }
-}
-
-fn diagnostic_recovery(recovery: RecoveryAction) -> DiagnosticRecovery {
-    match recovery {
-        RecoveryAction::None => DiagnosticRecovery::None,
-        RecoveryAction::Retry => DiagnosticRecovery::Retry,
-        RecoveryAction::Login => DiagnosticRecovery::Login,
-        RecoveryAction::ConfigureProvider => DiagnosticRecovery::ConfigureProvider,
-        RecoveryAction::Upgrade => DiagnosticRecovery::Upgrade,
-        RecoveryAction::Reinstall => DiagnosticRecovery::Reinstall,
     }
 }
 
@@ -1651,6 +1550,7 @@ fn account_value_from(
         return AccountComponentValue {
             auth_status: status,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1660,6 +1560,7 @@ fn account_value_from(
         return AccountComponentValue {
             auth_status: status,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1669,6 +1570,10 @@ fn account_value_from(
         auth_status: status,
         account_id: object
             .get("account_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        display_label: object
+            .get("display_label")
             .and_then(Value::as_str)
             .map(str::to_owned),
         device_id: object
@@ -1687,29 +1592,23 @@ fn account_value_json(value: &AccountComponentValue) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
 
+/// The revoke record for a session being signed out, from an active one or from itself.
 fn make_logout_pending(session: &Value) -> Option<Value> {
     let object = session.as_object()?;
     let account_id = object.get("account_id")?.as_str()?;
     let device_id = object.get("device_id")?.as_str()?;
-    let account_refresh_token = object
-        .get("account")
+    let refresh_token = object
+        .get("session")
         .and_then(Value::as_object)
-        .and_then(|v| v.get("refresh_token"))
+        .and_then(|value| value.get("refresh_token"))
         .and_then(Value::as_str)
-        .or_else(|| object.get("account_refresh_token").and_then(Value::as_str))?;
-    let device_refresh_token = object
-        .get("device")
-        .and_then(Value::as_object)
-        .and_then(|v| v.get("refresh_token"))
-        .and_then(Value::as_str)
-        .or_else(|| object.get("device_refresh_token").and_then(Value::as_str))?;
+        .or_else(|| object.get("refresh_token").and_then(Value::as_str))?;
     Some(serde_json::json!({
         "schema_version": 1,
         "status": "logout_pending",
         "account_id": account_id,
         "device_id": device_id,
-        "account_refresh_token": account_refresh_token,
-        "device_refresh_token": device_refresh_token
+        "refresh_token": refresh_token
     }))
 }
 
@@ -1825,7 +1724,7 @@ mod tests {
     }
 
     impl LocalBackend for BrowserSessionBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             let unavailable = || Err(BackendError::unavailable());
             RefreshOutcome {
                 quota: unavailable(),
@@ -1875,7 +1774,7 @@ mod tests {
     }
 
     impl LocalBackend for ChildLeakBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
             let (parent, _) = self
                 .state
                 .running_refresh_attempt()
@@ -1885,9 +1784,7 @@ mod tests {
                 .begin_diagnostic_attempt(
                     DiagnosticAttemptKind::UsageScan,
                     DiagnosticAttemptTrigger::Recheck,
-                    DiagnosticSource::ThisDevice,
                     Some("agent:codex"),
-                    DiagnosticMode::Required,
                     Some(parent),
                 )
                 .expect("child attempt");
@@ -1925,13 +1822,103 @@ mod tests {
     }
 
     fn browser_session_request(operation: &str, cookie_header: &str) -> IpcRequest {
+        provider_browser_session_request("cursor", operation, cookie_header)
+    }
+
+    fn provider_browser_session_request(
+        provider: &str,
+        operation: &str,
+        cookie_header: &str,
+    ) -> IpcRequest {
         serde_json::from_value(serde_json::json!({
             "type": "request",
             "request_id": operation,
             "operation": operation,
-            "payload": {"provider": "cursor", "cookie_header": cookie_header}
+            "payload": {"provider": provider, "cookie_header": cookie_header}
         }))
         .expect("browser-session request")
+    }
+
+    /// Every provider the catalog declares a session for can have one added and taken away.
+    ///
+    /// A commit stores the accepted header with the fingerprint and masked label validation
+    /// produced, and nothing else; disconnecting removes the row rather than emptying it.
+    #[test]
+    fn every_catalog_browser_session_provider_commits_and_disconnects() {
+        let root = std::env::temp_dir().join(format!("quota-service-sessions-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(BrowserSessionBackend { reject: false }),
+        );
+        let declared = crate::catalog::ProviderId::ALL
+            .iter()
+            .filter(|provider| provider.metadata().browser_session.is_some())
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(declared, ["codex", "claude", "grok", "kimi", "cursor"]);
+        // One real session cookie per provider, from that provider's own catalog allowlist.
+        let headers = [
+            ("codex", "__Secure-next-auth.session-token=secret"),
+            ("claude", "sessionKey=secret"),
+            ("grok", "sso=secret"),
+            ("kimi", "kimi-auth=secret"),
+            ("cursor", "wos-session=secret"),
+        ];
+        assert_eq!(
+            headers.map(|(provider, _)| provider).as_slice(),
+            declared.as_slice()
+        );
+        for (provider, header) in headers {
+            let committed = service.handle(provider_browser_session_request(
+                provider,
+                "commit_provider_browser_session",
+                header,
+            ));
+            assert!(committed.error.is_none(), "{provider} commit");
+            let stored = state
+                .provider_browser_session(provider)
+                .expect("read")
+                .expect("stored");
+            assert_eq!(stored.cookie_header, header);
+            assert_eq!(stored.account_fingerprint, "b".repeat(64));
+            assert_eq!(stored.account_label.as_deref(), Some("ne***@example.com"));
+
+            // A cookie name from another provider's list is not this provider's session.
+            let foreign = service.handle(provider_browser_session_request(
+                provider,
+                "commit_provider_browser_session",
+                "someone-elses-session=secret",
+            ));
+            assert!(
+                foreign.error.is_some(),
+                "{provider} accepted a foreign name"
+            );
+
+            let removed = service.handle(
+                serde_json::from_value(serde_json::json!({
+                    "type": "request",
+                    "request_id": "remove_provider_browser_session",
+                    "operation": "remove_provider_browser_session",
+                    "payload": {"provider": provider}
+                }))
+                .expect("disconnect request"),
+            );
+            assert!(removed.error.is_none(), "{provider} disconnect");
+            assert!(
+                state
+                    .provider_browser_session(provider)
+                    .expect("read")
+                    .is_none(),
+                "{provider} still stored"
+            );
+        }
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -1969,6 +1956,17 @@ mod tests {
             "wos-session=old-secret"
         );
 
+        // A refusal recorded before this attempt is answered by the session it stored.
+        state
+            .set_browser_access_denial(
+                "cursor",
+                &crate::state::BrowserAccessDenial {
+                    browser: "Safari".into(),
+                    reason: BrowserAccessDenialReason::FullDiskAccess,
+                    denied_at: crate::state::now_rfc3339(),
+                },
+            )
+            .expect("denial");
         let committed = service.handle(browser_session_request(
             "commit_provider_browser_session",
             "wos-session=new-secret",
@@ -1981,6 +1979,26 @@ mod tests {
                 .expect("new stored")
                 .cookie_header,
             "wos-session=new-secret"
+        );
+        assert!(state.browser_access_denials().expect("denials").is_empty());
+
+        // Naming both a session and a refusal is not an attempt this service can answer.
+        let ambiguous = service.handle(
+            serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": "ambiguous",
+                "operation": "commit_provider_browser_session",
+                "payload": {
+                    "provider": "cursor",
+                    "cookie_header": "wos-session=new-secret",
+                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
+                }
+            }))
+            .expect("ambiguous request"),
+        );
+        assert_eq!(
+            ambiguous.error.map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
         );
         service.shutdown();
 
@@ -2032,68 +2050,15 @@ mod tests {
         let response = service.handle(request);
         assert!(response.error.is_none());
         assert!(service.inner.refresh.lock().expect("lock").active.is_none());
-        let repair = response
+        let cache = response
             .result
             .as_ref()
-            .and_then(|value| value.get("repair"))
-            .expect("repair object");
-        assert_eq!(repair["status"], "idle");
-        assert_eq!(repair["severity"], "none");
+            .and_then(|value| value.get("cache"))
+            .expect("cache object");
+        assert_eq!(cache["rebuilding"], false);
+        assert!(cache["reset_at"].is_null());
         service.shutdown();
         drop(service);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn request_refresh_does_not_drop_usage_tables() {
-        let root = std::env::temp_dir().join(format!("quota-refresh-no-drop-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        state.insert_usage_file_record_for_test().expect("usage");
-        state.set_usage_isolated_for_test(true).expect("isolated");
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            Arc::new(UnavailableBackend),
-        );
-        service
-            .inner
-            .fail_next_refresh_spawn
-            .store(true, Ordering::Release);
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
-        assert!(!result.accepted);
-        assert_eq!(state.usage_event_count().expect("count"), 1);
-        assert!(state.derived_drop_pending().expect("pending"));
-        service.shutdown();
-        drop(service);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn automatic_salvage_emits_repair_changed() {
-        let root = std::env::temp_dir().join(format!("quota-repair-event-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        state
-            .fail_persist_probe_with_corruption_for_test()
-            .expect("poison");
-        let sink = Arc::new(RecordingSink::default());
-        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
-        assert!(result.accepted);
-        assert!(!result.pending);
-        let session = state.repair_session();
-        assert_eq!(session.severity, crate::protocol::RepairSeverity::Durable);
-        let events = sink.0.lock().expect("events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.changed_components == [ComponentName::Repair])
-        );
-        service.shutdown();
-        drop(service);
-        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -2126,18 +2091,21 @@ mod tests {
                 .is_none()
         );
         let facts = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticSource::System,
-                None,
-            )
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::Refresh, None)
             .expect("refresh attempt facts");
-        let attempt = facts.latest_completed.expect("completed attempt");
-        assert_eq!(attempt.trigger, DiagnosticAttemptTrigger::Recheck);
-        assert_eq!(attempt.outcome, DiagnosticAttemptOutcome::Failed);
-        assert_eq!(attempt.code, Some(DiagnosticAttemptCode::Unavailable));
-        assert_eq!(attempt.recovery, DiagnosticRecovery::Retry);
-        assert!(facts.latest_success.is_none());
+        assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Failed));
+        assert_eq!(
+            facts.unresolved_code,
+            Some(DiagnosticAttemptCode::Unavailable)
+        );
+        assert!(facts.last_success_at.is_none());
+        assert!(
+            state
+                .diagnostic_recent_attempts()
+                .expect("recent")
+                .iter()
+                .any(|attempt| attempt.kind == DiagnosticAttemptKind::Refresh)
+        );
 
         service.shutdown();
         drop(service);
@@ -2184,17 +2152,16 @@ mod tests {
         );
 
         let child = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticSource::ThisDevice,
-                Some("agent:codex"),
-            )
-            .expect("child facts")
-            .latest_completed
-            .expect("completed child");
-        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
-        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
-        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageScan, Some("agent:codex"))
+            .expect("child facts");
+        assert_eq!(
+            child.last_outcome,
+            Some(DiagnosticAttemptOutcome::Interrupted)
+        );
+        assert_eq!(
+            child.unresolved_code,
+            Some(DiagnosticAttemptCode::ProcessInterrupted)
+        );
 
         service.shutdown();
         drop(service);
@@ -2241,27 +2208,23 @@ mod tests {
         );
 
         let refresh = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticSource::System,
-                None,
-            )
-            .expect("refresh facts")
-            .latest_completed
-            .expect("completed refresh");
-        assert_eq!(refresh.outcome, DiagnosticAttemptOutcome::Success);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::Refresh, None)
+            .expect("refresh facts");
+        assert_eq!(
+            refresh.last_outcome,
+            Some(DiagnosticAttemptOutcome::Success)
+        );
         let child = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::UsageScan,
-                DiagnosticSource::ThisDevice,
-                Some("agent:codex"),
-            )
-            .expect("child facts")
-            .latest_completed
-            .expect("completed child");
-        assert_eq!(child.outcome, DiagnosticAttemptOutcome::Interrupted);
-        assert_eq!(child.code, Some(DiagnosticAttemptCode::ProcessInterrupted));
-        assert_eq!(child.recovery, DiagnosticRecovery::Retry);
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageScan, Some("agent:codex"))
+            .expect("child facts");
+        assert_eq!(
+            child.last_outcome,
+            Some(DiagnosticAttemptOutcome::Interrupted)
+        );
+        assert_eq!(
+            child.unresolved_code,
+            Some(DiagnosticAttemptCode::ProcessInterrupted)
+        );
 
         service.shutdown();
         drop(service);
@@ -2269,6 +2232,80 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A reset deletes the file the refresh in flight is reading, so it cancels that refresh
+    /// and waits for it to let go. Staging reads an hour's rows after it reads the list of
+    /// dirty hours; a reset in between would have staged that hour empty under the scan
+    /// version that produced it, and an hour is replaced by version.
+    #[test]
+    fn reset_cache_waits_for_the_refresh_it_cancelled() {
+        let root = std::env::temp_dir().join(format!("quota-reset-wait-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                ComponentName::Usage,
+                ComponentStatus::Ready,
+                Some(serde_json::json!({"kept": true})),
+                None,
+                None,
+                false,
+            )
+            .expect("something to lose");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
+            cancel: cancel.clone(),
+        });
+
+        // A refresh that will not let go is answered rather than raced.
+        assert_eq!(
+            service
+                .reset_cache_within(Duration::from_millis(50))
+                .expect_err("busy")
+                .code,
+            ErrorCode::Busy
+        );
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(state.snapshot().expect("snapshot").cache.reset_at.is_none());
+
+        // One that does is waited for, and only then is the cache thrown away.
+        let releasing = {
+            let service = service.clone();
+            let cancel = cancel.clone();
+            thread::spawn(move || {
+                while !cancel.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                thread::sleep(Duration::from_millis(20));
+                service.inner.refresh.lock().expect("refresh").active = None;
+            })
+        };
+        cancel.store(false, Ordering::Release);
+        service
+            .reset_cache_within(Duration::from_secs(5))
+            .expect("reset");
+        releasing.join().expect("releasing thread");
+        assert!(state.snapshot().expect("snapshot").cache.reset_at.is_some());
+        assert_ne!(
+            state
+                .component(ComponentName::Usage)
+                .expect("component")
+                .and_then(|record| record.value),
+            Some(serde_json::json!({"kept": true}))
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A recheck asks for a newer report; a running refresh has none to give yet, so it hands
+    /// back the last completed one unchanged rather than an intermediate state.
     #[test]
     fn diagnose_during_refresh_uses_the_last_completed_snapshot() {
         let root = std::env::temp_dir().join(format!("quota-service-{}", Uuid::new_v4()));
@@ -2296,7 +2333,6 @@ mod tests {
         let service = LocalService::new(state.clone(), Arc::new(RecordingSink::default()), backend);
         service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
             cancel: Arc::new(AtomicBool::new(false)),
-            started_at: "2026-08-15T08:00:00Z".into(),
         });
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -2310,9 +2346,16 @@ mod tests {
         let report: DiagnosticReport =
             serde_json::from_value(response.result.expect("result")).expect("report");
 
-        assert_eq!(report.refresh.phase, DiagnosticRefreshPhase::Running);
-        assert_eq!(report.refresh.revision, baseline.refresh.revision);
+        assert_eq!(report.generated_at, baseline.generated_at);
         assert_eq!(report.summary.operation, baseline.summary.operation);
+        assert_eq!(
+            report
+                .surfaces
+                .iter()
+                .find(|surface| surface.id == "usage_this_device")
+                .map(|surface| surface.status),
+            Some(DiagnosticStatus::Ok)
+        );
         service.shutdown();
         drop(service);
         drop(state);
@@ -2370,6 +2413,368 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A gate a test closes in front of a backend, so it can read the state a person would see
+    /// while that backend is provably still working.
+    struct Latch {
+        state: Mutex<(bool, bool)>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Latch {
+        fn new() -> Self {
+            Self {
+                state: Mutex::new((false, false)),
+                changed: std::sync::Condvar::new(),
+            }
+        }
+
+        /// Reports arrival and waits to be released; answers whether it was, rather than timing
+        /// out silently.
+        fn hold(&self) -> bool {
+            let mut state = self.state.lock().expect("latch");
+            state.0 = true;
+            self.changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.1 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (guard, _) = self
+                    .changed
+                    .wait_timeout(state, remaining)
+                    .expect("latch wait");
+                state = guard;
+            }
+            true
+        }
+
+        fn wait_arrived(&self) {
+            let mut state = self.state.lock().expect("latch");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.0 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(!remaining.is_zero(), "the latch was never reached");
+                let (guard, _) = self
+                    .changed
+                    .wait_timeout(state, remaining)
+                    .expect("latch wait");
+                state = guard;
+            }
+        }
+
+        fn release(&self) {
+            self.state.lock().expect("latch").1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    fn named_session() -> Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "active",
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        })
+    }
+
+    fn named_account(summary: Option<Value>) -> AccountComponentValue {
+        AccountComponentValue {
+            auth_status: AuthStatus::SignedIn,
+            account_id: Some("account_1".into()),
+            display_label: Some("octocat".into()),
+            device_id: Some("device_1".into()),
+            device_generation: Some(1),
+            account_summary: summary,
+        }
+    }
+
+    /// Signs in with an Account that has a name, and holds the refresh that follows.
+    struct NamedLoginBackend {
+        refreshing: Arc<Latch>,
+    }
+
+    impl LocalBackend for NamedLoginBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+            self.refreshing.hold();
+            let unavailable = || Err(BackendError::unavailable());
+            RefreshOutcome {
+                quota: unavailable(),
+                usage: unavailable(),
+                account: unavailable(),
+                pricing: unavailable(),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Ok(LoginOutcome {
+                session: named_session(),
+                account: named_account(None),
+            })
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    /// Hands the Account over the moment it has one, then keeps working.
+    struct EarlyAccountBackend {
+        collecting: Arc<Latch>,
+    }
+
+    impl EarlyAccountBackend {
+        fn account(&self) -> Value {
+            serde_json::to_value(named_account(Some(serde_json::json!({"devices": []}))))
+                .expect("account value")
+        }
+    }
+
+    impl LocalBackend for EarlyAccountBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+            updates.account(Ok(self.account()));
+            self.collecting.hold();
+            // A conditional read answered 304 hands back the Account it already had. Restating
+            // it is not a change, and a window that is already showing it is not told again.
+            updates.account(Ok(self.account()));
+            RefreshOutcome {
+                quota: Ok(serde_json::json!({"results": []})),
+                usage: Err(BackendError::unavailable()),
+                account: Ok(self.account()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    fn account_component(service: &LocalService) -> Value {
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "state",
+            "operation": "get_state",
+            "payload": {}
+        }))
+        .expect("request");
+        let response = service.handle(request);
+        assert!(response.error.is_none());
+        response
+            .result
+            .and_then(|state| state.get("account").cloned())
+            .expect("account component")
+    }
+
+    fn wait_for_account_event(sink: &RecordingSink, after: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = sink.0.lock().expect("events").len();
+            if sink
+                .0
+                .lock()
+                .expect("events")
+                .iter()
+                .skip(after)
+                .any(|event| event.changed_components == [ComponentName::Account])
+            {
+                return seen;
+            }
+            assert!(Instant::now() < deadline, "no account event was emitted");
+            thread::yield_now();
+        }
+    }
+
+    /// The panel names the account as soon as the sign-in answers, which is long before the
+    /// refresh it triggers can read one.
+    #[test]
+    fn signing_in_names_the_account_before_the_refresh_it_triggers() {
+        let root = std::env::temp_dir().join(format!("quota-login-name-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let refreshing = Arc::new(Latch::new());
+        let service = LocalService::new(
+            state.clone(),
+            sink.clone(),
+            Arc::new(NamedLoginBackend {
+                refreshing: refreshing.clone(),
+            }),
+        );
+
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "login",
+            "operation": "login",
+            "payload": {}
+        }))
+        .expect("request");
+        assert!(service.handle(request).error.is_none());
+        wait_for_account_event(&sink, 0);
+
+        // The next read a person's window makes already carries the name, with no Account
+        // summary yet: the sign-in named the account, it did not invent a read of it.
+        let account = account_component(&service);
+        assert_eq!(account["status"], "ready");
+        assert_eq!(account["value"]["auth_status"], "signed_in");
+        assert_eq!(account["value"]["display_label"], "octocat");
+        assert!(account["value"]["account_summary"].is_null());
+
+        // The account was announced on its own, before the refresh announced anything.
+        let events = sink.0.lock().expect("events").clone();
+        let account_first = events
+            .iter()
+            .position(|event| event.changed_components == [ComponentName::Account])
+            .expect("account event");
+        let refresh_first = events
+            .iter()
+            .position(|event| event.changed_components.len() == 4)
+            .expect("refresh event");
+        assert!(account_first < refresh_first, "{events:?}");
+
+        refreshing.release();
+        service.shutdown();
+        wait_refresh_idle(&service);
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A refresh applies the Account when it has it, not when it is finished, and the end of the
+    /// refresh restates nothing.
+    #[test]
+    fn the_account_is_applied_while_the_rest_of_the_refresh_is_still_running() {
+        let root = std::env::temp_dir().join(format!("quota-early-account-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state.write_session_json(&named_session()).expect("session");
+        let sink = Arc::new(RecordingSink::default());
+        let collecting = Arc::new(Latch::new());
+        let backend = Arc::new(EarlyAccountBackend {
+            collecting: collecting.clone(),
+        });
+        let service = LocalService::new(state.clone(), sink.clone(), backend.clone());
+
+        assert!(
+            service
+                .request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual)
+                .accepted
+        );
+        // The refresh is provably still inside the backend here, and the Account is already
+        // applied and announced.
+        collecting.wait_arrived();
+        wait_for_account_event(&sink, 1);
+        let mid_refresh = account_component(&service);
+        assert_eq!(mid_refresh["status"], "ready");
+        assert_eq!(mid_refresh["value"], backend.account());
+        assert!(mid_refresh["last_error"].is_null());
+
+        collecting.release();
+        wait_refresh_idle(&service);
+
+        // The unchanged second reading announced nothing: one account event stands for the one
+        // value the window is showing.
+        assert_eq!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .filter(|event| event.changed_components == [ComponentName::Account])
+                .count(),
+            1
+        );
+
+        // Ending the refresh neither restated the Account nor took it back.
+        let settled = account_component(&service);
+        assert_eq!(settled["value"], backend.account());
+        assert_eq!(settled["status"], "ready");
+        assert_eq!(settled["updated_at"], mid_refresh["updated_at"]);
+        assert!(settled["last_error"].is_null());
+        assert_eq!(settled["refreshing"], false);
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A sign-out that started while a read was in flight is not undone by that read.
+    #[test]
+    fn an_account_read_never_overwrites_a_session_that_is_signing_out() {
+        let root = std::env::temp_dir().join(format!("quota-account-guard-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "logout_pending",
+                "account_id": "account_1",
+                "device_id": "device_1",
+                "refresh_token": "qbr_refresh_token_synthetic"
+            }))
+            .expect("session");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let guarded = service.account_result_for_session(Ok(serde_json::json!({
+            "auth_status": "signed_in",
+            "display_label": "octocat"
+        })));
+
+        assert_eq!(
+            guarded
+                .expect_err("a signing-out session refuses the read")
+                .error,
+            IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn failed_background_login_emits_account_state() {
         let root = std::env::temp_dir().join(format!("quota-login-event-{}", Uuid::new_v4()));
@@ -2420,6 +2825,7 @@ mod tests {
                 Some(account_value_json(&AccountComponentValue {
                     auth_status: AuthStatus::SignedIn,
                     account_id: Some("account_test".into()),
+                    display_label: Some("octocat".into()),
                     device_id: Some("device_test".into()),
                     device_generation: Some(1),
                     account_summary: None,
@@ -2482,8 +2888,7 @@ mod tests {
                 "status": "active",
                 "account_id": "account_test",
                 "device_id": "device_test",
-                "account": {"refresh_token": "account_refresh"},
-                "device": {"refresh_token": "device_refresh"}
+                "session": {"refresh_token": "session_refresh"}
             }))
             .expect("session");
         let service = LocalService::new(
@@ -2494,7 +2899,6 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
             cancel: cancel.clone(),
-            started_at: now_rfc3339(),
         });
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -2529,44 +2933,21 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    struct WriteFailureBackend {
-        state: Arc<StateStore>,
-        kind: WriteFailureKind,
+    /// A backend that reports itself started and then waits, so a test can act on a refresh
+    /// that is provably still in flight.
+    struct GatedBackend {
         complete_calls: Arc<std::sync::atomic::AtomicUsize>,
-        publish_calls: Arc<std::sync::atomic::AtomicUsize>,
-        noted: Arc<(Mutex<bool>, std::sync::Condvar)>,
-        /// When set, `refresh` blocks here after signalling `noted`, so a test can
-        /// act on a refresh that is provably still in flight.
+        started: Arc<(Mutex<bool>, std::sync::Condvar)>,
         gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
 
-    #[derive(Clone, Copy)]
-    enum WriteFailureKind {
-        /// Refreshes without touching persistence, for the cases that are about
-        /// the worker's own lifecycle rather than a write failure.
-        Healthy,
-        UsageIsolated,
-        UsageIsolatedThenProbe,
-        DurableFailClosed,
-        Io,
-    }
-
-    impl WriteFailureBackend {
-        fn new(state: Arc<StateStore>, kind: WriteFailureKind) -> Self {
+    impl GatedBackend {
+        fn new() -> Self {
             Self {
-                state,
-                kind,
                 complete_calls: Arc::new(AtomicUsize::new(0)),
-                publish_calls: Arc::new(AtomicUsize::new(0)),
-                noted: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
-                gate: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
+                started: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+                gate: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
             }
-        }
-
-        /// Makes `refresh` wait after it reports itself started, until `release`.
-        fn gated(self) -> Self {
-            *self.gate.0.lock().expect("gate") = false;
-            self
         }
 
         fn release(&self) {
@@ -2574,79 +2955,37 @@ mod tests {
             self.gate.1.notify_all();
         }
 
-        fn wait_noted(&self) {
-            let (lock, cond) = &*self.noted;
-            let mut noted = lock.lock().expect("noted");
+        fn wait_started(&self) {
+            let (lock, cond) = &*self.started;
+            let mut started = lock.lock().expect("started");
             let deadline = Instant::now() + Duration::from_secs(2);
-            while !*noted {
+            while !*started {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     break;
                 }
-                let (guard, _) = cond.wait_timeout(noted, remaining).expect("wait");
-                noted = guard;
+                let (guard, _) = cond.wait_timeout(started, remaining).expect("wait");
+                started = guard;
             }
-            assert!(*noted, "refresh did not note a persistence failure");
+            assert!(*started, "refresh never started");
         }
     }
 
-    impl LocalBackend for WriteFailureBackend {
-        fn refresh(&self, _: Arc<AtomicBool>) -> RefreshOutcome {
-            if matches!(self.kind, WriteFailureKind::Healthy) {
-                *self.noted.0.lock().expect("noted") = true;
-                self.noted.1.notify_all();
-                let (lock, cond) = &*self.gate;
-                let mut open = lock.lock().expect("gate");
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while !*open {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        break;
-                    }
-                    let (guard, _) = cond.wait_timeout(open, remaining).expect("wait");
-                    open = guard;
+    impl LocalBackend for GatedBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+            *self.started.0.lock().expect("started") = true;
+            self.started.1.notify_all();
+            let (lock, cond) = &*self.gate;
+            let mut open = lock.lock().expect("gate");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !*open {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
                 }
-                return RefreshOutcome {
-                    quota: Ok(serde_json::json!({})),
-                    usage: Ok(serde_json::json!({})),
-                    account: Ok(serde_json::json!({})),
-                    pricing: Ok(serde_json::json!({})),
-                    overview: None,
-                };
+                let (guard, _) = cond.wait_timeout(open, remaining).expect("wait");
+                open = guard;
             }
-            let error = match self.kind {
-                WriteFailureKind::UsageIsolated | WriteFailureKind::UsageIsolatedThenProbe => {
-                    StateError::Sql(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error {
-                            code: rusqlite::ErrorCode::ConstraintViolation,
-                            extended_code: 19,
-                        },
-                        Some("usage_file_records unique constraint".into()),
-                    ))
-                }
-                WriteFailureKind::DurableFailClosed => {
-                    StateError::Sql(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error {
-                            code: rusqlite::ErrorCode::DatabaseCorrupt,
-                            extended_code: 11,
-                        },
-                        Some("database disk image is malformed".into()),
-                    ))
-                }
-                WriteFailureKind::Io => StateError::Io(std::io::Error::new(
-                    std::io::ErrorKind::StorageFull,
-                    "disk full",
-                )),
-                // Returned above, before any persistence is touched.
-                WriteFailureKind::Healthy => unreachable!(),
-            };
-            self.state.note_persistence_failure(&error);
-            if matches!(self.kind, WriteFailureKind::UsageIsolatedThenProbe) {
-                self.state.persist_probe().expect("probe still works");
-                assert!(self.state.last_persistence_requires_abort());
-            }
-            *self.noted.0.lock().expect("noted") = true;
-            self.noted.1.notify_all();
             RefreshOutcome {
                 quota: Ok(serde_json::json!({})),
                 usage: Ok(serde_json::json!({})),
@@ -2663,11 +3002,6 @@ mod tests {
         fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
             self.complete_calls.fetch_add(1, Ordering::SeqCst);
             Err(BackendError::unavailable())
-        }
-
-        fn publish_device_health(&self, _: &DiagnosticReport) -> Result<(), BackendError> {
-            self.publish_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
         }
 
         fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
@@ -2712,16 +3046,13 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_during_a_refresh_skips_the_report_but_still_checkpoints() {
-        // The guard's common case, which the aborted-refresh test does not reach:
-        // an ordinary refresh caught by a shutdown never aborts, so nothing marks
-        // it, yet a tearing-down service must not build or publish a report. The
-        // post-refresh repair is local durability and runs regardless.
+    fn shutdown_during_a_refresh_skips_the_report() {
+        // A tearing-down service must not build or publish a report, even though the refresh it
+        // caught mid-flight runs to its end.
         let root = std::env::temp_dir().join(format!("quota-shutdown-mid-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend =
-            Arc::new(WriteFailureBackend::new(state.clone(), WriteFailureKind::Healthy).gated());
+        let backend = Arc::new(GatedBackend::new());
         let service = LocalService::new(
             state.clone(),
             Arc::new(RecordingSink::default()),
@@ -2733,310 +3064,14 @@ mod tests {
                 .request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck)
                 .accepted
         );
-        // The refresh is provably inside `backend.refresh` here, so the shutdown
-        // lands mid-flight rather than racing the worker's completion check.
-        backend.wait_noted();
+        // The refresh is provably inside `backend.refresh` here, so the shutdown lands
+        // mid-flight rather than racing the worker's completion check.
+        backend.wait_started();
         service.shutdown();
         backend.release();
         wait_refresh_idle(&service);
 
         assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
-        // Local durability is no longer gated behind the report it used to sit
-        // behind: the post-refresh repair still wrote its last-good snapshot.
-        assert!(
-            root.join("state.sqlite.good").exists(),
-            "post-refresh repair ran despite the shutdown"
-        );
-
-        drop(service);
-        drop(backend);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn aborted_refresh_skips_diagnostics_and_keeps_last_good_usage() {
-        let root = std::env::temp_dir().join(format!("quota-abort-derived-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        state
-            .insert_usage_file_record_for_test()
-            .expect("usage rows");
-        let usage_value = serde_json::json!({"kept": true});
-        state
-            .set_component(
-                ComponentName::Usage,
-                ComponentStatus::Ready,
-                Some(usage_value.clone()),
-                Some(now_rfc3339()),
-                None,
-                false,
-            )
-            .expect("last-good usage");
-        let planted = DiagnosticReport {
-            schema_version: 2,
-            summary: DiagnosticSummary {
-                operation: DiagnosticOperation::Healthy,
-                data: DiagnosticDataState::Current,
-                attention: DiagnosticAttention::None,
-            },
-            refresh: DiagnosticRefresh {
-                phase: DiagnosticRefreshPhase::Idle,
-                revision: 1,
-                as_of: "2026-08-01T00:00:00Z".into(),
-                started_at: None,
-                next_due_at: None,
-            },
-            generated_at: "2026-08-01T00:00:00Z".into(),
-            client: DiagnosticClient {
-                name: "QuotaTest".into(),
-                version: "test".into(),
-            },
-            surfaces: vec![
-                DiagnosticSurface {
-                    name: "quota_overview".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: None,
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "usage_this_device".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Current,
-                    source: Some(DiagnosticSource::ThisDevice),
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "usage_account".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "account".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: Default::default(),
-                },
-            ],
-            checks: Vec::new(),
-            findings: Vec::new(),
-            recent_activity: DiagnosticRecentActivity {
-                attempts: Vec::new(),
-                history_truncated: false,
-            },
-        };
-        state
-            .write_diagnostic_snapshot(&planted)
-            .expect("plant snapshot");
-        let backend = Arc::new(WriteFailureBackend::new(
-            state.clone(),
-            WriteFailureKind::UsageIsolated,
-        ));
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            backend.clone(),
-        );
-
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
-        assert!(result.accepted);
-        backend.wait_noted();
-        service.shutdown();
-        wait_refresh_idle(&service);
-
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
-        let snapshot = state.diagnostic_snapshot().expect("snapshot").expect("row");
-        assert_eq!(snapshot.refresh.as_of, planted.refresh.as_of);
-        let usage = state
-            .component(ComponentName::Usage)
-            .expect("usage")
-            .expect("record");
-        assert_eq!(usage.value, Some(usage_value));
-        assert!(state.usage_reindex_pending().expect("reindex"));
-        let facts = state
-            .diagnostic_attempt_facts(
-                DiagnosticAttemptKind::Refresh,
-                DiagnosticSource::System,
-                None,
-            )
-            .expect("facts");
-        assert_eq!(
-            facts.latest_completed.map(|attempt| attempt.outcome),
-            Some(DiagnosticAttemptOutcome::Interrupted)
-        );
-
-        drop(service);
-        drop(backend);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn persist_probe_after_usage_isolated_still_aborts_without_snapshot() {
-        let root = std::env::temp_dir().join(format!("quota-abort-probe-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let planted = DiagnosticReport {
-            schema_version: 2,
-            summary: DiagnosticSummary {
-                operation: DiagnosticOperation::Healthy,
-                data: DiagnosticDataState::Current,
-                attention: DiagnosticAttention::None,
-            },
-            refresh: DiagnosticRefresh {
-                phase: DiagnosticRefreshPhase::Idle,
-                revision: 1,
-                as_of: "2026-08-01T00:00:00Z".into(),
-                started_at: None,
-                next_due_at: None,
-            },
-            generated_at: "2026-08-01T00:00:00Z".into(),
-            client: DiagnosticClient {
-                name: "QuotaTest".into(),
-                version: "test".into(),
-            },
-            surfaces: vec![
-                DiagnosticSurface {
-                    name: "quota_overview".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: None,
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "usage_this_device".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Current,
-                    source: Some(DiagnosticSource::ThisDevice),
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "usage_account".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: Default::default(),
-                },
-                DiagnosticSurface {
-                    name: "account".into(),
-                    operation: DiagnosticOperation::Healthy,
-                    data: DiagnosticDataState::Empty,
-                    source: Some(DiagnosticSource::Account),
-                    metrics: Default::default(),
-                },
-            ],
-            checks: Vec::new(),
-            findings: Vec::new(),
-            recent_activity: DiagnosticRecentActivity {
-                attempts: Vec::new(),
-                history_truncated: false,
-            },
-        };
-        state
-            .write_diagnostic_snapshot(&planted)
-            .expect("plant snapshot");
-        let backend = Arc::new(WriteFailureBackend::new(
-            state.clone(),
-            WriteFailureKind::UsageIsolatedThenProbe,
-        ));
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            backend.clone(),
-        );
-
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
-        assert!(result.accepted);
-        backend.wait_noted();
-        service.shutdown();
-        wait_refresh_idle(&service);
-
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        let snapshot = state.diagnostic_snapshot().expect("snapshot").expect("row");
-        assert_eq!(snapshot.refresh.as_of, planted.refresh.as_of);
-
-        drop(service);
-        drop(backend);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn fail_closed_abort_skips_device_health_and_does_not_rerun() {
-        let root = std::env::temp_dir().join(format!("quota-abort-closed-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let mut session = crate::protocol::RepairSession::idle();
-        session.status = crate::protocol::RepairStatus::Failed;
-        session.severity = crate::protocol::RepairSeverity::Durable;
-        session.recovery_action = Some(crate::protocol::RepairRecoveryAction::Reinstall);
-        session.started_at = Some(now_rfc3339());
-        session.heartbeat_at = Some(now_rfc3339());
-        session.stuck = true;
-        session.title = Some("Repairing local data".into());
-        session.guidance = Some("Reinstall QuotaBar to repair local data.".into());
-        state
-            .persist_session_for_test(session)
-            .expect("failed session");
-        let backend = Arc::new(WriteFailureBackend::new(
-            state.clone(),
-            WriteFailureKind::DurableFailClosed,
-        ));
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            backend.clone(),
-        );
-
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
-        assert!(result.accepted);
-        backend.wait_noted();
-        wait_refresh_idle(&service);
-
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
-        assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
-        assert!(!service.inner.refresh.lock().expect("refresh").pending);
-        assert!(state.image_unwritable() || state.last_persistence_requires_abort());
-
-        service.shutdown();
-        drop(service);
-        drop(backend);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn io_write_failure_sets_pending_and_skips_diagnostics() {
-        let root = std::env::temp_dir().join(format!("quota-abort-io-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = Arc::new(WriteFailureBackend::new(
-            state.clone(),
-            WriteFailureKind::Io,
-        ));
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            backend.clone(),
-        );
-
-        let result = service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Recheck);
-        assert!(result.accepted);
-        backend.wait_noted();
-        service.shutdown();
-        wait_refresh_idle(&service);
-
-        assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.publish_calls.load(Ordering::SeqCst), 0);
-        assert!(state.diagnostic_snapshot().expect("snapshot").is_none());
-        assert!(state.image_unwritable());
 
         drop(service);
         drop(backend);

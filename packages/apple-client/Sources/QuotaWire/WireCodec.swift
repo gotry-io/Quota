@@ -76,7 +76,6 @@ public enum QuotaIOSOAuth {
   public static let clientID = "quota-ios"
   public static let redirectURI = "io.gotry.quota:/oauth/callback"
   public static let callbackScheme = "io.gotry.quota"
-  public static let callbackPath = "/oauth/callback"
   public static let accessTokenPrefix = "qia_"
   public static let refreshTokenPrefix = "qiar_"
 }

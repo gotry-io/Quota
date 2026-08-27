@@ -1,27 +1,28 @@
 use crate::catalog::ProviderId;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, atomic::AtomicBool};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, decode_jwt_payload, discover_official_or_browser,
-    is_executable_file, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    slug, string,
+    CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
+    account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
+    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
+    read_bounded_file, sha256_hex, slug, string,
 };
 
+pub mod refresh;
 mod web;
 
-pub const SOURCE_API: &str = "chatgpt_usage_api";
-pub const SOURCE_PAT: &str = "codex_pat_usage_api";
-pub const SOURCE_RPC: &str = "codex_app_server";
+pub const SOURCE: &str = "chatgpt_usage_api";
+pub const WEB_SOURCE: &str = web::SOURCE;
+
+/// How close to its own expiry an access token has to be before this build asks Codex to
+/// renew it. The same minute Claude Code and Grok get, and well inside the five minutes the
+/// Codex CLI itself treats as expired, so every renewal this build asks for is one the CLI
+/// agrees is due.
+const AUTH_REFRESH_SKEW: i64 = 60;
+pub const PAT_SOURCE: &str = "codex_pat_usage_api";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
@@ -30,6 +31,30 @@ pub(super) struct Credentials {
     access_token: String,
     id_token: Option<String>,
     account_id: Option<String>,
+    /// When the access token says it stops being accepted, from its own payload. Codex signs
+    /// these; nothing here verifies that signature, because the only claim read is a
+    /// timestamp and a forged one would buy a spawn rather than a reading.
+    expires_at: Option<i64>,
+    /// When Codex last rewrote this file, as it stamps it. Not a freshness rule — the CLI
+    /// ignores it entirely — but it is the one field that moves when a renewal lands even if
+    /// the new token's payload cannot be read.
+    last_refresh: Option<i64>,
+}
+
+impl Credentials {
+    /// The bearer a ChatGPT web session hands out, as the WHAM rung's credential.
+    ///
+    /// It carries no expiry and no refresh stamp: those describe `auth.json`, which this token
+    /// never came from and which no renewal will rewrite on its behalf.
+    pub(super) fn from_web_session(access_token: &str, account_id: Option<String>) -> Self {
+        Self {
+            access_token: access_token.to_owned(),
+            id_token: None,
+            account_id,
+            expires_at: None,
+            last_refresh: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +71,7 @@ pub(super) struct Identity {
     account_id: Option<String>,
 }
 
+/// This device's Codex sign-in, and a stored ChatGPT browser session only when there is none.
 pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
     discover_official_or_browser(
         ProviderId::Codex,
@@ -64,6 +90,7 @@ pub fn validate_browser_session(
     web::validate_browser_session(cookie_header, context)
 }
 
+/// Personal access token, then OAuth, then the stored browser session.
 pub fn collect(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -72,7 +99,7 @@ pub fn collect(
         session,
         context,
         ProviderId::Codex,
-        SOURCE_API,
+        SOURCE,
         || collect_local(context),
         || web::collect(context),
     )
@@ -80,7 +107,7 @@ pub fn collect(
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let auth = load_auth(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
     if let Some(pat) = auth.pat.as_deref() {
         match collect_pat(pat, context) {
             Ok(snapshot) => return Ok(snapshot),
@@ -90,36 +117,20 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
     }
     let credentials = auth
         .oauth
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
-    let identity = extract_identity(&credentials);
-    let direct = collect_api(&credentials, &identity, context, SOURCE_API);
-    match direct {
-        Ok(Some(snapshot)) => return Ok(snapshot),
-        Err(error) if error.category == ErrorCategory::Error => return Err(error),
-        Err(error)
-            if matches!(
-                error.category,
-                ErrorCategory::AuthRequired
-                    | ErrorCategory::Unavailable
-                    | ErrorCategory::Unsupported
-            ) =>
-        {
-            let direct_auth = error.category == ErrorCategory::AuthRequired;
-            match collect_rpc(&identity, context) {
-                Ok(snapshot) => return Ok(snapshot),
-                // Reading this account directly already proved it needs a new sign-in. A
-                // fallback that also fails cannot disprove that, whatever it calls its own
-                // failure, and only the sign-in the reader is told to do will fix either one.
-                Err(_) if direct_auth => {
-                    return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API));
-                }
-                Err(fallback) => return Err(fallback),
-            }
-        }
-        Ok(None) => {}
-        Err(error) => return Err(error),
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+    // Codex owns token renewal. The refresh worker already gave it its one chance to renew an
+    // expired grant ([`refresh`]); one still out of time here is a sign-in only the reader can
+    // restore, and saying so beats spending a token the endpoint has already stopped taking.
+    // A token whose own expiry could not be read is not that, and is still tried.
+    if credentials
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
+    {
+        return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
-    collect_rpc(&identity, context)
+    let identity = extract_identity(&credentials);
+    collect_api(&credentials, &identity, context, SOURCE)?
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE))
 }
 
 fn load_auth(context: &CollectionContext) -> Option<AuthMaterial> {
@@ -163,6 +174,8 @@ fn parse_auth(value: &Value, source: &str) -> Option<AuthMaterial> {
 }
 
 fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
+    let last_refresh =
+        obj_get_any(value, &["last_refresh", "lastRefresh"]).and_then(|v| parse_date(Some(v)));
     let tokens = value.get("tokens")?.as_object()?;
     let access_token = obj_get_any(
         &Value::Object(tokens.clone()),
@@ -173,24 +186,113 @@ fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
         .and_then(|v| string(Some(v)));
     let account_id = obj_get_any(&Value::Object(tokens.clone()), &["account_id", "accountId"])
         .and_then(|v| string(Some(v)));
+    let expires_at = decode_jwt_payload(&access_token)
+        .as_ref()
+        .and_then(|payload| obj_get(payload, "exp"))
+        .and_then(|value| parse_date(Some(value)));
     Some(Credentials {
         access_token,
         id_token,
         account_id,
+        expires_at,
+        last_refresh,
     })
 }
 
+/// Whether this device's Codex sign-in is the thing standing between the refresh and a
+/// reading.
+///
+/// The access token's own `exp` decides it. `last_refresh` deliberately does not: measured
+/// against codex-cli 0.149.0, the CLI renews only when that `exp` is within five minutes, and
+/// a file thirty days stale with a live token is left exactly as it was — so asking on its age
+/// would spawn for nothing.
+///
+/// A token this build cannot date counts as expiring until it has been spent. The collector
+/// tries it anyway ([`collect_local`]), so a reading that came back with this exact token is
+/// proof the CLI has nothing to add — and without that, an `exp` this build cannot decode
+/// bought a `codex app-server` every hour, forever, for a sign-in that works.
+///
+/// A personal access token is not this: nothing renews one, and an `auth.json` holding only
+/// that has no OAuth grant to speak of.
+fn sign_in_expiring(context: &CollectionContext) -> bool {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .is_some_and(|credentials| match credentials.expires_at {
+            Some(expires_at) => expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW,
+            None => !context.credential_is_proven(
+                ProviderId::Codex,
+                &credential_fingerprint(&credentials.access_token),
+            ),
+        })
+}
+
+/// The irreversible name this device knows an access token by. Never the token.
+fn credential_fingerprint(access_token: &str) -> String {
+    sha256_hex(access_token)
+}
+
+/// The fingerprint of the OAuth grant a reading would be built from right now, for the refresh
+/// worker to record once that reading came back.
+pub fn proven_credential(context: &CollectionContext) -> Option<String> {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .map(|credentials| credential_fingerprint(&credentials.access_token))
+}
+
+/// Whether `auth.json` now holds a token this refresh can use.
+///
+/// Deliberately not `!sign_in_expiring`: an `auth.json` the CLI removed or emptied of its
+/// tokens is neither, and that third answer is a Codex that signed itself out rather than one
+/// that could not renew.
+fn sign_in_usable(context: &CollectionContext) -> bool {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .is_some_and(|credentials| {
+            credentials
+                .expires_at
+                .is_some_and(|expires_at| expires_at > context.observed_unix() + AUTH_REFRESH_SKEW)
+        })
+}
+
+/// When Codex last rewrote `auth.json`, as it stamps it there.
+fn last_refresh(context: &CollectionContext) -> Option<i64> {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .and_then(|credentials| credentials.last_refresh)
+}
+
+/// Whether Codex has rewritten `auth.json` since it carried `stamped`.
+///
+/// The second half of the renewal verdict, for the token whose own expiry cannot be read: the
+/// stamp moving is the CLI saying it wrote this file, and that is the whole claim.
+fn rewritten_since(context: &CollectionContext, stamped: Option<i64>) -> bool {
+    match (last_refresh(context), stamped) {
+        (Some(written), Some(before)) => written > before,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
 fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
+    collect_pat_at(token, context, WHOAMI_URL, USAGE_URL)
+}
+
+fn collect_pat_at(
+    token: &str,
+    context: &CollectionContext,
+    whoami_url: &str,
+    usage_url: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {token}");
-    let user_agent = pat_user_agent();
+    let user_agent = pat_user_agent(context);
     let headers = [
         ("Authorization", bearer.as_str()),
         ("Accept", "application/json"),
         ("User-Agent", user_agent.as_str()),
         ("originator", "codex_cli_rs"),
     ];
-    let (_, whoami) = client.get_json(WHOAMI_URL, &headers, SOURCE_PAT)?;
+    let (_, whoami) = client.get_json(whoami_url, &headers, PAT_SOURCE)?;
     let account_id = obj_get_any(&whoami, &["chatgpt_account_id", "chatgptAccountId"])
         .and_then(|v| string(Some(v)));
     let email = obj_get(&whoami, "email").and_then(|v| string(Some(v)));
@@ -205,13 +307,13 @@ fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot
     if let Some(account_id) = account_id.as_deref() {
         usage_headers.push(("ChatGPT-Account-Id", account_id));
     }
-    let (_, value) = client.get_json(USAGE_URL, &usage_headers, SOURCE_PAT)?;
+    let (_, value) = client.get_json(usage_url, &usage_headers, PAT_SOURCE)?;
     let mapped = map_usage(&value);
     if mapped.malformed_success {
-        return Err(ProviderError::new(ErrorCategory::Error, SOURCE_PAT));
+        return Err(ProviderError::new(ErrorCategory::Error, PAT_SOURCE));
     }
     if mapped.windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_PAT));
+        return Err(ProviderError::new(ErrorCategory::Unavailable, PAT_SOURCE));
     }
     Ok(snapshot(
         &mapped.windows,
@@ -222,8 +324,14 @@ fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot
     ))
 }
 
-/// Codex only honors personal access tokens from requests that identify as its CLI.
-fn pat_user_agent() -> String {
+/// Codex only honors personal access tokens from requests that identify as its CLI, so the
+/// request presents the CLI's own user agent — carrying the version of the Codex install that
+/// is actually on this device when one could be read, and no version at all when it could not.
+fn pat_user_agent(context: &CollectionContext) -> String {
+    build_pat_user_agent(context.cli_version(CliTool::Codex), os_version().as_deref())
+}
+
+fn build_pat_user_agent(cli_version: Option<&str>, os_version: Option<&str>) -> String {
     let platform = if cfg!(target_os = "macos") {
         "Mac OS"
     } else if cfg!(target_os = "linux") {
@@ -238,7 +346,49 @@ fn pat_user_agent() -> String {
     } else {
         "unknown"
     };
-    format!("codex_cli_rs ({platform}; {arch})")
+    let system = match os_version {
+        Some(version) => format!("{platform} {version}"),
+        None => platform.to_owned(),
+    };
+    match cli_version {
+        Some(version) => format!("codex_cli_rs/{version} ({system}; {arch})"),
+        None => format!("codex_cli_rs ({system}; {arch})"),
+    }
+}
+
+/// The macOS product version, read from the kernel rather than by starting `sw_vers`: a
+/// scheduled refresh starts no process it did not have to.
+#[cfg(target_os = "macos")]
+fn os_version() -> Option<String> {
+    let mut buffer = [0_u8; 32];
+    let mut length = buffer.len();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return None;
+    }
+    let end = length.min(buffer.len());
+    let value = std::str::from_utf8(&buffer[..end])
+        .ok()?
+        .trim_end_matches('\0');
+    // A user agent carries the version and nothing else; anything unexpected is dropped.
+    (!value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.'))
+    .then(|| value.to_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_version() -> Option<String> {
+    None
 }
 
 fn extract_identity(credentials: &Credentials) -> Identity {
@@ -383,22 +533,6 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
         account_id,
         malformed_success: windows.is_empty() && (malformed_primary || malformed_secondary),
         windows,
-    }
-}
-
-fn map_rpc(value: &Value) -> MappedUsage {
-    let root = value
-        .get("rateLimits")
-        .or_else(|| value.get("rate_limits"))
-        .unwrap_or(value);
-    let plan = obj_get_any(root, &["planType", "plan_type"]).and_then(|v| string(Some(v)));
-    let primary = obj_get(root, "primary").and_then(|v| map_window(v, "five_hour", "5 hour"));
-    let secondary = obj_get(root, "secondary").and_then(|v| map_window(v, "weekly", "Weekly"));
-    let windows = normalize_primary_secondary(primary, secondary);
-    MappedUsage {
-        plan,
-        windows,
-        ..Default::default()
     }
 }
 
@@ -601,86 +735,6 @@ fn map_named_windows(
     windows
 }
 
-fn collect_rpc(
-    identity: &Identity,
-    context: &CollectionContext,
-) -> Result<QuotaSnapshot, ProviderError> {
-    let executable = resolve_executable(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-    let mut rpc = RpcClient::spawn(&executable, context)?;
-    rpc.request(
-        "initialize",
-        Some(json!({ "clientInfo": {
-            "name": context.client_name,
-            "version": context.client_version
-        } })),
-    )?;
-    rpc.notify("initialized", None)?;
-    let rates = rpc.request("account/rateLimits/read", None)?;
-    let mut account_email = identity.email.clone();
-    let mut account_plan = identity.plan.clone();
-    if let Ok(account) = rpc.request("account/read", None) {
-        let account = account.get("account").unwrap_or(&account);
-        account_email = account_email
-            .or_else(|| obj_get_any(account, &["email"]).and_then(|v| string(Some(v))))
-            .or_else(|| {
-                obj_get(account, "chatgpt")
-                    .and_then(|v| obj_get(v, "email"))
-                    .and_then(|v| string(Some(v)))
-            });
-        account_plan = account_plan
-            .or_else(|| obj_get_any(account, &["plan", "planType"]).and_then(|v| string(Some(v))))
-            .or_else(|| {
-                obj_get(account, "chatgpt")
-                    .and_then(|v| obj_get(v, "plan"))
-                    .and_then(|v| string(Some(v)))
-            });
-    }
-    let mapped = map_rpc(&rates);
-    if mapped.windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-    }
-    Ok(snapshot(
-        &mapped.windows,
-        account_plan.as_deref(),
-        account_email.as_deref(),
-        identity.account_id.as_deref(),
-        &context.observed_at(),
-    ))
-}
-
-fn resolve_executable(context: &CollectionContext) -> Option<String> {
-    if let Some(path) = context
-        .env("CODEX_CLI_PATH")
-        .filter(|v| !v.trim().is_empty())
-    {
-        return Some(path.to_owned());
-    }
-    let mut paths = vec![
-        context.home_directory.join(".local/bin/codex"),
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-        context
-            .home_directory
-            .join("Applications/ChatGPT.app/Contents/Resources/codex"),
-        context
-            .home_directory
-            .join("Applications/Codex.app/Contents/Resources/codex"),
-        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
-        PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
-    ];
-    if let Some(path) = context.env("PATH") {
-        for directory in path.split(':') {
-            paths.push(PathBuf::from(directory).join("codex"));
-        }
-    }
-    paths
-        .into_iter()
-        .find(|path| is_executable_file(path))
-        .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| Some("codex".to_owned()))
-}
-
 pub(super) fn snapshot(
     windows: &[QuotaWindow],
     plan: Option<&str>,
@@ -703,188 +757,91 @@ pub(super) fn snapshot(
     }
 }
 
-struct RpcClient {
-    child: Child,
-    stdin: ChildStdin,
-    responses: Receiver<RpcReadEvent>,
-    next_id: u64,
-    cancel: Option<Arc<AtomicBool>>,
-}
-
-enum RpcReadEvent {
-    Line(String),
-    OutputLimit,
-}
-
-impl RpcClient {
-    fn spawn(executable: &str, context: &CollectionContext) -> Result<Self, ProviderError> {
-        let mut command = Command::new(executable);
-        command
-            // `never` is the only approval policy that suits a probe: the alternative,
-            // `on-request`, would wait on a prompt nothing is there to answer. Codex
-            // removed the `untrusted` value it once took here, and rejects the whole
-            // invocation when it sees one it does not know.
-            .args(["-s", "read-only", "-a", "never", "app-server"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        command.envs(&context.environment);
-        let mut child = command
-            .spawn()
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-        let Some(stdin) = child.stdin.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-        };
-        let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-        };
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = stdout;
-            let mut pending = Vec::new();
-            let mut chunk = [0_u8; 8192];
-            while let Ok(size) = reader.read(&mut chunk) {
-                if size == 0 {
-                    break;
-                }
-                pending.extend_from_slice(&chunk[..size]);
-                loop {
-                    let Some(newline) = pending.iter().position(|byte| *byte == b'\n') else {
-                        if pending.len() > 1_048_576 {
-                            let _ = sender.send(RpcReadEvent::OutputLimit);
-                            return;
-                        }
-                        break;
-                    };
-                    let line = pending.drain(..=newline).collect::<Vec<_>>();
-                    if line.len() > 1_048_577 {
-                        let _ = sender.send(RpcReadEvent::OutputLimit);
-                        return;
-                    }
-                    if let Ok(line) = String::from_utf8(line) {
-                        let _ = sender.send(RpcReadEvent::Line(line));
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            child,
-            stdin,
-            responses: receiver,
-            next_id: 1,
-            cancel: context.cancel.clone(),
-        })
-    }
-
-    fn notify(&mut self, method: &str, params: Option<Value>) -> Result<(), ProviderError> {
-        let mut request = json!({ "jsonrpc": "2.0", "method": method });
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        let line = serde_json::to_string(&request)
-            .map_err(|_| ProviderError::new(ErrorCategory::Error, SOURCE_RPC))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))
-    }
-
-    fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value, ProviderError> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut request = json!({ "jsonrpc": "2.0", "id": id, "method": method });
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        let line = serde_json::to_string(&request)
-            .map_err(|_| ProviderError::new(ErrorCategory::Error, SOURCE_RPC))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC))?;
-        let started = Instant::now();
-        loop {
-            if self
-                .cancel
-                .as_ref()
-                .map(|value| value.load(std::sync::atomic::Ordering::Acquire))
-                .unwrap_or(false)
-            {
-                return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-            }
-            let line = match self.responses.recv_timeout(Duration::from_millis(100)) {
-                Ok(RpcReadEvent::Line(line)) => line,
-                Ok(RpcReadEvent::OutputLimit) => {
-                    return Err(ProviderError::new(ErrorCategory::Error, SOURCE_RPC));
-                }
-                Err(RecvTimeoutError::Timeout) if started.elapsed() < Duration::from_secs(20) => {
-                    continue;
-                }
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                    return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_RPC));
-                }
-            };
-            // Provider CLIs may write startup banners or other non-JSON noise to stdout. The
-            // released collector ignored such lines while waiting for the matching response.
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if value.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            if value.get("error").is_some() {
-                return Err(ProviderError::new(rpc_error_category(&value), SOURCE_RPC));
-            }
-            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-        }
-    }
-}
-
-fn rpc_error_category(value: &Value) -> ErrorCategory {
-    let error = value.get("error").unwrap_or(&Value::Null);
-    let code = obj_get(error, "code").and_then(Value::as_i64);
-    let message = obj_get(error, "message")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if code == Some(-32601)
-        || message.contains("method not found")
-        || message.contains("not supported")
-        || message.contains("unsupported")
-    {
-        ErrorCategory::Unsupported
-    } else if message.contains("authentication required")
-        || message.contains("not authenticated")
-        || message.contains("login")
-        || message.contains("unauthorized")
-        || message.contains("token_expired")
-        || message.contains("invalid_token")
-    {
-        ErrorCategory::AuthRequired
-    } else {
-        ErrorCategory::Error
-    }
-}
-
-impl Drop for RpcClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine as _;
 
+    /// The endpoint only honors a personal access token from the Codex CLI, so the request
+    /// says it is the Codex CLI — and, when this device could read one, which one.
     #[test]
-    fn discovers_browser_session_when_oauth_is_absent() {
-        let mut context = CollectionContext {
+    fn the_personal_access_token_request_names_the_installed_codex() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        for (installed, expected) in [
+            (Some("0.42.1"), "user-agent: codex_cli_rs/0.42.1 ("),
+            (None, "user-agent: codex_cli_rs ("),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = std::thread::spawn(move || {
+                let mut heads = Vec::new();
+                for body in [
+                    r#"{"chatgpt_account_id":"acct-owner","email":"ada@example.com"}"#,
+                    r#"{"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}"#,
+                ] {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        break;
+                    };
+                    let mut request = [0_u8; 2048];
+                    let read = stream.read(&mut request).unwrap_or(0);
+                    heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                heads
+            });
+            let mut context = isolated_context();
+            if let Some(version) = installed {
+                context
+                    .cli_versions
+                    .insert(CliTool::Codex, version.to_owned());
+            }
+            let snapshot = collect_pat_at(
+                "pat-token",
+                &context,
+                &format!("http://{address}/whoami"),
+                &format!("http://{address}/usage"),
+            )
+            .expect("snapshot");
+            assert_eq!(snapshot.windows.len(), 1);
+            let heads = server.join().expect("server");
+            for head in &heads {
+                assert!(head.contains(expected), "{head}");
+                assert!(head.contains("originator: codex_cli_rs"));
+            }
+            // The account id whoami named travels as a header, never as reported identity.
+            assert!(heads[1].contains("chatgpt-account-id: acct-owner"));
+        }
+    }
+
+    /// The user agent states the platform whether or not a version could be read, and never
+    /// invents a version field.
+    #[test]
+    fn the_user_agent_states_a_version_only_when_one_was_read() {
+        let known = build_pat_user_agent(Some("0.42.1"), Some("15.6"));
+        assert!(known.starts_with("codex_cli_rs/0.42.1 ("), "{known}");
+        assert!(known.contains(" 15.6; "), "{known}");
+        assert!(known.ends_with(')'), "{known}");
+        let unknown = build_pat_user_agent(None, Some("15.6"));
+        assert!(unknown.starts_with("codex_cli_rs ("), "{unknown}");
+        assert!(!unknown.contains('/'), "{unknown}");
+        // Without an OS version the platform stands alone rather than trailing a blank.
+        let bare = build_pat_user_agent(None, None);
+        assert!(!bare.contains("  ") && !bare.contains(" ;"), "{bare}");
+        assert!(build_pat_user_agent(Some("1.0.0"), None).starts_with("codex_cli_rs/1.0.0 ("));
+        // The kernel answers on macOS and is not consulted anywhere else.
+        assert_eq!(os_version().is_some(), cfg!(target_os = "macos"));
+    }
+
+    /// Codex owns this grant, so a Mac without one has nothing for this collector to try.
+    /// There is no second rung to fall to.
+    fn isolated_context() -> CollectionContext {
+        CollectionContext {
             home_directory: PathBuf::from("/tmp/quota-codex-missing-home"),
             environment: std::collections::HashMap::new(),
             config_path: None,
@@ -893,7 +850,17 @@ mod tests {
             client_version: "test".to_owned(),
             now: Some("2026-08-10T00:00:00Z".to_owned()),
             cancel: None,
-        };
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        }
+    }
+
+    /// Without a Codex grant and without a stored cookie there is nothing to try; a stored
+    /// cookie alone is the last rung, and it is discovered as one.
+    #[test]
+    fn the_browser_session_is_discovered_only_without_a_local_grant() {
+        let mut context = isolated_context();
         assert!(discover(&context).is_empty());
         context.browser_sessions.insert(
             ProviderId::Codex,
@@ -901,7 +868,51 @@ mod tests {
         );
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].credential_source, "browser_session");
+        assert_eq!(
+            sessions[0].credential_source,
+            super::super::BROWSER_SESSION_SOURCE
+        );
+    }
+
+    /// The stored session is the last rung, and only the last rung.
+    ///
+    /// It answers when this Mac's own credential said "sign in again"; it never answers first,
+    /// it is not reached at all when nothing was stored, and a cancelled refresh reads neither.
+    #[test]
+    fn the_stored_session_is_reached_only_after_the_grant_says_sign_in_again() {
+        let mut context = isolated_context();
+        let official = ProviderSession {
+            provider: ProviderId::Codex,
+            credential_source: "auth.json".to_owned(),
+        };
+        // Nothing on disk and nothing stored: the credential path's verdict is the answer.
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("no credential")
+                .source_id,
+            SOURCE
+        );
+        // With a session stored, that same verdict hands off to it, and the rung that answers
+        // names itself. The header is one this rung rejects without a request.
+        context
+            .browser_sessions
+            .insert(ProviderId::Codex, "_account=acct".to_owned());
+        assert_eq!(
+            collect(&official, &context)
+                .expect_err("stored session")
+                .source_id,
+            web::SOURCE
+        );
+        // A cancelled refresh reads neither rung.
+        let cancelled = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..context.clone()
+        };
+        let error = collect(&official, &cancelled).expect_err("cancelled");
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert_eq!(error.source_id, SOURCE);
     }
 
     #[test]
@@ -964,6 +975,21 @@ mod tests {
             [("weekly", "Weekly", 12.0), ("monthly", "Monthly", 41.0),]
         );
         assert!(!usage.malformed_success);
+        // The same cadences stated in minutes rather than seconds.
+        let minutes = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 22, "window_minutes": 43200},
+                "secondary_window": {"usedPercent": 8, "windowDurationMins": 10080}
+            }
+        }));
+        assert_eq!(
+            minutes
+                .windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.duration_seconds))
+                .collect::<Vec<_>>(),
+            [("weekly", Some(604_800)), ("monthly", Some(2_592_000))]
+        );
     }
 
     #[test]
@@ -988,32 +1014,6 @@ mod tests {
             [("monthly", "Monthly")]
         );
         assert!(!usage.malformed_success);
-    }
-
-    #[test]
-    fn maps_rpc_window_minutes_to_monthly() {
-        let usage = map_rpc(&serde_json::json!({
-            "rate_limits": {
-                "plan_type": "free",
-                "primary": {"used_percent": 22, "window_minutes": 43200, "resets_at": 1787842532},
-                "secondary": {"usedPercent": 8, "windowDurationMins": 10080}
-            }
-        }));
-        assert_eq!(
-            usage
-                .windows
-                .iter()
-                .map(|window| (
-                    window.id.as_str(),
-                    window.title.as_str(),
-                    window.duration_seconds
-                ))
-                .collect::<Vec<_>>(),
-            [
-                ("weekly", "Weekly", Some(604_800)),
-                ("monthly", "Monthly", Some(2_592_000)),
-            ]
-        );
     }
 
     #[test]
@@ -1170,6 +1170,8 @@ mod tests {
             access_token: "opaque-access".to_owned(),
             id_token: Some(format!("header.{payload}.signature")),
             account_id: None,
+            expires_at: None,
+            last_refresh: None,
         };
         let identity = extract_identity(&credentials);
         assert_eq!(identity.plan.as_deref(), Some("pro"));
@@ -1184,48 +1186,5 @@ mod tests {
         let serialized = serde_json::to_string(&snapshot).unwrap();
         assert!(!serialized.contains("acct-owner"));
         assert!(!serialized.contains("ada@example.com"));
-    }
-
-    #[test]
-    fn classifies_rpc_auth_and_unsupported_errors() {
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"code": -32601, "message": "method not found"}
-            })),
-            ErrorCategory::Unsupported
-        );
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"message": "Authentication required"}
-            })),
-            ErrorCategory::AuthRequired
-        );
-        assert_eq!(
-            rpc_error_category(&serde_json::json!({
-                "error": {"message": "provider failed"}
-            })),
-            ErrorCategory::Error
-        );
-    }
-
-    /// An expired sign-in says so in the words the upstream service uses, not in the words
-    /// this classifier happened to be taught first.  A reader told to retry never retries
-    /// their way back in: only `auth_required` asks them to sign in again.
-    #[test]
-    fn an_expired_sign_in_is_recognised_however_the_upstream_words_it() {
-        for message in [
-            "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage \
-             failed: 401 Unauthorized; body: {\"error\":{\"code\":\"token_expired\"}}",
-            "request failed: 401 Unauthorized",
-            "{\"code\": \"invalid_token\"}",
-        ] {
-            assert_eq!(
-                rpc_error_category(&serde_json::json!({
-                    "error": {"code": -32603, "message": message}
-                })),
-                ErrorCategory::AuthRequired,
-                "{message}"
-            );
-        }
     }
 }

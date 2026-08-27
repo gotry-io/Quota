@@ -1,10 +1,11 @@
 use crate::catalog::ProviderId;
 use chrono_tz::Tz;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, OnceLock, atomic::AtomicBool};
 
+use super::cli_version::CliTool;
 use super::json::{parse_date, unix_now, unix_seconds_to_iso};
 
 pub const BROWSER_COOKIE_HEADER_LIMIT: usize = 8_192;
@@ -27,6 +28,19 @@ impl ErrorCategory {
         match self {
             Self::AuthRequired => "auth_required",
             Self::AccessDenied | Self::Unavailable => "unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Error => "error",
+        }
+    }
+
+    /// The category as itself, including the refusal [`Self::as_str`] folds away.  Only a
+    /// reader on this device can act on that difference, and only the local collection
+    /// report carries it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AuthRequired => "auth_required",
+            Self::AccessDenied => "access_denied",
+            Self::Unavailable => "unavailable",
             Self::Unsupported => "unsupported",
             Self::Error => "error",
         }
@@ -104,6 +118,30 @@ pub struct ValidatedBrowserSession {
     pub account_label: Option<String>,
 }
 
+/// What one macOS Keychain generic-password read found.
+///
+/// `Debug` is written by hand: the secret is the whole point of the entry, and a
+/// context that derives `Debug` around it must not be able to print it.
+#[derive(Clone, Eq, PartialEq)]
+pub enum KeychainSecret {
+    Found(Vec<u8>),
+    /// No entry for that service, or this build does not read the Keychain at all.
+    Absent,
+    /// The entry is there and its secret was withheld.  That is an access decision, and
+    /// signing in again only rewrites a secret this device still would not be handed.
+    Refused,
+}
+
+impl std::fmt::Debug for KeychainSecret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Found(_) => "KeychainSecret::Found(<redacted>)",
+            Self::Absent => "KeychainSecret::Absent",
+            Self::Refused => "KeychainSecret::Refused",
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CollectionContext {
     pub home_directory: PathBuf,
@@ -114,6 +152,21 @@ pub struct CollectionContext {
     pub client_version: String,
     pub now: Option<String>,
     pub cancel: Option<Arc<AtomicBool>>,
+    /// The one macOS Keychain read a refresh performs, shared by every collector running
+    /// under this context.  Claude Code's credential entry is the only Keychain item any
+    /// collector reads, and `/usr/bin/security` is the only process the scheduled refresh
+    /// starts on its own account.
+    pub keychain: Arc<OnceLock<KeychainSecret>>,
+    /// The installed version of each provider CLI this refresh identifies as, resolved on the
+    /// refresh worker before collection.  A collector reads it; it never probes for it, so no
+    /// collector can turn a five-minute timer into a spawn.
+    pub cli_versions: BTreeMap<CliTool, String>,
+    /// For each provider, an irreversible digest of the credential that last produced a
+    /// reading here.  A credential this build cannot judge on its own — an access token whose
+    /// expiry it cannot decode — is judged by whether it has already been spent, which is the
+    /// only evidence that outlives a refresh.  Written by the refresh worker after collection;
+    /// a collector only reads it.
+    pub proven_credentials: BTreeMap<String, String>,
 }
 
 impl Default for CollectionContext {
@@ -131,6 +184,9 @@ impl Default for CollectionContext {
             client_version: "development".to_owned(),
             now: None,
             cancel: None,
+            keychain: Arc::new(OnceLock::new()),
+            cli_versions: BTreeMap::new(),
+            proven_credentials: BTreeMap::new(),
         }
     }
 }
@@ -158,6 +214,18 @@ impl CollectionContext {
         format!("{}/{}", self.client_name, self.client_version)
     }
 
+    /// Whether this exact credential has already produced a reading on this device.
+    pub fn credential_is_proven(&self, provider: ProviderId, fingerprint: &str) -> bool {
+        self.proven_credentials
+            .get(provider.as_str())
+            .is_some_and(|proven| proven == fingerprint)
+    }
+
+    /// The installed version of a provider CLI, when this device has one and it answered.
+    pub fn cli_version(&self, tool: CliTool) -> Option<&str> {
+        self.cli_versions.get(&tool).map(String::as_str)
+    }
+
     pub fn env(&self, key: &str) -> Option<&str> {
         self.environment.get(key).map(String::as_str)
     }
@@ -177,7 +245,7 @@ impl CollectionContext {
                 .filter(|value| !value.trim().is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| self.home_directory.join(".config"))
-                .join("quotacli/providers.json")
+                .join("quota/providers.json")
         })
     }
 
@@ -206,8 +274,32 @@ impl CollectionContext {
     pub fn browser_session(&self, provider: ProviderId) -> Option<&str> {
         self.browser_sessions.get(&provider).map(String::as_str)
     }
+
+    /// The macOS Keychain secret this refresh may read, fetched at most once however
+    /// many collectors ask for it.  Discovery and collection both need the same answer,
+    /// and asking twice starts a second `/usr/bin/security` for no new information.
+    pub fn keychain_secret(&self, read: impl FnOnce() -> KeychainSecret) -> &KeychainSecret {
+        self.keychain.get_or_init(read)
+    }
+
+    /// Forgets that read, so the next ask starts a fresh `/usr/bin/security`.
+    ///
+    /// Called for one plan: Claude Code's, whose CLI rewrites the Keychain entry in place.  A
+    /// memo taken before it ran describes the grant that was replaced, and every collector
+    /// after it would spend a token that no longer exists.  No other renewal may call this —
+    /// the memo is what holds a refresh to one Keychain read — and it is `&mut` because the
+    /// renewal runs before any collector has a clone.
+    pub fn forget_keychain(&mut self) {
+        self.keychain = Arc::new(OnceLock::new());
+    }
 }
 
+/// The ladder every provider with a stored browser session ends on.
+///
+/// A browser session is the last rung: it is only ever reported when this Mac holds no
+/// official credential for the provider at all.  A device that has one reports that, and
+/// [`collect_official_or_browser`] decides at collection time whether the stored session is
+/// reached.
 pub fn discover_official_or_browser(
     provider: ProviderId,
     official: Option<ProviderSession>,
@@ -226,14 +318,16 @@ pub fn discover_official_or_browser(
         .collect()
 }
 
-/// Collects from a provider's local credentials, falling back to a stored
-/// browser session.
+/// Reads the provider's own credential path, and falls back to the stored browser session
+/// only when that path ended in [`ErrorCategory::AuthRequired`].
 ///
-/// **`collect_official` must report [`ErrorCategory::AuthRequired`] when no
-/// usable local credential exists.** That category is the only one that reaches
-/// `collect_web`; any other ends the refresh, so a provider whose official
-/// closure chains several credential sources internally has to surface the
-/// chain's verdict rather than the last step's incidental error.
+/// **`collect_official` must report `AuthRequired` when no usable official credential
+/// exists.** That category is the only one that reaches `collect_web`; any other ends the
+/// refresh, so a provider whose official closure chains several rungs internally has to
+/// surface the chain's verdict rather than the last rung's incidental error.  A refusal
+/// ([`ErrorCategory::AccessDenied`]) is deliberately not that verdict: a secret this Mac was
+/// withheld says nothing about the account, and spending a cookie on it would report a
+/// sign-in problem the reader does not have.
 pub fn collect_official_or_browser(
     session: &ProviderSession,
     context: &CollectionContext,
@@ -263,11 +357,25 @@ pub fn collect_official_or_browser(
     }
 }
 
+/// One cookie's value out of a `Cookie:` header this build assembled itself.
+pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+    header.split(';').find_map(|pair| {
+        let pair = pair.trim_matches([' ', '\t']);
+        let (cookie_name, value) = pair.split_once('=')?;
+        (cookie_name == name && !value.is_empty()).then_some(value)
+    })
+}
+
+/// The `Cookie:` header this build will send for a stored browser session, or why it will
+/// not.
+///
+/// A header this build refuses is a browser session that was never usable, so that is the rung
+/// every refusal here names.
 pub fn normalize_browser_cookie_header(
     provider: ProviderId,
     header: &str,
 ) -> Result<String, ProviderError> {
-    let source = super::json::provider_source(provider.as_str());
+    let source = BROWSER_SESSION_SOURCE;
     let Some(spec) = provider.metadata().browser_session else {
         return Err(ProviderError::new(ErrorCategory::Unsupported, source));
     };
@@ -302,14 +410,6 @@ pub fn normalize_browser_cookie_header(
         .join("; "))
 }
 
-pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
-    header.split(';').find_map(|pair| {
-        let pair = pair.trim_matches([' ', '\t']);
-        let (cookie_name, value) = pair.split_once('=')?;
-        (cookie_name == name && !value.is_empty()).then_some(value)
-    })
-}
-
 fn is_cookie_octet(byte: u8) -> bool {
     matches!(byte, 0x21 | 0x23..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E)
 }
@@ -318,6 +418,9 @@ fn is_cookie_octet(byte: u8) -> bool {
 mod tests {
     use super::*;
 
+    /// The browser session is the last rung and only the last rung: a credential path that
+    /// answered anything but "sign in again" is this refresh's answer, and a refusal is
+    /// never a reason to spend a cookie.
     #[test]
     fn only_auth_required_reaches_the_browser_session() {
         let mut context = CollectionContext::default();
@@ -351,6 +454,7 @@ mod tests {
             ErrorCategory::Error,
             ErrorCategory::Unavailable,
             ErrorCategory::Unsupported,
+            ErrorCategory::AccessDenied,
         ] {
             let error = collect_official_or_browser(
                 &session,
@@ -364,6 +468,115 @@ mod tests {
             assert_eq!(error.category, category);
             assert_eq!(error.source_id, "official_source");
         }
+        // And a working official credential never reaches the cookie at all.
+        let snapshot = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official_source",
+            || {
+                Ok(QuotaSnapshot {
+                    provider: ProviderId::Claude,
+                    account: QuotaAccount {
+                        fingerprint: "fp".to_owned(),
+                        fingerprint_scope: "source",
+                        label: None,
+                        plan: None,
+                    },
+                    windows: Vec::new(),
+                    status: "available",
+                    observed_at: "2026-08-10T00:00:00Z".to_owned(),
+                })
+            },
+            || panic!("browser session reached"),
+        );
+        assert!(snapshot.is_ok());
+    }
+
+    /// A stored session is discovered only when this Mac holds no official credential.
+    #[test]
+    fn the_browser_session_is_discovered_last() {
+        let mut context = CollectionContext::default();
+        assert!(discover_official_or_browser(ProviderId::Claude, None, &context).is_empty());
+        context
+            .browser_sessions
+            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+        let stored = discover_official_or_browser(ProviderId::Claude, None, &context);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].credential_source, BROWSER_SESSION_SOURCE);
+        let official = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: "keychain".to_owned(),
+        };
+        let discovered = discover_official_or_browser(ProviderId::Claude, Some(official), &context);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].credential_source, "keychain");
+    }
+
+    #[test]
+    fn cancelled_browser_session_collect_uses_web_source() {
+        let session = ProviderSession {
+            provider: ProviderId::Claude,
+            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+        };
+        let context = CollectionContext {
+            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            ))),
+            ..CollectionContext::default()
+        };
+        let error = collect_official_or_browser(
+            &session,
+            &context,
+            ProviderId::Claude,
+            "official",
+            || panic!("official collect"),
+            || {
+                Err(ProviderError::new(
+                    ErrorCategory::Unavailable,
+                    "claude_web_usage_api",
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.source_id, "claude_web_usage_api");
+    }
+
+    #[test]
+    fn one_cookie_value_is_read_out_of_a_header() {
+        assert_eq!(
+            cookie_named_value("sessionKey=sk-ant-ok; lastActiveOrg=org-2", "lastActiveOrg"),
+            Some("org-2")
+        );
+        assert_eq!(cookie_named_value("sessionKey=", "sessionKey"), None);
+        assert_eq!(cookie_named_value("sso-rw=alt", "sso"), None);
+    }
+
+    /// Discovery and collection both need this device's Claude grant, and asking twice
+    /// starts a second `/usr/bin/security` for an answer the first already gave.
+    #[test]
+    fn the_keychain_is_read_once_per_context() {
+        let context = CollectionContext::default();
+        let mut reads = 0;
+        for _ in 0..3 {
+            let secret = context.keychain_secret(|| {
+                reads += 1;
+                KeychainSecret::Found(b"{}".to_vec())
+            });
+            assert_eq!(*secret, KeychainSecret::Found(b"{}".to_vec()));
+        }
+        assert_eq!(reads, 1);
+        // A clone of the context is the same refresh, and shares the same answer.
+        let cloned = context.clone();
+        assert_eq!(
+            *cloned.keychain_secret(|| panic!("second read")),
+            KeychainSecret::Found(b"{}".to_vec())
+        );
+        // A secret must not be printable through the context that carries it.
+        assert_eq!(
+            format!("{:?}", KeychainSecret::Found(b"sk-ant-secret".to_vec())),
+            "KeychainSecret::Found(<redacted>)"
+        );
     }
 
     #[test]
@@ -409,34 +622,5 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn cancelled_browser_session_collect_uses_web_source() {
-        let session = ProviderSession {
-            provider: ProviderId::Claude,
-            credential_source: BROWSER_SESSION_SOURCE.to_owned(),
-        };
-        let context = CollectionContext {
-            cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                true,
-            ))),
-            ..CollectionContext::default()
-        };
-        let error = collect_official_or_browser(
-            &session,
-            &context,
-            ProviderId::Claude,
-            "official",
-            || panic!("official collect"),
-            || {
-                Err(ProviderError::new(
-                    ErrorCategory::Unavailable,
-                    "claude_web_usage_api",
-                ))
-            },
-        )
-        .unwrap_err();
-        assert_eq!(error.source_id, "claude_web_usage_api");
     }
 }
