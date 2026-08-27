@@ -215,6 +215,9 @@ final class MenuBarViewModel {
   private var loginTask: Task<Void, Never>?
 
   @ObservationIgnored
+  private var cancelLoginTask: Task<Void, Never>?
+
+  @ObservationIgnored
   private var browserSessionTask: Task<Void, Never>?
 
   @ObservationIgnored
@@ -336,6 +339,7 @@ final class MenuBarViewModel {
   deinit {
     eventTask?.cancel()
     loginTask?.cancel()
+    cancelLoginTask?.cancel()
     browserSessionTask?.cancel()
     menuBarClockTask?.cancel()
   }
@@ -522,14 +526,20 @@ final class MenuBarViewModel {
     }
   }
 
+  /// Calls off a browser sign-in.
+  ///
+  /// The row keeps its Cancel until the service says the flow is over, so it is easy to press
+  /// twice. A second press joins the request already in flight rather than sending the service a
+  /// second `cancel_login` to race the first.
   func cancelLogin() {
-    guard let client else { return }
+    guard cancelLoginTask == nil, let client else { return }
     loginTask?.cancel()
     loginTask = nil
     isLoggingIn = false
     accountActionErrorMessage = nil
     accountErrorMessage = nil
-    Task { @MainActor [weak self] in
+    cancelLoginTask = Task { @MainActor [weak self] in
+      defer { self?.cancelLoginTask = nil }
       do {
         try await client.cancelLogin()
       } catch {
