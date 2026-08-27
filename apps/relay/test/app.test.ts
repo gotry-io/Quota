@@ -310,6 +310,28 @@ describe("managed Relay on real Workers and D1", () => {
     expect(afterUpload.status).toBe(200);
     expect(afterUpload.headers.get("ETag")).not.toBe(etag);
 
+    // The response carries the Account's display label, which a later sign-in rewrites without
+    // touching a device or an observation.
+    const afterObservation = afterUpload.headers.get("ETag") ?? "";
+    await env.DB.prepare(
+      "UPDATE accounts SET display_label = 'octocat', updated_at = ?2 WHERE id = ?1",
+    )
+      .bind("account_etag", new Date(now.getTime() + 1_000).toISOString())
+      .run();
+    const renamed = await app.request(summaryPath, {
+      headers: { "If-None-Match": afterObservation },
+    });
+    expect(renamed.status).toBe(200);
+    expect(renamed.headers.get("ETag")).not.toBe(afterObservation);
+
+    // The reading that speaks for a subscription changes with the clock alone: past its own
+    // validity boundary it stops describing current quota. A held answer must not outlive that.
+    const later = appFor("account_etag", new Date(now.getTime() + 3_600_000));
+    const nextHour = await later.request(summaryPath, {
+      headers: { "If-None-Match": renamed.headers.get("ETag") ?? "" },
+    });
+    expect(nextHour.status).toBe(200);
+
     // A query key this route does not serve is still refused rather than validated.
     const bogus = await app.request(`${summaryPath}?nonsense=1`, {
       headers: { "If-None-Match": etag ?? "" },
@@ -1235,16 +1257,16 @@ function usageDailyInsert(
 }
 
 /** An app answering as the signed-in owner of one account. */
-function appFor(accountId: string) {
+function appFor(accountId: string, readAt: Date = now) {
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webSessions: new SignedInWebSessionStub(accountId, now),
+    webSessions: new SignedInWebSessionStub(accountId, readAt),
     hasher,
-    now: () => now,
+    now: () => readAt,
   });
 }
 

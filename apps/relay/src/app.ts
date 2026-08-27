@@ -551,7 +551,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
-      rolloverKey: plan.localDate,
+      rolloverKey: summaryRolloverKey(plan.localDate, checkedAt),
     });
     if (conditional) return conditional;
     const [account, devices, stored, daily, boundary] = await Promise.all([
@@ -922,6 +922,20 @@ async function beginGitHubSignIn(
   const started = await options.webSessions.beginSignIn(returnTo, now);
   context.header("Set-Cookie", started.handoff, { append: true });
   return context.redirect(started.location, 302);
+}
+
+/**
+ * The two things that turn a summary over with no write behind it.
+ *
+ * The caller's local date decides where the three trailing periods start and end. The clock
+ * decides which reading speaks for a subscription: a reading stops describing current quota at
+ * its own validity boundary, and when it does, a fresher one from another device takes its place
+ * and the freshness a reader is shown flips. Bucketing that to the hour is what keeps the
+ * boundary rule in one place — `packages/quota-model` derives it from the reading — while still
+ * bounding how long a held answer can outlive a flip.
+ */
+function summaryRolloverKey(localDate: string, checkedAt: Date): string {
+  return `${localDate}|${checkedAt.toISOString().slice(0, 13)}`;
 }
 
 /** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */

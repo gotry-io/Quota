@@ -760,13 +760,15 @@ export class D1AccountState implements AccountState {
   }
 
   /**
-   * Three aggregates over the tables an Account read projects. They are the whole basis for the
+   * Aggregates over the tables an Account read projects. They are the whole basis for the
    * conditional answer, so each one has to move whenever the response would: counts catch
    * deletion and retention, the newest instant catches replacement, and the summed per-device
-   * usage revision catches an upload from any device rather than only the leading one.
+   * usage revision catches an upload from any device rather than only the leading one. The
+   * Account's own `updated_at` is here because the response carries its display label, which a
+   * later GitHub sign-in rewrites without touching a device or an observation.
    */
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
-    const [devices, snapshots] = await this.database.batch<Record<string, unknown>>([
+    const [devices, snapshots, account] = await this.database.batch<Record<string, unknown>>([
       this.database
         .prepare(
           `SELECT COUNT(*) AS devices,
@@ -790,12 +792,17 @@ export class D1AccountState implements AccountState {
            WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL`,
         )
         .bind(accountId),
+      this.database
+        .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
+        .bind(accountId),
     ]);
     const merged = {
       ...(devices?.results[0] ?? {}),
       ...(snapshots?.results[0] ?? {}),
+      ...(account?.results[0] ?? {}),
     };
     return {
+      account_updated_at: stampInstant(merged.account_updated_at),
       devices: stampCount(merged.devices),
       active_devices: stampCount(merged.active_devices),
       usage_revision: stampCount(merged.usage_revision),

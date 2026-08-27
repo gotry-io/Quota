@@ -206,6 +206,8 @@ export interface RateLimitResult {
  * read instant, not from a stored column, so it changes with no write at all.
  */
 export interface AccountVersionStamp {
+  /** When the Account row last changed. The response carries its display label. */
+  account_updated_at: string | null;
   devices: number;
   active_devices: number;
   usage_revision: number;
