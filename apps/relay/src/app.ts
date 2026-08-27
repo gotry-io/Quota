@@ -255,7 +255,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         },
         now(),
       );
-    } catch {
+    } catch (error) {
+      // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
+      // a credential; without them a production sign-in that dies mid-verification is invisible.
+      console.error("web_signin_failed", {
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+      });
       return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
     }
     if (completed.outcome !== "signed_in") {
