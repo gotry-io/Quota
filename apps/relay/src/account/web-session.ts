@@ -96,7 +96,11 @@ export class GitHubWebSessions implements WebSessionPort {
 
   constructor(private readonly environment: WebSessionEnvironment) {
     this.#origin = environment.origin ?? CANONICAL_ORIGIN;
-    this.#fetch = environment.fetch ?? fetch;
+    // `fetch` is a global that refuses to run as anyone's method: stored on this object and
+    // called as `this.#fetch(...)`, workerd throws "Illegal invocation". Call it with the
+    // global as its receiver, which is also what a test double is happy to receive.
+    const implementation = environment.fetch ?? fetch;
+    this.#fetch = (input, init) => implementation.call(globalThis, input, init);
   }
 
   async beginSignIn(returnTo: string, now: Date): Promise<WebSignInStart> {
