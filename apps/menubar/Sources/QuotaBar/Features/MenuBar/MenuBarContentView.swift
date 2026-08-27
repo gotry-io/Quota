@@ -122,7 +122,11 @@ struct MenuBarContentView: View {
         QuotaConfirmationPopup(
           title: BrowserSessionCopy.consentTitle(provider: provider),
           message: BrowserSessionCopy.consentMessage(
-            provider: provider, browserName: choice.title, spec: spec),
+            provider: provider,
+            browserName: choice.title,
+            family: choice.family,
+            spec: spec
+          ),
           confirmTitle: BrowserSessionCopy.consentConfirmTitle,
           onCancel: model.cancelProviderBrowserSessionFlow,
           onConfirm: model.confirmProviderBrowserSessionConsent
