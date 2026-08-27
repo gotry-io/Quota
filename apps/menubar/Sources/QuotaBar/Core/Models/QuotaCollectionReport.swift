@@ -67,7 +67,7 @@ extension QuotaCollectionSource {
   static func displayName(forSourceID sourceID: String) -> String {
     switch sourceID {
     case "anthropic_oauth_usage_api", "anthropic_oauth_signed_out", "chatgpt_usage_api",
-      "grok_billing_api", "grok_billing_rpc":
+      "grok_billing_api":
       "OAuth"
     case "codex_pat_usage_api": "Access token"
     case "browser_session", "chatgpt_web_usage_api", "claude_web_usage_api",

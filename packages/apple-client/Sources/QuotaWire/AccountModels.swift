@@ -291,7 +291,6 @@ public enum RelayErrorCode: String, Codable, Sendable, TolerantWireEnum {
   case expiredToken = "expired_token"
   case invalidGrant = "invalid_grant"
   case rateLimited = "rate_limited"
-  case sequenceConflict = "sequence_conflict"
   case staleGeneration = "stale_generation"
   case deviceDeleted = "device_deleted"
   case clientUpgradeRequired = "client_upgrade_required"
