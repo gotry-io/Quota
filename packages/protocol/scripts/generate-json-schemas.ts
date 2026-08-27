@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
@@ -137,16 +137,24 @@ for (const output of outputs) {
     $comment: output.comment,
     ...generated,
   };
-  writeFileSync(join(target, output.filename), `${JSON.stringify(document, null, 2)}\n`);
-}
-
-const formatted = spawnSync("pnpm", ["exec", "biome", "format", "--write", target], {
-  cwd: repositoryRoot,
-  encoding: "utf8",
-});
-if (formatted.status !== 0) {
-  if (checkOnly) rmSync(target, { recursive: true, force: true });
-  throw new Error(`Could not format the generated schemas: ${formatted.stderr}`);
+  // Biome only formats paths inside the repository, so a scratch directory under the system
+  // temp root is refused on Linux. Each document is formatted through stdin under the name
+  // of the published file it will become, which applies the repository's JSON settings.
+  const formatted = spawnSync(
+    "pnpm",
+    [
+      "exec",
+      "biome",
+      "format",
+      `--stdin-file-path=${relative(repositoryRoot, join(directory, output.filename))}`,
+    ],
+    { cwd: repositoryRoot, encoding: "utf8", input: `${JSON.stringify(document, null, 2)}\n` },
+  );
+  if (formatted.status !== 0) {
+    if (checkOnly) rmSync(target, { recursive: true, force: true });
+    throw new Error(`Could not format ${output.filename}: ${formatted.stderr}`);
+  }
+  writeFileSync(join(target, output.filename), formatted.stdout);
 }
 
 if (checkOnly) {
