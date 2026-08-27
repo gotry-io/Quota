@@ -607,6 +607,7 @@ describe("managed Relay on real Workers and D1", () => {
       "rate_limit_counters",
       "sessions",
       "usage_daily",
+      "usage_hour_scans",
       "usage_hourly",
     ]);
   });
@@ -652,6 +653,81 @@ describe("managed Relay on real Workers and D1", () => {
       "SELECT provider FROM quota_snapshots WHERE device_id = 'device_retention' ORDER BY provider",
     ).all<{ provider: string }>();
     expect(remaining.results.map((row) => row.provider)).toEqual(["codex"]);
+  });
+
+  it("reads all time as the window it names rather than as every retained day", async () => {
+    const oldest = utcDaysBefore(729);
+    const older = utcDaysBefore(730);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_window', 'subject_window', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_window', 'account_window', 'installation_window', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_window",
+        date: oldest,
+      }),
+      usageDailyInsert("codex", "openai_direct", "claude-opus-5", {
+        deviceID: "device_window",
+        date: older,
+      }),
+    ]);
+
+    const response = await appFor("account_window").request(
+      "https://quota.gotry.io/api/v6/account/summary",
+    );
+    expect(response.status).toBe(200);
+    const summary = (await response.json()) as {
+      usage: {
+        all: {
+          totals: { messages: number };
+          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+        };
+      };
+    };
+    // The day one past the window is retained and not read; `all` is 730 days, not everything.
+    expect(summary.usage.all.totals.messages).toBe(1);
+    expect(
+      summary.usage.all.agents.flatMap((agent) =>
+        agent.providers.flatMap((provider) => provider.models.map((model) => model.model)),
+      ),
+    ).toEqual(["gpt-5.6-sol"]);
+  });
+
+  it("sweeps Usage older than retention, a bounded batch at a time", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_sweep', 'subject_sweep', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+             id, account_id, installation_id_hash, generation, created_at, last_login_at
+           ) VALUES ('device_sweep', 'account_sweep', 'installation_sweep', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+    ]);
+    // One hour and one day on each side of every bound, plus enough beyond it to prove the
+    // batch stops rather than running the table down in a single pass.
+    const expiredHours = Array.from({ length: 120 }, (_, index) =>
+      new Date(Date.parse("2024-01-01T00:00:00Z") + index * 3_600_000).toISOString().slice(0, 19),
+    ).map((instant) => `${instant}Z`);
+    await env.DB.batch([
+      ...[...expiredHours, "2026-08-09T00:00:00Z"].flatMap((bucket) => storedHour(bucket)),
+      ...["2023-01-01", "2023-01-02", "2026-08-09"].map((date) => storedDay(date)),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    expect(await sweptHours()).toHaveLength(expiredHours.length - 100 + 1);
+    expect(await sweptScans()).toHaveLength(expiredHours.length - 100 + 1);
+    expect(await sweptDays()).toEqual(["2026-08-09"]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+    expect(await sweptHours()).toEqual(["2026-08-09T00:00:00Z"]);
+    expect(await sweptScans()).toEqual(["2026-08-09T00:00:00Z"]);
   });
 
   it("expires one rate-limit window without resetting that subject's live one", async () => {
@@ -1049,6 +1125,61 @@ async function dailyMismatch(): Promise<unknown[]> {
     ...expected.filter((row) => !actual.includes(row)),
     ...actual.filter((row) => !expected.includes(row)),
   ];
+}
+
+function utcDaysBefore(days: number): string {
+  return new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** One stored hour of the retention fixture, with the scan version that owns it. */
+function storedHour(bucket: string): D1PreparedStatement[] {
+  return [
+    env.DB.prepare(
+      `INSERT INTO usage_hourly (
+           device_id, agent, bucket_start_utc, scan_version, partial,
+           billing_channel, channel_source, model, context_bucket,
+           service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+           cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+           output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+           source_cost_microusd, source_cost_covered_requests
+         ) VALUES (
+           'device_sweep', 'codex', ?1, 1, 0,
+           'openai_direct', 'agent_default', 'gpt-5.6-sol', 'le_128k',
+           'unknown', 'unknown', 'unknown', 10, 0,
+           0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
+         )`,
+    ).bind(bucket),
+    env.DB.prepare(
+      `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
+       VALUES ('device_sweep', 'codex', ?1, 1)`,
+    ).bind(bucket),
+  ];
+}
+
+function storedDay(date: string): D1PreparedStatement {
+  return usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+    deviceID: "device_sweep",
+    date,
+  });
+}
+
+function sweptHours(): Promise<string[]> {
+  return sweptColumn("usage_hourly", "bucket_start_utc");
+}
+
+function sweptScans(): Promise<string[]> {
+  return sweptColumn("usage_hour_scans", "bucket_start_utc");
+}
+
+function sweptDays(): Promise<string[]> {
+  return sweptColumn("usage_daily", "utc_date");
+}
+
+async function sweptColumn(table: string, column: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    `SELECT ${column} AS value FROM ${table} WHERE device_id = 'device_sweep' ORDER BY value`,
+  ).all<{ value: string }>();
+  return rows.results.map((row) => row.value);
 }
 
 /** One hour of the same fact `usageDailyInsert` rolls into a day, on the same device. */

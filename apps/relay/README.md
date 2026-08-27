@@ -23,7 +23,10 @@ The v6 data contract is four routes
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
   and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
-  where the three trailing periods start and end.
+  where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
+  ever stored: an answer that grows with an account's whole history eventually cannot be given.
+  The rollup is read newest day first, so an account with more retained rows than one response can
+  carry gets a shorter `all` rather than no summary at all.
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
@@ -97,5 +100,8 @@ unpriced; wildcard dimension matches and the inferred-cache approximation remain
 calculation assumptions.
 
 Readiness probes and the hourly Worker schedule run the bounded credential and quota-observation
-cleanup defined in [`docs/security.md`](../../docs/security.md). An unhandled request failure writes
-one `relay_request_failed` line carrying only the path, the status, and the error's class name.
+cleanup defined in [`docs/security.md`](../../docs/security.md), and the same batch retires Usage:
+`usage_hourly` and the hour versions beside it after 400 days, `usage_daily` after 800. Each is at
+most a hundred rows per run, so a sweep never competes with the uploads it runs alongside. An
+unhandled request failure writes one `relay_request_failed` line carrying only the path, the status,
+and the error's class name.

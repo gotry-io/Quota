@@ -228,6 +228,19 @@ export interface AccountMaintenanceInput {
    * this; this is when Relay stops keeping it at all.
    */
   snapshot_observed_before: string;
+  /**
+   * The `bucket_start_utc` before which stored hours are deleted.
+   *
+   * Hours exist to answer the UTC day a local period's edge cuts, which is never more than a
+   * day or two back. They are kept far longer than that so a device returning from a long
+   * absence can still be told its old hours are already stored, and no longer.
+   */
+  usage_hour_before: string;
+  /**
+   * The `utc_date` before which stored days are deleted. The daily rollup is what a long read
+   * folds, so it outlives both the hours behind it and the widest window `all` covers.
+   */
+  usage_day_before: string;
   limit: number;
 }
 

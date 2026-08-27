@@ -105,6 +105,33 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.snapshot_observed_before, input.limit),
+      // Usage is the only thing here an account accumulates without limit, so it is the only
+      // thing that can make a read of it impossible. The hours go first and their versions with
+      // them: a version outliving its hour would refuse an upload of an hour that is gone.
+      this.database
+        .prepare(
+          `DELETE FROM usage_hourly WHERE rowid IN (
+             SELECT rowid FROM usage_hourly WHERE bucket_start_utc < ?1
+             ORDER BY bucket_start_utc ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_hour_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM usage_hour_scans WHERE rowid IN (
+             SELECT rowid FROM usage_hour_scans WHERE bucket_start_utc < ?1
+             ORDER BY bucket_start_utc ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_hour_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM usage_daily WHERE rowid IN (
+             SELECT rowid FROM usage_daily WHERE utc_date < ?1
+             ORDER BY utc_date ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_day_before, input.limit),
     ]);
   }
 

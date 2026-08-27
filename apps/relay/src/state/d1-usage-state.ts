@@ -122,6 +122,14 @@ export class D1UsageState implements UsageState {
     };
   }
 
+  /**
+   * The rollup an Account read folds, newest day first.
+   *
+   * The order decides which days a capped read keeps, and the caller has no use for the far end
+   * of a history it cannot carry: a trailing period is made of the newest days, and `all` is a
+   * window ending today. Nothing downstream depends on the order itself — every reader groups or
+   * sorts these rows for itself.
+   */
   async queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult> {
     const parameters: (string | number)[] = [accountId];
     const conditions = ["devices.account_id = ?1", "devices.deleted_at IS NULL"];
@@ -144,7 +152,7 @@ export class D1UsageState implements UsageState {
          FROM usage_daily AS daily
          INNER JOIN devices ON devices.id = daily.device_id
          WHERE ${conditions.join(" AND ")}
-         ORDER BY daily.utc_date ASC, daily.device_id ASC, daily.agent ASC,
+         ORDER BY daily.utc_date DESC, daily.device_id ASC, daily.agent ASC,
                   ${identityColumns.map((column) => `daily.${column} ASC`).join(", ")}
          LIMIT ?${parameters.length}`,
       )
