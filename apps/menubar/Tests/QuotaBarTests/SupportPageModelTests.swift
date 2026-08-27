@@ -69,14 +69,33 @@ struct SupportPageModelTests {
     #expect(ResetLocalDataCopy.message.contains("You stay signed in."))
   }
 
-  /// The service owns every sentence; the page only names the thing the sentence is about.
+  /// The service owns every sentence; the page only names the thing the sentence is about, and
+  /// every one of those names comes from a table rather than from the id it arrived as.
   @Test func sourceTitlesNameTheProviderAndTheRungThatAnswered() {
     #expect(
-      SupportPresentation.sourceTitle(subject: "provider:codex", sourceID: "oauth")
-        == "Codex · Oauth")
+      SupportPresentation.sourceTitle(subject: "provider:codex", sourceID: "chatgpt_usage_api")
+        == "Codex · OAuth")
+    #expect(
+      SupportPresentation.sourceTitle(subject: "provider:cursor", sourceID: "browser_session")
+        == "Cursor · Browser session")
     #expect(SupportPresentation.sourceTitle(subject: "agent:cursor", sourceID: nil) == "Cursor")
     #expect(
-      SupportPresentation.sourceTitle(subject: "usage_upload", sourceID: nil) == "Usage Upload")
+      SupportPresentation.sourceTitle(subject: "agent:claude_code", sourceID: nil) == "Claude Code")
+    #expect(SupportPresentation.sourceTitle(subject: "usage_upload", sourceID: nil) == "Usage sync")
+    #expect(SupportPresentation.sourceTitle(subject: "local_state", sourceID: nil) == "Local data")
+  }
+
+  /// A subject or surface this build has no name for is not introduced by its wire id. The row
+  /// still carries the service's own sentence, which is what it was saying all along.
+  @Test func anUnnamedSubjectIsNotDressedUpAsATitle() {
+    #expect(
+      SupportPresentation.sourceTitle(subject: "provider:a_provider_from_2027", sourceID: nil)
+        == "Unknown provider")
+    #expect(
+      SupportPresentation.sourceTitle(subject: "agent:an_agent_from_2027", sourceID: nil)
+        == "Other")
+    #expect(SupportPresentation.sourceTitle(subject: "a_new_service_path", sourceID: nil) == "Other")
+    #expect(SupportPresentation.surfaceTitle("a_new_surface") == "Other")
   }
 
   /// Support is the one page that states a clock time. A person presses Recheck to find out

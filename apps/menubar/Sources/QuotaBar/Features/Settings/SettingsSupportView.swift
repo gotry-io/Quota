@@ -20,24 +20,57 @@ enum SupportHeaderAction {
 /// The Support page's own presentation. Every sentence a person reads comes from the service;
 /// this only decides which symbol and colour carries it.
 enum SupportPresentation {
+  /// The word for something this build does not have a name for. It is deliberately not the id:
+  /// a wire id with its underscores swapped for spaces is the private service's vocabulary in a
+  /// disguise, and the service's own sentence underneath already says what the row is about.
+  static let unnamed = "Other"
+
   static func surfaceTitle(_ id: String) -> String {
     switch id {
     case "quota_overview": "Quota Overview"
     case "usage_this_device": "This Mac Usage"
     case "usage_account": "Account Usage"
     case "account": "Account"
-    default: id.replacingOccurrences(of: "_", with: " ").capitalized
+    default: unnamed
     }
   }
 
-  /// `provider:codex/oauth` reads as "Codex · OAuth"; the service's own names read as words.
+  /// `provider:codex` with the `chatgpt_usage_api` rung reads as "Codex · OAuth".
+  ///
+  /// Every part of that comes from a table: the provider catalog, the Usage agent list, the
+  /// service-owned paths below, and the collection report's own source names. None of it is
+  /// derived from the id it arrived as.
   static func sourceTitle(subject: String, sourceID: String?) -> String {
-    let identity = subject.split(separator: ":", maxSplits: 1).last.map(String.init) ?? subject
-    let name =
-      ProviderID(rawValue: identity)?.displayName
-      ?? identity.replacingOccurrences(of: "_", with: " ").capitalized
+    let name = subjectTitle(subject)
     guard let sourceID else { return name }
-    return "\(name) · \(sourceID.replacingOccurrences(of: "_", with: " ").capitalized)"
+    return "\(name) · \(QuotaCollectionSource.displayName(forSourceID: sourceID))"
+  }
+
+  private static func subjectTitle(_ subject: String) -> String {
+    let parts = subject.split(separator: ":", maxSplits: 1)
+    guard parts.count == 2 else { return serviceSubjectTitle(subject) }
+    let identity = String(parts[1])
+    switch parts[0] {
+    case "provider":
+      // An id outside the catalog is `.unknown`, which names itself the same way everywhere.
+      return (ProviderID(rawValue: identity) ?? .unknown(identity)).displayName
+    case "agent":
+      return BillingAgent(rawValue: identity).map(UsageValueFormatter.agent) ?? unnamed
+    default:
+      return unnamed
+    }
+  }
+
+  /// The service's own paths, which belong to no provider and no agent.
+  private static func serviceSubjectTitle(_ subject: String) -> String {
+    switch subject {
+    case "account": "Account"
+    case "usage_upload": "Usage sync"
+    case "pricing_catalog": "Pricing"
+    case "provider_configuration": "Provider setup"
+    case "local_state": "Local data"
+    default: unnamed
+    }
   }
 
   /// When the report on screen was evaluated, as a clock time rather than an age.
