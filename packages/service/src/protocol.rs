@@ -440,11 +440,19 @@ impl ComponentState {
     }
 }
 
+/// What this device knows about the Account it is signed in to.
+///
+/// `display_label` is what the sign-in itself said the Account is called. It is separate from
+/// `account_summary` because the summary is a whole Account read — devices, subscriptions, four
+/// Usage periods, two catalog revisions — and none of that is known at the instant a session is
+/// issued. Naming the account is, so it is stated on its own rather than as a summary with
+/// invented fields.
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountComponentValue {
     pub auth_status: AuthStatus,
     pub account_id: Option<String>,
+    pub display_label: Option<String>,
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
     pub account_summary: Option<Value>,

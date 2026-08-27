@@ -1374,6 +1374,10 @@ impl AccountManager {
         let account = AccountComponentValue {
             auth_status: AuthStatus::SignedIn,
             account_id: Some(account_id),
+            display_label: session
+                .get("display_label")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             device_id: session
                 .get("device_id")
                 .and_then(Value::as_str)
@@ -1421,6 +1425,10 @@ impl AccountManager {
         Ok(serde_json::to_value(AccountComponentValue {
             auth_status: AuthStatus::SignedIn,
             account_id,
+            display_label: session
+                .get("display_label")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             device_id,
             device_generation,
             account_summary: Some(summary),
@@ -2033,6 +2041,7 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         "schema_version": 1,
         "status": "active",
         "account_id": account_id,
+        "display_label": account_display_label(object.get("display_label")),
         "device_id": device_id,
         "device_generation": generation,
         "usage_sync_revision": usage_sync_revision,
@@ -2045,6 +2054,16 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
             "refresh_expires_at": issued["refresh_expires_at"]
         }
     }))
+}
+
+/// The Account's name as a payload states it, or nothing.
+///
+/// A read tolerates a field this build has not been told about and a value it cannot use, so an
+/// absent, null, blank, or over-long label is simply no name rather than a refused sign-in
+/// ([ADR 0023](../../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
+fn account_display_label(value: Option<&Value>) -> Option<String> {
+    let label = value?.as_str()?.trim();
+    (!label.is_empty() && label.chars().count() <= 128).then(|| label.to_owned())
 }
 
 fn validate_session_token(value: &Value) -> Result<(), RelayError> {
@@ -2675,6 +2694,30 @@ mod tests {
             "session": valid_token()
         });
         assert!(session_from_token_response(&response).is_ok());
+        // The exchange names the Account, and the session keeps that name so a device that
+        // threw its cache away still says whose account it is signed in to.
+        let mut named = response.clone();
+        named["display_label"] = serde_json::json!("octocat");
+        assert_eq!(
+            session_from_token_response(&named).expect("named session")["display_label"],
+            serde_json::json!("octocat")
+        );
+        // A read tolerates what it cannot use: no name is a session without one, not a refusal.
+        for absent in [
+            serde_json::Value::Null,
+            serde_json::json!("   "),
+            serde_json::json!("x".repeat(129)),
+            serde_json::json!(7),
+        ] {
+            let mut unnamed = response.clone();
+            unnamed["display_label"] = absent;
+            assert!(
+                session_from_token_response(&unnamed).expect("session")["display_label"].is_null()
+            );
+        }
+        assert!(
+            session_from_token_response(&response).expect("session")["display_label"].is_null()
+        );
         let mut unsafe_response = response.clone();
         unsafe_response["usage_sync_revision"] = serde_json::json!(9_007_199_254_740_992u64);
         assert!(session_from_token_response(&unsafe_response).is_err());

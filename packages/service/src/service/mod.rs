@@ -1025,6 +1025,7 @@ impl LocalService {
                         Some(account_value_json(&AccountComponentValue {
                             auth_status: AuthStatus::SignedOut,
                             account_id: None,
+                            display_label: None,
                             device_id: None,
                             device_generation: None,
                             account_summary: None,
@@ -1225,6 +1226,7 @@ impl LocalService {
                     Some(account_value_json(&AccountComponentValue {
                         auth_status: AuthStatus::SignedOut,
                         account_id: None,
+                        display_label: None,
                         device_id: None,
                         device_generation: None,
                         account_summary: None,
@@ -1299,6 +1301,7 @@ impl LocalService {
         let value = AccountComponentValue {
             auth_status: AuthStatus::SignedOut,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1417,6 +1420,7 @@ fn account_value_from(
         return AccountComponentValue {
             auth_status: status,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1426,6 +1430,7 @@ fn account_value_from(
         return AccountComponentValue {
             auth_status: status,
             account_id: None,
+            display_label: None,
             device_id: None,
             device_generation: None,
             account_summary: None,
@@ -1435,6 +1440,10 @@ fn account_value_from(
         auth_status: status,
         account_id: object
             .get("account_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        display_label: object
+            .get("display_label")
             .and_then(Value::as_str)
             .map(str::to_owned),
         device_id: object
@@ -2252,6 +2261,7 @@ mod tests {
                 Some(account_value_json(&AccountComponentValue {
                     auth_status: AuthStatus::SignedIn,
                     account_id: Some("account_test".into()),
+                    display_label: Some("octocat".into()),
                     device_id: Some("device_test".into()),
                     device_generation: Some(1),
                     account_summary: None,

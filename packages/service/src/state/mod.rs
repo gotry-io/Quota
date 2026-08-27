@@ -533,6 +533,7 @@ impl StateStore {
                     value: Some(serde_json::json!({
                         "auth_status": "signed_out",
                         "account_id": null,
+                        "display_label": null,
                         "device_id": null,
                         "device_generation": null,
                         "account_summary": null
