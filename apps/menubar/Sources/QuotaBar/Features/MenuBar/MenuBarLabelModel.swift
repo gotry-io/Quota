@@ -8,8 +8,7 @@ enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
   case percent
   case iconAndPercent = "icon_and_percent"
 
-  /// The key is older than the name on screen. A rename is not worth losing what someone chose.
-  static let storageKey = "menubar.display"
+  static let storageKey = "menubar.style"
   static let fallback = MenuBarStylePreference.iconAndPercent
 
   var id: Self { self }

@@ -242,7 +242,7 @@ struct MenuBarLabelModelTests {
     #expect(MenuBarStylePreference.iconAndPercent.rawValue == "icon_and_percent")
     #expect(MenuBarStylePreference.fallback == .iconAndPercent)
     #expect(MenuBarStylePreference.allCases.count == 3)
-    #expect(MenuBarStylePreference.storageKey == "menubar.display")
+    #expect(MenuBarStylePreference.storageKey == "menubar.style")
   }
 
   /// Codex at 68% and 74% remaining, Claude Code at 27%, and a Grok reading that aged out.
