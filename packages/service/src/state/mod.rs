@@ -3251,11 +3251,11 @@ fn open_cache_image(path: &Path, revision_seed: u64) -> Result<Connection, State
 fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
     let connection =
         Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
-    connection.execute_batch(
+    connection.execute_batch(&format!(
         "PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;
-         PRAGMA journal_mode = WAL;",
-    )?;
+         PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};
+         PRAGMA journal_mode = WAL;"
+    ))?;
     connection.pragma_update(None, "journal_size_limit", MAXIMUM_WAL_BYTES)?;
     Ok(connection)
 }
@@ -3313,6 +3313,12 @@ fn create_owner_only_file_if_missing(path: &Path) -> Result<(), StateError> {
     }
 }
 
+/// How long a connection waits behind another writer before answering busy.
+///
+/// Shortened under test so the case proving that a busy image is not a damaged one does not
+/// spend the whole wait proving it.
+const BUSY_TIMEOUT_MS: u64 = if cfg!(test) { 100 } else { 5_000 };
+
 fn remove_sqlite_image(path: &Path) {
     let _ = fs::remove_file(path);
     for suffix in ["-wal", "-shm"] {
@@ -3324,8 +3330,11 @@ fn remove_sqlite_image(path: &Path) {
 
 /// A cache error the service answers by throwing the file away.
 ///
-/// Contention and a machine that cannot write right now are not the file's fault, so they are
-/// reported as they are. Everything else means SQLite no longer agrees with what is on disk.
+/// Contention, a machine that cannot write right now, and a statement this build got wrong are
+/// not the file's fault, so they are reported as they are. A read-only image, a refused
+/// permission, an allocation that failed, a row over a limit, and a violated constraint all say
+/// something about this moment or about what was being written, never that the bytes on disk
+/// stopped describing what this device collected. Everything else does mean exactly that.
 fn cache_needs_rebuild(error: &StateError) -> bool {
     match error {
         StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => !matches!(
@@ -3336,6 +3345,11 @@ fn cache_needs_rebuild(error: &StateError) -> bool {
                 | SqliteErrorCode::SystemIoFailure
                 | SqliteErrorCode::CannotOpen
                 | SqliteErrorCode::OperationInterrupted
+                | SqliteErrorCode::ReadOnly
+                | SqliteErrorCode::OutOfMemory
+                | SqliteErrorCode::PermissionDenied
+                | SqliteErrorCode::TooBig
+                | SqliteErrorCode::ConstraintViolation
         ),
         // The image no longer holds the shape this build reads: a column of the wrong type or
         // name, or a statement SQLite will not prepare against it.
@@ -3352,12 +3366,19 @@ fn cache_needs_rebuild(error: &StateError) -> bool {
     }
 }
 
+/// A failure that is about this machine right now rather than about the image.
+///
+/// Contention is the reason `DatabaseBusy` and `DatabaseLocked` are here: a second helper
+/// holding the write lock is not a damaged file, and deleting one because another process was
+/// mid-write is how a working device loses its cache.  The caller retries instead.
 fn sqlite_io_or_full_error(error: &StateError) -> bool {
     match error {
         StateError::Io(_) => true,
         StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => matches!(
             code.code,
-            SqliteErrorCode::DiskFull
+            SqliteErrorCode::DatabaseBusy
+                | SqliteErrorCode::DatabaseLocked
+                | SqliteErrorCode::DiskFull
                 | SqliteErrorCode::SystemIoFailure
                 | SqliteErrorCode::CannotOpen
         ),
@@ -4853,6 +4874,108 @@ mod tests {
         let snapshot = store.snapshot().expect("rebuilt");
         assert!(snapshot.cache.rebuilding);
         assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Contention is not corruption (ADR 0021). A second process holding the write lock costs
+    /// this one a retry; it must never cost the device the file.
+    #[test]
+    fn an_open_another_writer_holds_leaves_both_images_where_they_are() {
+        let root = temp_root("open-busy");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+        drop(store);
+
+        for name in [CACHE_NAME, IDENTITY_NAME] {
+            let path = root.join(name);
+            let before = fs::metadata(&path).expect("image").len();
+            let blocker = Connection::open(&path).expect("second writer");
+            blocker
+                .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;")
+                .expect("write lock");
+
+            let answer = if name == CACHE_NAME {
+                open_cache(&root, 0).map(|_| ())
+            } else {
+                open_identity(&root).map(|_| ())
+            };
+            assert!(matches!(answer, Err(StateError::Unavailable)), "{name}");
+            assert_eq!(
+                fs::metadata(&path).expect("image is still there").len(),
+                before,
+                "{name}"
+            );
+            drop(blocker);
+        }
+
+        // And the device that waited its turn still holds everything it had.
+        let store = StateStore::open(&root).expect("reopen");
+        assert!(store.session_json().expect("session").is_some());
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A statement SQLite refused is an answer about that statement. The cache is only thrown
+    /// away when the bytes on disk stopped describing what this device collected.
+    #[test]
+    fn a_refused_write_is_never_a_verdict_on_the_cache() {
+        let root = temp_root("cache-refused");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+
+        // An outcome the journal's CHECK constraint refuses.
+        let refused = store.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome)
+                 VALUES ('refresh', 'manual', '2026-08-10T00:00:00Z', 'nonsense')",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(matches!(refused, Err(StateError::Sql(_))));
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+
+        // The codes a test cannot provoke on demand, answered from the same rule.
+        for code in [
+            SqliteErrorCode::ReadOnly,
+            SqliteErrorCode::OutOfMemory,
+            SqliteErrorCode::PermissionDenied,
+            SqliteErrorCode::TooBig,
+            SqliteErrorCode::ConstraintViolation,
+        ] {
+            let error = StateError::Sql(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code,
+                    extended_code: 0,
+                },
+                None,
+            ));
+            assert!(!cache_needs_rebuild(&error), "{code:?}");
+            assert!(!sqlite_io_or_full_error(&error), "{code:?}");
+        }
+        // A shape this build cannot read still is.
+        assert!(cache_needs_rebuild(&StateError::Sql(
+            rusqlite::Error::InvalidQuery
+        )));
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
