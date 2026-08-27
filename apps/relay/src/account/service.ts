@@ -108,6 +108,7 @@ export interface IssuedSession {
 export interface NativeTokenResponse {
   token_type: "Bearer";
   account_id: string;
+  display_label: string | null;
   device_id: string;
   device_generation: number;
   usage_deleted_before: string | null;
@@ -118,6 +119,7 @@ export interface NativeTokenResponse {
 export interface AccountTokenResponse {
   token_type: "Bearer";
   account_id: string;
+  display_label: string | null;
   session: IssuedSession;
 }
 
@@ -324,6 +326,7 @@ export class AccountService {
     return {
       token_type: "Bearer",
       account_id: result.account_id,
+      display_label: result.display_label,
       device_id: result.device.id,
       device_generation: result.device.generation,
       usage_deleted_before: result.device.deleted_before,
@@ -352,6 +355,7 @@ export class AccountService {
     return {
       token_type: "Bearer",
       account_id: result.account_id,
+      display_label: result.display_label,
       session: issued(credentials),
     };
   }

@@ -133,6 +133,7 @@ export type LoginGrantConsumeResult =
   | {
       outcome: "issued";
       account_id: string;
+      display_label: string | null;
       device: DeviceRecord;
     }
   | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
@@ -162,7 +163,7 @@ export interface ConsumeAccountLoginGrantInput {
 }
 
 export type AccountLoginGrantConsumeResult =
-  | { outcome: "issued"; account_id: string }
+  | { outcome: "issued"; account_id: string; display_label: string | null }
   | { outcome: "not_found" | "expired" | "consumed" | "not_completed" };
 
 export interface RefreshSessionInput {

@@ -159,8 +159,16 @@ describe("quota-ios read-only account client", () => {
     expect(exchanged.status).toBe(200);
     const tokens = IosOAuthTokenResponseSchema.parse(await exchanged.json());
     expect(tokens.account_id).toBe(harness.accountId);
+    // The exchange names the Account it signed in to; it still names no Device.
+    expect(tokens.display_label).toBe("iOS Tester");
+    expect(
+      await env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+        .bind(harness.accountId)
+        .first("display_label"),
+    ).toBe(tokens.display_label);
     expect(Object.keys(tokens).sort()).toEqual([
       "account_id",
+      "display_label",
       "protocol_version",
       "session",
       "token_type",

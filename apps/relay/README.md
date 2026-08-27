@@ -67,8 +67,10 @@ Every client's session is a row in that same table, and one login issues one acc
 authorization code over a loopback redirect for a session scoped `[account:read, device:write]`,
 which is the only way a Device is registered; Authorization Code with PKCE is the only grant Relay
 offers. The registered `quota-ios` public client is a read-only Account login over the exact
-redirect `io.gotry.quota:/oauth/callback`, scoped `[account:read]`, and it registers no Device. The
-checked-in Worker enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
+redirect `io.gotry.quota:/oauth/callback`, scoped `[account:read]`, and it registers no Device. Both
+exchanges answer with the Account's `display_label` beside the session, read in the same batch that
+issued it, so a client can name the account before its first Account read. The checked-in Worker
+enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly

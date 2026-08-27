@@ -4,7 +4,8 @@ Runtime schemas for QuotaBar's Rust local service, managed QuotaRelay, Swift `Co
 the registered `quota-ios` account client. OAuth and Device control remain v2; quota, Usage, and
 Account summary use managed-data v6. Each client exchanges its authorization code for one session
 on the same v2 OAuth contract, and `quota-ios` names its own request and response payloads because
-it registers no Device.
+it registers no Device. Both token responses carry the Account's `display_label` alongside the
+session, so a client names the account it signed in to before it has read one.
 
 Strict writes, tolerant reads
 ([ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md)). A request body is checked against exactly the contract and refused when it names a key the contract

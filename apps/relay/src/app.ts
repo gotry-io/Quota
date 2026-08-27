@@ -1059,6 +1059,7 @@ function iosOAuthTokenResponse(
     protocol_version: PROTOCOL_VERSION,
     token_type: issued.token_type,
     account_id: issued.account_id,
+    display_label: issued.display_label,
     session: sessionToken(issued.session),
   };
 }
@@ -1070,6 +1071,7 @@ function oauthTokenResponse(
     protocol_version: PROTOCOL_VERSION,
     token_type: issued.token_type,
     account_id: issued.account_id,
+    display_label: issued.display_label,
     device_id: issued.device_id,
     device_generation: issued.device_generation,
     usage_deleted_before: issued.usage_deleted_before,

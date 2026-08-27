@@ -287,10 +287,18 @@ export function platformDisplayName(platform: string): string {
   return platform === "macos" ? "macOS" : "Unknown";
 }
 
+/**
+ * What an Account is called: the identity login as stored, or nothing when none was kept.
+ *
+ * Both the Account read and the token exchange state it, so the label a client shows is one
+ * value with one rule rather than two that could drift.
+ */
+export const AccountDisplayLabelSchema = z.string().trim().min(1).max(128).nullable();
+
 export const AccountSchema = z
   .object({
     account_id: OpaqueIdSchema,
-    display_label: z.string().trim().min(1).max(128).nullable(),
+    display_label: AccountDisplayLabelSchema,
     created_at: Rfc3339InstantSchema,
   })
   .strict();
@@ -374,12 +382,17 @@ export type SessionToken = z.infer<typeof SessionTokenSchema>;
  * and every rule about a session was then written twice. One family carries both scopes, so a
  * client holds one access token, rotates one refresh token, and revoking it revokes everything
  * that login granted ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+ *
+ * `display_label` is the Account's own label, the same value `AccountSummary.account` carries. It
+ * is here because signing in is when a person most wants to be told whose account they reached,
+ * and the first Account read finishes long after the exchange does.
  */
 export const OAuthTokenResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     token_type: z.literal("Bearer"),
     account_id: OpaqueIdSchema,
+    display_label: AccountDisplayLabelSchema,
     device_id: OpaqueIdSchema,
     device_generation: SafePositiveIntegerSchema,
     usage_deleted_before: Rfc3339InstantSchema.nullable(),
@@ -395,6 +408,7 @@ export const IosOAuthTokenResponseSchema = z
     protocol_version: z.literal(PROTOCOL_VERSION),
     token_type: z.literal("Bearer"),
     account_id: OpaqueIdSchema,
+    display_label: AccountDisplayLabelSchema,
     session: SessionTokenSchema,
   })
   .strict();

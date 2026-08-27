@@ -192,7 +192,9 @@ device sync through the device-scoped profile endpoint, and the local session re
 profile so another write happens only after login, upgrade, or a host rename. Collection login
 returns one session — a single access/refresh family that reads this Account and writes this Device,
 with explicit expiry and compare-and-swap refresh rotation
-([ADR 0027](decisions/0027-one-token-per-client.md)). The `client_id` value is `quotabar`.
+([ADR 0027](decisions/0027-one-token-per-client.md)). The `client_id` value is `quotabar`. That
+exchange also answers with the Account's `display_label`, the same value the Account read carries, so
+a client names the account it just reached without waiting for its first read.
 
 QuotaBar updates in place with Sparkle 2: it reads
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA

@@ -340,6 +340,16 @@ export class D1AccountState implements AccountState {
            WHERE id = ?1 AND consume_nonce_hash = ?3`,
           )
           .bind(input.grant_id, input.installation_id_hash, input.completion_nonce_hash),
+        // What this Account is called, read in the batch that issued the session: the client
+        // can name it the moment the exchange answers, without a second round trip.
+        this.database
+          .prepare(
+            `SELECT accounts.display_label AS display_label
+           FROM accounts
+           INNER JOIN login_grants AS grants ON grants.account_id = accounts.id
+           WHERE grants.id = ?1 AND grants.consume_nonce_hash = ?2`,
+          )
+          .bind(input.grant_id, input.completion_nonce_hash),
       ]);
     } catch (error) {
       const concurrent = await this.getLoginGrantByIdAndCredential(
@@ -353,7 +363,12 @@ export class D1AccountState implements AccountState {
     }
     const device = resultRow<DeviceRecord>(results[1]);
     if (resultChanged(results[0]) && device) {
-      return { outcome: "issued", account_id: device.account_id, device };
+      return {
+        outcome: "issued",
+        account_id: device.account_id,
+        display_label: displayLabelRow(results[5]),
+        device,
+      };
     }
     const grant = await this.getLoginGrantByIdAndCredential(input.grant_id, input.credential_hash);
     if (!grant) {
@@ -417,6 +432,14 @@ export class D1AccountState implements AccountState {
             input.completion_nonce_hash,
             IOS_OAUTH_CLIENT_ID,
           ),
+        this.database
+          .prepare(
+            `SELECT accounts.display_label AS display_label
+           FROM accounts
+           INNER JOIN login_grants AS grants ON grants.account_id = accounts.id
+           WHERE grants.id = ?1 AND grants.consume_nonce_hash = ?2`,
+          )
+          .bind(input.grant_id, input.completion_nonce_hash),
       ]);
     } catch (error) {
       const concurrent = await this.getLoginGrantByIdAndCredential(
@@ -430,7 +453,11 @@ export class D1AccountState implements AccountState {
     }
     const account = resultRow<{ account_id: string }>(results[0]);
     if (resultChanged(results[0]) && resultChanged(results[1]) && account) {
-      return { outcome: "issued", account_id: account.account_id };
+      return {
+        outcome: "issued",
+        account_id: account.account_id,
+        display_label: displayLabelRow(results[2]),
+      };
     }
     const grant = await this.getLoginGrantByIdAndCredential(input.grant_id, input.credential_hash);
     if (!grant) {
@@ -1051,6 +1078,11 @@ function resultChanged(result: D1Result<unknown> | undefined): boolean {
 
 function resultRow<T>(result: D1Result<unknown> | undefined): T | null {
   return (result?.results[0] as T | undefined) ?? null;
+}
+
+function displayLabelRow(result: D1Result<unknown> | undefined): string | null {
+  const label = resultRow<{ display_label: string | null }>(result)?.display_label;
+  return typeof label === "string" && label.length > 0 ? label : null;
 }
 
 function stampCount(value: unknown): number {

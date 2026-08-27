@@ -754,6 +754,14 @@ describe("managed Relay on real Workers and D1", () => {
     expect(exchanged.status).toBe(200);
     const tokens = (await exchanged.json()) as OAuthTokenResponse;
     expect(tokens.account_id).toBe("identity_subject");
+    // Signing in names the Account, so QuotaBar says whose account it reached before it has
+    // read one.
+    expect(tokens.display_label).toBe("Quota Tester");
+    expect(
+      await env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+        .bind(tokens.account_id)
+        .first("display_label"),
+    ).toBe(tokens.display_label);
     expect(tokens.device_generation).toBe(1);
     expect(
       await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")

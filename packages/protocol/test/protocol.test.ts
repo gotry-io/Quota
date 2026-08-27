@@ -316,6 +316,7 @@ describe("quota protocol", () => {
       protocol_version: 2,
       token_type: "Bearer",
       account_id: "account_01",
+      display_label: "octocat",
       session,
     };
     expect(IosOAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(true);
@@ -323,6 +324,13 @@ describe("quota protocol", () => {
     expect(
       IosOAuthTokenResponseSchema.safeParse({ ...iosResponse, device_id: "device_01" }).success,
     ).toBe(false);
+    // Signing in names the Account, so a client says whose account it reached before it has
+    // read one. An Account that kept no label still states the key.
+    expect(
+      IosOAuthTokenResponseSchema.safeParse({ ...iosResponse, display_label: null }).success,
+    ).toBe(true);
+    const { display_label: _iosLabel, ...unnamedIosResponse } = iosResponse;
+    expect(IosOAuthTokenResponseSchema.safeParse(unnamedIosResponse).success).toBe(false);
     expect(
       IosSessionRefreshRequestSchema.safeParse({
         protocol_version: 2,
@@ -362,6 +370,7 @@ describe("quota protocol", () => {
       protocol_version: 2,
       token_type: "Bearer",
       account_id: "account_01",
+      display_label: "octocat",
       device_id: "device_01",
       device_generation: 3,
       usage_deleted_before: null,
@@ -369,6 +378,14 @@ describe("quota protocol", () => {
       session: token,
     };
     expect(OAuthTokenResponseSchema.safeParse(response).success).toBe(true);
+    expect(OAuthTokenResponseSchema.safeParse({ ...response, display_label: null }).success).toBe(
+      true,
+    );
+    expect(OAuthTokenResponseSchema.safeParse({ ...response, display_label: "  " }).success).toBe(
+      false,
+    );
+    const { display_label: _label, ...unnamed } = response;
+    expect(OAuthTokenResponseSchema.safeParse(unnamed).success).toBe(false);
     // A second token family is not an extra field to ignore on a write; it is a refusal.
     expect(OAuthTokenResponseSchema.safeParse({ ...response, write_session: token }).success).toBe(
       false,
