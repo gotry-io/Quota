@@ -86,6 +86,7 @@ pub fn renew_expired_sign_in(
         // Not the negation: an `auth.json` the CLI removed, or emptied of its tokens, is
         // neither, and that third answer is a Codex that signed itself out.
         usable: &usable,
+        rewrites_keychain: false,
         drive: &drive,
     };
     renew_sign_in(&plan, context, environment, attempted, now)
@@ -236,8 +237,18 @@ mod tests {
             );
 
             assert!(super::super::sign_in_expiring(&context));
+            // Claude Code's Keychain memo is not this renewal's to drop: `auth.json` is read
+            // fresh either way, and forgetting it buys a second `/usr/bin/security` for
+            // nothing.
+            context.keychain_secret(|| {
+                crate::providers::common::KeychainSecret::Found(b"memoized".to_vec())
+            });
             let attempt = renew_expired_sign_in(&mut context, &environment, None, 10_000)
                 .expect("an expired sign-in earns an attempt");
+            assert!(matches!(
+                context.keychain_secret(|| panic!("the Keychain read was forgotten")),
+                crate::providers::common::KeychainSecret::Found(secret) if secret == b"memoized"
+            ));
             assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
             assert_eq!(attempt.attempted_at, 10_000);
             assert_eq!(spawns(&log), 1);

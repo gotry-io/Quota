@@ -94,6 +94,10 @@ pub struct RenewalPlan<'a> {
     pub expiring: &'a dyn Fn(&CollectionContext) -> bool,
     /// Whether the credential now holds a token this refresh can use.
     pub usable: &'a dyn Fn(&CollectionContext) -> bool,
+    /// Whether the CLI rewrites the Keychain entry this refresh memoized. Only Claude Code's
+    /// does; a provider whose credential is a file on disk is read fresh either way, and
+    /// dropping the memo for it would buy a second `/usr/bin/security` for nothing.
+    pub rewrites_keychain: bool,
     /// The conversation, if the CLI wants one. This is the one place providers differ: a
     /// handshake that has to name something the first reply carried cannot be a one-shot run.
     /// Called once, with the exchange already bounded and about to be closed.
@@ -117,10 +121,9 @@ pub fn within_renewal_floor(attempted: Option<&RenewalAttempt>, now: i64) -> boo
 /// already made this hour. Those are not failures to record: nothing was started, so nothing
 /// needs rate-limiting.
 ///
-/// Takes the context by `&mut` to forget this refresh's one Keychain read. A renewal replaces
-/// a credential this refresh may already have memoized, and that memo is the only one; every
-/// renewal runs before any collector holds a clone, so dropping it costs nothing until
-/// something asks again.
+/// Takes the context by `&mut` so a plan that says its CLI rewrites the Keychain can forget
+/// this refresh's one Keychain read. That memo is the only one; every renewal runs before any
+/// collector holds a clone, so dropping it costs nothing until something asks again.
 ///
 /// Runs on the refresh worker before collection, so the collector that reads the credential
 /// afterwards neither knows nor waits for any of this.
@@ -141,7 +144,9 @@ pub fn renew_sign_in(
         return None;
     }
     renew(plan, &binary, context, environment);
-    context.forget_keychain();
+    if plan.rewrites_keychain {
+        context.forget_keychain();
+    }
     // The CLI's exit status is not the answer; the credential is. A build that leaves non-zero
     // after rewriting the token has still renewed it, and one that leaves cleanly without
     // touching it has not.

@@ -15,7 +15,7 @@
 //! authentication method other than `cached_token`. The CLI's other method, `grok.com`, prints
 //! a device code and waits for a person; a scheduled refresh must never start that.
 
-use serde_json::{Value, json};
+use serde_json::json;
 use std::time::Duration;
 
 use crate::providers::common::{
@@ -32,8 +32,13 @@ const AGENT_STDIO: [&str; 2] = ["agent", "stdio"];
 /// found expired.
 const GROK_HOME: [&str; 1] = ["GROK_HOME"];
 
-/// The one authentication method this build ever asks for. It renews from the refresh token
-/// the CLI already holds, with no browser and no device code.
+/// The one authentication method this build ever asks for, whatever `initialize` advertises.
+///
+/// It renews from the refresh token the CLI already holds, with no browser and no device code.
+/// Grok 1.0.5 answers it without listing it — its `authMethods` offers only `grok.com`, "Sign
+/// in with Grok", which prints a device code and waits for a person — so the list is not worth
+/// consulting: a method this build does not know is not one it would ask for, and an
+/// unsupported one comes back as a JSON-RPC error that costs a round trip and starts nothing.
 const CACHED_TOKEN_METHOD: &str = "cached_token";
 
 const INITIALIZE_ID: u64 = 1;
@@ -65,6 +70,7 @@ pub fn renew_expired_sign_in(
         // Not the negation: the Grok CLI leaves `auth.json` alone when it cannot renew, so a
         // file that is gone or unreadable afterwards is a sign-out rather than a refusal.
         usable: &super::sign_in_usable,
+        rewrites_keychain: false,
         drive: &drive,
     };
     renew_sign_in(&plan, context, environment, attempted, now)
@@ -81,32 +87,15 @@ fn drive(exchange: &mut BoundedExchange) {
     if !exchange.send(&initialize_request()) {
         return;
     }
-    let Some(reply) = json_rpc_reply(exchange, INITIALIZE_ID) else {
+    // The reply is not read for what it offers, only waited for: `authenticate` may not be
+    // sent to a program that has not finished coming up.
+    if json_rpc_reply(exchange, INITIALIZE_ID).is_none() {
         return;
-    };
-    if !exchange.send(&authenticate_request(cached_token_method(&reply))) {
+    }
+    if !exchange.send(&authenticate_request(CACHED_TOKEN_METHOD)) {
         return;
     }
     let _ = json_rpc_reply(exchange, AUTHENTICATE_ID);
-}
-
-/// The method to ask for: the `cached_token` entry `initialize` advertised, or the name this
-/// build knows when it advertises none.
-///
-/// Grok 1.0.5 answers `cached_token` without listing it — its `authMethods` offers only
-/// `grok.com`, "Sign in with Grok", which prints a device code and waits — so an unlisted
-/// method is still asked for, and an unsupported one comes back as a JSON-RPC error that
-/// costs a round trip and starts nothing. What never happens is asking for a *different*
-/// method because that is the one on offer.
-fn cached_token_method(reply: &Value) -> &str {
-    reply
-        .pointer("/result/authMethods")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|method| method.get("id").and_then(Value::as_str))
-        .find(|id| *id == CACHED_TOKEN_METHOD)
-        .unwrap_or(CACHED_TOKEN_METHOD)
 }
 
 fn initialize_request() -> String {
@@ -389,22 +378,8 @@ mod tests {
     /// code and waits for a person; nothing a scheduled refresh does may start that.
     #[test]
     fn the_only_method_ever_asked_for_is_cached_token() {
-        let listed_elsewhere = json!({"result": {"authMethods": [
-            {"id": "grok.com", "name": "Grok"},
-            {"id": "xai.api_key"}
-        ]}});
-        assert_eq!(cached_token_method(&listed_elsewhere), CACHED_TOKEN_METHOD);
-
-        let listed = json!({"result": {"authMethods": [
-            {"id": "grok.com"},
-            {"id": CACHED_TOKEN_METHOD, "name": "Cached token"}
-        ]}});
-        assert_eq!(cached_token_method(&listed), CACHED_TOKEN_METHOD);
-
-        for reply in [json!({"result": {}}), json!({}), json!({"result": null})] {
-            assert_eq!(cached_token_method(&reply), CACHED_TOKEN_METHOD);
-        }
-        assert!(authenticate_request(cached_token_method(&listed)).contains(CACHED_TOKEN_METHOD));
-        assert!(!authenticate_request(cached_token_method(&listed)).contains("grok.com"));
+        let request = authenticate_request(CACHED_TOKEN_METHOD);
+        assert!(request.contains(CACHED_TOKEN_METHOD));
+        assert!(!request.contains("grok.com"));
     }
 }

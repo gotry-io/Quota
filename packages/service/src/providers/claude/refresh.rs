@@ -81,6 +81,7 @@ pub fn renew_expired_sign_in(
         // Not the negation: an emptied entry is neither, which is how a Claude Code that
         // signed itself out is told apart from one that could not renew.
         usable: &super::sign_in_usable,
+        rewrites_keychain: true,
         drive: &drive,
     };
     renew_sign_in(&plan, context, environment, attempted, now)
@@ -219,8 +220,17 @@ mod tests {
             );
 
             assert!(super::super::sign_in_expiring(&context));
+            // This is the one CLI that rewrites the Keychain entry in place, so the memo taken
+            // before it ran describes a grant that no longer exists and has to go.
+            context.keychain_secret(|| {
+                crate::providers::common::KeychainSecret::Found(b"replaced".to_vec())
+            });
             let attempt = renew_expired_sign_in(&mut context, &environment, None, 10_000)
                 .expect("an expired sign-in earns an attempt");
+            assert!(matches!(
+                context.keychain_secret(|| crate::providers::common::KeychainSecret::Absent),
+                crate::providers::common::KeychainSecret::Absent
+            ));
             assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
             assert_eq!(attempt.attempted_at, 10_000);
             assert_eq!(spawns(&log), 1);
