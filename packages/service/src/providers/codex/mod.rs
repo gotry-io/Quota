@@ -8,7 +8,7 @@ use super::common::{
     ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
     account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
     discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, slug, string,
+    read_bounded_file, sha256_hex, slug, string,
 };
 
 pub mod refresh;
@@ -202,22 +202,41 @@ fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
 /// Whether this device's Codex sign-in is the thing standing between the refresh and a
 /// reading.
 ///
-/// The access token's own `exp` decides it. An unreadable one counts as expiring: a token this
-/// build cannot date is one it cannot spend with any confidence, and the CLI is the thing that
-/// can tell. `last_refresh` deliberately does not: measured against codex-cli 0.149.0, the CLI
-/// renews only when that `exp` is within five minutes, and a file thirty days stale with a
-/// live token is left exactly as it was — so asking on its age would spawn for nothing.
+/// The access token's own `exp` decides it. `last_refresh` deliberately does not: measured
+/// against codex-cli 0.149.0, the CLI renews only when that `exp` is within five minutes, and
+/// a file thirty days stale with a live token is left exactly as it was — so asking on its age
+/// would spawn for nothing.
+///
+/// A token this build cannot date counts as expiring until it has been spent. The collector
+/// tries it anyway ([`collect_local`]), so a reading that came back with this exact token is
+/// proof the CLI has nothing to add — and without that, an `exp` this build cannot decode
+/// bought a `codex app-server` every hour, forever, for a sign-in that works.
 ///
 /// A personal access token is not this: nothing renews one, and an `auth.json` holding only
 /// that has no OAuth grant to speak of.
 fn sign_in_expiring(context: &CollectionContext) -> bool {
     load_auth(context)
         .and_then(|auth| auth.oauth)
-        .is_some_and(|credentials| {
-            credentials
-                .expires_at
-                .is_none_or(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
+        .is_some_and(|credentials| match credentials.expires_at {
+            Some(expires_at) => expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW,
+            None => !context.credential_is_proven(
+                ProviderId::Codex,
+                &credential_fingerprint(&credentials.access_token),
+            ),
         })
+}
+
+/// The irreversible name this device knows an access token by. Never the token.
+fn credential_fingerprint(access_token: &str) -> String {
+    sha256_hex(access_token)
+}
+
+/// The fingerprint of the OAuth grant a reading would be built from right now, for the refresh
+/// worker to record once that reading came back.
+pub fn proven_credential(context: &CollectionContext) -> Option<String> {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .map(|credentials| credential_fingerprint(&credentials.access_token))
 }
 
 /// Whether `auth.json` now holds a token this refresh can use.
@@ -833,6 +852,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 

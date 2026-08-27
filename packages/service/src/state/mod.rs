@@ -57,6 +57,7 @@ const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
 const CLI_VERSION_KEY: &str = "provider_cli_versions";
 /// The last time this device asked each provider's own CLI to renew the sign-in it owns.
 const RENEWAL_ATTEMPT_KEY: &str = "provider_refresh_attempts";
+const PROVEN_CREDENTIAL_KEY: &str = "provider_proven_credentials";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -1622,6 +1623,19 @@ impl StateStore {
 
     pub fn write_provider_refresh_attempts(&self, encoded: &str) -> Result<(), StateError> {
         self.write_cache_metadata(RENEWAL_ATTEMPT_KEY, encoded)
+    }
+
+    /// For each provider, the irreversible name of the credential that last produced a
+    /// reading on this device.  It is what tells a token this build cannot judge on its own —
+    /// an access token whose expiry it cannot decode — from one that has never worked; without
+    /// it, an undatable token bought a provider CLI spawn every hour forever.  Disposable:
+    /// losing it to a cache reset costs one extra renewal attempt per provider.
+    pub fn proven_provider_credentials(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, PROVEN_CREDENTIAL_KEY))
+    }
+
+    pub fn write_proven_provider_credentials(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(PROVEN_CREDENTIAL_KEY, encoded)
     }
 
     fn write_cache_metadata(&self, key: &str, encoded: &str) -> Result<(), StateError> {

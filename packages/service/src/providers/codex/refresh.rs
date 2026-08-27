@@ -357,6 +357,42 @@ mod tests {
         }
     }
 
+    /// ...until it has been spent. The collector tries an undatable token anyway, so a reading
+    /// that came back with this exact token is proof the CLI has nothing to add — and without
+    /// that, an `exp` this build cannot decode bought a spawn every hour, forever.
+    #[test]
+    fn an_undatable_token_that_already_produced_a_reading_is_left_alone() {
+        #[cfg(unix)]
+        {
+            let token = "not-a-jwt";
+            let (directory, mut context, environment) =
+                fixture("proven", &auth_json(token, "2026-08-26T11:00:00Z"));
+            let log = directory.join("spawns.log");
+            install(
+                &directory,
+                &renewing_script(&log, &directory.join("ignored.json"), "{}"),
+            );
+            assert!(super::super::sign_in_expiring(&context));
+
+            context.proven_credentials.insert(
+                crate::catalog::ProviderId::Codex.as_str().to_owned(),
+                crate::providers::common::sha256_hex(token),
+            );
+            assert!(!super::super::sign_in_expiring(&context));
+            assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
+            assert_eq!(spawns(&log), 0);
+
+            // A different token has proved nothing, so it earns the attempt again.
+            fs::write(
+                directory.join("codex-home/auth.json"),
+                auth_json("a-different-token", "2026-08-26T11:00:00Z"),
+            )
+            .expect("auth");
+            assert!(super::super::sign_in_expiring(&context));
+            let _ = fs::remove_dir_all(&directory);
+        }
+    }
+
     /// A Codex that cannot renew must not be started every five minutes for the rest of the
     /// day, and the hour it costs is the same hour whatever the failure was.
     #[test]

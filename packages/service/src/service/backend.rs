@@ -1233,6 +1233,7 @@ impl NativeBackend {
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
+        self.record_proven_credentials(&results, &context);
         Ok(json!({
             "captured_at": captured_at,
             "results": results
@@ -1401,7 +1402,55 @@ impl NativeBackend {
             cancel: Some(cancel),
             keychain: Default::default(),
             cli_versions: BTreeMap::new(),
+            proven_credentials: self
+                .state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default(),
         })
+    }
+
+    /// Remembers the credential a provider was just read with.
+    ///
+    /// Only a rung that spends this device's own credential counts, and only when it answered:
+    /// that is the one thing that says an access token this build cannot date is a token that
+    /// works. Everything else — a browser session, a rung that failed — leaves the record
+    /// alone, so a sign-in that stops working goes back to earning a renewal.
+    fn record_proven_credentials(&self, results: &[Value], context: &CollectionContext) {
+        let succeeded = |provider: ProviderId, source_id: &str| {
+            results.iter().any(|result| {
+                result.get("provider").and_then(Value::as_str) == Some(provider.as_str())
+                    && result
+                        .get("sources")
+                        .and_then(Value::as_array)
+                        .is_some_and(|sources| {
+                            sources.iter().any(|source| {
+                                source.get("source_id").and_then(Value::as_str) == Some(source_id)
+                                    && source.get("outcome").and_then(Value::as_str)
+                                        == Some("success")
+                            })
+                        })
+            })
+        };
+        let mut proven = context.proven_credentials.clone();
+        let before = proven.clone();
+        match codex::proven_credential(context)
+            .filter(|_| succeeded(ProviderId::Codex, codex::SOURCE))
+        {
+            Some(fingerprint) => {
+                proven.insert(ProviderId::Codex.as_str().to_owned(), fingerprint);
+            }
+            None => {
+                proven.remove(ProviderId::Codex.as_str());
+            }
+        }
+        if proven != before
+            && let Ok(encoded) = serde_json::to_string(&proven)
+        {
+            let _ = self.state.write_proven_provider_credentials(&encoded);
+        }
     }
 
     fn collect_usage(&self, cancel: Arc<AtomicBool>) -> Result<UsageCollection, BackendError> {
@@ -4668,6 +4717,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let sessions = providers::discover(ProviderId::LiteLlm, &context);
         assert_eq!(sessions.len(), 1);
@@ -4702,6 +4752,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,
@@ -5383,6 +5434,81 @@ mod tests {
                 .map(|surface| surface.data),
             Some(DiagnosticDataState::Partial)
         );
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A credential is proven by being spent on the rung that spends it. A browser session
+    /// answering for the same provider proves nothing about the sign-in on disk, and a rung
+    /// that stopped working takes the proof back with it.
+    #[test]
+    fn only_a_rung_spending_this_device_s_own_credential_proves_it() {
+        let root = std::env::temp_dir().join(format!("quota-proven-{}", uuid::Uuid::new_v4()));
+        let codex_home = root.join("codex");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        fs::write(
+            codex_home.join("auth.json"),
+            r#"{"tokens": {"access_token": "opaque-token", "account_id": "acct"}}"#,
+        )
+        .expect("auth");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let mut context = CollectionContext {
+            home_directory: root.clone(),
+            environment: HashMap::from([(
+                "CODEX_HOME".to_owned(),
+                codex_home.to_string_lossy().into_owned(),
+            )]),
+            ..CollectionContext::default()
+        };
+        // Each refresh builds its context from the cache, which is what the record is for.
+        let reload = |context: &mut CollectionContext, state: &StateStore| {
+            context.proven_credentials = state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        };
+        let result = |source_id: &str, outcome: &str| {
+            json!({
+                "provider": "codex",
+                "outcome": outcome,
+                "snapshots": [],
+                "sources": [{"source_id": source_id, "outcome": outcome, "category": outcome}]
+            })
+        };
+        let proven = |state: &StateStore| {
+            state
+                .proven_provider_credentials()
+                .expect("record")
+                .unwrap_or_default()
+        };
+        let fingerprint = crate::providers::common::sha256_hex("opaque-token");
+
+        // A stored browser session answering for Codex says nothing about `auth.json`.
+        backend.record_proven_credentials(
+            &[result(
+                crate::providers::common::BROWSER_SESSION_SOURCE,
+                "success",
+            )],
+            &context,
+        );
+        assert!(!proven(&state).contains(&fingerprint));
+
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "success")], &context);
+        assert!(proven(&state).contains(&fingerprint));
+
+        // The same sign-in refused is a sign-in that has to earn a renewal again.
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "auth_required")], &context);
+        assert!(!proven(&state).contains(&fingerprint));
         drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }

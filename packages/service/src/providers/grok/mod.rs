@@ -375,6 +375,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         assert!(discover(&context).is_empty());
         context
@@ -405,6 +406,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let official = ProviderSession {
             provider: ProviderId::Grok,

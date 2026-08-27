@@ -240,6 +240,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
