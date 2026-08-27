@@ -28,7 +28,8 @@ Worker. Browser GitHub login on localhost is not available.
 
 `/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
 Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in
-0.0.4, so it remains a single bookmark redirect to `/my`; new links and OAuth callbacks use `/my`.
+0.0.4, so it and anything under it stay a redirect to `/my`; new links and OAuth callbacks name
+`/my` directly.
 Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
 a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
 `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion

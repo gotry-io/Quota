@@ -19,7 +19,8 @@ shape of a released contract still moves its version.
   `packages/provider/catalog.json` into `src/provider-ids.generated.ts` via
   `pnpm generate:provider-catalog`. Do not hand-edit that file.
 - Language-neutral JSON Schemas live in `schema` and are served by Quota Web under `/schema/`.
-  Run `pnpm --filter @gotry-io/quota-protocol generate:schema` after changing a runtime schema.
+  Run `pnpm --filter @gotry-io/quota-protocol generate:schema` from the repository root after
+  changing a runtime schema; the generator formats what it writes with the repository's Biome.
 - Canonical schema identifiers use `https://quota.gotry.io/schema/`.
 - Wire fields use `snake_case`. A request object rejects unknown keys; a read accepts them. V2
   directly relates accounts and devices and contains no owner, pairing, Relay discovery, or
@@ -33,6 +34,9 @@ shape of a released contract still moves its version.
 - `fixtures/wire-conformance.json` states each wire contract as accepted and refused payloads, and
   all three runtimes answer it: writes through the schema that guards them, reads through the schema
   a client reads with.
+- `fixtures/freshness-copy-conformance.json` states the thresholds and the words every Quota
+  surface uses to say how old a reading is, so the website and the Apple clients say the same
+  thing about the same instant.
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge

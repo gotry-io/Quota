@@ -7,8 +7,13 @@ public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It rend
 There is no self-hosted or SQLite runtime.
 
 QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
-that speaks an older shape is refused rather than translated; see
-[ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md).
+that speaks an older version is refused rather than translated; see
+[ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md). Within a version the two
+directions differ: Relay checks a request body against exactly the contract and refuses one that
+names a key the contract does not, while a client reads a response through a schema that accepts
+fields and enum members its build cannot name, at any depth. Adding either to a response is
+therefore not a breaking change. See
+[ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md).
 
 The v6 data contract is four routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):

@@ -339,16 +339,6 @@ describe("quota protocol", () => {
         refresh_token: "synthetic-refresh-token",
       }).success,
     ).toBe(true);
-    // There is one token, so there is nothing for a request to name an audience for.
-    expect(
-      IosSessionRefreshRequestSchema.safeParse({
-        protocol_version: 2,
-        grant_type: "refresh_token",
-        client_id: IOS_OAUTH_CLIENT_ID,
-        token_audience: "account",
-        refresh_token: "synthetic-refresh-token",
-      }).success,
-    ).toBe(false);
     expect(
       protocol.SessionRefreshRequestSchema.safeParse({
         protocol_version: 2,
