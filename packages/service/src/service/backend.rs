@@ -46,6 +46,8 @@ use crate::usage::{
 /// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
 /// keep a steady device empty, small enough that a first sign-in does not stage a year at once.
 const MAX_STAGED_HOURS_PER_REFRESH: usize = usage::MAX_USAGE_HOURS_PER_UPLOAD * 4;
+/// The widest lower bound there is, for a count that could not read a narrower one.
+const EPOCH_HOUR: &str = "1970-01-01T00:00:00Z";
 
 fn plural(value: i64, singular: &str) -> String {
     format!("{value} {singular}{}", if value == 1 { "" } else { "s" })
@@ -117,23 +119,6 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .and_then(Value::as_array)
         .map(|items| items.len() as i64)
         .unwrap_or(0)
-}
-
-/// How many recomputed hours are ready to leave. The hour in progress is still being written
-/// to, so it is not waiting on anything.
-fn uploadable_dirty_hour_count(hours: &[crate::state::DirtyUsageHour], now: DateTime<Utc>) -> i64 {
-    let Ok(complete_until) = DateTime::parse_from_rfc3339(&floor_utc_hour(&now)) else {
-        return hours.len().min(i64::MAX as usize) as i64;
-    };
-    hours
-        .iter()
-        .filter(|hour| {
-            DateTime::parse_from_rfc3339(&hour.bucket_start_utc)
-                .map(|start| start < complete_until)
-                .unwrap_or(true)
-        })
-        .count()
-        .min(i64::MAX as usize) as i64
 }
 
 fn error_code_wire(code: ErrorCode) -> String {
@@ -787,16 +772,11 @@ impl NativeBackend {
         }
 
         // Usage upload.
-        let dirty_hours = self
-            .state
-            .dirty_usage_hours()
-            .map_err(|_| BackendError::unavailable())?;
         let outbox_count = self
             .state
-            .outbox_entries()
-            .map_err(|_| BackendError::unavailable())?
-            .len() as i64;
-        let uploadable_dirty_count = uploadable_dirty_hour_count(&dirty_hours, Utc::now());
+            .outbox_len()
+            .map_err(|_| BackendError::unavailable())?;
+        let uploadable_dirty_count = self.uploadable_dirty_hour_count()?;
         let upload_facts = self
             .state
             .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
@@ -1757,6 +1737,27 @@ impl NativeBackend {
         }
     }
 
+    /// How many recomputed hours are ready to leave, under the same two bounds staging
+    /// applies: at or after this device's privacy watermark, and before the hour still being
+    /// written to.
+    ///
+    /// A session this build cannot read a watermark out of is counted from the epoch. This is
+    /// a number for one diagnostic line, and refusing to produce it would take the whole
+    /// report with it.
+    fn uploadable_dirty_hour_count(&self) -> Result<i64, BackendError> {
+        let lower_bound = self
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .and_then(|session| effective_usage_lower_bound(&session).ok())
+            .and_then(|value| ceil_utc_hour(&value).ok())
+            .unwrap_or_else(|| EPOCH_HOUR.to_owned());
+        self.state
+            .uploadable_dirty_hour_count(&lower_bound, &floor_utc_hour(&Utc::now()))
+            .map_err(|_| BackendError::unavailable())
+    }
+
     /// Hands every hour this device has recomputed to the outbox, newest scan wins.
     ///
     /// An hour is the unit and its version decides, so staging is a copy rather than a
@@ -1792,41 +1793,18 @@ impl NativeBackend {
             .get("device_generation")
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
-        let lower_bound = DateTime::parse_from_rfc3339(&effective_usage_lower_bound(&session)?)
-            .map_err(|_| invalid_local_state())?;
+        let lower_bound = ceil_utc_hour(&effective_usage_lower_bound(&session)?)?;
         // The hour in progress is still being written to, so it is left for the next refresh.
-        let complete_until = DateTime::parse_from_rfc3339(&floor_utc_hour(&Utc::now()))
-            .map_err(|_| BackendError::unavailable())?;
-        let dirty = self
+        let complete_until = floor_utc_hour(&Utc::now());
+        // An hour before the watermark will never be staged, so its mark is not work owed.
+        let _ = self.state.forget_dirty_usage_hours_before(&lower_bound);
+        // Identity is the file this device cannot rebuild, so it holds a bounded queue rather
+        // than a year of history at once. What is left over stays dirty and is staged by the
+        // next refresh, oldest hour first.
+        let entries = self
             .state
-            .dirty_usage_hours()
+            .dirty_usage_hour_batch(&lower_bound, &complete_until, MAX_STAGED_HOURS_PER_REFRESH)
             .map_err(|_| BackendError::unavailable())?;
-        let mut entries = Vec::new();
-        for hour in dirty {
-            // Identity is the file this device cannot rebuild, so it holds a bounded queue
-            // rather than a year of history at once. What is left over stays dirty and is
-            // staged by the next refresh, oldest hour first.
-            if entries.len() >= MAX_STAGED_HOURS_PER_REFRESH {
-                break;
-            }
-            let Ok(start) = DateTime::parse_from_rfc3339(&hour.bucket_start_utc) else {
-                continue;
-            };
-            if start < lower_bound || start >= complete_until {
-                continue;
-            }
-            let rows = self
-                .state
-                .usage_hour_rows(hour.agent, &hour.bucket_start_utc)
-                .map_err(|_| BackendError::unavailable())?;
-            entries.push(UsageOutboxEntry {
-                agent: hour.agent,
-                bucket_start_utc: hour.bucket_start_utc,
-                scan_version: hour.scan_version,
-                partial: hour.partial,
-                rows,
-            });
-        }
         if entries.is_empty() {
             return Ok(false);
         }
@@ -2589,23 +2567,13 @@ impl LocalBackend for NativeBackend {
                             }
                         }
                         if usage_upload_enabled && account_sync_error.is_none() {
-                            let before = self
-                                .state
-                                .outbox_entries()
-                                .ok()
-                                .map(|entries| entries.len() as i64)
-                                .unwrap_or(0);
+                            let before = self.state.outbox_len().unwrap_or(0);
                             let upload_attempt =
                                 self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
                             match self.drain_outbox() {
                                 Ok(accepted) => {
                                     uploaded |= accepted;
-                                    let pending = self
-                                        .state
-                                        .outbox_entries()
-                                        .ok()
-                                        .map(|entries| entries.len() as i64)
-                                        .unwrap_or(0);
+                                    let pending = self.state.outbox_len().unwrap_or(0);
                                     let (outcome, code) = if before == 0 {
                                         (
                                             DiagnosticAttemptOutcome::NoWork,
@@ -3040,6 +3008,29 @@ fn usage_upload_batch_size(
         }
     }
     low
+}
+
+/// The first whole hour at or after an instant, in the canonical form `bucket_start_utc`
+/// holds.
+///
+/// An hour that starts before the watermark is not one this device may upload. Rounding the
+/// watermark up is what turns that into a comparison the stored column can answer directly,
+/// without re-parsing every row.
+fn ceil_utc_hour(value: &str) -> Result<String, BackendError> {
+    let instant = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| invalid_local_state())?
+        .with_timezone(&Utc);
+    let floored = instant
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .ok_or_else(invalid_local_state)?;
+    let hour = if floored == instant {
+        floored
+    } else {
+        floored + Duration::hours(1)
+    };
+    Ok(hour.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 fn floor_utc_hour(value: &DateTime<Utc>) -> String {
@@ -5396,20 +5387,48 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// The hour still being written to is not work owed, and neither is an hour before this
+    /// device's privacy watermark: staging skips both, so the count that says how much is
+    /// waiting skips them too — and the marks it can never stage are retired rather than left
+    /// to sit in the cache saying the upload is behind.
     #[test]
-    fn diagnostics_do_not_treat_the_open_hour_as_a_pending_upload() {
-        let now = DateTime::parse_from_rfc3339("2026-08-15T04:30:00Z")
-            .expect("now")
-            .with_timezone(&Utc);
-        let hour = |bucket_start_utc: &str| crate::state::DirtyUsageHour {
-            agent: UsageAgent::Codex,
-            bucket_start_utc: bucket_start_utc.into(),
-            scan_version: 1,
-            partial: false,
-        };
-        let hours = [hour("2026-08-15T03:00:00Z"), hour("2026-08-15T04:00:00Z")];
-        assert_eq!(uploadable_dirty_hour_count(&hours, now), 1);
-        assert_eq!(uploadable_dirty_hour_count(&hours[1..], now), 0);
+    fn only_complete_hours_inside_the_watermark_count_as_pending_uploads() {
+        let root = std::env::temp_dir().join(format!("quota-pending-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let hour = |back: i64| floor_utc_hour(&(now - Duration::hours(back)));
+        let mut session = active_session();
+        session["upload_not_before"] = json!(hour(3));
+        state.write_session_json(&session).expect("session");
+        for back in [4, 2, 0] {
+            state
+                .insert_usage_dirty_hour_for_test(UsageAgent::Codex, &hour(back), 1)
+                .expect("dirty hour");
+        }
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+
+        // The mark before the watermark is not waiting on anything, and does not stay.
+        state
+            .forget_dirty_usage_hours_before(&hour(3))
+            .expect("retire");
+        assert_eq!(
+            state
+                .dirty_usage_hour_batch(EPOCH_HOUR, "9999-12-31T23:00:00Z", 100)
+                .expect("dirty")
+                .len(),
+            2
+        );
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

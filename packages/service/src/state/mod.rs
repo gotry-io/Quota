@@ -1678,6 +1678,15 @@ impl StateStore {
         self.with_identity(|conn| read_outbox(conn, None))
     }
 
+    /// How many hours are staged. Counted in SQL, because the callers that ask this were
+    /// deserializing every staged hour's rows to call `len()` on the result.
+    pub fn outbox_len(&self) -> Result<i64, StateError> {
+        self.with_identity(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))
+                .map_err(StateError::from)
+        })
+    }
+
     pub fn outbox_entries_for(
         &self,
         account_id: &str,
@@ -1883,35 +1892,104 @@ impl StateStore {
         })
     }
 
-    /// The hours whose facts changed since the last time they were staged for upload.
-    pub fn dirty_usage_hours(&self) -> Result<Vec<DirtyUsageHour>, StateError> {
+    /// The hours this device still owes its Account, oldest first, with the rows each is made
+    /// of.
+    ///
+    /// One transaction, and bounded. Reading the list of dirty hours and then reading each
+    /// hour's rows under a lock of its own let a cache reset land in between: the hour was
+    /// staged empty under the scan version that produced it, and an hour is replaced by
+    /// version, so the Account applied the emptiness.
+    ///
+    /// `lower_bound` is the privacy watermark this device may not upload before and
+    /// `upper_bound` the hour still being written to. Both are canonical UTC hours, which is
+    /// the form `bucket_start_utc` holds, so the comparison is the column's own order.
+    pub fn dirty_usage_hour_batch(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+        limit: usize,
+    ) -> Result<Vec<UsageOutboxEntry>, StateError> {
         self.with_cache(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
-                 ORDER BY bucket_start_utc, agent",
-            )?;
-            let rows = statement.query_map([], |row| {
-                let agent: String = row.get(0)?;
-                let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                    rusqlite::Error::InvalidColumnType(
-                        0,
-                        "agent".to_owned(),
-                        rusqlite::types::Type::Text,
-                    )
-                })?;
-                Ok(DirtyUsageHour {
-                    agent,
-                    bucket_start_utc: row.get(1)?,
-                    scan_version: row.get::<_, i64>(2)? as u64,
-                    partial: row.get::<_, i64>(3)? != 0,
-                })
-            })?;
-            let mut hours = Vec::new();
-            for row in rows {
-                hours.push(row?);
+            let tx = conn.unchecked_transaction()?;
+            let hours = {
+                let mut statement = tx.prepare(
+                    "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
+                     WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2
+                     ORDER BY bucket_start_utc, agent LIMIT ?3",
+                )?;
+                let rows = statement.query_map(
+                    params![lower_bound, upper_bound, limit as i64],
+                    |row| {
+                        let agent: String = row.get(0)?;
+                        let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                            rusqlite::Error::InvalidColumnType(
+                                0,
+                                "agent".to_owned(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })?;
+                        Ok((
+                            agent,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)? as u64,
+                            row.get::<_, i64>(3)? != 0,
+                        ))
+                    },
+                )?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let mut entries = Vec::with_capacity(hours.len());
+            {
+                let mut statement = tx.prepare(FACT_ROW_QUERY)?;
+                for (agent, bucket_start_utc, scan_version, partial) in hours {
+                    let rows = statement
+                        .query_map(params![agent.as_str(), &bucket_start_utc], read_fact_row)?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    entries.push(UsageOutboxEntry {
+                        agent,
+                        bucket_start_utc,
+                        scan_version,
+                        partial,
+                        rows,
+                    });
+                }
             }
-            Ok(hours)
+            tx.commit()?;
+            Ok(entries)
         })
+    }
+
+    /// How many recomputed hours are ready to leave, under the same bounds that decide what
+    /// [`Self::dirty_usage_hour_batch`] stages. Counted in SQL: the answer is a number for a
+    /// diagnostic line, not a reason to read a year of rows.
+    pub fn uploadable_dirty_hour_count(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+    ) -> Result<i64, StateError> {
+        self.with_cache(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_dirty_hours
+                 WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                params![lower_bound, upper_bound],
+                |row| row.get(0),
+            )
+            .map_err(StateError::from)
+        })
+    }
+
+    /// Retires the dirty marks for hours this device may never upload.
+    ///
+    /// An hour before the privacy watermark is not waiting for anything: staging skips it, so
+    /// left alone its mark would sit in the cache forever and count as work owed.
+    pub fn forget_dirty_usage_hours_before(&self, lower_bound: &str) -> Result<bool, StateError> {
+        let removed = self.with_cache_mut(|conn| {
+            Ok(conn.execute(
+                "DELETE FROM usage_dirty_hours WHERE bucket_start_utc < ?1",
+                params![lower_bound],
+            )?)
+        })?;
+        Ok(removed > 0)
     }
 
     /// Marks an hour dirty without a scan behind it, for tests that only need the mark.
@@ -2272,15 +2350,6 @@ fn validate_browser_session(
         return Err(StateError::InvalidState);
     }
     Ok(session)
-}
-
-/// One hour this device has recomputed and not yet handed to its Account.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirtyUsageHour {
-    pub agent: UsageAgent,
-    pub bucket_start_utc: String,
-    pub scan_version: u64,
-    pub partial: bool,
 }
 
 /// One staged upload: an hour, the version of the scan behind it, and its rows.
@@ -4239,6 +4308,13 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Every dirty hour, whatever its bound, as the tests below read them.
+    fn dirty_hours(store: &StateStore) -> Vec<UsageOutboxEntry> {
+        store
+            .dirty_usage_hour_batch("1970-01-01T00:00:00Z", "9999-12-31T23:00:00Z", 1_000)
+            .expect("dirty")
+    }
+
     fn outbox_entry(bucket: &str, scan_version: u64) -> UsageOutboxEntry {
         UsageOutboxEntry {
             agent: UsageAgent::Codex,
@@ -4262,7 +4338,7 @@ mod tests {
                 7,
             )
             .expect("initial scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(dirty[0].scan_version, 7);
@@ -4285,7 +4361,7 @@ mod tests {
                 .stage_outbox_entries("account_test", "device_test", 1, &[entry])
                 .expect("stage")
         );
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
         assert_eq!(store.outbox_entries().expect("entries").len(), 1);
 
         store
@@ -4399,7 +4475,7 @@ mod tests {
         store
             .ensure_usage_context("account_a", "device_a", 1, "2026-08-10T00:00:00Z")
             .expect("first identity");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         store
@@ -4415,7 +4491,7 @@ mod tests {
             .ensure_usage_context("account_b", "device_b", 2, "1970-01-01T00:00:00Z")
             .expect("second identity");
         assert!(store.outbox_entries().expect("entries").is_empty());
-        assert_eq!(store.dirty_usage_hours().expect("dirty").len(), 2);
+        assert_eq!(dirty_hours(&store).len(), 2);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4435,7 +4511,7 @@ mod tests {
                 1,
             )
             .expect("initial scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         store
             .stage_outbox_entries(
@@ -4448,7 +4524,7 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
             .expect("clear initial");
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
 
         let appended = usage_event("2026-08-10T14:15:00Z", 3);
         store
@@ -4458,7 +4534,7 @@ mod tests {
                 2,
             )
             .expect("append scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T14:00:00Z");
         assert_eq!(dirty[0].scan_version, 2);
@@ -4479,7 +4555,7 @@ mod tests {
                 3,
             )
             .expect("equivalent rewrite");
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
 
         store
             .apply_usage_scan(
@@ -4495,7 +4571,7 @@ mod tests {
                 4,
             )
             .expect("old hour edit");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
@@ -4583,7 +4659,7 @@ mod tests {
                 .expect("partial hours")
                 .contains(&(UsageAgent::Codex, "2026-08-10T12:00:00Z".into()))
         );
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         assert!(dirty.iter().all(|hour| hour.partial));
         store
@@ -4613,7 +4689,7 @@ mod tests {
         );
         // A repaired source restates its hours once so the reader stops calling them partial,
         // even when the numbers behind them did not move.
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         assert!(dirty.iter().all(|hour| !hour.partial));
         drop(store);
@@ -4750,7 +4826,7 @@ mod tests {
                 2,
             )
             .expect("parser upgrade");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         let (rows, _) = store.usage_period_rows(None).expect("rows");
