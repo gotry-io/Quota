@@ -1,8 +1,7 @@
 # ADR 0009: Versioned report-time model catalog
 
-## Status
-
-Accepted
+- Status: Accepted
+- Date: 2026-08-12
 
 ## Context
 

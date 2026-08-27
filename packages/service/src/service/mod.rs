@@ -5,9 +5,7 @@ pub mod backend;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
-#[cfg(test)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::protocol::*;
 use crate::state::{
@@ -202,6 +200,13 @@ fn coalesce_refresh_trigger(
         .unwrap_or(incoming)
 }
 
+/// How long a reset waits for the refresh it cancelled to let go of the cache.
+///
+/// A cancelled refresh unwinds at the next thing it checks, and the longest of those is one
+/// provider request already in flight.
+const REFRESH_HANDOVER_DEADLINE: Duration = Duration::from_secs(30);
+const REFRESH_HANDOVER_POLL: Duration = Duration::from_millis(25);
+
 struct ActiveRefresh {
     cancel: Arc<AtomicBool>,
 }
@@ -383,9 +388,47 @@ impl LocalService {
     /// is untouched.
     fn reset_cache(&self, request: &IpcRequest) -> Result<EmptyResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
+        self.reset_cache_within(REFRESH_HANDOVER_DEADLINE)
+    }
+
+    /// Deletes the cache once the refresh in flight has let go of it.
+    ///
+    /// A refresh reads the cache to decide what this device owes its Account, so a reset that
+    /// landed in the middle of one would delete the rows it was about to hand over. The refresh
+    /// is cancelled first and this call waits for it, and a refresh still holding on when the
+    /// wait runs out is answered `Busy` rather than raced.
+    fn reset_cache_within(&self, deadline: Duration) -> Result<EmptyResult, IpcError> {
+        if !self.cancel_refresh_and_wait(deadline) {
+            return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
+        }
         self.inner.state.reset_cache();
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual);
         Ok(EmptyResult {})
+    }
+
+    /// Stops the refresh in flight and answers whether it let go before the deadline.
+    fn cancel_refresh_and_wait(&self, deadline: Duration) -> bool {
+        {
+            let Ok(refresh) = self.inner.refresh.lock() else {
+                return false;
+            };
+            let Some(active) = &refresh.active else {
+                return true;
+            };
+            active.cancel.store(true, Ordering::Release);
+        }
+        let deadline = Instant::now() + deadline;
+        loop {
+            thread::sleep(REFRESH_HANDOVER_POLL);
+            match self.inner.refresh.lock() {
+                Ok(refresh) if refresh.active.is_none() => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+        }
     }
 
     fn recheck_diagnostics(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
@@ -2181,6 +2224,78 @@ mod tests {
         assert_eq!(
             child.unresolved_code,
             Some(DiagnosticAttemptCode::ProcessInterrupted)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A reset deletes the file the refresh in flight is reading, so it cancels that refresh
+    /// and waits for it to let go. Staging reads an hour's rows after it reads the list of
+    /// dirty hours; a reset in between would have staged that hour empty under the scan
+    /// version that produced it, and an hour is replaced by version.
+    #[test]
+    fn reset_cache_waits_for_the_refresh_it_cancelled() {
+        let root = std::env::temp_dir().join(format!("quota-reset-wait-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                ComponentName::Usage,
+                ComponentStatus::Ready,
+                Some(serde_json::json!({"kept": true})),
+                None,
+                None,
+                false,
+            )
+            .expect("something to lose");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        service.inner.refresh.lock().expect("refresh").active = Some(ActiveRefresh {
+            cancel: cancel.clone(),
+        });
+
+        // A refresh that will not let go is answered rather than raced.
+        assert_eq!(
+            service
+                .reset_cache_within(Duration::from_millis(50))
+                .expect_err("busy")
+                .code,
+            ErrorCode::Busy
+        );
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(state.snapshot().expect("snapshot").cache.reset_at.is_none());
+
+        // One that does is waited for, and only then is the cache thrown away.
+        let releasing = {
+            let service = service.clone();
+            let cancel = cancel.clone();
+            thread::spawn(move || {
+                while !cancel.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                thread::sleep(Duration::from_millis(20));
+                service.inner.refresh.lock().expect("refresh").active = None;
+            })
+        };
+        cancel.store(false, Ordering::Release);
+        service
+            .reset_cache_within(Duration::from_secs(5))
+            .expect("reset");
+        releasing.join().expect("releasing thread");
+        assert!(state.snapshot().expect("snapshot").cache.reset_at.is_some());
+        assert_ne!(
+            state
+                .component(ComponentName::Usage)
+                .expect("component")
+                .and_then(|record| record.value),
+            Some(serde_json::json!({"kept": true}))
         );
 
         service.shutdown();

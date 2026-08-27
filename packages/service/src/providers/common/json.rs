@@ -93,6 +93,23 @@ pub fn decode_jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Who a locally held bearer token says it belongs to, when it is a JWT that says.
+///
+/// A stored browser session is the one credential whose provider response names nobody, so
+/// without this every cookie on a machine hashes to one fingerprint and two accounts read as
+/// one. The signature is not checked — the bearer already proves possession, and a forged
+/// subject would only give this device a second fingerprint for an account it cannot read.
+pub fn jwt_subject(token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(token)?;
+    ["sub", "user_id", "userId", "uid"]
+        .into_iter()
+        .find_map(|claim| string(obj_get(&payload, claim)))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        })
+}
+
 pub fn parse_date(value: Option<&Value>) -> Option<i64> {
     match value {
         Some(Value::Number(number)) => number.as_f64().and_then(parse_numeric_date),
@@ -179,19 +196,6 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 pub fn duration_seconds(start: Option<i64>, end: Option<i64>) -> Option<u64> {
     let seconds = end?.checked_sub(start?)?;
     (seconds >= 0).then_some(seconds as u64)
-}
-
-pub fn provider_source(provider: &str) -> &'static str {
-    match provider {
-        "openrouter" => "openrouter_api",
-        "deepseek" => "deepseek_balance_api",
-        "kimi" => "kimi_code_usages_api",
-        "litellm" => "litellm_budget_api",
-        "codex" => "chatgpt_usage_api",
-        "claude" => "anthropic_oauth_usage_api",
-        "grok" => "grok_billing_api",
-        _ => "provider",
-    }
 }
 
 pub fn obj_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {

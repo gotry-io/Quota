@@ -13,7 +13,7 @@ use super::super::common::{
     QuotaSnapshot, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     cookie_named_value, mask_email, obj_get, obj_get_any, string,
 };
-use super::map_usage;
+use super::{answers_for_a_known_window, map_usage};
 
 pub const SOURCE: &str = "claude_web_usage_api";
 const ORIGIN: &str = "https://claude.ai";
@@ -41,16 +41,18 @@ fn validate_at(
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
     // The organization list alone is not proof: a session that can list organizations and can
-    // no longer read usage is one this build would store and never be able to spend.
-    if map_usage(&fetch_usage(
+    // no longer read usage is one this build would store and never be able to spend. An
+    // account that answers for a window this build knows, even to say it has none, has been
+    // read — the same rule the OAuth rung applies, because refusing it told a reader whose
+    // account simply has no windows that their session was broken.
+    let usage = fetch_usage(
         cookie_header,
         context,
         origin,
         &account.organization_id,
         remaining,
-    )?)
-    .is_empty()
-    {
+    )?;
+    if map_usage(&usage).is_empty() && !answers_for_a_known_window(&usage) {
         return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
     }
     let (account_fingerprint, _) = account_identity(
@@ -86,7 +88,7 @@ fn collect_at(
         HTTP_TIMEOUT,
     )?;
     let windows = map_usage(&usage);
-    if windows.is_empty() {
+    if windows.is_empty() && !answers_for_a_known_window(&usage) {
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
     let (fingerprint, scope) = account_identity(
@@ -298,8 +300,6 @@ fn web_account_plan(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::io::{Read as _, Write as _};
-    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn context() -> CollectionContext {
@@ -314,30 +314,18 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
+    /// A queue of successful responses, over the shared stub.
     fn serve(bodies: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-        let address = listener.local_addr().expect("address").to_string();
-        let handle = std::thread::spawn(move || {
-            let mut heads = Vec::new();
-            for body in bodies {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    break;
-                };
-                let mut request = [0_u8; 2048];
-                let read = stream.read(&mut request).unwrap_or(0);
-                heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-            heads
-        });
-        (address, handle)
+        crate::providers::common::serve_responses(
+            bodies
+                .into_iter()
+                .map(|body| (200, body.into_bytes()))
+                .collect(),
+        )
     }
 
     #[test]
@@ -384,7 +372,24 @@ mod tests {
         assert!(heads[0].contains("cookie: sessionkey=sk-ant-ok"));
         assert!(heads[2].contains("/api/organizations/org-1/usage"));
 
-        // A session that still lists organizations and can no longer read usage is refused.
+        // An account that answers for a window this build knows, even to say it has none, has
+        // been read: the same rule the OAuth rung applies, so the ladder does not tell a
+        // reader with no windows that their session is broken.
+        let (address, server) = serve(vec![
+            organizations.clone(),
+            account.clone(),
+            r#"{"five_hour":null}"#.to_owned(),
+        ]);
+        validate_at(
+            "sessionKey=sk-ant-ok",
+            &context(),
+            &format!("http://{address}"),
+        )
+        .expect("an account with no windows is still an account");
+        assert_eq!(server.join().expect("server").len(), 3);
+
+        // A session that still lists organizations and answers for no window this build knows
+        // is refused.
         let (address, server) = serve(vec![organizations, account, "{}".to_owned()]);
         let error = validate_at(
             "sessionKey=sk-ant-ok",

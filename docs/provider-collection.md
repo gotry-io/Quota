@@ -64,7 +64,9 @@ Claude Code requests below present that client's `User-Agent`. Sending another p
 identity is a provider-terms risk this build takes knowingly, and it is stated once here rather
 than repeated.
 
-The version in those headers is the version of the CLI installed on this device, not a constant:
+The version in those headers is the version of the CLI installed on this device, not a constant.
+Only those two are read: Grok's CLI is started for a renewal but never asked its version, because
+no request identifies as it.
 
 - The binary is resolved by name — `claude`, `codex`, and `grok` alike — on the service's `PATH`,
   then in `~/.local/bin`, `~/.npm-global/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, and
@@ -105,9 +107,9 @@ tells a program that signed itself out from one that could not renew.
 
 | Process | Trigger | Bounds |
 | --- | --- | --- |
-| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran; secret held in a redacted type |
-| `<binary> --version` | The installed binary's fingerprint is absent or changed, for a CLI this device holds a sign-in for | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH` |
-| The renewal — `claude mcp list`, `codex -s read-only -a never app-server`, or `grok agent stdio` | That provider's local credential is already expired or within a minute of expiry; Claude Code additionally needs a `claudeAiOauth` refresh token to renew from, and Codex an OAuth grant rather than a personal access token | Once an hour per provider whatever the outcome; 64 KiB of stdout, stderr discarded, empty owner-only cwd created for the run, `HOME` + `PATH` + the variable that names the provider's credential home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`) and nothing else. The deadline is the CLI's own: 10 s for Claude Code, 8 s for Codex, 5 s for Grok |
+| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran, plus one that asks only whether the entry exists when reading the secret failed; secret held in a redacted type |
+| `<binary> --version` | The installed binary's fingerprint is absent or changed, for Claude Code or Codex when this device holds a sign-in for it | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH`, empty owner-only cwd created for the run |
+| The renewal — `claude mcp list`, `codex -s read-only -a never app-server`, or `grok agent stdio` | That provider's local credential is already expired or within a minute of expiry; Claude Code additionally needs a `claudeAiOauth` refresh token to renew from, and Codex an OAuth grant rather than a personal access token | Once an hour per provider whatever the outcome; 64 KiB of stdout, stderr discarded, empty owner-only cwd created for the run, `HOME` + `PATH` + the variable that names the provider's credential home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`) + the fixed pair that provider's plan names, which is `TERM=dumb` for Claude Code and nothing for the other two. The deadline is the CLI's own: 10 s for Claude Code, 8 s for Codex, 5 s for Grok |
 
 Each is started as an explicit executable with an argument array, never through a shell, and is
 terminated on success, failure, timeout, and cancellation. The binary is resolved by the rules
@@ -159,8 +161,6 @@ Acquisition happens once, in QuotaBar, and never during a refresh:
    repeats validation before an atomic SQLite replacement, so a failure keeps the old session.
    Disconnect removes the row and the refusal recorded against it.
 
-Linux QuotaCLI does not acquire browser sessions; it reads a session QuotaBar stored.
-
 ## Codex
 
 1. Discover `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
@@ -198,7 +198,7 @@ Linux QuotaCLI does not acquire browser sessions; it reads a session QuotaBar st
    Bounded to eight seconds, about three times the observed run and the same figure CodexBar
    allows its own `initialize`, with 64 KiB of stdout read only to bound it, stderr discarded, and
    an empty private working directory. At most one attempt per hour, recorded in `cache.sqlite`
-   metadata with the binary's fingerprint and the outcome. Afterwards `auth.json` is read again: a
+   metadata with the time and the outcome. Afterwards `auth.json` is read again: a
    token with days left continues to step 4 in the same refresh; a file the CLI emptied or removed
    is a Codex that signed itself out; anything else is `auth_required` with "Open Codex to refresh
    the sign-in". A rejected refresh leaves `auth.json` exactly as it was — observed with a bogus
@@ -265,7 +265,7 @@ reset-credit redemption are not used.
    keeps a slow server from holding the refresh. Bounded to ten seconds — measured here at
    2.97–3.46 s renewing and 2.05–2.44 s not — with 64 KiB of stdout read only to bound it and
    discarded, stderr discarded, and no stdin. At most one attempt per hour, recorded in
-   `cache.sqlite` metadata with the binary's fingerprint and the outcome, so a Claude Code that
+   `cache.sqlite` metadata with the time and the outcome, so a Claude Code that
    cannot renew is not started every five minutes. Afterwards the credential is read again, the
    Keychain read of this refresh forgotten first because Claude Code rewrites that entry in place:
    a grant with time left continues to step 4 in the same refresh; an emptied entry is the
@@ -462,7 +462,7 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    discarded, an empty private working directory created for the run, and an environment holding
    only `HOME`, `PATH`, and `GROK_HOME`; the child is terminated on timeout, cancellation, or an
    over-long answer. At most one attempt per hour,
-   recorded in `cache.sqlite` metadata with the binary's fingerprint and the outcome, so a CLI that
+   recorded in `cache.sqlite` metadata with the time and the outcome, so a CLI that
    cannot renew is not started every five minutes. Afterwards `auth.json` is read again: an
    unexpired token continues to step 4 in the same refresh, and anything else is `auth_required`
    with "Open Grok to refresh the sign-in". No Grok CLI on this Mac means no attempt and no record.

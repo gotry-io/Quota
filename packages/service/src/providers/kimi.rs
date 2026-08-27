@@ -6,8 +6,8 @@ use super::common::{
     ApiKeyCredentials, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient,
     LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity, api_key_identity, clamp_percent,
-    collect_official_or_browser, cookie_named_value, discover_official_or_browser, number, obj_get,
-    obj_get_any, parse_date, read_bounded_file, resolve_api_key, string,
+    collect_official_or_browser, cookie_named_value, discover_official_or_browser, jwt_subject,
+    number, obj_get, obj_get_any, parse_date, read_bounded_file, resolve_api_key, string,
 };
 
 pub const SOURCE: &str = "kimi_code_usages_api";
@@ -68,7 +68,7 @@ fn validate_at(
     if map_web_usages(&data).is_none() {
         return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE));
     }
-    let (account_fingerprint, _) = account_identity("kimi", "browser_session", None);
+    let (account_fingerprint, _) = web_account_identity(&token);
     Ok(ValidatedBrowserSession {
         cookie_header: cookie_header.to_owned(),
         account_fingerprint,
@@ -199,7 +199,7 @@ fn collect_with_bearer(
 }
 
 fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderError> {
-    resolve_api_key(context, ProviderId::Kimi)
+    resolve_api_key(context, ProviderId::Kimi, SOURCE)
 }
 
 fn load_cli_credentials(context: &CollectionContext) -> Option<CliCredentials> {
@@ -224,11 +224,11 @@ fn read_cli_credentials(path: &Path, context: &CollectionContext) -> Option<CliC
 fn parse_cli_credentials(value: &Value, source: &str, now: i64) -> Option<CliCredentials> {
     let access_token = obj_get_any(value, &["access_token", "accessToken"])
         .and_then(|value| string(Some(value)))?;
-    let expires_at = obj_get_any(value, &["expires_at", "expiresAt"]).and_then(|value| {
-        number(Some(value))
-            .map(|seconds| seconds as i64)
-            .or_else(|| parse_date(Some(value)))
-    })?;
+    // Kimi Code writes this stamp in milliseconds. Reading a number as seconds put the expiry
+    // fifty thousand years out, so a token that had run out looked live and the request that
+    // spent it came back `auth_required`.
+    let expires_at = obj_get_any(value, &["expires_at", "expiresAt"])
+        .and_then(|value| parse_date(Some(value)))?;
     if expires_at <= now + CLI_TOKEN_SKEW_SECONDS {
         return None;
     }
@@ -263,7 +263,7 @@ fn collect_web_at(
     if windows.is_empty() {
         return Err(ProviderError::new(ErrorCategory::Error, WEB_SOURCE));
     }
-    let (fingerprint, scope) = account_identity("kimi", "browser_session", None);
+    let (fingerprint, scope) = web_account_identity(&token);
     Ok(QuotaSnapshot {
         provider: ProviderId::Kimi,
         account: QuotaAccount {
@@ -310,6 +310,15 @@ fn fetch_web_usages(
         WEB_SOURCE,
     )?;
     Ok(value)
+}
+
+/// Whose kimi.com account a stored session speaks for.
+///
+/// The billing RPC names nobody, so the cookie itself has to: it is spent as a bearer, and the
+/// subject it carries is what tells two signed-in accounts apart. A token that names no one
+/// keeps the source-wide fingerprint, which says exactly that.
+fn web_account_identity(token: &str) -> (String, &'static str) {
+    account_identity("kimi", "browser_session", jwt_subject(token).as_deref())
 }
 
 /// The `kimi-auth` cookie is a whole sign-in: kimi.com spends its value as the bearer.
@@ -467,6 +476,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
@@ -522,13 +532,51 @@ mod tests {
             )
             .is_none()
         );
+        // Kimi Code stamps this in milliseconds. Read as seconds it was fifty thousand years
+        // out, so a token that had run out an hour ago read as live.
+        assert!(
+            parse_cli_credentials(
+                &serde_json::json!({
+                    "access_token": "cli-token",
+                    "expires_at": 1_786_316_400_000_i64
+                }),
+                "fixture",
+                1_786_320_000,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            parse_cli_credentials(
+                &serde_json::json!({
+                    "access_token": "cli-token",
+                    "expires_at": 1_786_323_600_000_i64
+                }),
+                "fixture",
+                1_786_320_000,
+            )
+            .map(|credentials| credentials.access_token),
+            Some("cli-token".to_owned())
+        );
     }
 
+    /// The Kimi Code token names no account of its own, so its fingerprint is scoped to the
+    /// source rather than to an owner — and what is stored is a digest, never the credential.
     #[test]
-    fn source_scoped_fingerprint_is_redacted() {
+    fn the_cli_credential_fingerprint_is_source_scoped_and_irreversible() {
         let (fingerprint, scope) = account_identity("kimi", "cli_credential", None);
         assert_eq!(scope, "source");
-        assert!(!fingerprint.contains("super-secret"));
+        assert_eq!(fingerprint.len(), 64);
+        assert!(
+            fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+        // And a name an owner does take part in is a different name, so the source-scoped one
+        // is not standing in for an account it never read.
+        assert_ne!(
+            fingerprint,
+            account_identity("kimi", "cli_credential", Some("owner")).0
+        );
     }
 
     /// The stored session is the last rung, and only the last rung.
@@ -589,28 +637,14 @@ mod tests {
     }
 
     /// One request, one canned answer, and the request head handed back for inspection.
+    /// One response, over the shared stub.
     fn serve(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-        let address = listener.local_addr().expect("address").to_string();
-        let body = body.to_owned();
-        let handle = std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return String::new();
-            };
-            let mut request = [0_u8; 4096];
-            let read = stream.read(&mut request).unwrap_or(0);
-            let head = String::from_utf8_lossy(&request[..read]).to_lowercase();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            head
-        });
-        (address, handle)
+        let (address, handle) =
+            crate::providers::common::serve_responses(vec![(status, body.as_bytes().to_vec())]);
+        (
+            address,
+            std::thread::spawn(move || handle.join().expect("server").remove(0)),
+        )
     }
 
     const CODING_USAGES: &str = r#"{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"100","used":"25","remaining":"75"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"50","used":"10","remaining":"40"}}]}]}"#;
@@ -627,6 +661,8 @@ mod tests {
         )
         .expect("validated");
         assert_eq!(validated.account_label.as_deref(), Some("Kimi"));
+        // A bearer that names no one keeps the source-wide fingerprint, which says exactly
+        // that.
         assert_eq!(
             validated.account_fingerprint,
             account_identity("kimi", "browser_session", None).0
@@ -646,6 +682,29 @@ mod tests {
         assert_eq!(error.category, ErrorCategory::Error);
         assert_eq!(error.source_id, WEB_SOURCE);
         server.join().expect("server");
+
+        // Two signed-in accounts are two accounts. The billing RPC names nobody, so the bearer
+        // is what tells them apart; without it every cookie on a Mac hashed to one fingerprint
+        // and the second account overwrote the first.
+        let owned = |subject: &str, encoded: &str| {
+            let (address, server) = serve(200, CODING_USAGES);
+            let validated = validate_at(
+                &format!("kimi-auth=header.{encoded}.signature"),
+                &isolated_context(),
+                &format!("http://{address}/usages"),
+            )
+            .expect("validated");
+            server.join().expect("server");
+            assert_eq!(
+                validated.account_fingerprint,
+                account_identity("kimi", "browser_session", Some(subject)).0
+            );
+            validated.account_fingerprint
+        };
+        assert_ne!(
+            owned("user-1", "eyJzdWIiOiJ1c2VyLTEifQ"),
+            owned("user-2", "eyJzdWIiOiJ1c2VyLTIifQ")
+        );
     }
 
     /// A header with no `kimi-auth` is refused before a request is made.

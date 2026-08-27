@@ -8,13 +8,13 @@ use super::common::{
     ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
     account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
     discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, slug, string,
+    read_bounded_file, sha256_hex, slug, string,
 };
 
 pub mod refresh;
 mod web;
 
-pub const SOURCE_API: &str = "chatgpt_usage_api";
+pub const SOURCE: &str = "chatgpt_usage_api";
 pub const WEB_SOURCE: &str = web::SOURCE;
 
 /// How close to its own expiry an access token has to be before this build asks Codex to
@@ -22,7 +22,7 @@ pub const WEB_SOURCE: &str = web::SOURCE;
 /// Codex CLI itself treats as expired, so every renewal this build asks for is one the CLI
 /// agrees is due.
 const AUTH_REFRESH_SKEW: i64 = 60;
-pub const SOURCE_PAT: &str = "codex_pat_usage_api";
+pub const PAT_SOURCE: &str = "codex_pat_usage_api";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
@@ -99,7 +99,7 @@ pub fn collect(
         session,
         context,
         ProviderId::Codex,
-        SOURCE_API,
+        SOURCE,
         || collect_local(context),
         || web::collect(context),
     )
@@ -107,7 +107,7 @@ pub fn collect(
 
 fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     let auth = load_auth(context)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
     if let Some(pat) = auth.pat.as_deref() {
         match collect_pat(pat, context) {
             Ok(snapshot) => return Ok(snapshot),
@@ -117,7 +117,7 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
     }
     let credentials = auth
         .oauth
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API))?;
+        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
     // Codex owns token renewal. The refresh worker already gave it its one chance to renew an
     // expired grant ([`refresh`]); one still out of time here is a sign-in only the reader can
     // restore, and saying so beats spending a token the endpoint has already stopped taking.
@@ -126,11 +126,11 @@ fn collect_local(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderE
         .expires_at
         .is_some_and(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
     {
-        return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE_API));
+        return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
     let identity = extract_identity(&credentials);
-    collect_api(&credentials, &identity, context, SOURCE_API)?
-        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE_API))
+    collect_api(&credentials, &identity, context, SOURCE)?
+        .ok_or_else(|| ProviderError::new(ErrorCategory::Unavailable, SOURCE))
 }
 
 fn load_auth(context: &CollectionContext) -> Option<AuthMaterial> {
@@ -202,22 +202,41 @@ fn parse_oauth_credentials(value: &Value) -> Option<Credentials> {
 /// Whether this device's Codex sign-in is the thing standing between the refresh and a
 /// reading.
 ///
-/// The access token's own `exp` decides it. An unreadable one counts as expiring: a token this
-/// build cannot date is one it cannot spend with any confidence, and the CLI is the thing that
-/// can tell. `last_refresh` deliberately does not: measured against codex-cli 0.149.0, the CLI
-/// renews only when that `exp` is within five minutes, and a file thirty days stale with a
-/// live token is left exactly as it was — so asking on its age would spawn for nothing.
+/// The access token's own `exp` decides it. `last_refresh` deliberately does not: measured
+/// against codex-cli 0.149.0, the CLI renews only when that `exp` is within five minutes, and
+/// a file thirty days stale with a live token is left exactly as it was — so asking on its age
+/// would spawn for nothing.
+///
+/// A token this build cannot date counts as expiring until it has been spent. The collector
+/// tries it anyway ([`collect_local`]), so a reading that came back with this exact token is
+/// proof the CLI has nothing to add — and without that, an `exp` this build cannot decode
+/// bought a `codex app-server` every hour, forever, for a sign-in that works.
 ///
 /// A personal access token is not this: nothing renews one, and an `auth.json` holding only
 /// that has no OAuth grant to speak of.
 fn sign_in_expiring(context: &CollectionContext) -> bool {
     load_auth(context)
         .and_then(|auth| auth.oauth)
-        .is_some_and(|credentials| {
-            credentials
-                .expires_at
-                .is_none_or(|expires_at| expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW)
+        .is_some_and(|credentials| match credentials.expires_at {
+            Some(expires_at) => expires_at <= context.observed_unix() + AUTH_REFRESH_SKEW,
+            None => !context.credential_is_proven(
+                ProviderId::Codex,
+                &credential_fingerprint(&credentials.access_token),
+            ),
         })
+}
+
+/// The irreversible name this device knows an access token by. Never the token.
+fn credential_fingerprint(access_token: &str) -> String {
+    sha256_hex(access_token)
+}
+
+/// The fingerprint of the OAuth grant a reading would be built from right now, for the refresh
+/// worker to record once that reading came back.
+pub fn proven_credential(context: &CollectionContext) -> Option<String> {
+    load_auth(context)
+        .and_then(|auth| auth.oauth)
+        .map(|credentials| credential_fingerprint(&credentials.access_token))
 }
 
 /// Whether `auth.json` now holds a token this refresh can use.
@@ -273,7 +292,7 @@ fn collect_pat_at(
         ("User-Agent", user_agent.as_str()),
         ("originator", "codex_cli_rs"),
     ];
-    let (_, whoami) = client.get_json(whoami_url, &headers, SOURCE_PAT)?;
+    let (_, whoami) = client.get_json(whoami_url, &headers, PAT_SOURCE)?;
     let account_id = obj_get_any(&whoami, &["chatgpt_account_id", "chatgptAccountId"])
         .and_then(|v| string(Some(v)));
     let email = obj_get(&whoami, "email").and_then(|v| string(Some(v)));
@@ -288,13 +307,13 @@ fn collect_pat_at(
     if let Some(account_id) = account_id.as_deref() {
         usage_headers.push(("ChatGPT-Account-Id", account_id));
     }
-    let (_, value) = client.get_json(usage_url, &usage_headers, SOURCE_PAT)?;
+    let (_, value) = client.get_json(usage_url, &usage_headers, PAT_SOURCE)?;
     let mapped = map_usage(&value);
     if mapped.malformed_success {
-        return Err(ProviderError::new(ErrorCategory::Error, SOURCE_PAT));
+        return Err(ProviderError::new(ErrorCategory::Error, PAT_SOURCE));
     }
     if mapped.windows.is_empty() {
-        return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE_PAT));
+        return Err(ProviderError::new(ErrorCategory::Unavailable, PAT_SOURCE));
     }
     Ok(snapshot(
         &mapped.windows,
@@ -833,6 +852,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
@@ -870,7 +890,7 @@ mod tests {
             collect(&official, &context)
                 .expect_err("no credential")
                 .source_id,
-            SOURCE_API
+            SOURCE
         );
         // With a session stored, that same verdict hands off to it, and the rung that answers
         // names itself. The header is one this rung rejects without a request.
@@ -892,7 +912,7 @@ mod tests {
         };
         let error = collect(&official, &cancelled).expect_err("cancelled");
         assert_eq!(error.category, ErrorCategory::Unavailable);
-        assert_eq!(error.source_id, SOURCE_API);
+        assert_eq!(error.source_id, SOURCE);
     }
 
     #[test]

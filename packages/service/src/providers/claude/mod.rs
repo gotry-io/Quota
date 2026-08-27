@@ -500,7 +500,7 @@ fn collect_at(
 
 /// Whether the response named a window this build knows and answered `null` for it, which is
 /// an account stating it has no such window rather than a shape this build failed to read.
-fn answers_for_a_known_window(value: &Value) -> bool {
+pub(super) fn answers_for_a_known_window(value: &Value) -> bool {
     CLAUDE_WINDOWS
         .iter()
         .any(|entry| matches!(obj_get(value, entry.field), Some(Value::Null)))
@@ -776,6 +776,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 

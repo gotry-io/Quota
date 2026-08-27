@@ -13,6 +13,7 @@ cask "quotabar" do
   app "QuotaBar.app"
 
   zap trash: [
+    "~/.config/quota/",
     "~/Library/Preferences/io.gotry.quotabar.plist",
     "~/Library/Saved Application State/io.gotry.quotabar.savedState",
   ]

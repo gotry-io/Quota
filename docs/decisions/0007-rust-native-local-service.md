@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-10
+- Updated by [ADR 0027](0027-one-token-per-client.md)
 
 ## Context
 
@@ -19,7 +20,8 @@ is the ownership signal: when QuotaBar exits, the service cancels its work and e
 daemonizes and has no public command or socket surface.
 
 The shared implementation lives in `packages/service`. `apps/menubar/helper` is the macOS private
-stdio entry point around that crate; `apps/cli` is the Linux-only native `quotacli` entry point.
+stdio entry point around that crate, and since [ADR 0027](0027-one-token-per-client.md) it is the
+only entry point there is.
 
 The private protocol is `snake_case` IPC v1 with request ids, typed operations, stable error and
 recovery codes, independent component state, and revisioned state-change events, with lines limited
@@ -40,13 +42,14 @@ to Relay or a provider.
 
 The provider catalog is language-neutral JSON validated by JSON Schema, and generation keeps the
 TypeScript network ids, the Rust metadata, and the Swift ids aligned. Optional provider secrets stay
-in the owner-only `providers.json` path so `quotacli` and QuotaBar serialize access to one
-configuration. Operational state is SQLite; there is no JSON/SQLite dual write.
+in the owner-only `providers.json` path. Operational state is SQLite; there is no JSON/SQLite dual
+write.
 
-Usage invalidation is file-level and final: bounded discovery compares identity, size, mtime, and
-parser revision against the file index, unchanged files are skipped, and a changed file is reparsed
-with its normalized rows replaced transactionally. The index is the only invalidation mechanism —
-no watcher, no byte checkpoint.
+Usage invalidation is file-level: bounded discovery compares identity, size, mtime, and parser
+revision against the file index, and unchanged files are skipped. A changed file that has only
+grown, and whose whole parsed prefix still hashes to what it hashed before, is read from where the
+last parse stopped; anything else is reparsed with its normalized rows replaced transactionally.
+The index is the only invalidation mechanism — no watcher.
 
 ## Consequences
 

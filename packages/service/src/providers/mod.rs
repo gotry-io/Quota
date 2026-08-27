@@ -61,7 +61,7 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
         return BROWSER_SESSION_SOURCE;
     }
     match provider {
-        ProviderId::Codex => codex::SOURCE_API,
+        ProviderId::Codex => codex::SOURCE,
         ProviderId::Claude => claude::SOURCE,
         ProviderId::Grok => grok::SOURCE,
         ProviderId::OpenRouter => openrouter::SOURCE,
@@ -72,36 +72,22 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
     }
 }
 
-/// What a person calls a collection source.
-///
-/// Source ids are written for code and travel through the report as ids; this is the one
-/// place that turns them into words for a reader.  QuotaBar keeps the same table in Swift,
-/// because the report crosses the IPC boundary as ids and nothing else.
-pub fn source_display_name(source_id: &str) -> &'static str {
-    match source_id {
-        claude::SOURCE
-        | claude::SIGNED_OUT_SOURCE
-        | codex::SOURCE_API
-        | grok::SOURCE
-        | grok::BILLING_RPC_SOURCE => "OAuth",
-        codex::SOURCE_PAT => "Access token",
-        BROWSER_SESSION_SOURCE
-        | claude::WEB_SOURCE
-        | codex::WEB_SOURCE
-        | grok::WEB_SOURCE
-        | kimi::WEB_SOURCE
-        | cursor::SOURCE => "Browser session",
-        cursor::APP_SOURCE => "Cursor app session",
-        kimi::CLI_SOURCE => "Kimi Code token",
-        kimi::SOURCE | openrouter::SOURCE | deepseek::SOURCE | litellm::SOURCE => "API key",
-        _ => "Provider",
-    }
-}
-
 /// Whether a source is a browser session this app stores, which is re-added here rather
 /// than renewed in the program that owns the provider.
+///
+/// Source ids are written for code and travel through the report as ids. What a person calls
+/// one is QuotaBar's table in Swift, which is where the report is read; the only question
+/// asked on this side is this one.
 pub fn is_browser_session_source(source_id: &str) -> bool {
-    source_display_name(source_id) == "Browser session"
+    matches!(
+        source_id,
+        BROWSER_SESSION_SOURCE
+            | claude::WEB_SOURCE
+            | codex::WEB_SOURCE
+            | grok::WEB_SOURCE
+            | kimi::WEB_SOURCE
+            | cursor::WEB_SOURCE
+    )
 }
 
 pub fn validate_browser_session(
@@ -125,11 +111,24 @@ pub fn validate_browser_session(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     /// Split so that scanning this file does not find the scanner.
     const SPAWN: &str = concat!("Command", "::new(");
+
+    /// Every program named by a literal in `src/providers`, and how many call sites name it.
+    ///
+    /// The count is the point: a set said "`/usr/bin/security` is expected here" and would
+    /// have taken a second, a third, and a fourth call site without a word.
+    const NAMED_PROGRAMS: &[(&str, usize)] = &[
+        // The bounded runner proving its own bounds, in its own test.
+        ("/bin/sh", 6),
+        // Claude Code's Keychain grant, plus the call that asks only whether the entry is
+        // there — which is what separates a Mac that was never signed in from one that is not
+        // allowed to read the secret, and runs only when reading it failed.
+        ("/usr/bin/security", 2),
+    ];
 
     /// The only functions allowed to start a program a variable names, each with the rule
     /// that keeps it off the five-minute timer. Both run on the refresh worker before
@@ -147,7 +146,11 @@ mod tests {
         ("common/renewal.rs", "renew"),
     ];
 
-    fn visit(directory: &Path, found: &mut BTreeSet<String>, spawns: &mut Vec<(String, String)>) {
+    fn visit(
+        directory: &Path,
+        found: &mut BTreeMap<String, usize>,
+        spawns: &mut Vec<(String, String)>,
+    ) {
         for entry in std::fs::read_dir(directory).expect("provider sources") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
@@ -165,7 +168,9 @@ mod tests {
                     .unwrap_or_default()
                     .trim();
                 if argument.starts_with('"') {
-                    found.insert(argument.trim_matches('"').to_owned());
+                    *found
+                        .entry(argument.trim_matches('"').to_owned())
+                        .or_default() += 1;
                     continue;
                 }
                 let module = NAMED_SPAWNS
@@ -207,7 +212,7 @@ mod tests {
     /// and this counts the call sites so a new one cannot arrive quietly.
     #[test]
     fn collection_starts_no_process_it_did_not_name() {
-        let mut found = BTreeSet::new();
+        let mut found = BTreeMap::new();
         let mut spawns = Vec::new();
         visit(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/providers"),
@@ -216,8 +221,11 @@ mod tests {
         );
         assert_eq!(
             found,
-            // `/bin/sh` is the bounded runner proving its own bounds, in its own test.
-            BTreeSet::from(["/bin/sh".to_owned(), "/usr/bin/security".to_owned()])
+            NAMED_PROGRAMS
+                .iter()
+                .map(|(program, count)| ((*program).to_owned(), *count))
+                .collect::<BTreeMap<_, _>>(),
+            "each named program is allowed exactly the call sites listed with it"
         );
         spawns.sort();
         let named = NAMED_SPAWNS

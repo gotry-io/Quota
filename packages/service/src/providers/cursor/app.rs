@@ -173,7 +173,7 @@ mod tests {
     use crate::catalog::ProviderId;
     use crate::providers::ProviderSession;
     use crate::providers::common::ErrorCategory;
-    use crate::providers::cursor::{SOURCE as DASHBOARD_SOURCE, discover};
+    use crate::providers::cursor::discover;
     use base64::Engine;
     use rusqlite::Connection;
     use std::collections::HashMap;
@@ -195,6 +195,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         }
     }
 
@@ -304,7 +305,9 @@ mod tests {
         };
         let error = crate::providers::cursor::collect(&session, &context).expect_err("auth");
         assert_eq!(error.category, ErrorCategory::AuthRequired);
-        assert_eq!(error.source_id, DASHBOARD_SOURCE);
+        // The rung that failed is the app's, and the recovery copy a reader is shown turns on
+        // that: an expired app token is not a browser session to re-add.
+        assert_eq!(error.source_id, SOURCE);
         assert!(!error.to_string().contains("cursorAuth"));
     }
 }

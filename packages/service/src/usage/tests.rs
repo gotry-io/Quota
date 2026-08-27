@@ -475,7 +475,7 @@ fn file_index_skips_replaces_cleans_deleted_and_invalidates_by_revision() {
             modified_ns: source.modified_ns,
             parser_revision: first.sources[0].index.parser_revision.clone(),
             parsed_offset: first.sources[0].index.parsed_offset,
-            tail_hash: first.sources[0].index.tail_hash.clone(),
+            prefix_hash: first.sources[0].index.prefix_hash.clone(),
         },
     )]
     .into_iter()
@@ -1829,7 +1829,7 @@ fn an_appended_log_is_read_from_where_the_last_parse_stopped() {
     assert!(!first.sources[0].append);
     let index = first.sources[0].index.clone();
     assert!(index.parsed_offset > 0);
-    assert!(!index.tail_hash.is_empty());
+    assert!(!index.prefix_hash.is_empty());
 
     fs::write(
         &source,
@@ -1860,8 +1860,8 @@ fn an_appended_log_is_read_from_where_the_last_parse_stopped() {
         resumed.sources[0].index.parsed_offset
     );
     assert_eq!(
-        whole.sources[0].index.tail_hash,
-        resumed.sources[0].index.tail_hash
+        whole.sources[0].index.prefix_hash,
+        resumed.sources[0].index.prefix_hash
     );
     let _ = fs::remove_dir_all(path);
 }
@@ -1908,6 +1908,57 @@ fn a_log_whose_tail_no_longer_matches_is_read_whole() {
     let truncated = scan_claude_usage(&truncated_options).expect("truncated scan");
     assert!(!truncated.sources[0].append);
     assert_eq!(truncated.records.len(), 1);
+    let _ = fs::remove_dir_all(path);
+}
+
+/// A window at the end of what was parsed cannot see an edit further back, and a file that did
+/// not grow is not a file that was appended to. Both are read whole.
+#[test]
+fn a_log_rewritten_out_of_sight_of_its_tail_is_read_whole() {
+    let path = root("incremental-prefix");
+    let source = path.join("session.jsonl");
+    // Padding puts the first line well behind any trailing window: an edit to it is invisible
+    // to everything but the whole prefix.
+    let padding = "p".repeat(16 * 1024);
+    let line = |minute: usize, input: u64| {
+        serde_json::json!({
+            "timestamp": format!("2026-08-02T12:{minute:02}:00.000Z"),
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [{"type": "text", "text": padding}],
+                "usage": {"input_tokens": input, "output_tokens": 1}
+            }
+        })
+        .to_string()
+    };
+    fs::write(&source, format!("{}\n{}\n", line(0, 100), line(1, 200))).expect("write log");
+    let first = scan_claude_usage(&options(&path)).expect("first scan");
+    let index = first.sources[0].index.clone();
+    assert!(index.parsed_offset > 16 * 1024);
+
+    // Longer than it was, with the same bytes at the end, and one edited line far behind them.
+    fs::write(
+        &source,
+        format!("{}\n{}\n{}\n", line(0, 999), line(1, 200), line(2, 300)),
+    )
+    .expect("rewrite the head and append");
+    let mut rewritten_options = options(&path);
+    rewritten_options.file_index = HashMap::from([(index.source_file_id.clone(), index.clone())]);
+    let rewritten = scan_claude_usage(&rewritten_options).expect("rewritten scan");
+    assert!(!rewritten.sources[0].append, "not the same log any more");
+    assert_eq!(rewritten.records.len(), 3);
+    assert_eq!(rewritten.records[0].event.input_tokens, 999);
+
+    // The same length as it was, and different bytes: growth is what an append looks like.
+    fs::write(&source, format!("{}\n{}\n", line(0, 999), line(1, 200))).expect("same length");
+    let mut equal_options = options(&path);
+    equal_options.file_index = HashMap::from([(index.source_file_id.clone(), index)]);
+    let equal = scan_claude_usage(&equal_options).expect("equal-length scan");
+    assert!(!equal.sources[0].append, "a rewrite is not an append");
+    assert_eq!(equal.records.len(), 2);
+    assert_eq!(equal.records[0].event.input_tokens, 999);
     let _ = fs::remove_dir_all(path);
 }
 

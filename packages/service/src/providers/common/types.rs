@@ -161,6 +161,12 @@ pub struct CollectionContext {
     /// refresh worker before collection.  A collector reads it; it never probes for it, so no
     /// collector can turn a five-minute timer into a spawn.
     pub cli_versions: BTreeMap<CliTool, String>,
+    /// For each provider, an irreversible digest of the credential that last produced a
+    /// reading here.  A credential this build cannot judge on its own — an access token whose
+    /// expiry it cannot decode — is judged by whether it has already been spent, which is the
+    /// only evidence that outlives a refresh.  Written by the refresh worker after collection;
+    /// a collector only reads it.
+    pub proven_credentials: BTreeMap<String, String>,
 }
 
 impl Default for CollectionContext {
@@ -180,6 +186,7 @@ impl Default for CollectionContext {
             cancel: None,
             keychain: Arc::new(OnceLock::new()),
             cli_versions: BTreeMap::new(),
+            proven_credentials: BTreeMap::new(),
         }
     }
 }
@@ -205,6 +212,13 @@ impl CollectionContext {
 
     pub fn user_agent(&self) -> String {
         format!("{}/{}", self.client_name, self.client_version)
+    }
+
+    /// Whether this exact credential has already produced a reading on this device.
+    pub fn credential_is_proven(&self, provider: ProviderId, fingerprint: &str) -> bool {
+        self.proven_credentials
+            .get(provider.as_str())
+            .is_some_and(|proven| proven == fingerprint)
     }
 
     /// The installed version of a provider CLI, when this device has one and it answered.
@@ -270,11 +284,11 @@ impl CollectionContext {
 
     /// Forgets that read, so the next ask starts a fresh `/usr/bin/security`.
     ///
-    /// One caller: the Claude renewal, which runs a CLI that rewrites the Keychain entry in
-    /// place.  A memo taken before it ran describes the grant that was replaced, and every
-    /// collector after it would spend a token that no longer exists.  Nothing else may call
-    /// this — the memo is what holds a refresh to one Keychain read — and it is `&mut`
-    /// because the renewal runs before any collector has a clone.
+    /// Called for one plan: Claude Code's, whose CLI rewrites the Keychain entry in place.  A
+    /// memo taken before it ran describes the grant that was replaced, and every collector
+    /// after it would spend a token that no longer exists.  No other renewal may call this —
+    /// the memo is what holds a refresh to one Keychain read — and it is `&mut` because the
+    /// renewal runs before any collector has a clone.
     pub fn forget_keychain(&mut self) {
         self.keychain = Arc::new(OnceLock::new());
     }
@@ -352,11 +366,16 @@ pub fn cookie_named_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+/// The `Cookie:` header this build will send for a stored browser session, or why it will
+/// not.
+///
+/// A header this build refuses is a browser session that was never usable, so that is the rung
+/// every refusal here names.
 pub fn normalize_browser_cookie_header(
     provider: ProviderId,
     header: &str,
 ) -> Result<String, ProviderError> {
-    let source = super::json::provider_source(provider.as_str());
+    let source = BROWSER_SESSION_SOURCE;
     let Some(spec) = provider.metadata().browser_session else {
         return Err(ProviderError::new(ErrorCategory::Unsupported, source));
     };

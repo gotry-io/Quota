@@ -18,23 +18,22 @@ mod json;
 mod renewal;
 mod types;
 
-pub use cli_version::{
-    CliTool, CliVersionResolution, ProbeCache, ProbeEnvironment, ProbeRecord,
-    fingerprint as binary_fingerprint, resolve as resolve_cli_versions, resolve_binary,
-};
+pub use cli_version::{CliTool, ProbeCache, ProbeEnvironment, resolve as resolve_cli_versions};
 pub use config::{ApiKeyCredentials, resolve_api_key};
+#[cfg(test)]
+pub use http::serve_responses;
 pub use http::{HTTP_BODY_LIMIT, HTTP_TIMEOUT, HttpClient, VALIDATION_TIMEOUT};
 pub use identity::{
     account_identity, api_key_identity, mask_display_name, mask_email, mask_secret, sha256_hex,
 };
 pub use io::{BoundedExchange, LOCAL_FILE_LIMIT, read_bounded_file, run_bounded_command};
 pub use json::{
-    clamp_percent, decode_jwt_payload, duration_seconds, number, obj_get, obj_get_any, parse_date,
-    provider_source, slug, string, unix_now, unix_seconds_to_iso, url_encode,
+    clamp_percent, decode_jwt_payload, duration_seconds, jwt_subject, number, obj_get, obj_get_any,
+    parse_date, slug, string, unix_now, unix_seconds_to_iso, url_encode,
 };
 pub use renewal::{
-    RENEWAL_FLOOR_SECONDS, RENEWAL_OUTPUT_LIMIT, RenewalAttempt, RenewalAttempts, RenewalOutcome,
-    RenewalPlan, json_rpc_reply, renew_sign_in, within_renewal_floor,
+    RENEWAL_FLOOR_SECONDS, RenewalAttempt, RenewalAttempts, RenewalOutcome, RenewalPlan,
+    json_rpc_reply, renew_sign_in,
 };
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, CollectionContext, ErrorCategory,

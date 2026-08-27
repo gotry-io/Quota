@@ -57,6 +57,7 @@ const USAGE_SCAN_VERSION_KEY: &str = "usage_scan_version";
 const CLI_VERSION_KEY: &str = "provider_cli_versions";
 /// The last time this device asked each provider's own CLI to renew the sign-in it owns.
 const RENEWAL_ATTEMPT_KEY: &str = "provider_refresh_attempts";
+const PROVEN_CREDENTIAL_KEY: &str = "provider_proven_credentials";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -349,8 +350,9 @@ pub struct StateStore {
     /// which ignores an event whose revision is not newer than the state it holds, keeps
     /// following along instead of going quiet until the count catches up.
     remembered_revision: AtomicU64,
-    /// Unix seconds of the last attempt-journal prune. Retention runs at open and hourly, never
-    /// inside the transaction that records a refresh.
+    /// Unix seconds of the last attempt-journal prune. Retention runs once at open, and after
+    /// that at most once an hour, in the transaction that records the attempt which found it
+    /// due — so the row and the prune commit together, and no refresh pays for it twice.
     last_attempt_prune: AtomicU64,
 }
 
@@ -1205,10 +1207,6 @@ impl StateStore {
     }
 
     /// The last revision this process observed, without touching SQLite.
-    pub fn remembered_revision(&self) -> u64 {
-        self.remembered_revision.load(Ordering::Acquire)
-    }
-
     /// Folds the cache's write-ahead log back into the image and hands freed pages back to the
     /// filesystem. A refresh rewrites every Usage record it re-reads, so without this the file
     /// keeps whatever size its largest transaction reached.
@@ -1624,6 +1622,19 @@ impl StateStore {
         self.write_cache_metadata(RENEWAL_ATTEMPT_KEY, encoded)
     }
 
+    /// For each provider, the irreversible name of the credential that last produced a
+    /// reading on this device.  It is what tells a token this build cannot judge on its own —
+    /// an access token whose expiry it cannot decode — from one that has never worked; without
+    /// it, an undatable token bought a provider CLI spawn every hour forever.  Disposable:
+    /// losing it to a cache reset costs one extra renewal attempt per provider.
+    pub fn proven_provider_credentials(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, PROVEN_CREDENTIAL_KEY))
+    }
+
+    pub fn write_proven_provider_credentials(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(PROVEN_CREDENTIAL_KEY, encoded)
+    }
+
     fn write_cache_metadata(&self, key: &str, encoded: &str) -> Result<(), StateError> {
         if encoded.len() > crate::protocol::MAXIMUM_LINE_BYTES {
             return Err(StateError::InvalidState);
@@ -1676,6 +1687,15 @@ impl StateStore {
     /// Everything this device still owes an Account, oldest hour first.
     pub fn outbox_entries(&self) -> Result<Vec<UsageOutboxEntry>, StateError> {
         self.with_identity(|conn| read_outbox(conn, None))
+    }
+
+    /// How many hours are staged. Counted in SQL, because the callers that ask this were
+    /// deserializing every staged hour's rows to call `len()` on the result.
+    pub fn outbox_len(&self) -> Result<i64, StateError> {
+        self.with_identity(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM usage_outbox", [], |row| row.get(0))
+                .map_err(StateError::from)
+        })
     }
 
     pub fn outbox_entries_for(
@@ -1795,7 +1815,7 @@ impl StateStore {
         self.with_cache(|conn| {
             let mut statement = conn.prepare(
                 "SELECT source_file_id, identity, size, modified_ns, parser_revision,
-                        parsed_offset, tail_hash
+                        parsed_offset, prefix_hash
              FROM usage_file_index WHERE agent = ?1",
             )?;
             let rows = statement.query_map(params![agent.as_str()], |row| {
@@ -1817,7 +1837,7 @@ impl StateStore {
                         modified_ns,
                         parser_revision: row.get(4)?,
                         parsed_offset: row.get::<_, i64>(5)? as u64,
-                        tail_hash: row.get(6)?,
+                        prefix_hash: row.get(6)?,
                     },
                 ))
             })?;
@@ -1842,6 +1862,7 @@ impl StateStore {
         })
     }
 
+    #[cfg(test)]
     pub fn make_usage_file_index_unreadable_for_test(&self) -> Result<(), StateError> {
         self.with_cache_mut(|conn| {
             conn.execute("DROP TABLE usage_file_index", [])?;
@@ -1883,38 +1904,108 @@ impl StateStore {
         })
     }
 
-    /// The hours whose facts changed since the last time they were staged for upload.
-    pub fn dirty_usage_hours(&self) -> Result<Vec<DirtyUsageHour>, StateError> {
+    /// The hours this device still owes its Account, oldest first, with the rows each is made
+    /// of.
+    ///
+    /// One transaction, and bounded. Reading the list of dirty hours and then reading each
+    /// hour's rows under a lock of its own let a cache reset land in between: the hour was
+    /// staged empty under the scan version that produced it, and an hour is replaced by
+    /// version, so the Account applied the emptiness.
+    ///
+    /// `lower_bound` is the privacy watermark this device may not upload before and
+    /// `upper_bound` the hour still being written to. Both are canonical UTC hours, which is
+    /// the form `bucket_start_utc` holds, so the comparison is the column's own order.
+    pub fn dirty_usage_hour_batch(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+        limit: usize,
+    ) -> Result<Vec<UsageOutboxEntry>, StateError> {
         self.with_cache(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
-                 ORDER BY bucket_start_utc, agent",
-            )?;
-            let rows = statement.query_map([], |row| {
-                let agent: String = row.get(0)?;
-                let agent = parse_usage_agent(&agent).ok_or_else(|| {
-                    rusqlite::Error::InvalidColumnType(
-                        0,
-                        "agent".to_owned(),
-                        rusqlite::types::Type::Text,
-                    )
-                })?;
-                Ok(DirtyUsageHour {
-                    agent,
-                    bucket_start_utc: row.get(1)?,
-                    scan_version: row.get::<_, i64>(2)? as u64,
-                    partial: row.get::<_, i64>(3)? != 0,
-                })
-            })?;
-            let mut hours = Vec::new();
-            for row in rows {
-                hours.push(row?);
+            let tx = conn.unchecked_transaction()?;
+            let hours = {
+                let mut statement = tx.prepare(
+                    "SELECT agent, bucket_start_utc, scan_version, partial FROM usage_dirty_hours
+                     WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2
+                     ORDER BY bucket_start_utc, agent LIMIT ?3",
+                )?;
+                let rows = statement.query_map(
+                    params![lower_bound, upper_bound, limit as i64],
+                    |row| {
+                        let agent: String = row.get(0)?;
+                        let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                            rusqlite::Error::InvalidColumnType(
+                                0,
+                                "agent".to_owned(),
+                                rusqlite::types::Type::Text,
+                            )
+                        })?;
+                        Ok((
+                            agent,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)? as u64,
+                            row.get::<_, i64>(3)? != 0,
+                        ))
+                    },
+                )?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let mut entries = Vec::with_capacity(hours.len());
+            {
+                let mut statement = tx.prepare(FACT_ROW_QUERY)?;
+                for (agent, bucket_start_utc, scan_version, partial) in hours {
+                    let rows = statement
+                        .query_map(params![agent.as_str(), &bucket_start_utc], read_fact_row)?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    entries.push(UsageOutboxEntry {
+                        agent,
+                        bucket_start_utc,
+                        scan_version,
+                        partial,
+                        rows,
+                    });
+                }
             }
-            Ok(hours)
+            tx.commit()?;
+            Ok(entries)
         })
     }
 
+    /// How many recomputed hours are ready to leave, under the same bounds that decide what
+    /// [`Self::dirty_usage_hour_batch`] stages. Counted in SQL: the answer is a number for a
+    /// diagnostic line, not a reason to read a year of rows.
+    pub fn uploadable_dirty_hour_count(
+        &self,
+        lower_bound: &str,
+        upper_bound: &str,
+    ) -> Result<i64, StateError> {
+        self.with_cache(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_dirty_hours
+                 WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                params![lower_bound, upper_bound],
+                |row| row.get(0),
+            )
+            .map_err(StateError::from)
+        })
+    }
+
+    /// Retires the dirty marks for hours this device may never upload.
+    ///
+    /// An hour before the privacy watermark is not waiting for anything: staging skips it, so
+    /// left alone its mark would sit in the cache forever and count as work owed.
+    pub fn forget_dirty_usage_hours_before(&self, lower_bound: &str) -> Result<bool, StateError> {
+        let removed = self.with_cache_mut(|conn| {
+            Ok(conn.execute(
+                "DELETE FROM usage_dirty_hours WHERE bucket_start_utc < ?1",
+                params![lower_bound],
+            )?)
+        })?;
+        Ok(removed > 0)
+    }
+
     /// Marks an hour dirty without a scan behind it, for tests that only need the mark.
+    #[cfg(test)]
     pub fn insert_usage_dirty_hour_for_test(
         &self,
         agent: UsageAgent,
@@ -2151,6 +2242,7 @@ impl StateStore {
                         &source.source.source_file_id,
                         hours.clone(),
                     )?;
+                    remember_partial_progress(&tx, agent, source)?;
                     dirty_hours.extend(hours);
                     changed += 1;
                     continue;
@@ -2186,7 +2278,7 @@ impl StateStore {
                 changed += tx.execute(
                     "INSERT INTO usage_file_index(
                     agent, source_file_id, identity, size, modified_ns, parser_revision,
-                    parsed_offset, tail_hash
+                    parsed_offset, prefix_hash
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(agent, source_file_id) DO UPDATE SET
                     identity = excluded.identity,
@@ -2194,7 +2286,7 @@ impl StateStore {
                     modified_ns = excluded.modified_ns,
                     parser_revision = excluded.parser_revision,
                     parsed_offset = excluded.parsed_offset,
-                    tail_hash = excluded.tail_hash",
+                    prefix_hash = excluded.prefix_hash",
                     params![
                         agent.as_str(),
                         source.source.source_file_id,
@@ -2203,7 +2295,7 @@ impl StateStore {
                         source.source.modified_ns.to_string(),
                         source.index.parser_revision,
                         source.index.parsed_offset as i64,
-                        source.index.tail_hash,
+                        source.index.prefix_hash,
                     ],
                 )?;
             }
@@ -2245,6 +2337,45 @@ impl StateStore {
     }
 }
 
+/// Remembers how far a source this scan could not finish was read.
+///
+/// The size and modification time are deliberately not stored: they are what makes the next
+/// scan skip a source it already read, and a source that came up short has to be tried again.
+/// What is worth keeping is the byte the last clean record ended on and the digest of
+/// everything before it, so the retry reads the part that was never read rather than the whole
+/// log, every refresh, forever.
+fn remember_partial_progress(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source: &crate::usage::UsageSourceScan,
+) -> Result<(), StateError> {
+    if source.index.parsed_offset == 0 || source.index.prefix_hash.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO usage_file_index(
+            agent, source_file_id, identity, size, modified_ns, parser_revision,
+            parsed_offset, prefix_hash
+         ) VALUES (?1, ?2, ?3, 0, '0', ?4, ?5, ?6)
+         ON CONFLICT(agent, source_file_id) DO UPDATE SET
+            identity = excluded.identity,
+            size = 0,
+            modified_ns = '0',
+            parser_revision = excluded.parser_revision,
+            parsed_offset = excluded.parsed_offset,
+            prefix_hash = excluded.prefix_hash",
+        params![
+            agent.as_str(),
+            source.source.source_file_id,
+            source.source.identity,
+            source.index.parser_revision,
+            source.index.parsed_offset as i64,
+            source.index.prefix_hash,
+        ],
+    )?;
+    Ok(())
+}
+
 fn validate_browser_session(
     provider: &str,
     session: ProviderBrowserSession,
@@ -2272,15 +2403,6 @@ fn validate_browser_session(
         return Err(StateError::InvalidState);
     }
     Ok(session)
-}
-
-/// One hour this device has recomputed and not yet handed to its Account.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirtyUsageHour {
-    pub agent: UsageAgent,
-    pub bucket_start_utc: String,
-    pub scan_version: u64,
-    pub partial: bool,
 }
 
 /// One staged upload: an hour, the version of the scan behind it, and its rows.
@@ -2778,6 +2900,12 @@ fn read_usage_periods(conn: &Connection) -> Result<UsagePeriodCache, StateError>
     Ok(cache)
 }
 
+/// The Overview rows the last refresh wrote, or none.
+///
+/// A row this build cannot read is answered the way [`read_component`] answers one: as a
+/// statement about the image rather than about this query, so the cache is thrown away and
+/// rebuilt. Returning the decode error instead left `get_state` failing on every call with
+/// nothing able to clear it.
 fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError> {
     let raw: Option<String> = conn
         .query_row(
@@ -2786,8 +2914,16 @@ fn read_overview(conn: &Connection) -> Result<Vec<QuotaOverviewItem>, StateError
             |row| row.get(0),
         )
         .optional()?;
-    raw.map(|value| serde_json::from_str(&value).map_err(StateError::from))
-        .unwrap_or_else(|| Ok(Vec::new()))
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&raw).map_err(|_| {
+        StateError::Sql(rusqlite::Error::InvalidColumnType(
+            0,
+            "overview_json".to_owned(),
+            rusqlite::types::Type::Text,
+        ))
+    })
 }
 
 fn read_provider_views(root: &Path) -> Result<Vec<ProviderConfigView>, StateError> {
@@ -3060,7 +3196,6 @@ fn status_key(value: ComponentStatus) -> &'static str {
         ComponentStatus::Stale => "stale",
         ComponentStatus::AuthRequired => "auth_required",
         ComponentStatus::Unavailable => "unavailable",
-        ComponentStatus::Unsupported => "unsupported",
         ComponentStatus::Error => "error",
         ComponentStatus::SignedOut => "signed_out",
     }
@@ -3072,7 +3207,6 @@ fn parse_status(value: &str) -> Option<ComponentStatus> {
         "stale" => ComponentStatus::Stale,
         "auth_required" => ComponentStatus::AuthRequired,
         "unavailable" => ComponentStatus::Unavailable,
-        "unsupported" => ComponentStatus::Unsupported,
         "error" => ComponentStatus::Error,
         "signed_out" => ComponentStatus::SignedOut,
         _ => return None,
@@ -3251,11 +3385,11 @@ fn open_cache_image(path: &Path, revision_seed: u64) -> Result<Connection, State
 fn open_writable_connection(path: &Path) -> Result<Connection, StateError> {
     let connection =
         Connection::open_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
-    connection.execute_batch(
+    connection.execute_batch(&format!(
         "PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;
-         PRAGMA journal_mode = WAL;",
-    )?;
+         PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};
+         PRAGMA journal_mode = WAL;"
+    ))?;
     connection.pragma_update(None, "journal_size_limit", MAXIMUM_WAL_BYTES)?;
     Ok(connection)
 }
@@ -3313,6 +3447,12 @@ fn create_owner_only_file_if_missing(path: &Path) -> Result<(), StateError> {
     }
 }
 
+/// How long a connection waits behind another writer before answering busy.
+///
+/// Shortened under test so the case proving that a busy image is not a damaged one does not
+/// spend the whole wait proving it.
+const BUSY_TIMEOUT_MS: u64 = if cfg!(test) { 100 } else { 5_000 };
+
 fn remove_sqlite_image(path: &Path) {
     let _ = fs::remove_file(path);
     for suffix in ["-wal", "-shm"] {
@@ -3324,8 +3464,11 @@ fn remove_sqlite_image(path: &Path) {
 
 /// A cache error the service answers by throwing the file away.
 ///
-/// Contention and a machine that cannot write right now are not the file's fault, so they are
-/// reported as they are. Everything else means SQLite no longer agrees with what is on disk.
+/// Contention, a machine that cannot write right now, and a statement this build got wrong are
+/// not the file's fault, so they are reported as they are. A read-only image, a refused
+/// permission, an allocation that failed, a row over a limit, and a violated constraint all say
+/// something about this moment or about what was being written, never that the bytes on disk
+/// stopped describing what this device collected. Everything else does mean exactly that.
 fn cache_needs_rebuild(error: &StateError) -> bool {
     match error {
         StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => !matches!(
@@ -3336,6 +3479,11 @@ fn cache_needs_rebuild(error: &StateError) -> bool {
                 | SqliteErrorCode::SystemIoFailure
                 | SqliteErrorCode::CannotOpen
                 | SqliteErrorCode::OperationInterrupted
+                | SqliteErrorCode::ReadOnly
+                | SqliteErrorCode::OutOfMemory
+                | SqliteErrorCode::PermissionDenied
+                | SqliteErrorCode::TooBig
+                | SqliteErrorCode::ConstraintViolation
         ),
         // The image no longer holds the shape this build reads: a column of the wrong type or
         // name, or a statement SQLite will not prepare against it.
@@ -3352,12 +3500,19 @@ fn cache_needs_rebuild(error: &StateError) -> bool {
     }
 }
 
+/// A failure that is about this machine right now rather than about the image.
+///
+/// Contention is the reason `DatabaseBusy` and `DatabaseLocked` are here: a second helper
+/// holding the write lock is not a damaged file, and deleting one because another process was
+/// mid-write is how a working device loses its cache.  The caller retries instead.
 fn sqlite_io_or_full_error(error: &StateError) -> bool {
     match error {
         StateError::Io(_) => true,
         StateError::Sql(rusqlite::Error::SqliteFailure(code, _)) => matches!(
             code.code,
-            SqliteErrorCode::DiskFull
+            SqliteErrorCode::DatabaseBusy
+                | SqliteErrorCode::DatabaseLocked
+                | SqliteErrorCode::DiskFull
                 | SqliteErrorCode::SystemIoFailure
                 | SqliteErrorCode::CannotOpen
         ),
@@ -3610,8 +3765,6 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
 }
 
@@ -3632,8 +3785,6 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
-        "upload_disabled" => Ok(DiagnosticAttemptCode::UploadDisabled),
-        "signed_out" => Ok(DiagnosticAttemptCode::SignedOut),
         _ => Err(invalid_diagnostic_column(9, value)),
     }
 }
@@ -4204,6 +4355,13 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Every dirty hour, whatever its bound, as the tests below read them.
+    fn dirty_hours(store: &StateStore) -> Vec<UsageOutboxEntry> {
+        store
+            .dirty_usage_hour_batch("1970-01-01T00:00:00Z", "9999-12-31T23:00:00Z", 1_000)
+            .expect("dirty")
+    }
+
     fn outbox_entry(bucket: &str, scan_version: u64) -> UsageOutboxEntry {
         UsageOutboxEntry {
             agent: UsageAgent::Codex,
@@ -4227,7 +4385,7 @@ mod tests {
                 7,
             )
             .expect("initial scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(dirty[0].scan_version, 7);
@@ -4250,7 +4408,7 @@ mod tests {
                 .stage_outbox_entries("account_test", "device_test", 1, &[entry])
                 .expect("stage")
         );
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
         assert_eq!(store.outbox_entries().expect("entries").len(), 1);
 
         store
@@ -4364,7 +4522,7 @@ mod tests {
         store
             .ensure_usage_context("account_a", "device_a", 1, "2026-08-10T00:00:00Z")
             .expect("first identity");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         store
@@ -4380,7 +4538,7 @@ mod tests {
             .ensure_usage_context("account_b", "device_b", 2, "1970-01-01T00:00:00Z")
             .expect("second identity");
         assert!(store.outbox_entries().expect("entries").is_empty());
-        assert_eq!(store.dirty_usage_hours().expect("dirty").len(), 2);
+        assert_eq!(dirty_hours(&store).len(), 2);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4400,7 +4558,7 @@ mod tests {
                 1,
             )
             .expect("initial scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         store
             .stage_outbox_entries(
@@ -4413,7 +4571,7 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
             .expect("clear initial");
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
 
         let appended = usage_event("2026-08-10T14:15:00Z", 3);
         store
@@ -4423,7 +4581,7 @@ mod tests {
                 2,
             )
             .expect("append scan");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T14:00:00Z");
         assert_eq!(dirty[0].scan_version, 2);
@@ -4444,7 +4602,7 @@ mod tests {
                 3,
             )
             .expect("equivalent rewrite");
-        assert!(store.dirty_usage_hours().expect("dirty").is_empty());
+        assert!(dirty_hours(&store).is_empty());
 
         store
             .apply_usage_scan(
@@ -4460,7 +4618,7 @@ mod tests {
                 4,
             )
             .expect("old hour edit");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         assert_eq!(
@@ -4548,7 +4706,7 @@ mod tests {
                 .expect("partial hours")
                 .contains(&(UsageAgent::Codex, "2026-08-10T12:00:00Z".into()))
         );
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         assert!(dirty.iter().all(|hour| hour.partial));
         store
@@ -4578,9 +4736,45 @@ mod tests {
         );
         // A repaired source restates its hours once so the reader stops calling them partial,
         // even when the numbers behind them did not move.
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 2);
         assert!(dirty.iter().all(|hour| !hour.partial));
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A source that came up short still says how far it was read, so the next refresh reads
+    /// the part that was never read instead of the whole log again, every five minutes,
+    /// forever. What it must not say is that the file is unchanged: that is what would make
+    /// the next scan skip it.
+    #[test]
+    fn a_partial_source_remembers_how_far_it_was_read_without_claiming_to_be_finished() {
+        let root = std::env::temp_dir().join(format!("quota-partial-resume-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let mut partial = usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 7);
+        partial.coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.status = CoverageStatus::Partial;
+        partial.sources[0].coverage.reasons = vec![crate::usage::CoverageReason {
+            code: crate::usage::CoverageReasonCode::MalformedJson,
+            count: 1,
+        }];
+        partial.sources[0].index.parsed_offset = 4_096;
+        partial.sources[0].index.prefix_hash = "a".repeat(64);
+
+        store
+            .apply_usage_scan(UsageAgent::Codex, &partial, 1)
+            .expect("partial scan");
+
+        let index = store
+            .usage_file_index(UsageAgent::Codex)
+            .expect("file index");
+        let entry = index.get("source-1").expect("row for the partial source");
+        assert_eq!(entry.parsed_offset, 4_096);
+        assert_eq!(entry.prefix_hash, "a".repeat(64));
+        // Not the size or the modification time the scan saw: the next scan has to look again.
+        assert_eq!(entry.size, 0);
+        assert_eq!(entry.modified_ns, 0);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4715,7 +4909,7 @@ mod tests {
                 2,
             )
             .expect("parser upgrade");
-        let dirty = store.dirty_usage_hours().expect("dirty");
+        let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].bucket_start_utc, "2026-08-10T12:00:00Z");
         let (rows, _) = store.usage_period_rows(None).expect("rows");
@@ -4853,6 +5047,139 @@ mod tests {
         let snapshot = store.snapshot().expect("rebuilt");
         assert!(snapshot.cache.rebuilding);
         assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An Overview row this build cannot read is a cache row: thrown away, not carried as an
+    /// error every `get_state` call answers with.
+    #[test]
+    fn an_unreadable_overview_row_rebuilds_the_cache_rather_than_wedging_state() {
+        let root = temp_root("overview-garbage");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store.snapshot().expect("snapshot");
+        store
+            .with_cache_mut(|conn| {
+                conn.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('overview_json', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params!["not json"],
+                )?;
+                Ok(())
+            })
+            .expect("garbage row");
+
+        assert!(matches!(store.snapshot(), Err(StateError::Unavailable)));
+
+        let snapshot = store.snapshot().expect("rebuilt");
+        assert!(snapshot.overview.is_empty());
+        assert!(snapshot.cache.rebuilding);
+        assert!(store.session_json().expect("session").is_some());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Contention is not corruption (ADR 0021). A second process holding the write lock costs
+    /// this one a retry; it must never cost the device the file.
+    #[test]
+    fn an_open_another_writer_holds_leaves_both_images_where_they_are() {
+        let root = temp_root("open-busy");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&active_session())
+            .expect("session");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+        drop(store);
+
+        for name in [CACHE_NAME, IDENTITY_NAME] {
+            let path = root.join(name);
+            let before = fs::metadata(&path).expect("image").len();
+            let blocker = Connection::open(&path).expect("second writer");
+            blocker
+                .execute_batch("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;")
+                .expect("write lock");
+
+            let answer = if name == CACHE_NAME {
+                open_cache(&root, 0).map(|_| ())
+            } else {
+                open_identity(&root).map(|_| ())
+            };
+            assert!(matches!(answer, Err(StateError::Unavailable)), "{name}");
+            assert_eq!(
+                fs::metadata(&path).expect("image is still there").len(),
+                before,
+                "{name}"
+            );
+            drop(blocker);
+        }
+
+        // And the device that waited its turn still holds everything it had.
+        let store = StateStore::open(&root).expect("reopen");
+        assert!(store.session_json().expect("session").is_some());
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A statement SQLite refused is an answer about that statement. The cache is only thrown
+    /// away when the bytes on disk stopped describing what this device collected.
+    #[test]
+    fn a_refused_write_is_never_a_verdict_on_the_cache() {
+        let root = temp_root("cache-refused");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
+                1,
+            )
+            .expect("scan");
+
+        // An outcome the journal's CHECK constraint refuses.
+        let refused = store.with_cache_mut(|conn| {
+            conn.execute(
+                "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome)
+                 VALUES ('refresh', 'manual', '2026-08-10T00:00:00Z', 'nonsense')",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(matches!(refused, Err(StateError::Sql(_))));
+        assert_eq!(store.usage_event_count().expect("records"), 1);
+        assert!(!store.snapshot().expect("snapshot").cache.rebuilding);
+
+        // The codes a test cannot provoke on demand, answered from the same rule.
+        for code in [
+            SqliteErrorCode::ReadOnly,
+            SqliteErrorCode::OutOfMemory,
+            SqliteErrorCode::PermissionDenied,
+            SqliteErrorCode::TooBig,
+            SqliteErrorCode::ConstraintViolation,
+        ] {
+            let error = StateError::Sql(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code,
+                    extended_code: 0,
+                },
+                None,
+            ));
+            assert!(!cache_needs_rebuild(&error), "{code:?}");
+            assert!(!sqlite_io_or_full_error(&error), "{code:?}");
+        }
+        // A shape this build cannot read still is.
+        assert!(cache_needs_rebuild(&StateError::Sql(
+            rusqlite::Error::InvalidQuery
+        )));
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

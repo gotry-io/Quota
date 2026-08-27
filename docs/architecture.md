@@ -48,9 +48,9 @@ official provider sessions       agent JSON/JSONL logs
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
-Operations are ping, state read, diagnose/recheck, refresh, login/cancel, logout, provider
-configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
-shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
+Operations are ping, state read, diagnose/recheck, refresh, cache reset, login/cancel, logout,
+provider configuration, provider browser-session validate/commit/remove, Usage upload
+configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
 before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
 answers `ping` on the thread that reads stdin, so an operation that blocks never stops the helper
 from saying it is alive. That is the only liveness signal QuotaBar uses: requests are never on a
@@ -58,8 +58,9 @@ deadline, and a helper leaving two consecutive pings unanswered is replaced.
 
 `get_state` performs no collection or network work: it returns the current SQLite-backed snapshot,
 including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately. Components carry
-independent status, last-good value, update time, error/recovery code, and refreshing flag for quota,
-Usage, account, and pricing. The service begins a background startup refresh once IPC is available,
+independent status, last-good value, update time, error/recovery code, and refreshing flag; there
+are five of them — quota, Usage, account, pricing, and providers, the last of which a refresh never
+touches and a configuration change always does. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and schedules refreshes every five minutes; manual refresh
 uses the same single-flight path. A refresh applies a component as soon as it has one rather than
 only at its end — the account read finishes in well under a second while provider collection can
@@ -112,22 +113,25 @@ accepting cannot pass unnoticed by the others
 The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
 Schema; generation produces TypeScript protocol IDs, Rust catalog metadata in
 `packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared crate implements all eight
-quota collectors and all six Usage parsers. The local catalog is broader than the managed Account:
-`account_sync` declares whether a provider synchronizes and the generated managed provider enum is
-exactly that set, while the private local collection schema uses the full catalog. Provider
-credentials stay provider-owned; optional API-key overrides live in the owner-only `providers.json`
+quota collectors and all six Usage parsers. `account_sync` declares whether a provider
+synchronizes and the generated managed provider enum is exactly that set; all eight declare it
+today, so the managed enum and the local collection schema currently name the same providers.
+Provider credentials stay provider-owned; optional API-key overrides live in the owner-only `providers.json`
 described in [`security.md`](security.md).
 
 Operational state has one owner and two files
 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). `identity.sqlite` stores what
 this device cannot regenerate: installation, session, upload identity, the outbox of hours it still
 owes an Account, the monotonic scan revision those hours carry, stored provider browser sessions, and
-preferences including the Usage upload setting. `cache.sqlite` stores what it can: component
+preferences including the Usage upload setting. The outbox is in that file because losing it would
+lose hours already recomputed, not because it could not be rebuilt. `cache.sqlite` stores what it can: component
 last-good values, the Usage file index and its normalized records, the hourly facts folded from them,
 the fixed-period presentation cache, pricing and model catalog state, cached Account reads, the
 last-completed diagnostic snapshot, and the bounded attempt journal. Both start at schema v1 with
 explicit append-only migrations. A released single-file `state.sqlite` hands its identity rows over
-once at startup and is then removed; nothing derived crosses, because the first refresh rebuilds it.
+once at startup and is then removed. Nothing derived crosses, because the first refresh rebuilds
+it — and neither does its outbox: those were requests in a contract this build no longer speaks,
+and the first scan recomputes every retained hour and sends it again.
 
 Catalog browser-session capability contains an HTTPS login URL, exact Cookie hosts and names, a
 browser-priority prefix, and `exclusive` when Settings should omit an official CLI sign-in command.
@@ -205,7 +209,7 @@ signatures against the `SUPublicEDKey` in `Info.plist`, which the release workfl
 `SPARKLE_ED_PRIVATE_KEY`. Releases still publish `menubar-update.json` so QuotaBar 0.0.10 can update
 once onto Sparkle. Both that appcast and the website `.dmg` button resolve through the repository
 `latest` alias, which only a `menubar-v*` release carries — so the newest stable `menubar-v*` must
-hold `latest` and every other release train publishes without claiming it.
+hold it.
 
 The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKCE route with the
 exact redirect `io.gotry.quota:/oauth/callback`. Its exchange rejects installation identity and
@@ -264,8 +268,8 @@ or a report.
   `packages/apple-client`, QuotaBar's app-behavior extension on that enum, and the protocol
   TypeScript IDs. One catalog produces one Swift type, and one decoder validates for both products.
 - `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
-  OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` adds only process
-  startup and IPC lifetime around it; `apps/cli` adds only command parsing and terminal output.
+  OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` is its only
+  entry point and adds only process startup and IPC lifetime around it.
 - `apps/menubar` keeps private IPC decoding separate from SwiftUI views and never reads local service
   files or provider-owned credentials. It depends on `packages/apple-shared` for presentation
   semantics and on QuotaWire for the managed wire types and `ProviderID`, and must not depend on
@@ -299,8 +303,8 @@ authenticates each route with the minimum account, device, or browser scope and 
 Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
 transactions. An Account read carries every stored agent and channel with no opt-in query: the only
 thing it asks for is the caller's `tz`, because a local day begins at local midnight and that
-decides where the three trailing periods start and end.
-Every other route takes no query at all, and an unnamed key is a 400. The managed data contract is
+decides where the three trailing periods start and end. Every route that reads a query names the
+keys it accepts, and a key it did not name is a 400. The managed data contract is
 canonical in [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).
 
 Quota Web is a SvelteKit app whose hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
@@ -311,9 +315,9 @@ by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cooki
 `.dmg` and Homebrew install command, GitHub sign-in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a streaming dashboard whose document load starts the existing
 `GET /api/v6/account/summary` handler inside the composed Worker and reuses the request's memoized
-session read, so Account data resolves in parallel with hydration without a second round trip. Every
-page requires a session and Quota Web publishes no account data anonymously, and `/app` redirects
-to `/my`. Relay owns GitHub login and browser
+session read, so Account data resolves in parallel with hydration without a second round trip. `/`
+is public; every page that shows account data requires a session, Quota Web publishes none
+anonymously, and `/app` redirects to `/my`. Relay owns GitHub login and browser
 sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition decision is
 [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 

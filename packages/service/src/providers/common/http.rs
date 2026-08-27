@@ -170,6 +170,48 @@ fn http_category(status: u16) -> ErrorCategory {
     }
 }
 
+/// A local HTTP server that answers a fixed queue of responses and hands back the request
+/// heads it saw, lowercased.
+///
+/// One of these rather than one per provider: what a validation or a reading does over the
+/// wire is the same question everywhere — which headers went out, and what the collector makes
+/// of what came back — and five copies of a `TcpListener` loop was five places to get the
+/// framing subtly different.
+#[cfg(test)]
+pub fn serve_responses(
+    responses: Vec<(u16, Vec<u8>)>,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address").to_string();
+    let handle = std::thread::spawn(move || {
+        let mut heads = Vec::new();
+        for (status, body) in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut request = [0_u8; 8_192];
+            let read = stream.read(&mut request).unwrap_or(0);
+            heads.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
+            let reason = if (200..300).contains(&status) {
+                "OK"
+            } else {
+                "Error"
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(&body);
+        }
+        heads
+    });
+    (address, handle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

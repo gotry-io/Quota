@@ -24,8 +24,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   fixed allowlisted error/recovery pair; the startup path never sends raw paths, filesystem errors,
   or stderr to Swift. A helper judged gone is terminated, killed if it will not exit, and reaped
   before its pending requests fail.
-- The macOS browser-session exception is acquisition only, applies to Cursor alone, and never starts
-  without the consent popup in [ADR 0010](decisions/0010-provider-browser-session-auth.md).
+- The macOS browser-session exception is acquisition only, covers the five providers whose catalog
+  entry declares `browser_session` — Codex, Claude, Grok, Kimi, and Cursor — and never starts without
+  the consent popup in [ADR 0010](decisions/0010-provider-browser-session-auth.md). Cursor is the
+  only one marked `exclusive`, because a stored session is the only credential it has.
   SweetCookieKit's logger is disabled; profile paths, store IDs, the error behind a refused store,
   and unrelated Cookies never cross private stdin or enter logs, diagnostics, UserDefaults, or
   Relay, and Swift holds candidates only in memory. Rust revalidates the account on commit and
@@ -64,9 +66,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Account reads answer a conditional request from a version stamp over the rows they project, never
   from a cached body. A 304 asserts only that those rows and the catalog revisions are unchanged, is
   issued to the principal that asked, and is `private, no-cache` so no shared cache may hold it.
-- Account and device sessions are separate credential families. Persist each token with its
-  audience, authoritative IDs, Device generation, and absolute expiry; a response whose principal
-  does not match local state fails closed.
+- A client holds one session, and the scopes on its row are what it may do
+  ([ADR 0027](decisions/0027-one-token-per-client.md)). Persist its token with the authoritative
+  IDs, the Device generation it opened at, and an absolute expiry; a response whose principal does
+  not match local state fails closed.
 - SQLite has one process owner for account state, upload identity, normalized cache, and outbox
   transactions. Logout cancels the active refresh and atomically advances the session to
   `logout_pending`, so later account operations fail their session-epoch check even if revocation is
@@ -169,11 +172,16 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   - `/usr/bin/security` reads Claude Code's Keychain grant once per refresh, for both discovery and
     collection, plus once more when a renewal actually ran — a renewal replaces a credential this
     refresh may already have read, so the memo taken before it ran describes the grant it replaced.
+    A read that fails costs a second call which asks only whether the entry is there: that is what
+    separates a Mac that was never signed in from one that is not allowed to read the secret, and
+    the answer decides whether the reader is offered "sign in" or "grant access". Neither call is
+    made again once the refresh has its answer.
   - `<binary> --version` reads the installed Claude Code or Codex version the request headers claim,
     only for a provider this device holds a sign-in for, and only when the binary's real path, size,
     and mtime differ from the fingerprint stored in the disposable cache — so a given installed
     binary is run at most once, and never more than once an hour. Bounded to five seconds and 4 KiB
-    of stdout, no stdin, stderr discarded, and only `HOME` and `PATH` in its environment. A failed or
+    of stdout, no stdin, stderr discarded, only `HOME` and `PATH` in its environment, and the same
+    empty owner-only working directory a renewal gets. A failed or
     absent read leaves the header on its fallback constant, and collection neither waits on it nor
     fails because of it.
   - **The renewal** asks the CLI that owns a sign-in to renew it, and only when the credential on
@@ -202,8 +210,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
       cache — on time alone, so a binary that rewrites itself cannot buy an earlier spawn. Bounded
       to the CLI's own deadline (10 s for Claude Code, 8 s for Codex, 5 s for Grok) and 64 KiB of
       stdout, stderr discarded, an empty owner-only directory created for the run as its working
-      directory, and only `HOME`, `PATH`, and the one variable naming that provider's credential
-      home in its environment. The outcome is judged by re-reading the credential, never by an exit
+      directory, and an environment of `HOME`, `PATH`, the one variable naming that provider's
+      credential home, and whatever fixed pair that provider's plan names — Claude Code's is
+      `TERM=dumb`, so its CLI does not try to draw a terminal into a pipe. The outcome is judged by re-reading the credential, never by an exit
       status; a credential the CLI emptied or removed is a program that signed itself out, which is
       a different answer from one that could not renew. The service never submits a refresh token
       itself and never writes a provider's credential file or Keychain item — Codex's refresh
@@ -237,8 +246,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 ## Relay storage and operations
 
 - Keep D1 migrations explicit, never rewrite an applied one, and review lifecycle, retention, and
-  new retained fields as security-sensitive. Protocol routing is a trust boundary: v2 writes pass
-  the closed v2 provider and agent schemas, and one managed contract is served, so a read excludes
+  new retained fields as security-sensitive. Protocol routing is a trust boundary: v6 writes pass
+  the closed v6 provider and agent schemas, and one managed contract is served, so a read excludes
   nothing a retired one could not carry.
 - Persist GitHub subjects, installation identities, token and grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens

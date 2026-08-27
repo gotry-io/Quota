@@ -46,6 +46,8 @@ use crate::usage::{
 /// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
 /// keep a steady device empty, small enough that a first sign-in does not stage a year at once.
 const MAX_STAGED_HOURS_PER_REFRESH: usize = usage::MAX_USAGE_HOURS_PER_UPLOAD * 4;
+/// The widest lower bound there is, for a count that could not read a narrower one.
+const EPOCH_HOUR: &str = "1970-01-01T00:00:00Z";
 
 fn plural(value: i64, singular: &str) -> String {
     format!("{value} {singular}{}", if value == 1 { "" } else { "s" })
@@ -119,23 +121,6 @@ fn array_len(value: Option<&Value>, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// How many recomputed hours are ready to leave. The hour in progress is still being written
-/// to, so it is not waiting on anything.
-fn uploadable_dirty_hour_count(hours: &[crate::state::DirtyUsageHour], now: DateTime<Utc>) -> i64 {
-    let Ok(complete_until) = DateTime::parse_from_rfc3339(&floor_utc_hour(&now)) else {
-        return hours.len().min(i64::MAX as usize) as i64;
-    };
-    hours
-        .iter()
-        .filter(|hour| {
-            DateTime::parse_from_rfc3339(&hour.bucket_start_utc)
-                .map(|start| start < complete_until)
-                .unwrap_or(true)
-        })
-        .count()
-        .min(i64::MAX as usize) as i64
-}
-
 fn error_code_wire(code: ErrorCode) -> String {
     serde_json::to_value(code)
         .ok()
@@ -187,8 +172,6 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::UploadDisabled => "upload_disabled",
-        DiagnosticAttemptCode::SignedOut => "signed_out",
     }
 }
 
@@ -356,6 +339,7 @@ impl NativeBackend {
 
     /// Discover providers through the same provider-owned credential paths used for collection.
     /// No account or Relay state is read or changed.
+    #[cfg(test)]
     pub fn configured_providers(&self) -> Result<Vec<ProviderId>, BackendError> {
         let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
         Ok(ProviderId::ALL
@@ -787,16 +771,11 @@ impl NativeBackend {
         }
 
         // Usage upload.
-        let dirty_hours = self
-            .state
-            .dirty_usage_hours()
-            .map_err(|_| BackendError::unavailable())?;
         let outbox_count = self
             .state
-            .outbox_entries()
-            .map_err(|_| BackendError::unavailable())?
-            .len() as i64;
-        let uploadable_dirty_count = uploadable_dirty_hour_count(&dirty_hours, Utc::now());
+            .outbox_len()
+            .map_err(|_| BackendError::unavailable())?;
+        let uploadable_dirty_count = self.uploadable_dirty_hour_count()?;
         let upload_facts = self
             .state
             .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
@@ -921,8 +900,6 @@ impl NativeBackend {
                 recovery: DiagnosticRecovery::Login,
             });
         }
-
-        sources.truncate(MAXIMUM_DIAGNOSTIC_SOURCES);
 
         // Surfaces.
         let quota_status = if configured_quota_source_failed {
@@ -1090,6 +1067,9 @@ impl NativeBackend {
             .fold(DiagnosticAttention::None, |worst, recovery| {
                 worst_attention(worst, attention_for(recovery))
             });
+        // Folded before the cap, so a report never says everything is fine because the row
+        // that needed acting on fell off the end of a long list.
+        sources.truncate(MAXIMUM_DIAGNOSTIC_SOURCES);
 
         Ok(DiagnosticReport {
             schema_version: DIAGNOSTIC_SCHEMA_VERSION,
@@ -1253,6 +1233,7 @@ impl NativeBackend {
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
         }
+        self.record_proven_credentials(&results, &context);
         Ok(json!({
             "captured_at": captured_at,
             "results": results
@@ -1421,7 +1402,55 @@ impl NativeBackend {
             cancel: Some(cancel),
             keychain: Default::default(),
             cli_versions: BTreeMap::new(),
+            proven_credentials: self
+                .state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default(),
         })
+    }
+
+    /// Remembers the credential a provider was just read with.
+    ///
+    /// Only a rung that spends this device's own credential counts, and only when it answered:
+    /// that is the one thing that says an access token this build cannot date is a token that
+    /// works. Everything else — a browser session, a rung that failed — leaves the record
+    /// alone, so a sign-in that stops working goes back to earning a renewal.
+    fn record_proven_credentials(&self, results: &[Value], context: &CollectionContext) {
+        let succeeded = |provider: ProviderId, source_id: &str| {
+            results.iter().any(|result| {
+                result.get("provider").and_then(Value::as_str) == Some(provider.as_str())
+                    && result
+                        .get("sources")
+                        .and_then(Value::as_array)
+                        .is_some_and(|sources| {
+                            sources.iter().any(|source| {
+                                source.get("source_id").and_then(Value::as_str) == Some(source_id)
+                                    && source.get("outcome").and_then(Value::as_str)
+                                        == Some("success")
+                            })
+                        })
+            })
+        };
+        let mut proven = context.proven_credentials.clone();
+        let before = proven.clone();
+        match codex::proven_credential(context)
+            .filter(|_| succeeded(ProviderId::Codex, codex::SOURCE))
+        {
+            Some(fingerprint) => {
+                proven.insert(ProviderId::Codex.as_str().to_owned(), fingerprint);
+            }
+            None => {
+                proven.remove(ProviderId::Codex.as_str());
+            }
+        }
+        if proven != before
+            && let Ok(encoded) = serde_json::to_string(&proven)
+        {
+            let _ = self.state.write_proven_provider_credentials(&encoded);
+        }
     }
 
     fn collect_usage(&self, cancel: Arc<AtomicBool>) -> Result<UsageCollection, BackendError> {
@@ -1687,8 +1716,11 @@ impl NativeBackend {
             .map_err(|_| BackendError::unavailable())?;
         match self.relay.pricing_catalog(etag.as_deref()) {
             Ok((next_etag, Some(value))) if pricing::validate_pricing_catalog(&value).valid => {
+                // A new body under the validator that described the old one would answer the
+                // next conditional request with a 304 for a document this device no longer
+                // holds. A response with no ETag is stored with none.
                 self.state
-                    .commit_pricing_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_pricing_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -1727,8 +1759,10 @@ impl NativeBackend {
             Ok((next_etag, Some(value)))
                 if crate::model_catalog::validate_model_catalog_value(&value).valid =>
             {
+                // As above: a body this device just received is not described by the validator
+                // for the one it replaced.
                 self.state
-                    .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
+                    .commit_model_catalog(&value, next_etag.as_deref())
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
@@ -1755,6 +1789,27 @@ impl NativeBackend {
                 error: crate::relay::relay_error_for_backend(error),
             }),
         }
+    }
+
+    /// How many recomputed hours are ready to leave, under the same two bounds staging
+    /// applies: at or after this device's privacy watermark, and before the hour still being
+    /// written to.
+    ///
+    /// A session this build cannot read a watermark out of is counted from the epoch. This is
+    /// a number for one diagnostic line, and refusing to produce it would take the whole
+    /// report with it.
+    fn uploadable_dirty_hour_count(&self) -> Result<i64, BackendError> {
+        let lower_bound = self
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .and_then(|session| effective_usage_lower_bound(&session).ok())
+            .and_then(|value| ceil_utc_hour(&value).ok())
+            .unwrap_or_else(|| EPOCH_HOUR.to_owned());
+        self.state
+            .uploadable_dirty_hour_count(&lower_bound, &floor_utc_hour(&Utc::now()))
+            .map_err(|_| BackendError::unavailable())
     }
 
     /// Hands every hour this device has recomputed to the outbox, newest scan wins.
@@ -1792,41 +1847,18 @@ impl NativeBackend {
             .get("device_generation")
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
-        let lower_bound = DateTime::parse_from_rfc3339(&effective_usage_lower_bound(&session)?)
-            .map_err(|_| invalid_local_state())?;
+        let lower_bound = ceil_utc_hour(&effective_usage_lower_bound(&session)?)?;
         // The hour in progress is still being written to, so it is left for the next refresh.
-        let complete_until = DateTime::parse_from_rfc3339(&floor_utc_hour(&Utc::now()))
-            .map_err(|_| BackendError::unavailable())?;
-        let dirty = self
+        let complete_until = floor_utc_hour(&Utc::now());
+        // An hour before the watermark will never be staged, so its mark is not work owed.
+        let _ = self.state.forget_dirty_usage_hours_before(&lower_bound);
+        // Identity is the file this device cannot rebuild, so it holds a bounded queue rather
+        // than a year of history at once. What is left over stays dirty and is staged by the
+        // next refresh, oldest hour first.
+        let entries = self
             .state
-            .dirty_usage_hours()
+            .dirty_usage_hour_batch(&lower_bound, &complete_until, MAX_STAGED_HOURS_PER_REFRESH)
             .map_err(|_| BackendError::unavailable())?;
-        let mut entries = Vec::new();
-        for hour in dirty {
-            // Identity is the file this device cannot rebuild, so it holds a bounded queue
-            // rather than a year of history at once. What is left over stays dirty and is
-            // staged by the next refresh, oldest hour first.
-            if entries.len() >= MAX_STAGED_HOURS_PER_REFRESH {
-                break;
-            }
-            let Ok(start) = DateTime::parse_from_rfc3339(&hour.bucket_start_utc) else {
-                continue;
-            };
-            if start < lower_bound || start >= complete_until {
-                continue;
-            }
-            let rows = self
-                .state
-                .usage_hour_rows(hour.agent, &hour.bucket_start_utc)
-                .map_err(|_| BackendError::unavailable())?;
-            entries.push(UsageOutboxEntry {
-                agent: hour.agent,
-                bucket_start_utc: hour.bucket_start_utc,
-                scan_version: hour.scan_version,
-                partial: hour.partial,
-                rows,
-            });
-        }
         if entries.is_empty() {
             return Ok(false);
         }
@@ -2589,23 +2621,13 @@ impl LocalBackend for NativeBackend {
                             }
                         }
                         if usage_upload_enabled && account_sync_error.is_none() {
-                            let before = self
-                                .state
-                                .outbox_entries()
-                                .ok()
-                                .map(|entries| entries.len() as i64)
-                                .unwrap_or(0);
+                            let before = self.state.outbox_len().unwrap_or(0);
                             let upload_attempt =
                                 self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
                             match self.drain_outbox() {
                                 Ok(accepted) => {
                                     uploaded |= accepted;
-                                    let pending = self
-                                        .state
-                                        .outbox_entries()
-                                        .ok()
-                                        .map(|entries| entries.len() as i64)
-                                        .unwrap_or(0);
+                                    let pending = self.state.outbox_len().unwrap_or(0);
                                     let (outcome, code) = if before == 0 {
                                         (
                                             DiagnosticAttemptOutcome::NoWork,
@@ -3040,6 +3062,29 @@ fn usage_upload_batch_size(
         }
     }
     low
+}
+
+/// The first whole hour at or after an instant, in the canonical form `bucket_start_utc`
+/// holds.
+///
+/// An hour that starts before the watermark is not one this device may upload. Rounding the
+/// watermark up is what turns that into a comparison the stored column can answer directly,
+/// without re-parsing every row.
+fn ceil_utc_hour(value: &str) -> Result<String, BackendError> {
+    let instant = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| invalid_local_state())?
+        .with_timezone(&Utc);
+    let floored = instant
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .ok_or_else(invalid_local_state)?;
+    let hour = if floored == instant {
+        floored
+    } else {
+        floored + Duration::hours(1)
+    };
+    Ok(hour.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 fn floor_utc_hour(value: &DateTime<Utc>) -> String {
@@ -4350,6 +4395,63 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A body is only described by the validator that came with it. Keeping the old ETag over
+    /// a new document made the next conditional request ask about a document this device no
+    /// longer held, and a 304 would have confirmed the wrong one.
+    #[test]
+    fn a_body_with_no_validator_is_stored_without_one() {
+        let root = std::env::temp_dir().join(format!("quota-etag-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let catalog = |revision: &str| {
+            json!({
+                "schema_version": 2,
+                "revision": revision,
+                "models": [{
+                    "canonical_id": "gpt-5.5",
+                    "aliases": [{"reported_model": "gpt-5.5-alias", "provider": "openai"}]
+                }]
+            })
+        };
+        state
+            .commit_model_catalog(&catalog("model-1"), Some("\"model-1\""))
+            .expect("first catalog");
+
+        let body = serde_json::to_string(&catalog("model-2")).expect("body");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 8_192];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            // A newer document, and no ETag with it.
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .expect("response");
+        });
+        let relay =
+            Arc::new(RelayClient::for_test(&format!("http://{address}")).expect("test relay"));
+        let backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+
+        backend.refresh_model_catalog().expect("refresh");
+
+        assert_eq!(
+            state.model_catalog().expect("catalog"),
+            Some(catalog("model-2"))
+        );
+        assert_eq!(state.model_catalog_etag().expect("etag"), None);
+        server.join().expect("server");
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn model_catalog_refresh_failure_keeps_last_known_good_for_reports() {
         let root = std::env::temp_dir().join(format!("quota-model-lkg-{}", uuid::Uuid::new_v4()));
@@ -4677,6 +4779,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let sessions = providers::discover(ProviderId::LiteLlm, &context);
         assert_eq!(sessions.len(), 1);
@@ -4711,6 +4814,7 @@ mod tests {
             cancel: None,
             keychain: Default::default(),
             cli_versions: Default::default(),
+            proven_credentials: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,
@@ -5396,20 +5500,181 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// The cap on how many rows a report carries is a cap on what it prints, not on what it
+    /// noticed: folding after the cut let a long list of healthy sources hide the one row that
+    /// said sign in again.
     #[test]
-    fn diagnostics_do_not_treat_the_open_hour_as_a_pending_upload() {
-        let now = DateTime::parse_from_rfc3339("2026-08-15T04:30:00Z")
-            .expect("now")
-            .with_timezone(&Utc);
-        let hour = |bucket_start_utc: &str| crate::state::DirtyUsageHour {
-            agent: UsageAgent::Codex,
-            bucket_start_utc: bucket_start_utc.into(),
-            scan_version: 1,
-            partial: false,
+    fn a_capped_source_list_still_reports_the_attention_it_dropped() {
+        let root = std::env::temp_dir().join(format!("quota-capped-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        drop(state);
+        // A device that could not read who it is: the one row a refresh cannot retire, and the
+        // last one pushed.
+        fs::write(root.join("identity.sqlite"), b"not a database").expect("garbage");
+        let state = Arc::new(StateStore::open(&root).expect("reopen"));
+
+        let results = (0..MAXIMUM_DIAGNOSTIC_SOURCES + 4)
+            .map(|index| {
+                json!({
+                    "provider": format!("provider_{index}"),
+                    "outcome": "success",
+                    "snapshots": [{"provider": "codex"}],
+                    "sources": [{"source_id": "s", "outcome": "success", "category": "success"}]
+                })
+            })
+            .collect::<Vec<_>>();
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(json!({"results": results})),
+                None,
+                None,
+                false,
+            )
+            .expect("quota");
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
+
+        assert_eq!(report.sources.len(), MAXIMUM_DIAGNOSTIC_SOURCES);
+        assert!(
+            !report
+                .sources
+                .iter()
+                .any(|source| source.subject == "local_state"),
+            "the row that needed acting on is past the cap"
+        );
+        assert_eq!(report.summary.attention, DiagnosticAttention::Required);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A credential is proven by being spent on the rung that spends it. A browser session
+    /// answering for the same provider proves nothing about the sign-in on disk, and a rung
+    /// that stopped working takes the proof back with it.
+    #[test]
+    fn only_a_rung_spending_this_device_s_own_credential_proves_it() {
+        let root = std::env::temp_dir().join(format!("quota-proven-{}", uuid::Uuid::new_v4()));
+        let codex_home = root.join("codex");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        fs::write(
+            codex_home.join("auth.json"),
+            r#"{"tokens": {"access_token": "opaque-token", "account_id": "acct"}}"#,
+        )
+        .expect("auth");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let mut context = CollectionContext {
+            home_directory: root.clone(),
+            environment: HashMap::from([(
+                "CODEX_HOME".to_owned(),
+                codex_home.to_string_lossy().into_owned(),
+            )]),
+            ..CollectionContext::default()
         };
-        let hours = [hour("2026-08-15T03:00:00Z"), hour("2026-08-15T04:00:00Z")];
-        assert_eq!(uploadable_dirty_hour_count(&hours, now), 1);
-        assert_eq!(uploadable_dirty_hour_count(&hours[1..], now), 0);
+        // Each refresh builds its context from the cache, which is what the record is for.
+        let reload = |context: &mut CollectionContext, state: &StateStore| {
+            context.proven_credentials = state
+                .proven_provider_credentials()
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        };
+        let result = |source_id: &str, outcome: &str| {
+            json!({
+                "provider": "codex",
+                "outcome": outcome,
+                "snapshots": [],
+                "sources": [{"source_id": source_id, "outcome": outcome, "category": outcome}]
+            })
+        };
+        let proven = |state: &StateStore| {
+            state
+                .proven_provider_credentials()
+                .expect("record")
+                .unwrap_or_default()
+        };
+        let fingerprint = crate::providers::common::sha256_hex("opaque-token");
+
+        // A stored browser session answering for Codex says nothing about `auth.json`.
+        backend.record_proven_credentials(
+            &[result(
+                crate::providers::common::BROWSER_SESSION_SOURCE,
+                "success",
+            )],
+            &context,
+        );
+        assert!(!proven(&state).contains(&fingerprint));
+
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "success")], &context);
+        assert!(proven(&state).contains(&fingerprint));
+
+        // The same sign-in refused is a sign-in that has to earn a renewal again.
+        reload(&mut context, &state);
+        backend.record_proven_credentials(&[result(codex::SOURCE, "auth_required")], &context);
+        assert!(!proven(&state).contains(&fingerprint));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The hour still being written to is not work owed, and neither is an hour before this
+    /// device's privacy watermark: staging skips both, so the count that says how much is
+    /// waiting skips them too — and the marks it can never stage are retired rather than left
+    /// to sit in the cache saying the upload is behind.
+    #[test]
+    fn only_complete_hours_inside_the_watermark_count_as_pending_uploads() {
+        let root = std::env::temp_dir().join(format!("quota-pending-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let hour = |back: i64| floor_utc_hour(&(now - Duration::hours(back)));
+        let mut session = active_session();
+        session["upload_not_before"] = json!(hour(3));
+        state.write_session_json(&session).expect("session");
+        for back in [4, 2, 0] {
+            state
+                .insert_usage_dirty_hour_for_test(UsageAgent::Codex, &hour(back), 1)
+                .expect("dirty hour");
+        }
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+
+        // The mark before the watermark is not waiting on anything, and does not stay.
+        state
+            .forget_dirty_usage_hours_before(&hour(3))
+            .expect("retire");
+        assert_eq!(
+            state
+                .dirty_usage_hour_batch(EPOCH_HOUR, "9999-12-31T23:00:00Z", 100)
+                .expect("dirty")
+                .len(),
+            2
+        );
+        assert_eq!(backend.uploadable_dirty_hour_count().expect("count"), 1);
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
