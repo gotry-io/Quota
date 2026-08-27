@@ -97,20 +97,6 @@ extension ProviderID {
     }
   }
 
-  var allowsPrivateHttpBaseURL: Bool {
-    switch self {
-    case .`codex`: false
-    case .`claude`: false
-    case .`grok`: false
-    case .`openrouter`: false
-    case .`deepseek`: false
-    case .`kimi`: false
-    case .`litellm`: true
-    case .`cursor`: false
-    case .unknown: false
-    }
-  }
-
   var browserSession: BrowserSessionSpec? {
     switch self {
     case .`codex`: BrowserSessionSpec(

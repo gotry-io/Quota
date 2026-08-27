@@ -1,6 +1,18 @@
 import Foundation
 import QuotaWire
 
+/// Which gatekeeper stands in front of a browser's cookie jar.
+///
+/// Safari's is Full Disk Access, a Chrome-family jar is sealed with a Keychain item, and a Gecko
+/// profile has neither. That is one fact about a browser, and it decides both the refusal a read
+/// can come back with and the permission consent has to name — so it travels as itself.
+/// `BrowserSessionImporter` classifies it; nothing downstream re-derives it from a display name.
+enum BrowserSessionFamily: Equatable, Sendable {
+  case safari
+  case chromium
+  case gecko
+}
+
 /// Every sentence QuotaBar says about reading a browser's cookies.
 ///
 /// Reading another program's cookie jar is the one thing this app does that a person has to
@@ -23,6 +35,7 @@ enum BrowserSessionCopy {
   static func consentMessage(
     provider: ProviderID,
     browserName: String,
+    family: BrowserSessionFamily,
     spec: BrowserSessionSpec
   ) -> String {
     let hosts = list(spec.cookieHosts)
@@ -30,27 +43,31 @@ enum BrowserSessionCopy {
     return """
       QuotaBar will read \(browserName)'s cookies for \(hosts), and only the \
       \(names) \(spec.cookieNames.count == 1 ? "cookie" : "cookies") stored there. \
-      \(permissionSentence(browserName: browserName))
+      \(permissionSentence(browserName: browserName, family: family))
       The session you accept is stored in QuotaBar's local service database on this Mac until \
       you disconnect it. Nothing about it is uploaded to your Quota account or anywhere else.
       """
   }
 
   /// What macOS will ask for, in the words of the browser being read.
-  static func permissionSentence(browserName: String) -> String {
-    if browserName == "Safari" {
-      return """
-        Safari keeps its cookies behind Full Disk Access, so QuotaBar needs that grant in \
-        System Settings › Privacy & Security to read them.
-        """
-    }
-    if browserName.hasPrefix("Firefox") || browserName == "Zen" {
-      return "\(browserName) stores its cookies in a profile QuotaBar reads directly."
-    }
-    return """
+  static func permissionSentence(
+    browserName: String,
+    family: BrowserSessionFamily
+  ) -> String {
+    switch family {
+    case .safari:
+      """
+      \(browserName) keeps its cookies behind Full Disk Access, so QuotaBar needs that grant in \
+      System Settings › Privacy & Security to read them.
+      """
+    case .gecko:
+      "\(browserName) stores its cookies in a profile QuotaBar reads directly."
+    case .chromium:
+      """
       \(browserName) encrypts its cookies with the "Chrome Safe Storage" Keychain item, so \
       macOS will ask you to allow QuotaBar to use it.
       """
+    }
   }
 
   /// What a refusal means, and what fixes it.

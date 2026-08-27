@@ -71,7 +71,7 @@ func decliningConsentNeverReadsACookie() async throws {
 func consentCopyNamesTheBrowserThePermissionAndTheCookies() throws {
   let spec = try #require(ProviderID.cursor.browserSession)
   let safari = BrowserSessionCopy.consentMessage(
-    provider: .cursor, browserName: "Safari", spec: spec)
+    provider: .cursor, browserName: "Safari", family: .safari, spec: spec)
   #expect(safari.contains("Safari"))
   #expect(safari.contains("Full Disk Access"))
   #expect(safari.contains("cursor.com"))
@@ -81,10 +81,33 @@ func consentCopyNamesTheBrowserThePermissionAndTheCookies() throws {
   #expect(safari.contains("Nothing about it is uploaded"))
 
   let chrome = BrowserSessionCopy.consentMessage(
-    provider: .cursor, browserName: "Chrome", spec: spec)
+    provider: .cursor, browserName: "Chrome", family: .chromium, spec: spec)
   #expect(chrome.contains("Chrome Safe Storage"))
   #expect(!chrome.contains("Full Disk Access"))
   #expect(BrowserSessionCopy.consentTitle(provider: .cursor) == "Read Cursor Cookies?")
+
+  let firefox = BrowserSessionCopy.consentMessage(
+    provider: .cursor, browserName: "Firefox", family: .gecko, spec: spec)
+  #expect(firefox.contains("a profile QuotaBar reads directly"))
+  #expect(!firefox.contains("Full Disk Access"))
+  #expect(!firefox.contains("Chrome Safe Storage"))
+}
+
+/// The permission a browser will ask for is a fact about the browser, not about the name on the
+/// button, so the importer's classification is the one both the sheet and the refusal answer to.
+@Test
+func theConsentSheetNamesTheGatekeeperTheImporterFound() {
+  #expect(BrowserSessionImporter.family(of: .safari) == .safari)
+  #expect(BrowserSessionImporter.family(of: .chrome) == .chromium)
+  #expect(BrowserSessionImporter.family(of: .arc) == .chromium)
+  #expect(BrowserSessionImporter.family(of: .firefoxDeveloperEdition) == .gecko)
+  #expect(BrowserSessionImporter.family(of: .zen) == .gecko)
+
+  // A rebadged Chromium keeps its own name in the sentence and the Keychain item in the promise.
+  let dia = BrowserSessionCopy.permissionSentence(
+    browserName: "Dia", family: BrowserSessionImporter.family(of: .dia))
+  #expect(dia.hasPrefix("Dia encrypts its cookies"))
+  #expect(dia.contains("Chrome Safe Storage"))
 }
 
 /// The sheet cannot promise a narrower read than the one that happens, so for every provider
@@ -95,7 +118,7 @@ func consentCopyNamesEveryHostAndCookieTheCatalogDeclares() throws {
   for provider in ProviderID.allCases {
     guard let spec = provider.browserSession else { continue }
     let message = BrowserSessionCopy.consentMessage(
-      provider: provider, browserName: "Chrome", spec: spec)
+      provider: provider, browserName: "Chrome", family: .chromium, spec: spec)
     for host in spec.cookieHosts {
       #expect(message.contains(host), "\(provider.rawValue) consent omits \(host)")
     }

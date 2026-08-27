@@ -8,8 +8,7 @@ enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
   case percent
   case iconAndPercent = "icon_and_percent"
 
-  /// The key is older than the name on screen. A rename is not worth losing what someone chose.
-  static let storageKey = "menubar.display"
+  static let storageKey = "menubar.style"
   static let fallback = MenuBarStylePreference.iconAndPercent
 
   var id: Self { self }
@@ -142,6 +141,16 @@ struct MenuBarLabelModel: Equatable, Sendable {
       }
     }
     return tightest
+  }
+
+  /// Which Overview readings still describe live quota, in Overview's order.
+  ///
+  /// Time enters the item's content in exactly one place — this verdict — because a percent
+  /// does not move on its own and only the freshness rule can retire it. A caller that has to
+  /// re-evaluate the item on a clock compares this instead of the label, so a minute in which
+  /// nothing aged out costs nothing.
+  static func currency(of overview: [LocalServiceOverviewItem], now: Date) -> [Bool] {
+    overview.map { isCurrent($0, now: now) }
   }
 
   /// A reading that still describes live quota: the source reported it could read, and the

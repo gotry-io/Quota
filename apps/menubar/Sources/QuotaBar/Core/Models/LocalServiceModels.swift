@@ -6,7 +6,6 @@ enum LocalServiceComponentStatus: String, Decodable, Sendable {
   case stale
   case authRequired = "auth_required"
   case unavailable
-  case unsupported
   case error
   case signedOut = "signed_out"
 }

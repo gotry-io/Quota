@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 public struct QuotaUserAccount: Codable, Equatable, Sendable {
   public let accountID: String
@@ -95,6 +96,11 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
 
   public var isValid: Bool {
     WireValidation.isOpaqueID(id) && WireValidation.isTrimmedText(displayName, maximum: 128)
+  }
+
+  /// How recently this device spoke, in the words every Quota client uses.
+  public func activity(now: Date) -> DeviceActivity {
+    DeviceActivity.make(lastSeenAt: lastSeenAt, lastObservedAt: lastObservedAt, now: now)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -291,7 +297,6 @@ public enum RelayErrorCode: String, Codable, Sendable, TolerantWireEnum {
   case expiredToken = "expired_token"
   case invalidGrant = "invalid_grant"
   case rateLimited = "rate_limited"
-  case sequenceConflict = "sequence_conflict"
   case staleGeneration = "stale_generation"
   case deviceDeleted = "device_deleted"
   case clientUpgradeRequired = "client_upgrade_required"

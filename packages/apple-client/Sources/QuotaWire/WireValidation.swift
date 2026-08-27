@@ -45,16 +45,6 @@ public enum WireValidation {
     return formatter.date(from: value).map { formatter.string(from: $0) == value } ?? false
   }
 
-  public static func isUTCHour(_ value: String) -> Date? {
-    guard value.count == 20, value.hasSuffix(":00:00Z") else { return nil }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime]
-    guard let instant = formatter.date(from: value), formatter.string(from: instant) == value else {
-      return nil
-    }
-    return instant
-  }
-
   public static func isNonnegativeInteger(_ value: String) -> Bool {
     guard !value.isEmpty, value.count <= 32,
       value.utf8.allSatisfy({ (48...57).contains($0) })

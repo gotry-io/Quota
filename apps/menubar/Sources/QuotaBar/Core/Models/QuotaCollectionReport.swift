@@ -56,14 +56,18 @@ extension QuotaCollectionSource {
   }
 
   /// What a person calls this source.
+  var displayName: String { Self.displayName(forSourceID: sourceID) }
+
+  /// The same, for a source id arriving on its own — a diagnostic report names the rung that
+  /// answered with these ids too.
   ///
   /// The report crosses IPC as ids and nothing else, so this table is the only place they are
   /// named. A source this build does not know still names something real, so it reads as a
   /// provider rather than as nothing.
-  var displayName: String {
+  static func displayName(forSourceID sourceID: String) -> String {
     switch sourceID {
     case "anthropic_oauth_usage_api", "anthropic_oauth_signed_out", "chatgpt_usage_api",
-      "grok_billing_api", "grok_billing_rpc":
+      "grok_billing_api":
       "OAuth"
     case "codex_pat_usage_api": "Access token"
     case "browser_session", "chatgpt_web_usage_api", "claude_web_usage_api",

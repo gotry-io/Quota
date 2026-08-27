@@ -207,22 +207,13 @@ func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
   let withRetiredField = try decodeDevice(extra: ["health": NSNull(), "status": "active"])
   #expect(withRetiredField.id == "device_01")
 
-  #expect(AccountDeviceActivity.make(for: try decodeDevice(), now: now).status == .active)
+  // The verdict itself is `DeviceActivityTests`; what a decoded device owes it is both
+  // witnessed instants, so a device quiet for a day but reporting minutes ago is still active.
+  #expect(try decodeDevice().activity(now: now).status == .active)
   #expect(
-    AccountDeviceActivity.make(
-      for: try decodeDevice(
-        lastSeenAt: "2026-08-14T08:00:00Z", lastObservedAt: "2026-08-15T08:05:00Z"),
-      now: now).status == .active)
-  #expect(
-    AccountDeviceActivity.make(
-      for: try decodeDevice(lastSeenAt: "2026-08-15T05:00:00Z"), now: now).status == .idle)
-  #expect(
-    AccountDeviceActivity.make(
-      for: try decodeDevice(lastSeenAt: "2026-08-12T05:00:00Z"), now: now).status
-      == .notReporting)
-  #expect(
-    AccountDeviceActivity.make(for: try decodeDevice(lastSeenAt: NSNull()), now: now).status
-      == .notReporting)
+    try decodeDevice(lastSeenAt: "2026-08-14T08:00:00Z", lastObservedAt: "2026-08-15T08:05:00Z")
+      .activity(now: now).status == .active)
+  #expect(try decodeDevice(lastSeenAt: NSNull()).activity(now: now).status == .notReporting)
 }
 
 @Test

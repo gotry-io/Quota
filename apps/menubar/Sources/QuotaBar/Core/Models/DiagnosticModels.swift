@@ -50,7 +50,6 @@ enum LocalServiceDiagnosticRecovery: String, Codable, Equatable, Sendable {
   case configureProvider = "configure_provider"
   case updateSource = "update_source"
   case checkAccess = "check_access"
-  case upgrade
   case reinstall
 }
 

@@ -1,5 +1,4 @@
 import AppKit
-import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
@@ -21,24 +20,74 @@ enum SupportHeaderAction {
 /// The Support page's own presentation. Every sentence a person reads comes from the service;
 /// this only decides which symbol and colour carries it.
 enum SupportPresentation {
+  /// The word for something this build does not have a name for. It is deliberately not the id:
+  /// a wire id with its underscores swapped for spaces is the private service's vocabulary in a
+  /// disguise, and the service's own sentence underneath already says what the row is about.
+  static let unnamed = "Other"
+
   static func surfaceTitle(_ id: String) -> String {
     switch id {
     case "quota_overview": "Quota Overview"
     case "usage_this_device": "This Mac Usage"
     case "usage_account": "Account Usage"
     case "account": "Account"
-    default: id.replacingOccurrences(of: "_", with: " ").capitalized
+    default: unnamed
     }
   }
 
-  /// `provider:codex/oauth` reads as "Codex · OAuth"; the service's own names read as words.
+  /// `provider:codex` with the `chatgpt_usage_api` rung reads as "Codex · OAuth".
+  ///
+  /// Every part of that comes from a table: the provider catalog, the Usage agent list, the
+  /// service-owned paths below, and the collection report's own source names. None of it is
+  /// derived from the id it arrived as.
   static func sourceTitle(subject: String, sourceID: String?) -> String {
-    let identity = subject.split(separator: ":", maxSplits: 1).last.map(String.init) ?? subject
-    let name =
-      ProviderID(rawValue: identity)?.displayName
-      ?? identity.replacingOccurrences(of: "_", with: " ").capitalized
+    let name = subjectTitle(subject)
     guard let sourceID else { return name }
-    return "\(name) · \(sourceID.replacingOccurrences(of: "_", with: " ").capitalized)"
+    return "\(name) · \(QuotaCollectionSource.displayName(forSourceID: sourceID))"
+  }
+
+  private static func subjectTitle(_ subject: String) -> String {
+    let parts = subject.split(separator: ":", maxSplits: 1)
+    guard parts.count == 2 else { return serviceSubjectTitle(subject) }
+    let identity = String(parts[1])
+    switch parts[0] {
+    case "provider":
+      // An id outside the catalog is `.unknown`, which names itself the same way everywhere.
+      return (ProviderID(rawValue: identity) ?? .unknown(identity)).displayName
+    case "agent":
+      return BillingAgent(rawValue: identity).map(UsageValueFormatter.agent) ?? unnamed
+    default:
+      return unnamed
+    }
+  }
+
+  /// The service's own paths, which belong to no provider and no agent.
+  private static func serviceSubjectTitle(_ subject: String) -> String {
+    switch subject {
+    case "account": "Account"
+    case "usage_upload": "Usage sync"
+    case "pricing_catalog": "Pricing"
+    case "provider_configuration": "Provider setup"
+    case "local_state": "Local data"
+    default: unnamed
+    }
+  }
+
+  /// When the report on screen was evaluated, as a clock time rather than an age.
+  ///
+  /// Every other past instant in the product is a relative age, because a quota number that
+  /// moves while it is being read is noise. A check is the opposite: a person presses Recheck
+  /// and needs to see that what is on screen came from the run they just asked for, and "just
+  /// now" says that about every run. The time is fixed — it does not depend on when it is
+  /// read — and locale-shortened, so it reads the way the menu bar clock beside it does.
+  static func checkedLabel(
+    _ generatedAt: Date,
+    locale: Locale = .current,
+    timeZone: TimeZone = .current
+  ) -> String {
+    var style = Date.FormatStyle(date: .omitted, time: .shortened)
+    style.timeZone = timeZone
+    return "Checked \(generatedAt.formatted(style.locale(locale)))"
   }
 
   static func statusLabel(_ status: LocalServiceDiagnosticStatus) -> String {
@@ -76,6 +125,16 @@ enum SupportPresentation {
     default: "questionmark.circle"
     }
   }
+}
+
+/// The confirmation Reset Local Data raises. It is an app-owned popup at the panel root, like
+/// Sign Out and Disconnect: a MenuBarExtra panel is not a window a system alert can sit over.
+enum ResetLocalDataCopy {
+  static let title = "Reset Local Data?"
+  static let confirmTitle = "Reset Local Data"
+  static let message =
+    "This Mac's collected quota and Usage history are deleted and rebuilt on the next refresh. "
+    + "You stay signed in."
 }
 
 /// Owns Support page state so MenuBarContentView can drive header actions.
@@ -117,7 +176,6 @@ final class SupportPageModel {
   }
 
   var showsHeaderActions: Bool { report != nil }
-  var canCopy: Bool { report != nil }
   var canRecheck: Bool { report != nil && !isLoading }
 
   func prepareForEntry() {
@@ -172,23 +230,10 @@ struct SettingsSupportView: View {
   let state: SupportPageState
   @Bindable var model: SupportPageModel
   let onRetry: () -> Void
-  let onResetLocalData: () -> Void
 
   var body: some View {
     QuotaNavigationStableContent(state: state) { presentedState in
       content(presentedState)
-    }
-    .confirmationDialog(
-      "Reset local data?",
-      isPresented: $model.isResetConfirmationPresented
-    ) {
-      Button("Reset Local Data", role: .destructive, action: onResetLocalData)
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "This Mac's collected quota and Usage history are deleted and rebuilt on the next "
-          + "refresh. You stay signed in."
-      )
     }
   }
 
@@ -228,7 +273,7 @@ struct SettingsSupportView: View {
   }
 
   private func statusView(_ report: LocalServiceDiagnosticReport) -> some View {
-    let checked = FreshnessCopy.updated(since: report.generatedAt)
+    let checked = SupportPresentation.checkedLabel(report.generatedAt)
     let label = SupportPresentation.summaryLabel(report.summary)
     return HStack(spacing: QuotaDesign.Spacing.sm) {
       Image(systemName: summarySymbol(report.summary))

@@ -9,6 +9,7 @@ struct BrowserApplicationChoice: Identifiable, Equatable, Sendable {
   let title: String
 
   var id: String { browser.rawValue }
+  var family: BrowserSessionFamily { BrowserSessionImporter.family(of: browser) }
 }
 
 struct BrowserSessionCookieCandidate: Equatable, Sendable {
@@ -130,11 +131,19 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     }
   }
 
+  /// Which gatekeeper stands in front of this browser's cookie jar. Read once, here, from the
+  /// browser itself: the consent sheet and the refusal copy are two sentences about the same
+  /// fact, and neither may recover it by looking at a name on screen.
+  static func family(of browser: Browser) -> BrowserSessionFamily {
+    if browser == .safari { return .safari }
+    return geckoBrowsers.contains(browser) ? .gecko : .chromium
+  }
+
   /// A store that is simply not there is not a refusal: that browser has never been used.
   ///
   /// The two refusals macOS actually issues come from different gatekeepers. Safari's jar sits
   /// behind Full Disk Access; a Chrome-family jar is encrypted with a Keychain item the user
-  /// has to release. Firefox has neither, so an unreadable profile is just that.
+  /// has to release. Gecko has neither, so an unreadable profile is just that.
   static func denialReason(for error: any Error, browser: Browser) -> BrowserAccessDenialReason? {
     guard let cookieError = error as? BrowserCookieError else { return .storeUnreadable }
     switch cookieError {
@@ -143,8 +152,11 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     case .loadFailed:
       return .storeUnreadable
     case .accessDenied:
-      if browser == .safari { return .fullDiskAccess }
-      return geckoBrowsers.contains(browser) ? .storeUnreadable : .keychainRefused
+      return switch family(of: browser) {
+      case .safari: .fullDiskAccess
+      case .gecko: .storeUnreadable
+      case .chromium: .keychainRefused
+      }
     }
   }
 

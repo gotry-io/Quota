@@ -8,8 +8,11 @@ import Testing
 
 @MainActor
 struct AppModelTests {
+  /// The verdict itself is `DeviceActivityTests` in `packages/apple-shared`; what the card owes
+  /// it is both witnessed instants, so a device quiet for a day but reporting minutes ago is
+  /// still active.
   @Test
-  func remoteDeviceActivityUsesTheNewerOfLastSeenAndLastReading() {
+  func deviceActivityUsesTheNewerOfLastSeenAndLastReading() {
     let now = Fixtures.date("2026-08-15T08:10:00Z")
     func device(lastSeenAt: Date?, lastObservedAt: Date? = nil) -> AccountDevice {
       AccountDevice(
@@ -21,37 +24,56 @@ struct AppModelTests {
       )
     }
 
+    #expect(device(lastSeenAt: now.addingTimeInterval(-300)).activity(now: now).status == .active)
     #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-300)), now: now).status == .active)
-    // A device that has not called in a day can still have sent a reading minutes ago.
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(
-          lastSeenAt: now.addingTimeInterval(-86_400),
-          lastObservedAt: now.addingTimeInterval(-120)
-        ),
-        now: now).status == .active)
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 3_600)), now: now).status == .idle)
-    #expect(
-      RemoteDeviceActivity.make(
-        for: device(lastSeenAt: now.addingTimeInterval(-3 * 86_400)), now: now).status
-        == .notReporting)
-    #expect(
-      RemoteDeviceActivity.make(for: device(lastSeenAt: nil), now: now).status == .notReporting)
+      device(
+        lastSeenAt: now.addingTimeInterval(-86_400),
+        lastObservedAt: now.addingTimeInterval(-120)
+      ).activity(now: now).status == .active)
+    #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
   }
 
   @Test
   func restoreSignedOutWithoutSession() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
-    let model = makeModel(session: nil, cache: nil, exchanges: [], widgetPublisher: publisher)
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
     await model.restore()
     #expect(model.phase == .signedOut)
     #expect(model.summary == nil)
     #expect(publisher.clearCount == 1)
     #expect(publisher.publishCount == 0)
+    // Nothing to read, so nothing to be woken for.
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
+  }
+
+  /// A deliberate logout, or a first launch, is not an expiry. Connect Account says only what it
+  /// always says, and the background window nobody can use any more is withdrawn.
+  @Test
+  func refreshWithoutASessionIsPlainSignedOutAndWithdrawsTheBackgroundWindow() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
+    )
+
+    #expect(await model.refresh() == false)
+    #expect(model.phase == .signedOut)
+    #expect(model.expiredMessage == nil)
+    #expect(model.banner == nil)
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
   }
 
   @Test
@@ -182,9 +204,12 @@ struct AppModelTests {
     #expect(publisher.clearCount == 1)
   }
 
+  /// An expired session still says so — it is the one status line Connect Account has — and the
+  /// standing background window goes with the session behind it.
   @Test
   func expiredSessionReturnsToConnect() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
     let model = makeModel(
       session: Fixtures.session(),
       cache: CachedAccountSummary(
@@ -200,15 +225,18 @@ struct AppModelTests {
           ])
         ),
       ],
-      widgetPublisher: publisher
+      widgetPublisher: publisher,
+      backgroundRefresh: scheduler
     )
     await model.restore()
     #expect(model.phase == .signedOut)
-    #expect(model.expiredMessage?.contains("Session expired") == true)
+    #expect(model.expiredMessage == "Session expired. Connect Account to continue.")
     #expect(model.summary == nil)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
+    #expect(scheduler.scheduleCount == 0)
+    #expect(scheduler.cancelCount == 1)
   }
 
   /// The refresh a background app refresh runs is the refresh the pull-to-refresh gesture runs:
@@ -286,6 +314,7 @@ struct AppModelTests {
       .init(status: 204, body: Data()),
     ])
     let publisher = RecordingWidgetSnapshotPublisher()
+    let scheduler = RecordingBackgroundRefreshScheduler()
     let account = AccountClient(
       relay: RelayClient(transport: transport),
       sessionStore: MemoryAccountSessionStore(),
@@ -296,6 +325,7 @@ struct AppModelTests {
       account: account,
       authenticator: authenticator,
       widgetPublisher: publisher,
+      backgroundRefresh: scheduler,
       makeAuthorizationAttempt: { attempt }
     )
 
@@ -311,9 +341,12 @@ struct AppModelTests {
     await model.logout()
     #expect(model.phase == .signedOut)
     #expect(model.summary == nil)
+    #expect(model.expiredMessage == nil)
     #expect(try await account.hasSession() == false)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
+    // The pending request outlives the session unless it is cancelled.
+    #expect(scheduler.cancelCount == 1)
   }
 }
 

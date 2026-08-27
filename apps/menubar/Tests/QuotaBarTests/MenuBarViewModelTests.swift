@@ -215,6 +215,36 @@ func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws
   #expect(!model.isLoggingIn)
 }
 
+/// The row keeps its Cancel until the service says the flow is over, so it is easy to press
+/// twice. Two presses are one request, and a press after that one finished is a new one.
+@Test @MainActor
+func repeatedCancelTapsSendOneCancelLogin() async throws {
+  let record = CallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      loginDelayNanoseconds: 30_000_000_000,
+      cancelDelayNanoseconds: 50_000_000,
+      cancelRecord: record
+    )
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  model.cancelLogin()
+  model.cancelLogin()
+  model.cancelLogin()
+
+  try await Task.sleep(for: .milliseconds(200))
+  var cancels = await record.count
+  #expect(cancels == 1, "three presses of one Cancel are one cancel_login")
+
+  model.cancelLogin()
+  try await Task.sleep(for: .milliseconds(200))
+  cancels = await record.count
+  #expect(cancels == 2, "a press after the first request finished is a request of its own")
+}
+
 @Test @MainActor
 func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
   let model = MenuBarViewModel(
@@ -429,7 +459,7 @@ func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async thr
 
 @Test @MainActor
 func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
-  let record = ShutdownRecord()
+  let record = CallRecord()
   let model = MenuBarViewModel(
     client: StubLocalService(state: loggingInState(), shutdownRecord: record)
   )
@@ -447,7 +477,7 @@ func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
 @Test @MainActor
 func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   #expect(MenuBarViewModel.shutdownDeadline == .seconds(2))
-  let record = ShutdownRecord()
+  let record = CallRecord()
   let model = MenuBarViewModel(
     client: StubLocalService(
       state: loggingInState(),
@@ -577,9 +607,9 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
-/// Counts the shutdowns a stub was asked for, which is all the app's termination path leaves
-/// behind once the service it spoke to is gone.
-private actor ShutdownRecord {
+/// Counts the calls a stub was asked for, which is all a fire-and-forget operation leaves behind
+/// once the service it spoke to is gone.
+private actor CallRecord {
   private(set) var count = 0
 
   func record() {
@@ -593,7 +623,8 @@ private struct StubLocalService: LocalServiceServing {
   let loginDelayNanoseconds: UInt64
   let cancelDelayNanoseconds: UInt64
   let cancelFails: Bool
-  let shutdownRecord: ShutdownRecord?
+  let cancelRecord: CallRecord?
+  let shutdownRecord: CallRecord?
   let shutdownAnswerDelayNanoseconds: UInt64
 
   init(
@@ -601,7 +632,8 @@ private struct StubLocalService: LocalServiceServing {
     loginDelayNanoseconds: UInt64 = 0,
     cancelDelayNanoseconds: UInt64 = 0,
     cancelFails: Bool = false,
-    shutdownRecord: ShutdownRecord? = nil,
+    cancelRecord: CallRecord? = nil,
+    shutdownRecord: CallRecord? = nil,
     shutdownAnswerDelayNanoseconds: UInt64 = 0
   ) {
     stateValue = state
@@ -609,6 +641,7 @@ private struct StubLocalService: LocalServiceServing {
     self.loginDelayNanoseconds = loginDelayNanoseconds
     self.cancelDelayNanoseconds = cancelDelayNanoseconds
     self.cancelFails = cancelFails
+    self.cancelRecord = cancelRecord
     self.shutdownRecord = shutdownRecord
     self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
   }
@@ -653,6 +686,7 @@ private struct StubLocalService: LocalServiceServing {
     )
   }
   func cancelLogin() async throws {
+    await cancelRecord?.record()
     if cancelDelayNanoseconds > 0 {
       try await Task.sleep(nanoseconds: cancelDelayNanoseconds)
     }

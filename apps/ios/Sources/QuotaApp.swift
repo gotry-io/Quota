@@ -13,13 +13,12 @@ struct QuotaApp: App {
         return
       }
     #endif
-    let scheduler = SystemBackgroundRefreshScheduler()
-    let model = AppModel(backgroundRefresh: scheduler)
+    let model = AppModel(backgroundRefresh: SystemBackgroundRefreshScheduler())
     _model = State(initialValue: model)
     // `App.init` runs inside launch, which is the only time `BGTaskScheduler` accepts a
-    // launch handler.
+    // launch handler. Whether a window is worth asking for is a question about the session,
+    // which only `restore()` has read yet, so the ask is made — or withdrawn — from there.
     BackgroundRefresh.register(model: model)
-    scheduler.scheduleNextRefresh()
   }
 
   var body: some Scene {

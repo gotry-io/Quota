@@ -105,8 +105,7 @@ final class AppModel {
       }
       await refresh()
     } else {
-      phase = .signedOut
-      clearWidget()
+      applySignedOut()
     }
   }
 
@@ -151,6 +150,10 @@ final class AppModel {
   /// the account summary, apply it, republish the widget snapshot from the result, and ask for
   /// the next background window. Reports whether the read reached Relay, which is the success
   /// a `BGAppRefreshTask` completes with.
+  ///
+  /// The next window is only worth asking for while a session exists to read with. A read that
+  /// ends signed out — no session, or one Relay would not renew — leaves without asking, and
+  /// has already withdrawn the standing ask on its way through `applySignedOut`.
   @discardableResult
   func refresh() async -> Bool {
     guard !isRefreshing else { return false }
@@ -158,19 +161,15 @@ final class AppModel {
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
     apply(result)
-    backgroundRefresh.scheduleNextRefresh()
+    if phase == .signedIn {
+      backgroundRefresh.scheduleNextRefresh()
+    }
     return result.error == nil
   }
 
   func logout() async {
     await account.logout()
-    summary = nil
-    fetchedAt = nil
-    fromCache = false
-    banner = nil
-    expiredMessage = nil
-    phase = .signedOut
-    clearWidget()
+    applySignedOut()
   }
 
   private func apply(_ result: AccountRefreshResult) {
@@ -187,8 +186,12 @@ final class AppModel {
       } else {
         clearWidget()
       }
-    case .sessionExpired, .notSignedIn:
+    case .sessionExpired:
       applyExpired()
+    case .notSignedIn:
+      // Signing out, or never having signed in, is not an expiry. Saying a session expired to
+      // someone who deliberately logged out invents a failure that did not happen.
+      applySignedOut()
     case .relay(.unavailable), .relay(.timeout):
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
@@ -223,12 +226,20 @@ final class AppModel {
   }
 
   private func applyExpired() {
+    applySignedOut()
+    expiredMessage = "Session expired. Connect Account to continue."
+  }
+
+  /// Connect Account with nothing said about why: no session, or one the person ended. There is
+  /// no account left to read, so the standing background-refresh ask goes with it.
+  private func applySignedOut() {
     summary = nil
     fetchedAt = nil
     fromCache = false
     banner = nil
-    expiredMessage = "Session expired. Connect Account to continue."
+    expiredMessage = nil
     phase = .signedOut
+    backgroundRefresh.cancelPendingRefresh()
     clearWidget()
   }
 

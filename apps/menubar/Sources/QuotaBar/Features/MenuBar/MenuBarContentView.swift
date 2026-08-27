@@ -66,8 +66,8 @@ struct MenuBarContentView: View {
       await model.refreshIfNeeded()
     }
     .focusEffectDisabled()
-    .disabled(isLogoutConfirmationPresented || model.browserSessionPopup != nil)
-    .accessibilityHidden(isLogoutConfirmationPresented || model.browserSessionPopup != nil)
+    .disabled(isPopupPresented)
+    .accessibilityHidden(isPopupPresented)
     .overlay {
       if isLogoutConfirmationPresented {
         QuotaConfirmationPopup(
@@ -80,10 +80,28 @@ struct MenuBarContentView: View {
           isLogoutConfirmationPresented = false
           Task { await model.logout() }
         }
+      } else if support.isResetConfirmationPresented {
+        QuotaConfirmationPopup(
+          title: ResetLocalDataCopy.title,
+          message: ResetLocalDataCopy.message,
+          confirmTitle: ResetLocalDataCopy.confirmTitle,
+          onCancel: { support.isResetConfirmationPresented = false }
+        ) {
+          support.isResetConfirmationPresented = false
+          Task { await resetLocalData() }
+        }
       } else if let popup = model.browserSessionPopup {
         providerBrowserSessionPopup(popup)
       }
     }
+  }
+
+  /// Every destructive confirmation in the panel is one of these, and while one is up the page
+  /// under it takes neither pointer nor VoiceOver.
+  private var isPopupPresented: Bool {
+    isLogoutConfirmationPresented
+      || support.isResetConfirmationPresented
+      || model.browserSessionPopup != nil
   }
 
   @ViewBuilder
@@ -104,7 +122,11 @@ struct MenuBarContentView: View {
         QuotaConfirmationPopup(
           title: BrowserSessionCopy.consentTitle(provider: provider),
           message: BrowserSessionCopy.consentMessage(
-            provider: provider, browserName: choice.title, spec: spec),
+            provider: provider,
+            browserName: choice.title,
+            family: choice.family,
+            spec: spec
+          ),
           confirmTitle: BrowserSessionCopy.consentConfirmTitle,
           onCancel: model.cancelProviderBrowserSessionFlow,
           onConfirm: model.confirmProviderBrowserSessionConsent
@@ -224,8 +246,7 @@ struct MenuBarContentView: View {
       SettingsSupportView(
         state: support.pageState,
         model: support,
-        onRetry: { Task { await runSupportCheck() } },
-        onResetLocalData: { Task { await resetLocalData() } }
+        onRetry: { Task { await runSupportCheck() } }
       )
       .task {
         guard performsSupportCheckOnEntry else { return }

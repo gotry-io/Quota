@@ -80,7 +80,7 @@ Production inherits the menu extra's system material. Add only adaptive semantic
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
-- Control: `fieldFill`, with `fieldFillFocused` and the accent focus ring.
+- Control: `fieldFill` plus the accent focus ring.
 - Transient: regular material plus `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
 - Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group.
 
@@ -117,7 +117,10 @@ It is a template mark plus the remaining percent of one current subscription. By
 most constrained one — the smallest remaining percent across every window of every Overview reading
 that still describes live quota. A reading the source reported as failed, or one the shared
 freshness rule has aged out, answers for nothing. Balance-only windows have no budget to be a
-percent of and never set it.
+percent of and never set it. Ageing out is a fact about the clock rather than about anything the
+service says, so the item re-asks the question once a minute — the freshness rule's smallest
+unit — and a Mac that stopped collecting loses its number without waiting for an event that is
+never coming. The item is only rebuilt when that answer changed.
 
 The mark and the number are composed into **one template image**, which is what the menu bar is
 given. A status item is one image to AppKit, and AppKit places it exactly as it places every other
@@ -301,7 +304,8 @@ orange warning, red blocked mark).
 human-readable text report, including the recent work the page does not list, and its row title
 becomes **Report Copied** for about two seconds. Reset Local Data always confirms first and says
 plainly that collected quota and Usage history are deleted and rebuilt and that the person stays
-signed in. **About** stays last with Website, version, and **Check for Updates**, which opens
+signed in. That confirmation is `QuotaConfirmationPopup` at the panel root, like Sign Out and
+Disconnect, and leaving Support takes the question with it. **About** stays last with Website, version, and **Check for Updates**, which opens
 Sparkle's standard updater; Sparkle also checks on a daily schedule after launch.
 
 Recheck lives only in the page header; opening Support resets and requests a real refresh so

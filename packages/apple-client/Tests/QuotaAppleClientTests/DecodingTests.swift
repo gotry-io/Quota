@@ -70,8 +70,10 @@ struct DecodingTests {
     let unknownProvider = try Fixtures.accountSummaryJSON(subscriptions: [subscription])
     let summary = try WireCodec.decode(AccountSummary.self, from: unknownProvider)
     #expect(summary.subscriptions.first?.snapshot.provider == .unknown("a_provider_from_2027"))
-    #expect(
-      summary.subscriptions.first?.snapshot.provider.displayName == "a_provider_from_2027")
+    // The id is kept, because the reading is worth keeping. It is not a name: the catalog is the
+    // only place a provider is named, and this one is not in it.
+    #expect(summary.subscriptions.first?.snapshot.provider.rawValue == "a_provider_from_2027")
+    #expect(summary.subscriptions.first?.snapshot.provider.displayName == "Unknown provider")
     #expect(!ProviderID.allCases.contains(.unknown("a_provider_from_2027")))
     #expect(summary.subscriptions.first?.snapshot.windows.first?.usedPercent == 29)
   }
