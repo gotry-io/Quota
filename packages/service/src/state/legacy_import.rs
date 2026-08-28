@@ -134,7 +134,9 @@ fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateErro
         "UPDATE installation SET installation_id = ?1, payload_json = ?2 WHERE id = 1",
         params![installation.0, installation.1],
     )?;
-    if let Some((payload, epoch)) = session {
+    if let Some((payload, epoch)) =
+        session.filter(|(payload, _)| session_payload_is_usable(payload))
+    {
         tx.execute(
             "INSERT OR REPLACE INTO session(id, payload_json, epoch) VALUES (1, ?1, ?2)",
             params![payload, epoch],
@@ -165,6 +167,56 @@ fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateErro
     }
     tx.commit()?;
     Ok(())
+}
+
+/// A released session this build can actually use. Anything else is dropped rather than copied
+/// into a row `login` would then refuse forever.
+fn session_payload_is_usable(payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let Some(status) = object.get("status").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    if !matches!(status, "active" | "logout_pending") {
+        return false;
+    }
+    let Some(account_id) = object.get("account_id").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let Some(device_id) = object.get("device_id").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    if account_id.is_empty() || device_id.is_empty() {
+        return false;
+    }
+    let generation = object.get("device_generation").and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok()))
+    });
+    if generation.is_none() {
+        return false;
+    }
+    let Some(session) = object.get("session").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    let Some(access) = session
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Some(refresh) = session
+        .get("refresh_token")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    !access.is_empty() && !refresh.is_empty()
 }
 
 type RowMap<T> = fn(&rusqlite::Row<'_>) -> Result<T, rusqlite::Error>;
@@ -212,7 +264,7 @@ mod tests {
         .expect("legacy rows");
         if session {
             conn.execute(
-                "INSERT INTO session VALUES (1, '{\"status\":\"active\"}', 7)",
+                "INSERT INTO session VALUES (1, '{\"status\":\"active\",\"account_id\":\"account_1\",\"device_id\":\"device_1\",\"device_generation\":1,\"session\":{\"access_token\":\"qb_access_token_synthetic\",\"refresh_token\":\"qbr_refresh_token_synthetic\"}}', 7)",
                 [],
             )
             .expect("legacy session");
@@ -313,6 +365,27 @@ mod tests {
                     .starts_with(LEGACY_PREFIX))
         );
         assert_eq!(take(&root, &mut identity), LegacyImport::Absent);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unusable_released_session_is_dropped_instead_of_copied() {
+        let root = temp_root("legacy-bad-session");
+        let live = root.join(LEGACY_PREFIX);
+        let conn = seed_released_image(&live, false);
+        conn.execute(
+            "INSERT INTO session VALUES (1, '{\"status\":\"expired\"}', 7)",
+            [],
+        )
+        .expect("invalid session");
+        drop(conn);
+        let mut identity = identity_image();
+
+        assert_eq!(take(&root, &mut identity), LegacyImport::Imported);
+        let count: i64 = identity
+            .query_row("SELECT COUNT(*) FROM session", [], |row| row.get(0))
+            .expect("session count");
+        assert_eq!(count, 0);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

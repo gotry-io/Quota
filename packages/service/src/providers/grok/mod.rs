@@ -105,6 +105,17 @@ fn sign_in_usable(context: &CollectionContext) -> bool {
     load_credentials(context).is_some_and(|credentials| !expiring(&credentials, context))
 }
 
+/// The access token and expiry this refresh would spend. Compared before and after a spawn
+/// so a forced run is `Renewed` only when the Grok CLI actually rewrote `auth.json`.
+fn credential_identity(context: &CollectionContext) -> Option<String> {
+    let credentials = load_credentials(context)?;
+    Some(format!(
+        "{}:{}",
+        credentials.access_token,
+        credentials.expires_at.unwrap_or(0)
+    ))
+}
+
 fn load_credentials(context: &CollectionContext) -> Option<Credentials> {
     let mut paths = Vec::new();
     if let Some(home) = context

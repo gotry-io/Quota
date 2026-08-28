@@ -277,7 +277,7 @@ mod tests {
     }
 
     impl LocalBackend for BlockingDiagnoseBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
             RefreshOutcome {
                 quota: Err(BackendError::unavailable()),
                 usage: Err(BackendError::unavailable()),

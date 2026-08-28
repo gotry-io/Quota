@@ -34,6 +34,11 @@ The attempt journal is evidence about collection, not a permit to collect. A jou
 fails is counted on stderr; the scan, upload, or sync it was recording runs anyway. Retention runs at
 open and hourly rather than inside every insert, at 5,000 rows and seven days.
 
+Lane work records the trigger that started it: `scheduled` for the timer, `manual` only for a
+person's action. Coordinated refresh children inherit the parent refresh's trigger. The Usage lane
+records `usage_upload` when it drains the outbox, the same kind the coordinated refresh records.
+There is no separate kind for a quota snapshot upload; adding one would be a cache schema change.
+
 Device Health is deleted end to end: the local publisher, the `PUT /api/v5/device/health` route, the
 D1 table, and every client type. Relay already witnesses when a device last called and when the
 newest reading it sent was taken, so an Account device list says **Active** under 30 minutes,

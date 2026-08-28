@@ -22,8 +22,9 @@ pub const WEB_SOURCE: &str = web::SOURCE;
 ///
 /// Not a rung: the same OAuth path answered, and what it found was a Claude Code that signed
 /// itself out. It is a source of its own because it is the one sign-in failure whose recovery
-/// is not "open Claude Code" — the app opens onto the same emptied entry — and the recovery
-/// text is chosen by the source that reached the verdict.
+/// is a terminal `claude` login — used only when this Mac holds no Keychain item either. A
+/// withheld Keychain item is `access_denied` instead: opening Claude Code can rewrite the
+/// file from the grant this process was refused.
 pub const SIGNED_OUT_SOURCE: &str = "anthropic_oauth_signed_out";
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
@@ -143,11 +144,10 @@ fn collect_official(context: &CollectionContext) -> Result<QuotaSnapshot, Provid
         ));
     };
     let Some(credentials) = entry.grant() else {
-        // Claude Code emptied its own credential rather than renew it, which is the one
-        // sign-in problem that opening Claude Code does not fix: it opens onto the same
-        // emptied entry.  Unless the Keychain withheld the entry it holds — then the emptied
-        // one is a file an older Claude Code left behind, and it says nothing about the grant
-        // this device was refused.
+        // Claude Code emptied its own credential rather than renew it. Opening the app is
+        // the recovery when a Keychain item is still on this Mac — Claude Code can read a
+        // grant this process was refused, and has been seen to rewrite the file from it.
+        // With no Keychain item, only a person at a terminal can sign in again.
         return Err(if lookup.keychain_refused {
             ProviderError::new(ErrorCategory::AccessDenied, SOURCE)
         } else {
@@ -208,17 +208,21 @@ fn preferred_entry(keychain: Option<Entry>, file: Option<Entry>, now: i64) -> Op
 }
 
 /// Whether this device's Claude sign-in is the thing standing between the refresh and a
-/// reading, and Claude Code holds what it needs to renew it.
+/// reading, and asking Claude Code to start is worth a spawn.
 ///
-/// The refresh token is that: 2.1.x can leave a Keychain item holding only `mcpOAuth`, and an
-/// entry carrying no refresh token cannot be renewed by anything, so neither earns a spawn.
+/// A readable grant earns one when it is out of time and still holds a refresh token — that
+/// token is what Claude Code spends, and 2.1.x can leave a Keychain item holding only
+/// `mcpOAuth`, which cannot be renewed by anything. A Mac that has no usable grant still
+/// earns one when the Keychain *has* the item and withheld it: Claude Code can read that
+/// entry even when this process cannot, and `mcp list` is how it rewrites the file from it.
 fn sign_in_expiring(context: &CollectionContext) -> bool {
-    matches!(
-        look_up_credentials(context).entry,
-        Some(Entry::Grant(credentials))
-            if credentials.refresh_token_present
-                && is_expiring(&credentials, context.observed_unix())
-    )
+    let lookup = look_up_credentials(context);
+    let now = context.observed_unix();
+    match lookup.entry {
+        Some(Entry::Grant(credentials)) if !is_expiring(&credentials, now) => false,
+        Some(Entry::Grant(credentials)) if credentials.refresh_token_present => true,
+        Some(Entry::Grant(_)) | Some(Entry::SignedOut(_)) | None => lookup.keychain_refused,
+    }
 }
 
 /// Whether the credential holds a grant this refresh can spend, under the preference
@@ -232,6 +236,20 @@ fn sign_in_usable(context: &CollectionContext) -> bool {
         look_up_credentials(context).entry,
         Some(Entry::Grant(credentials)) if !is_expiring(&credentials, context.observed_unix())
     )
+}
+
+/// The access token and expiry this refresh would spend, or the emptied-entry marker.
+/// Compared before and after a spawn so a forced run is `Renewed` only when Claude Code
+/// actually rewrote the credential.
+fn credential_identity(context: &CollectionContext) -> Option<String> {
+    match look_up_credentials(context).entry? {
+        Entry::Grant(credentials) => Some(format!(
+            "{}:{}",
+            credentials.access_token,
+            credentials.expires_at.unwrap_or(0)
+        )),
+        Entry::SignedOut(source) => Some(format!("signed-out:{source}")),
+    }
 }
 
 fn read_credentials_file(path: &Path) -> Option<Entry> {
@@ -761,6 +779,10 @@ mod tests {
             verdict(KeychainSecret::Absent),
             (ErrorCategory::AuthRequired, SIGNED_OUT_SOURCE)
         );
+        // A withheld item is worth asking Claude Code to start: it can read the grant this
+        // process cannot. An emptied file with nothing in the Keychain is not.
+        assert!(sign_in_expiring(&context(KeychainSecret::Refused)));
+        assert!(!sign_in_expiring(&context(KeychainSecret::Absent)));
         fs::remove_dir_all(&home).expect("cleanup");
     }
 

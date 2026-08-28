@@ -61,6 +61,16 @@ pub fn renew_expired_sign_in(
     attempted: Option<&RenewalAttempt>,
     now: i64,
 ) -> Option<RenewalAttempt> {
+    renew_expired_sign_in_for(context, environment, attempted, now, false)
+}
+
+pub(crate) fn renew_expired_sign_in_for(
+    context: &mut CollectionContext,
+    environment: &ProbeEnvironment,
+    attempted: Option<&RenewalAttempt>,
+    now: i64,
+    force: bool,
+) -> Option<RenewalAttempt> {
     let plan = RenewalPlan {
         binary: GROK_BINARY,
         args: &AGENT_STDIO,
@@ -70,10 +80,11 @@ pub fn renew_expired_sign_in(
         // Not the negation: the Grok CLI leaves `auth.json` alone when it cannot renew, so a
         // file that is gone or unreadable afterwards is a sign-out rather than a refusal.
         usable: &super::sign_in_usable,
+        identity: &super::credential_identity,
         rewrites_keychain: false,
         drive: &drive,
     };
-    renew_sign_in(&plan, context, environment, attempted, now)
+    renew_sign_in(&plan, context, environment, attempted, now, force)
 }
 
 /// Asks the CLI to renew from the token already on disk.
@@ -277,6 +288,58 @@ mod tests {
             );
             assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
             assert_eq!(spawns(&log), 0);
+            let _ = fs::remove_dir_all(&directory);
+        }
+    }
+
+    /// A reading the endpoint rejected is not a live sign-in, even when the token still has
+    /// hours left. Asking Grok to start is what may rewrite `auth.json`; a run that leaves
+    /// it untouched is a failed attempt, not a renewal.
+    #[test]
+    fn a_live_grant_is_asked_when_a_rejected_reading_forces_it() {
+        #[cfg(unix)]
+        {
+            let (directory, mut context, environment) =
+                fixture("forced-live", "2026-08-26T18:00:00Z");
+            let log = directory.join("spawns.log");
+            let auth = directory.join("grok-home/auth.json");
+            install(
+                &directory,
+                &renewing_script(&log, &auth, &auth_json("2026-08-27T00:00:00Z", "fresh")),
+            );
+            assert!(!super::super::sign_in_expiring(&context));
+            assert!(super::super::sign_in_usable(&context));
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
+            assert_eq!(spawns(&log), 1);
+            assert_eq!(
+                super::super::load_credentials(&context)
+                    .expect("credentials")
+                    .access_token,
+                "fresh"
+            );
+            let _ = fs::remove_dir_all(&directory);
+
+            let (directory, mut context, environment) =
+                fixture("forced-unchanged", "2026-08-26T18:00:00Z");
+            let log = directory.join("spawns.log");
+            install(
+                &directory,
+                &format!("#!/bin/sh\necho ran >> {}\nexit 0\n", log.display()),
+            );
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading still earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Failed);
+            assert_eq!(spawns(&log), 1);
+            assert_eq!(
+                super::super::load_credentials(&context)
+                    .expect("credentials")
+                    .access_token,
+                "stale"
+            );
             let _ = fs::remove_dir_all(&directory);
         }
     }

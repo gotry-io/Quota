@@ -236,7 +236,13 @@ final class MenuBarViewModel {
   private let browserApplicationRouter: any BrowserApplicationRouting
 
   @ObservationIgnored
-  private var accountActionErrorMessage: String?
+  private let loginURLOpener: any LoginURLOpening
+
+  private(set) var accountActionErrorMessage: String?
+  private(set) var loginAuthorizeURL: URL?
+  private var browserOpenFailed = false
+
+  var canCopyLoginLink: Bool { loginAuthorizeURL != nil }
 
   /// How long a quit waits for the service's goodbye before going ahead without it.
   nonisolated static let shutdownDeadline: Duration = .seconds(2)
@@ -253,10 +259,12 @@ final class MenuBarViewModel {
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
     browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter(),
+    loginURLOpener: any LoginURLOpening = WorkspaceLoginURLOpener(),
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     self.browserSessionImporter = browserSessionImporter
     self.browserApplicationRouter = browserApplicationRouter
+    self.loginURLOpener = loginURLOpener
     self.shutdownDeadline = shutdownDeadline
     if let client {
       self.client = client
@@ -280,6 +288,7 @@ final class MenuBarViewModel {
     ) {
       browserSessionImporter = BrowserSessionImporter()
       browserApplicationRouter = WorkspaceBrowserApplicationRouter()
+      loginURLOpener = WorkspaceLoginURLOpener()
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
       initializationError = nil
@@ -489,9 +498,23 @@ final class MenuBarViewModel {
   func menuBarLabel(
     style: MenuBarStylePreference,
     provider: MenuBarProviderPreference = .automatic,
+    arrangement: MenuBarArrangementPreference = .combined,
     now: Date
   ) -> MenuBarLabelModel {
-    MenuBarLabelModel.make(overview: overview, style: style, provider: provider, now: now)
+    let layout = MenuBarLayout.resolve(
+      selection: provider,
+      arrangement: arrangement,
+      visibleProviders: ProviderDisplayOrder.enabledProviders()
+    )
+    return menuBarSpecs(style: style, layout: layout, now: now).first?.label ?? .empty
+  }
+
+  func menuBarSpecs(
+    style: MenuBarStylePreference,
+    layout: MenuBarLayout,
+    now: Date
+  ) -> [MenuBarStatusItemSpec] {
+    MenuBarLabelModel.specs(overview: overview, style: style, layout: layout, now: now)
   }
 
   func isPreparingUsage(source: UsageSource) -> Bool {
@@ -505,6 +528,8 @@ final class MenuBarViewModel {
     }
     accountActionErrorMessage = nil
     accountErrorMessage = nil
+    loginAuthorizeURL = nil
+    browserOpenFailed = false
     isLoggingIn = true
     loginTask = Task { @MainActor [weak self] in
       guard let self else { return }
@@ -513,7 +538,17 @@ final class MenuBarViewModel {
         loginTask = nil
       }
       do {
-        _ = try await client.login()
+        let result = try await client.login()
+        if let raw = result.authorizeURL, let url = URL(string: raw) {
+          loginAuthorizeURL = url
+          if !loginURLOpener.open(url) {
+            browserOpenFailed = true
+            let message =
+              "QuotaBar could not open your browser. Copy the sign-in link and open it yourself."
+            accountActionErrorMessage = message
+            accountErrorMessage = message
+          }
+        }
         // The service stores logging_in before acknowledging this request. From here onward its
         // state/events, rather than the short-lived request task, are authoritative.
         loginTask = nil
@@ -540,6 +575,8 @@ final class MenuBarViewModel {
     isLoggingIn = false
     accountActionErrorMessage = nil
     accountErrorMessage = nil
+    loginAuthorizeURL = nil
+    browserOpenFailed = false
     cancelLoginTask = Task { @MainActor [weak self] in
       defer { self?.cancelLoginTask = nil }
       do {
@@ -551,6 +588,12 @@ final class MenuBarViewModel {
         await self?.reloadState()
       }
     }
+  }
+
+  func copyLoginLink() {
+    guard let url = loginAuthorizeURL else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(url.absoluteString, forType: .string)
   }
 
   func logout() async {
@@ -969,9 +1012,22 @@ final class MenuBarViewModel {
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
     signInDisplayLabel = state.account.value?.displayLabel
-    authStatus =
+    let incomingAuth =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)
+    if incomingAuth == .signedIn {
+      if !browserOpenFailed {
+        accountActionErrorMessage = nil
+      }
+      loginAuthorizeURL = nil
+      browserOpenFailed = false
+    } else if incomingAuth == .loggingIn, authStatus != .loggingIn, !browserOpenFailed {
+      accountActionErrorMessage = nil
+    } else if incomingAuth != .loggingIn, authStatus == .loggingIn {
+      loginAuthorizeURL = nil
+      browserOpenFailed = false
+    }
+    authStatus = incomingAuth
     accountDisconnectReason =
       if authStatus == .signedOut {
         switch state.account.lastError?.code {
@@ -1004,10 +1060,12 @@ final class MenuBarViewModel {
       errorMessage = nil
     }
 
-    if let accountError = state.account.lastError {
+    if let action = accountActionErrorMessage {
+      accountErrorMessage = action
+    } else if let accountError = state.account.lastError {
       accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
     } else {
-      accountErrorMessage = accountActionErrorMessage
+      accountErrorMessage = nil
     }
   }
 
@@ -1053,5 +1111,15 @@ final class MenuBarViewModel {
       return description
     }
     return "QuotaBar's local service could not complete the request."
+  }
+}
+
+protocol LoginURLOpening: Sendable {
+  func open(_ url: URL) -> Bool
+}
+
+struct WorkspaceLoginURLOpener: LoginURLOpening {
+  func open(_ url: URL) -> Bool {
+    NSWorkspace.shared.open(url)
   }
 }

@@ -32,6 +32,13 @@ session token only as an HMAC under `web-access`, so a cookie cannot be replayed
 or the reverse. Both HMACs use `QUOTA_SESSION_HASH_KEY` under new domain labels;
 `BETTER_AUTH_SECRET` is no longer read anywhere.
 
+**QuotaBar's loopback grant is a split handoff.** The private local service builds PKCE, `state`, and
+the loopback redirect, binds the listener, and returns the authorize URL on `login`. QuotaBar opens
+that URL with `NSWorkspace`. The service waits up to 600 seconds for the callback and exchanges the
+code; it never launches a browser. If the app cannot open one, the listener stays up and the person
+copies the link. A session row this build cannot use is dropped rather than left as a permanent
+`invalid_state` refusal.
+
 **The Web principal is read, not synthesized.** `authorizeAccount` and `WebDocumentPort.getViewer`
 resolve the session cookie against `sessions`, and the ten-minute freshness rule guarding Delete
 Device and Delete Account reads that row's `authenticated_at`. Delete Account is one D1 batch over

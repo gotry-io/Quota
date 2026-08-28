@@ -65,8 +65,10 @@ emits revisioned `state_changed` events, and then waits on one scheduler thread 
 three events: an Account conditional read every minute, a quota collection at the stored interval
 (1, 2, 5, 10, or 15 minutes; default five), and a quota-only catch-up when a window `resets_at`
 falls before the next collection. Usage indexes on the collection tick when the file index is
-dirty, on its own in-flight lane, so a long scan does not postpone the next quota pass. Manual
-refresh and Diagnostics Recheck run both lanes as one coordinated refresh. A refresh applies a
+dirty, on its own in-flight lane, so a long scan does not postpone the next quota pass. An Account
+poll that lands while Quota is already in flight is kept pending and starts when Quota finishes,
+rather than being dropped for that minute. Manual refresh and Diagnostics Recheck run both lanes as
+one coordinated refresh. A refresh applies a
 component as soon as it has one rather than only at its end — the account read finishes in well
 under a second, quota is applied and uploaded before Usage joins, and provider collection can
 take twenty seconds per provider — and the end of a refresh applies a component exactly when it

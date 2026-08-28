@@ -16,18 +16,22 @@ struct SettingsHomeView: View {
     MenuBarStylePreference.fallback
   @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
     MenuBarProviderPreference.fallback
+  @AppStorage(MenuBarArrangementPreference.storageKey) private var menuBarArrangement =
+    MenuBarArrangementPreference.fallback
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         accountSection
 
-        if let accountErrorMessage = model.accountErrorMessage,
-          accountErrorMessage != signedOutMessage
-        {
-          Label(accountErrorMessage, systemImage: "exclamationmark.circle")
-            .quotaMetaStyle()
-            .fixedSize(horizontal: false, vertical: true)
+        if let accountErrorMessage = model.accountErrorMessage {
+          let hideSignedOutHint =
+            accountErrorMessage == signedOutMessage && model.accountActionErrorMessage == nil
+          if !hideSignedOutHint {
+            Label(accountErrorMessage, systemImage: "exclamationmark.circle")
+              .quotaMetaStyle()
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
 
         SettingsSection(title: "Quota") {
@@ -54,14 +58,14 @@ struct SettingsHomeView: View {
             settingsDestinationRow(
               title: "Style",
               systemImage: "menubar.rectangle",
-              trailing: menuBarStyle.label,
+              trailing: currentLayout.effectiveStyle(menuBarStyle).label,
               accessibilityLabel: MenuBarRoute.menuBarStyle.title,
               action: onOpenMenuBarStyle
             )
             settingsDestinationRow(
               title: "Provider",
               systemImage: "chart.bar.doc.horizontal",
-              trailing: menuBarProvider.label,
+              trailing: currentLayout.settingsSummary,
               accessibilityLabel: MenuBarRoute.menuBarProvider.title,
               action: onOpenMenuBarProvider
             )
@@ -141,9 +145,17 @@ struct SettingsHomeView: View {
         case .notChecked, .signedOut:
           if model.isLoggingIn {
             SettingsListRow(title: "Finish sign-in in browser", systemImage: "person.crop.circle") {
-              Button("Cancel", action: model.cancelLogin)
-                .quotaFont(.listSecondary)
-                .buttonStyle(.plain)
+              HStack(spacing: QuotaDesign.Spacing.sm) {
+                if model.canCopyLoginLink {
+                  Button("Copy Link", action: model.copyLoginLink)
+                    .quotaFont(.listSecondary)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Copy Link")
+                }
+                Button("Cancel", action: model.cancelLogin)
+                  .quotaFont(.listSecondary)
+                  .buttonStyle(.plain)
+              }
             }
           } else {
             Button(action: model.startLogin) {
@@ -173,6 +185,14 @@ struct SettingsHomeView: View {
     case nil:
       "Sync quota and Usage across your devices."
     }
+  }
+
+  private var currentLayout: MenuBarLayout {
+    MenuBarLayout.resolve(
+      selection: menuBarProvider,
+      arrangement: menuBarArrangement,
+      visibleProviders: ProviderDisplayOrder.enabledProviders()
+    )
   }
 
   private var usageSummary: String {

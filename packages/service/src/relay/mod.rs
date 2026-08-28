@@ -4,8 +4,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "macos")]
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1285,11 +1285,23 @@ fn validate_session_refresh_response(value: &Value, session: &Value) -> Result<(
 /// Native account/session owner used by the service backend.  It stores only the bounded session
 /// envelope in SQLite; browser authorization codes and provider credentials never enter the
 /// component state or diagnostics.
+struct PendingBrowserLogin {
+    listener: TcpListener,
+    redirect_uri: String,
+    state: String,
+    verifier: String,
+}
+
 pub struct AccountManager {
     client: Arc<RelayClient>,
     state: Arc<StateStore>,
     device_name: String,
     platform: &'static str,
+    /// Serializes access-token refresh so two lanes cannot spend the same single-use refresh token.
+    refresh_lock: Mutex<()>,
+    /// Loopback listener and PKCE values for the login in flight. Set by `begin_login`, taken by
+    /// `login`.
+    pending_login: Mutex<Option<PendingBrowserLogin>>,
 }
 
 impl AccountManager {
@@ -1299,15 +1311,43 @@ impl AccountManager {
             state,
             device_name: sanitize_device_name(&device_name),
             platform: current_platform(),
+            refresh_lock: Mutex::new(()),
+            pending_login: Mutex::new(None),
+        }
+    }
+
+    /// Bind the loopback listener, generate PKCE/`state`, and return the authorize URL.
+    ///
+    /// The app opens the URL. This process never launches a browser.
+    pub fn begin_login(&self) -> Result<String, BackendError> {
+        let pending = prepare_browser_login()?;
+        let authorize_url = pending_authorize_url(&pending)?;
+        let mut slot = self
+            .pending_login
+            .lock()
+            .map_err(|_| BackendError::unavailable())?;
+        *slot = Some(pending);
+        Ok(authorize_url)
+    }
+
+    pub fn abort_pending_login(&self) {
+        if let Ok(mut slot) = self.pending_login.lock() {
+            slot.take();
         }
     }
 
     pub fn login(&self, cancel: &AtomicBool) -> Result<LoginOutcome, BackendError> {
+        let pending = self
+            .pending_login
+            .lock()
+            .map_err(|_| BackendError::unavailable())?
+            .take()
+            .ok_or_else(BackendError::unavailable)?;
         let installation_id = self
             .state
             .installation_id()
             .map_err(|_| BackendError::unavailable())?;
-        let response = self.browser_exchange(&installation_id, cancel)?;
+        let response = self.complete_browser_exchange(pending, &installation_id, cancel)?;
         self.finalize_login_unless_cancelled(&response, cancel)
     }
 
@@ -1333,11 +1373,11 @@ impl AccountManager {
     }
 
     fn finalize_login(&self, response: &Value) -> Result<LoginOutcome, BackendError> {
-        let session = session_from_token_response(response).map_err(|_| BackendError {
-            error: crate::protocol::IpcError::new(
+        let session = session_from_token_response(response).map_err(|_| {
+            BackendError::new(crate::protocol::IpcError::new(
                 crate::protocol::ErrorCode::InvalidResponse,
                 crate::protocol::RecoveryAction::Retry,
-            ),
+            ))
         })?;
         let account_id = session
             .get("account_id")
@@ -1370,9 +1410,7 @@ impl AccountManager {
             .ok_or_else(BackendError::unavailable)?;
         self.client
             .revoke(refresh_token)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })
+            .map_err(|error| BackendError::new(relay_error_for_backend(error)))
     }
 
     /// Reads the whole Account once, in the calendar this device keeps.
@@ -1418,19 +1456,17 @@ impl AccountManager {
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
-            .ok_or_else(|| BackendError {
-                error: crate::protocol::IpcError::new(
+            .ok_or_else(|| {
+                BackendError::new(crate::protocol::IpcError::new(
                     crate::protocol::ErrorCode::AuthenticationRequired,
                     crate::protocol::RecoveryAction::Login,
-                ),
+                ))
             })?;
         if !is_active_session(&session) {
-            return Err(BackendError {
-                error: crate::protocol::IpcError::new(
-                    crate::protocol::ErrorCode::AuthenticationRequired,
-                    crate::protocol::RecoveryAction::Login,
-                ),
-            });
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::AuthenticationRequired,
+                crate::protocol::RecoveryAction::Login,
+            )));
         }
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
@@ -1458,16 +1494,14 @@ impl AccountManager {
                 query,
                 cached.as_ref().map(|(etag, _)| etag.as_str()),
             )
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
         let summary = match body {
             Some(summary) => {
-                validate_account_summary(&summary).map_err(|_| BackendError {
-                    error: crate::protocol::IpcError::new(
+                validate_account_summary(&summary).map_err(|_| {
+                    BackendError::new(crate::protocol::IpcError::new(
                         crate::protocol::ErrorCode::InvalidResponse,
                         crate::protocol::RecoveryAction::Retry,
-                    ),
+                    ))
                 })?;
                 if !account_id.is_empty() {
                     let _ = self.state.commit_account_read(
@@ -1484,31 +1518,18 @@ impl AccountManager {
             None => match cached {
                 Some((_, summary)) => summary,
                 None => {
-                    return Err(BackendError {
-                        error: crate::protocol::IpcError::new(
-                            crate::protocol::ErrorCode::InvalidResponse,
-                            crate::protocol::RecoveryAction::Retry,
-                        ),
-                    });
+                    return Err(BackendError::new(crate::protocol::IpcError::new(
+                        crate::protocol::ErrorCode::InvalidResponse,
+                        crate::protocol::RecoveryAction::Retry,
+                    )));
                 }
             },
         };
-        if !self
-            .state
-            .active_session_at_epoch(session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        session["last_refreshed_at"] = Value::String(crate::state::now_rfc3339());
-        if self
-            .state
-            .write_session_json_if_epoch(&session, session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-            .is_none()
-        {
-            return Err(session_changed_error());
-        }
+        let refreshed_at = crate::state::now_rfc3339();
+        session["last_refreshed_at"] = Value::String(refreshed_at.clone());
+        // Bookkeeping must not advance epoch: a concurrent lane that still holds the epoch
+        // it started with would otherwise treat this stamp as a session replacement.
+        let _ = self.state.touch_session_last_refreshed_at(&refreshed_at);
         Ok((summary, session))
     }
 
@@ -1525,14 +1546,12 @@ impl AccountManager {
         let control = self
             .client
             .sync_control(&token)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        validate_control_response(&control).map_err(|_| BackendError {
-            error: crate::protocol::IpcError::new(
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
+        validate_control_response(&control).map_err(|_| {
+            BackendError::new(crate::protocol::IpcError::new(
                 crate::protocol::ErrorCode::InvalidResponse,
                 crate::protocol::RecoveryAction::Retry,
-            ),
+            ))
         })?;
         let object = control.as_object().ok_or_else(BackendError::unavailable)?;
         let expected_account = session.get("account_id").and_then(Value::as_str);
@@ -1540,12 +1559,10 @@ impl AccountManager {
         if object.get("account_id").and_then(Value::as_str) != expected_account
             || object.get("device_id").and_then(Value::as_str) != expected_device
         {
-            return Err(BackendError {
-                error: crate::protocol::IpcError::new(
-                    crate::protocol::ErrorCode::InvalidState,
-                    crate::protocol::RecoveryAction::Reinstall,
-                ),
-            });
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::InvalidState,
+                crate::protocol::RecoveryAction::Reinstall,
+            )));
         }
         let profile_is_current = session
             .get("device_profile")
@@ -1559,16 +1576,12 @@ impl AccountManager {
             let response = self
                 .client
                 .update_device_profile(&token, &self.device_name, self.platform)
-                .map_err(|error| BackendError {
-                    error: relay_error_for_backend(error),
-                })?;
+                .map_err(|error| relay_backend_error(error, session_epoch))?;
             validate_device_profile_response(&response, expected_device).map_err(|_| {
-                BackendError {
-                    error: crate::protocol::IpcError::new(
-                        crate::protocol::ErrorCode::InvalidResponse,
-                        crate::protocol::RecoveryAction::Retry,
-                    ),
-                }
+                BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::InvalidResponse,
+                    crate::protocol::RecoveryAction::Retry,
+                ))
             })?;
             session["device_profile"] = serde_json::json!({
                 "display_name": self.device_name,
@@ -1610,20 +1623,15 @@ impl AccountManager {
         report: &Value,
         republished: &[Value],
     ) -> Result<Value, BackendError> {
-        let (session, session_epoch) = self
+        let (mut session, mut session_epoch) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
             .ok_or_else(BackendError::unavailable)?;
-        if !is_active_session(&session)
-            || !self
-                .state
-                .active_session_at_epoch(session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-        {
+        if !is_active_session(&session) {
             return Err(session_changed_error());
         }
-        let token = session_access_token_from(&session)?;
+        let token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
         let (_, snapshots) = snapshot_payload_from_quota_report(report, republished)?;
         let expected_device_id = session
             .get("device_id")
@@ -1634,210 +1642,158 @@ impl AccountManager {
             .and_then(Value::as_u64)
             .ok_or_else(BackendError::unavailable)?;
         let envelope = snapshot_envelope(expected_generation, snapshots);
-        if !self
-            .state
-            .active_session_at_epoch(session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
         let response = self
             .client
             .upload_snapshot(&token, &envelope)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        if !self
-            .state
-            .active_session_at_epoch(session_epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
         if response.get("device_id").and_then(Value::as_str) != Some(expected_device_id)
             || response.get("device_generation").and_then(Value::as_u64)
                 != Some(expected_generation)
         {
-            return Err(BackendError {
-                error: crate::protocol::IpcError::new(
-                    crate::protocol::ErrorCode::InvalidResponse,
-                    crate::protocol::RecoveryAction::Retry,
-                ),
-            });
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::InvalidResponse,
+                crate::protocol::RecoveryAction::Retry,
+            )));
         }
         Ok(response)
     }
 
     pub fn upload_usage(&self, submission: &Value) -> Result<Value, BackendError> {
-        let (session, epoch) = self
+        let (mut session, mut epoch) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
             .ok_or_else(session_changed_error)?;
-        if !is_active_session(&session)
-            || !self
-                .state
-                .active_session_at_epoch(epoch)
-                .map_err(|_| BackendError::unavailable())?
-        {
+        if !is_active_session(&session) {
             return Err(session_changed_error());
         }
         validate_usage_submission_session(&session, submission)?;
-        let token = session_access_token_from(&session)?;
-        if !self
-            .state
-            .active_session_at_epoch(epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        let response = self
-            .client
+        let token = self.ensure_fresh_session(&mut session, &mut epoch)?;
+        self.client
             .upload_usage(&token, submission)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })?;
-        if !self
-            .state
-            .active_session_at_epoch(epoch)
-            .map_err(|_| BackendError::unavailable())?
-        {
-            return Err(session_changed_error());
-        }
-        Ok(response)
+            .map_err(|error| relay_backend_error(error, epoch))
     }
 
     /// The access token to use now, rotating the one session first if it is about to expire.
-    fn ensure_fresh_session(
+    pub(crate) fn ensure_fresh_session(
         &self,
         session: &mut Value,
         session_epoch: &mut u64,
     ) -> Result<String, BackendError> {
-        let needs_refresh = session
-            .get("session")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("access_expires_at"))
-            .and_then(Value::as_str)
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .is_none_or(|expires| {
-                expires.with_timezone(&chrono::Utc)
-                    <= chrono::Utc::now() + chrono::Duration::seconds(60)
-            });
-        if needs_refresh {
-            if !self
-                .state
-                .active_session_at_epoch(*session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-            {
-                return Err(session_changed_error());
-            }
-            refresh_session_family(&self.client, session)?;
-            // Persist the rotated family before issuing any subsequent network request. A
-            // compare-and-swap refresh token is single-use on Relay, so a later failure must not
-            // strand the newly issued token only in memory.
-            *session_epoch = self
-                .state
-                .write_session_json_if_epoch(session, *session_epoch)
-                .map_err(|_| BackendError::unavailable())?
-                .ok_or_else(session_changed_error)?;
+        if !access_token_needs_refresh(session) {
+            return session_access_token_from(session);
         }
-        session
-            .get("session")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("access_token"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| BackendError {
-                error: crate::protocol::IpcError::new(
-                    crate::protocol::ErrorCode::AuthenticationRequired,
-                    crate::protocol::RecoveryAction::Login,
-                ),
-            })
+        let _guard = self
+            .refresh_lock
+            .lock()
+            .map_err(|_| BackendError::unavailable())?;
+        let (mut current, mut current_epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(session_changed_error)?;
+        if !is_active_session(&current) {
+            return Err(session_changed_error());
+        }
+        if !access_token_needs_refresh(&current) {
+            *session = current;
+            *session_epoch = current_epoch;
+            return session_access_token_from(session);
+        }
+        refresh_session_family(&self.client, &mut current, current_epoch)?;
+        // Persist the rotated family before issuing any subsequent network request. A
+        // compare-and-swap refresh token is single-use on Relay, so a later failure must not
+        // strand the newly issued token only in memory.
+        current_epoch = self
+            .state
+            .write_session_json_if_epoch(&current, current_epoch)
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(session_changed_error)?;
+        *session = current;
+        *session_epoch = current_epoch;
+        session_access_token_from(session)
     }
 
-    fn browser_exchange(
+    fn complete_browser_exchange(
         &self,
+        pending: PendingBrowserLogin,
         installation_id: &str,
         cancel: &AtomicBool,
     ) -> Result<Value, BackendError> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| BackendError::unavailable())?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|_| BackendError::unavailable())?;
-        let port = listener
-            .local_addr()
-            .map_err(|_| BackendError::unavailable())?
-            .port();
-        let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-        let state = random_secret(32);
-        let verifier = random_secret(48);
-        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(sha2::Sha256::digest(verifier.as_bytes()));
-        let mut authorize = Url::parse(&format!("{MANAGED_ORIGIN}/oauth/v2/authorize"))
-            .map_err(|_| BackendError::unavailable())?;
-        authorize
-            .query_pairs_mut()
-            .append_pair("client_id", "quotabar")
-            .append_pair("response_type", "code")
-            .append_pair("redirect_uri", &redirect_uri)
-            .append_pair("state", &state)
-            .append_pair("code_challenge", &challenge)
-            .append_pair("code_challenge_method", "S256");
-        open_browser(authorize.as_str())?;
-        let callback = wait_for_callback(&listener, &state, cancel)?;
+        let callback = wait_for_callback(&pending.listener, &pending.state, cancel)?;
         let body = serde_json::json!({
             "protocol_version": CONTROL_PROTOCOL,
             "grant_type": "authorization_code",
             "client_id": "quotabar",
             "code": callback,
-            "code_verifier": verifier,
-            "redirect_uri": redirect_uri,
+            "code_verifier": pending.verifier,
+            "redirect_uri": pending.redirect_uri,
             "installation_id": installation_id,
             "device_display_name": self.device_name,
             "platform": self.platform
         });
         self.client
             .exchange_browser(&body)
-            .map_err(|error| BackendError {
-                error: relay_error_for_backend(error),
-            })
+            .map_err(|error| BackendError::new(relay_error_for_backend(error)))
     }
+}
+
+fn prepare_browser_login() -> Result<PendingBrowserLogin, BackendError> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|_| BackendError::unavailable())?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| BackendError::unavailable())?;
+    let port = listener
+        .local_addr()
+        .map_err(|_| BackendError::unavailable())?
+        .port();
+    Ok(PendingBrowserLogin {
+        listener,
+        redirect_uri: format!("http://127.0.0.1:{port}/callback"),
+        state: random_secret(32),
+        verifier: random_secret(48),
+    })
+}
+
+fn pending_authorize_url(pending: &PendingBrowserLogin) -> Result<String, BackendError> {
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(pending.verifier.as_bytes()));
+    let mut authorize = Url::parse(&format!("{MANAGED_ORIGIN}/oauth/v2/authorize"))
+        .map_err(|_| BackendError::unavailable())?;
+    authorize
+        .query_pairs_mut()
+        .append_pair("client_id", "quotabar")
+        .append_pair("response_type", "code")
+        .append_pair("redirect_uri", &pending.redirect_uri)
+        .append_pair("state", &pending.state)
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256");
+    Ok(authorize.into())
 }
 
 fn current_platform() -> &'static str {
     std::env::consts::OS
 }
 
-#[cfg(target_os = "macos")]
-fn open_browser(url: &str) -> Result<(), BackendError> {
-    let mut browser = Command::new("/usr/bin/open");
-    let mut browser = browser
-        .arg(url)
-        .spawn()
-        .map_err(|_| BackendError::unavailable())?;
-    if browser
-        .wait()
-        .map_err(|_| BackendError::unavailable())?
-        .success()
-    {
-        Ok(())
-    } else {
-        Err(BackendError::unavailable())
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn open_browser(_url: &str) -> Result<(), BackendError> {
-    Err(BackendError::unavailable())
-}
-
 fn session_changed_error() -> BackendError {
-    BackendError {
-        error: crate::protocol::IpcError::new(
-            crate::protocol::ErrorCode::AuthenticationRequired,
-            crate::protocol::RecoveryAction::Login,
-        ),
-    }
+    BackendError::session_changed()
+}
+
+fn relay_backend_error(error: RelayError, observed_epoch: u64) -> BackendError {
+    BackendError::relay_rejection(relay_error_for_backend(error), observed_epoch)
+}
+
+fn access_token_needs_refresh(session: &Value) -> bool {
+    session
+        .get("session")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("access_expires_at"))
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_none_or(|expires| {
+            expires.with_timezone(&chrono::Utc)
+                <= chrono::Utc::now() + chrono::Duration::seconds(60)
+        })
 }
 
 fn snapshot_payload_from_quota_report<'a>(
@@ -1910,7 +1866,7 @@ fn session_access_token_from(session: &Value) -> Result<String, BackendError> {
         .and_then(|value| value.get("access_token"))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(session_changed_error)
+        .ok_or_else(BackendError::unavailable)
 }
 
 fn pending_session_from_active(session: &Value) -> Option<Value> {
@@ -1931,7 +1887,11 @@ fn pending_session_from_active(session: &Value) -> Option<Value> {
     }))
 }
 
-fn refresh_session_family(client: &RelayClient, session: &mut Value) -> Result<(), BackendError> {
+fn refresh_session_family(
+    client: &RelayClient,
+    session: &mut Value,
+    session_epoch: u64,
+) -> Result<(), BackendError> {
     let refresh_token = session
         .get("session")
         .and_then(Value::as_object)
@@ -1945,9 +1905,7 @@ fn refresh_session_family(client: &RelayClient, session: &mut Value) -> Result<(
             "client_id": "quotabar",
             "refresh_token": refresh_token
         }))
-        .map_err(|error| BackendError {
-            error: relay_error_for_backend(error),
-        })?;
+        .map_err(|error| relay_backend_error(error, session_epoch))?;
     validate_session_refresh_response(&response, session)?;
     let token = response
         .get("session")
@@ -2075,12 +2033,10 @@ fn wait_for_callback(
             return Err(BackendError::cancelled());
         }
         if Instant::now() >= deadline {
-            return Err(BackendError {
-                error: crate::protocol::IpcError::new(
-                    crate::protocol::ErrorCode::Unavailable,
-                    crate::protocol::RecoveryAction::Retry,
-                ),
-            });
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::Unavailable,
+                crate::protocol::RecoveryAction::Retry,
+            )));
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
@@ -2260,12 +2216,10 @@ fn valid_billing_agent(value: Option<&str>) -> bool {
 }
 
 fn invalid_response_backend() -> BackendError {
-    BackendError {
-        error: crate::protocol::IpcError::new(
-            crate::protocol::ErrorCode::InvalidResponse,
-            crate::protocol::RecoveryAction::Retry,
-        ),
-    }
+    BackendError::new(crate::protocol::IpcError::new(
+        crate::protocol::ErrorCode::InvalidResponse,
+        crate::protocol::RecoveryAction::Retry,
+    ))
 }
 
 fn validate_device_profile_response(
@@ -2610,13 +2564,12 @@ mod tests {
             validate_usage_submission_session(&session, &serde_json::json!({"generation": 2}))
                 .is_ok()
         );
-        assert_eq!(
+        let mismatch =
             validate_usage_submission_session(&session, &serde_json::json!({"generation": 3}))
-                .expect_err("generation mismatch")
-                .error
-                .code,
-            crate::protocol::ErrorCode::AuthenticationRequired
-        );
+                .expect_err("generation mismatch");
+        assert_eq!(mismatch.error.code, crate::protocol::ErrorCode::Unavailable);
+        assert!(mismatch.is_session_changed());
+        assert!(!mismatch.error.code.requires_login());
     }
 
     #[test]
@@ -2688,6 +2641,32 @@ mod tests {
         assert!(parse_utc_hour_value("2026-08-10T00:00:00Z").is_ok());
         assert!(parse_utc_hour_value("2026-08-10T00:00:00+00:00").is_err());
         assert!(parse_utc_hour_value("2026-08-10T00:00:60Z").is_err());
+    }
+
+    #[test]
+    fn begin_login_returns_an_authorize_url_and_does_not_open_a_browser() {
+        let root = std::env::temp_dir().join(format!("quota-begin-login-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test("http://127.0.0.1:1").expect("client")),
+            state.clone(),
+            "Studio Mac".into(),
+        );
+
+        let url = manager.begin_login().expect("authorize url");
+        assert!(url.contains("/oauth/v2/authorize"), "{url}");
+        assert!(url.contains("client_id=quotabar"), "{url}");
+        assert!(url.contains("code_challenge="), "{url}");
+        assert!(
+            url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"),
+            "{url}"
+        );
+        manager.abort_pending_login();
+
+        drop(manager);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -3073,6 +3052,10 @@ mod tests {
         );
 
         let cancel = AtomicBool::new(false);
+        let (_, epoch_before) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
         let first = manager
             .refresh_account_state("UTC", &cancel)
             .expect("first account read");
@@ -3081,6 +3064,20 @@ mod tests {
             .expect("conditional account read");
         assert_eq!(first, second);
         assert_eq!(second["account_summary"], summary);
+        let (after, epoch_after) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        assert_eq!(
+            epoch_after, epoch_before,
+            "bookkeeping must not rotate epoch"
+        );
+        assert!(
+            after
+                .get("last_refreshed_at")
+                .and_then(Value::as_str)
+                .is_some()
+        );
 
         let sent = server.join().expect("mock server");
         assert_eq!(sent.len(), 2, "{sent:?}");
@@ -3092,6 +3089,153 @@ mod tests {
             "{}",
             sent[1]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_epoch_conflict_on_bookkeeping_is_not_a_login_error() {
+        let mut summary = valid_summary(serde_json::json!([]));
+        summary["account"]["display_label"] = serde_json::json!("octocat");
+        let arrived = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (origin, server) = spawn_gated_mock(
+            vec![http_json_with_etag(200, "\"stamp-one\"", &summary)],
+            Duration::from_millis(150),
+            arrived.clone(),
+        );
+        let root = std::env::temp_dir().join(format!("quota-bookkeeping-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let (_, epoch) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        let reader = thread::spawn(move || manager.refresh_account_state("UTC", &cancel));
+        wait_gate(&arrived);
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("bump epoch");
+        let result = reader.join().expect("reader");
+        assert!(
+            result.as_ref().ok().is_some()
+                || result.as_ref().err().is_some_and(
+                    |error| error.is_session_changed() && !error.error.code.requires_login()
+                ),
+            "{result:?}"
+        );
+        let (session, after) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session still installed");
+        assert_ne!(after, epoch);
+        assert_eq!(
+            session.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        let _ = server.join().expect("mock server");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_upload_succeeds_when_the_local_epoch_moves_after_relay_accepts() {
+        let snapshot = valid_snapshot();
+        let report = serde_json::json!({
+            "captured_at": "2026-08-10T00:00:00Z",
+            "results": [{"snapshots": [snapshot]}]
+        });
+        let response = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "device_id": "device_1",
+            "device_generation": 1,
+            "accepted": ["codex"],
+            "ignored": []
+        });
+        let arrived = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (origin, server) = spawn_gated_mock(
+            vec![http_json(200, None, &response)],
+            Duration::from_millis(150),
+            arrived.clone(),
+        );
+        let root =
+            std::env::temp_dir().join(format!("quota-upload-epoch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        );
+        let uploader = thread::spawn(move || manager.upload_quota_report(&report, &[]));
+        wait_gate(&arrived);
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("bump epoch");
+        let result = uploader.join().expect("uploader");
+        assert!(result.is_ok(), "{result:?}");
+        let _ = server.join().expect("mock server");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_ensure_fresh_session_refreshes_once() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (origin, server) = spawn_looping_mock(token_refresh_http(), stop.clone());
+        let root =
+            std::env::temp_dir().join(format!("quota-refresh-once-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        let mut session = fresh_session_json();
+        session["session"]["access_expires_at"] = serde_json::json!(
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
+        state.write_session_json(&session).expect("session");
+        let manager = Arc::new(AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        ));
+        let (left_session, mut left_epoch) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        let (right_session, mut right_epoch) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        let left_manager = Arc::clone(&manager);
+        let right_manager = Arc::clone(&manager);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut session = left_session;
+                left_manager
+                    .ensure_fresh_session(&mut session, &mut left_epoch)
+                    .expect("left refresh");
+            });
+            scope.spawn(|| {
+                let mut session = right_session;
+                right_manager
+                    .ensure_fresh_session(&mut session, &mut right_epoch)
+                    .expect("right refresh");
+            });
+        });
+        stop.store(true, Ordering::Release);
+        let sent = server.join().expect("mock server");
+        let refreshes = sent
+            .iter()
+            .filter(|head| head.starts_with("POST /oauth/v2/token"))
+            .count();
+        assert_eq!(refreshes, 1, "{sent:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3148,6 +3292,121 @@ mod tests {
             recorded
         });
         (format!("http://{address}"), server)
+    }
+
+    fn wait_gate(arrived: &Arc<(Mutex<bool>, std::sync::Condvar)>) {
+        let (lock, cond) = arrived.as_ref();
+        let mut ready = lock.lock().expect("gate");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !*ready {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "mock never received a request");
+            let (guard, _) = cond.wait_timeout(ready, remaining).expect("wait");
+            ready = guard;
+        }
+    }
+
+    fn spawn_gated_mock(
+        responses: Vec<String>,
+        delay: Duration,
+        arrived: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let mut recorded = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("mock request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("mock timeout");
+                let mut request = [0_u8; 8_192];
+                let read = stream.read(&mut request).unwrap_or(0);
+                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                {
+                    let (lock, cond) = arrived.as_ref();
+                    *lock.lock().expect("gate") = true;
+                    cond.notify_all();
+                }
+                thread::sleep(delay);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("mock response");
+            }
+            recorded
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn spawn_looping_mock(
+        response: String,
+        stop: Arc<AtomicBool>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let mut recorded = Vec::new();
+            while !stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("blocking stream");
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .expect("mock timeout");
+                        let mut request = [0_u8; 8_192];
+                        let read = stream.read(&mut request).unwrap_or(0);
+                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        thread::sleep(Duration::from_millis(80));
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+            recorded
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn fresh_session_json() -> Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "active",
+            "account_id": "account_1",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "usage_sync_revision": 0,
+            "usage_deleted_before": null,
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        })
+    }
+
+    fn token_refresh_http() -> String {
+        http_json(
+            200,
+            None,
+            &serde_json::json!({
+                "protocol_version": CONTROL_PROTOCOL,
+                "token_type": "Bearer",
+                "account_id": "account_1",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "session": {
+                    "access_token": "access_token_rotated_xx",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "refresh_token_rotated_xx",
+                    "refresh_expires_at": "2099-11-10T01:00:00Z"
+                }
+            }),
+        )
     }
 
     fn valid_snapshot() -> Value {

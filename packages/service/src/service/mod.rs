@@ -19,22 +19,68 @@ pub trait EventSink: Send + Sync {
     fn event(&self, event: IpcEvent);
 }
 
+/// Where a [`BackendError`] came from. Kept off the IPC surface so Swift does not have to
+/// decode a new `ErrorCode`; a local epoch miss is retryable and never a sign-out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendErrorKind {
+    Ordinary,
+    SessionChanged,
+    RelayRejection { observed_epoch: u64 },
+}
+
 #[derive(Debug, Clone)]
 pub struct BackendError {
     pub error: IpcError,
+    kind: BackendErrorKind,
 }
 
 impl BackendError {
-    pub const fn unavailable() -> Self {
+    pub const fn new(error: IpcError) -> Self {
         Self {
-            error: IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
+            error,
+            kind: BackendErrorKind::Ordinary,
         }
     }
 
+    pub const fn unavailable() -> Self {
+        Self::new(IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry))
+    }
+
     pub const fn cancelled() -> Self {
+        Self::new(IpcError::new(ErrorCode::Cancelled, RecoveryAction::None))
+    }
+
+    /// The local session moved under this caller. Distinct from a Relay 401: IPC is retryable
+    /// and the installed session must not be cleared.
+    pub const fn session_changed() -> Self {
         Self {
-            error: IpcError::new(ErrorCode::Cancelled, RecoveryAction::None),
+            error: IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
+            kind: BackendErrorKind::SessionChanged,
         }
+    }
+
+    /// A Relay response that may end the session, pinned to the epoch observed when the
+    /// rejected request was sent.
+    pub(crate) const fn relay_rejection(error: IpcError, observed_epoch: u64) -> Self {
+        let kind = if error.code.requires_login() {
+            BackendErrorKind::RelayRejection { observed_epoch }
+        } else {
+            BackendErrorKind::Ordinary
+        };
+        Self { error, kind }
+    }
+
+    /// Epoch to compare-and-swap against when clearing a session after a Relay rejection.
+    pub(crate) const fn sign_out_epoch(&self) -> Option<u64> {
+        match self.kind {
+            BackendErrorKind::RelayRejection { observed_epoch } => Some(observed_epoch),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn is_session_changed(&self) -> bool {
+        matches!(self.kind, BackendErrorKind::SessionChanged)
     }
 }
 
@@ -145,24 +191,44 @@ pub trait LocalBackend: Send + Sync {
     /// One refresh transaction.  Implementations may collect quota/Usage and read the Account in
     /// parallel, but must order pricing/control, upload/outbox, and overview merging explicitly.
     /// Anything handed to `updates` before this returns is still named in the outcome.
-    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome;
+    ///
+    /// `bypass_renewal_floor` is true only for a Recheck or a manual refresh: those may ask
+    /// the owning CLI again immediately. Startup, settings, account changes, and the timer
+    /// wait out the hour.
+    fn refresh(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        bypass_renewal_floor: bool,
+    ) -> RefreshOutcome;
     /// Account summary only. Used by the one-minute signed-in poll.
     fn refresh_account(
         &self,
         cancel: Arc<AtomicBool>,
         updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
     ) -> Result<Value, BackendError> {
-        let _ = (cancel, updates);
+        let _ = (cancel, updates, trigger);
         Err(BackendError::unavailable())
     }
     /// Quota collection, upload, and Overview, without Usage. Defaults do not run a full refresh.
-    fn refresh_quota(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
-        let _ = (cancel, updates);
+    fn refresh_quota(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> RefreshOutcome {
+        let _ = (cancel, updates, trigger);
         unavailable_refresh_outcome()
     }
     /// Usage scan, report, and outbox, without provider collection.
-    fn refresh_usage(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
-        let _ = (cancel, updates);
+    fn refresh_usage(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> RefreshOutcome {
+        let _ = (cancel, updates, trigger);
         unavailable_refresh_outcome()
     }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
@@ -174,6 +240,15 @@ pub trait LocalBackend: Send + Sync {
         installation_id: &str,
         cancel: Arc<AtomicBool>,
     ) -> Result<LoginOutcome, BackendError>;
+    /// Bind the loopback listener and return the authorize URL the app should open.
+    ///
+    /// Test backends skip the listener and return a placeholder. Production binds synchronously
+    /// so `login` can answer with the URL before the callback thread waits.
+    fn begin_login(&self) -> Result<String, BackendError> {
+        Ok("http://127.0.0.1/quota-login".to_owned())
+    }
+    /// Drop a listener `begin_login` created if the login thread never starts.
+    fn abort_login_preparation(&self) {}
     fn logout(&self, pending_session: &Value) -> Result<(), BackendError>;
     fn validate_provider_browser_session(
         &self,
@@ -187,7 +262,7 @@ struct UnavailableBackend;
 
 #[cfg(test)]
 impl LocalBackend for UnavailableBackend {
-    fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+    fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
         let unavailable = || Err(BackendError::unavailable());
         RefreshOutcome {
             quota: unavailable(),
@@ -225,6 +300,7 @@ struct RefreshState {
     account: Option<ActiveRefresh>,
     pending_quota: bool,
     pending_usage: bool,
+    pending_account: bool,
 }
 
 struct SchedulerPlan {
@@ -241,6 +317,12 @@ enum RefreshLane {
 }
 
 impl RefreshLane {
+    /// Whether this lane should wait rather than start now.
+    ///
+    /// Quota and Usage may overlap: a local session-epoch miss is retryable and does not sign
+    /// the device out, token refresh is process-wide and single-flight, and uploads refresh
+    /// the access token before they send. Account waits for an in-flight Quota pass because
+    /// that pass already reads the Account; a blocked poll is kept pending rather than dropped.
     fn blocked(self, refresh: &RefreshState) -> bool {
         match self {
             Self::Quota => refresh.active.is_some() || refresh.quota.is_some(),
@@ -289,6 +371,28 @@ struct LoginState {
     active: Option<Arc<AtomicBool>>,
 }
 
+/// Clears `login.active` unless the login thread was spawned.
+struct LoginActiveGuard {
+    inner: Arc<ServiceInner>,
+    armed: bool,
+}
+
+impl LoginActiveGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for LoginActiveGuard {
+    fn drop(&mut self) {
+        if self.armed
+            && let Ok(mut login) = self.inner.login.lock()
+        {
+            login.active = None;
+        }
+    }
+}
+
 struct ServiceInner {
     state: Arc<StateStore>,
     backend: Arc<dyn LocalBackend>,
@@ -301,6 +405,8 @@ struct ServiceInner {
     scheduler_signal: Mutex<schedule::SchedulerSignal>,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
+    #[cfg(test)]
+    fail_next_account_component_write: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -314,7 +420,7 @@ impl LocalService {
         sink: Arc<dyn EventSink>,
         backend: Arc<dyn LocalBackend>,
     ) -> Self {
-        Self {
+        let service = Self {
             inner: Arc::new(ServiceInner {
                 state,
                 backend,
@@ -329,6 +435,7 @@ impl LocalService {
                     account: None,
                     pending_quota: false,
                     pending_usage: false,
+                    pending_account: false,
                 }),
                 login: Mutex::new(LoginState { active: None }),
                 scheduler: Mutex::new(SchedulerPlan {
@@ -340,8 +447,12 @@ impl LocalService {
                 scheduler_signal: Mutex::new(schedule::SchedulerSignal::Idle),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
+                #[cfg(test)]
+                fail_next_account_component_write: AtomicBool::new(false),
             }),
-        }
+        };
+        service.reconcile_persisted_login();
+        service
     }
 
     pub fn start_scheduler(&self) {
@@ -405,7 +516,10 @@ impl LocalService {
                         }
                         schedule::SchedulerWake::ResetBoundary => {
                             service.mark_reset_attempted();
-                            service.request_lane(RefreshLane::Quota);
+                            service.request_lane(
+                                RefreshLane::Quota,
+                                DiagnosticAttemptTrigger::Scheduled,
+                            );
                         }
                     }
                 }
@@ -642,16 +756,20 @@ impl LocalService {
 
     fn login(&self, request: &IpcRequest) -> Result<LoginResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        if let Some(session) = self.inner.state.session_json().map_err(state_error)? {
+        if let Some((session, epoch)) = self.inner.state.session_snapshot().map_err(state_error)? {
             match session.get("status").and_then(Value::as_str) {
                 Some("active") | Some("logout_pending") => {
                     return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
                 }
                 _ => {
-                    return Err(IpcError::new(
-                        ErrorCode::InvalidState,
-                        RecoveryAction::Reinstall,
-                    ));
+                    if !self
+                        .inner
+                        .state
+                        .clear_session_if_epoch(epoch)
+                        .map_err(state_error)?
+                    {
+                        return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
+                    }
                 }
             }
         }
@@ -663,24 +781,19 @@ impl LocalService {
         if login.active.is_some() {
             return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
         }
+        let authorize_url = match self.inner.backend.begin_login() {
+            Ok(url) => url,
+            Err(error) => return Err(error.error),
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         login.active = Some(cancel.clone());
         drop(login);
 
-        let current = self
-            .inner
-            .state
-            .component(ComponentName::Account)
-            .map_err(state_error)?;
-        let account = account_value_from(current.as_ref(), AuthStatus::LoggingIn);
-        self.update_component(
-            ComponentName::Account,
-            ComponentStatus::AuthRequired,
-            Some(account_value_json(&account)),
-            None,
-            None,
-            true,
-        )?;
+        let mut guard = LoginActiveGuard {
+            inner: Arc::clone(&self.inner),
+            armed: true,
+        };
+        let _ = self.mark_account_logging_in();
         let service = self.clone();
         if thread::Builder::new()
             .name("quota-login".to_owned())
@@ -696,16 +809,16 @@ impl LocalService {
             })
             .is_err()
         {
-            if let Ok(mut login) = self.inner.login.lock() {
-                login.active = None;
-            }
+            self.inner.backend.abort_login_preparation();
             return Err(IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry));
         }
+        guard.disarm();
         Ok(LoginResult {
             status: AuthStatus::LoggingIn,
             account_id: None,
             device_id: None,
             device_generation: None,
+            authorize_url: Some(authorize_url),
         })
     }
 
@@ -722,6 +835,7 @@ impl LocalService {
                 account_id: None,
                 device_id: None,
                 device_generation: None,
+                authorize_url: None,
             });
         };
         cancel.store(true, Ordering::Release);
@@ -730,6 +844,7 @@ impl LocalService {
             account_id: None,
             device_id: None,
             device_generation: None,
+            authorize_url: None,
         })
     }
 
@@ -1054,8 +1169,8 @@ impl LocalService {
     }
 
     fn request_scheduled_lanes(&self) -> RefreshResult {
-        let quota = self.request_lane(RefreshLane::Quota);
-        let usage = self.request_lane(RefreshLane::Usage);
+        let quota = self.request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled);
+        let usage = self.request_lane(RefreshLane::Usage, DiagnosticAttemptTrigger::Scheduled);
         RefreshResult {
             accepted: quota.accepted || usage.accepted,
             pending: quota.pending || usage.pending,
@@ -1064,10 +1179,10 @@ impl LocalService {
     }
 
     fn request_account_sync(&self) {
-        let _ = self.request_lane(RefreshLane::Account);
+        let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
     }
 
-    fn request_lane(&self, lane: RefreshLane) -> RefreshResult {
+    fn request_lane(&self, lane: RefreshLane, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
         let mut refresh = match self.inner.refresh.lock() {
             Ok(refresh) => refresh,
             Err(_) => {
@@ -1082,27 +1197,30 @@ impl LocalService {
             match lane {
                 RefreshLane::Quota => refresh.pending_quota = true,
                 RefreshLane::Usage => refresh.pending_usage = true,
-                RefreshLane::Account => {}
+                RefreshLane::Account => refresh.pending_account = true,
             }
             return RefreshResult {
                 accepted: false,
-                pending: !matches!(lane, RefreshLane::Account),
+                pending: true,
                 revision: self.inner.state.current_revision().unwrap_or(0),
             };
         }
         let cancel = Arc::new(AtomicBool::new(false));
         match lane {
             RefreshLane::Quota => {
+                refresh.pending_quota = false;
                 refresh.quota = Some(ActiveRefresh {
                     cancel: cancel.clone(),
                 })
             }
             RefreshLane::Usage => {
+                refresh.pending_usage = false;
                 refresh.usage = Some(ActiveRefresh {
                     cancel: cancel.clone(),
                 })
             }
             RefreshLane::Account => {
+                refresh.pending_account = false;
                 refresh.account = Some(ActiveRefresh {
                     cancel: cancel.clone(),
                 })
@@ -1123,7 +1241,7 @@ impl LocalService {
                 }
                 .to_owned(),
             )
-            .spawn(move || service.run_lane(lane, cancel))
+            .spawn(move || service.run_lane(lane, cancel, trigger))
             .is_ok();
         if !spawned {
             self.clear_lane(lane);
@@ -1205,7 +1323,7 @@ impl LocalService {
                 .name("quota-refresh".to_owned())
                 .spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        service.run_refresh(cancel, attempt)
+                        service.run_refresh(cancel, attempt, trigger)
                     }));
                     // A panicking refresh still has an outcome worth reporting: the
                     // recovery below marks every component unavailable.
@@ -1288,7 +1406,12 @@ impl LocalService {
         )
     }
 
-    fn run_refresh(&self, cancel: Arc<AtomicBool>, attempt: Option<DiagnosticAttemptHandle>) {
+    fn run_refresh(
+        &self,
+        cancel: Arc<AtomicBool>,
+        attempt: Option<DiagnosticAttemptHandle>,
+        trigger: DiagnosticAttemptTrigger,
+    ) {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
@@ -1304,7 +1427,14 @@ impl LocalService {
                 overview: None,
             }
         } else {
-            self.inner.backend.refresh(cancel.clone(), &updates)
+            self.inner.backend.refresh(
+                cancel.clone(),
+                &updates,
+                matches!(
+                    trigger,
+                    DiagnosticAttemptTrigger::Manual | DiagnosticAttemptTrigger::Recheck
+                ),
+            )
         };
         let session_required = self
             .inner
@@ -1345,7 +1475,7 @@ impl LocalService {
             Ok(refresh) => refresh,
             Err(_) => return,
         };
-        if refresh.active.is_some() || refresh.quota.is_some() || refresh.usage.is_some() {
+        if refresh.active.is_some() {
             return;
         }
         if refresh.pending {
@@ -1358,24 +1488,32 @@ impl LocalService {
             let _ = self.request_full(trigger);
             return;
         }
-        let quota = refresh.pending_quota;
-        let usage = refresh.pending_usage;
-        refresh.pending_quota = false;
-        refresh.pending_usage = false;
+        let start_account = refresh.pending_account && !RefreshLane::Account.blocked(&refresh);
+        let lanes_idle = refresh.quota.is_none() && refresh.usage.is_none();
+        let quota = lanes_idle && refresh.pending_quota;
+        let usage = lanes_idle && refresh.pending_usage;
         drop(refresh);
         if quota {
-            let _ = self.request_lane(RefreshLane::Quota);
+            let _ = self.request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled);
         }
         if usage {
-            let _ = self.request_lane(RefreshLane::Usage);
+            let _ = self.request_lane(RefreshLane::Usage, DiagnosticAttemptTrigger::Scheduled);
+        }
+        if start_account {
+            let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
         }
     }
 
-    fn run_lane(&self, lane: RefreshLane, cancel: Arc<AtomicBool>) {
+    fn run_lane(
+        &self,
+        lane: RefreshLane,
+        cancel: Arc<AtomicBool>,
+        trigger: DiagnosticAttemptTrigger,
+    ) {
         match lane {
-            RefreshLane::Account => self.run_account_lane(cancel),
-            RefreshLane::Quota => self.run_quota_lane(cancel),
-            RefreshLane::Usage => self.run_usage_lane(cancel),
+            RefreshLane::Account => self.run_account_lane(cancel, trigger),
+            RefreshLane::Quota => self.run_quota_lane(cancel, trigger),
+            RefreshLane::Usage => self.run_usage_lane(cancel, trigger),
         }
         self.clear_lane(lane);
         for component in lane.components() {
@@ -1405,18 +1543,21 @@ impl LocalService {
         self.maybe_start_pending();
     }
 
-    fn run_account_lane(&self, cancel: Arc<AtomicBool>) {
+    fn run_account_lane(&self, cancel: Arc<AtomicBool>, trigger: DiagnosticAttemptTrigger) {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
             quota: Mutex::new(None),
         };
         if !cancel.load(Ordering::Acquire) && !self.is_shutdown() {
-            let _ = self.inner.backend.refresh_account(cancel, &updates);
+            let _ = self
+                .inner
+                .backend
+                .refresh_account(cancel, &updates, trigger);
         }
     }
 
-    fn run_quota_lane(&self, cancel: Arc<AtomicBool>) {
+    fn run_quota_lane(&self, cancel: Arc<AtomicBool>, trigger: DiagnosticAttemptTrigger) {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
@@ -1425,7 +1566,7 @@ impl LocalService {
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             return;
         } else {
-            self.inner.backend.refresh_quota(cancel, &updates)
+            self.inner.backend.refresh_quota(cancel, &updates, trigger)
         };
         if !updates.already_applied_quota(&outcome.quota) {
             self.apply_component_result(ComponentName::Quota, outcome.quota.clone());
@@ -1442,7 +1583,7 @@ impl LocalService {
         }
     }
 
-    fn run_usage_lane(&self, cancel: Arc<AtomicBool>) {
+    fn run_usage_lane(&self, cancel: Arc<AtomicBool>, trigger: DiagnosticAttemptTrigger) {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
@@ -1451,7 +1592,7 @@ impl LocalService {
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             return;
         } else {
-            self.inner.backend.refresh_usage(cancel, &updates)
+            self.inner.backend.refresh_usage(cancel, &updates, trigger)
         };
         self.apply_component_result(ComponentName::Usage, outcome.usage);
         self.apply_component_result(ComponentName::Pricing, outcome.pricing);
@@ -1499,9 +1640,10 @@ impl LocalService {
             Some(session)
                 if session.get("status").and_then(Value::as_str) == Some("logout_pending") =>
             {
-                Err(BackendError {
-                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Retry),
-                })
+                Err(BackendError::new(IpcError::new(
+                    ErrorCode::AuthenticationRequired,
+                    RecoveryAction::Retry,
+                )))
             }
             _ => result,
         }
@@ -1805,6 +1947,60 @@ impl LocalService {
         if let Ok(mut login) = self.inner.login.lock() {
             login.active = None;
         }
+    }
+
+    /// Best-effort UI hint. A cache lock miss must not abort the login the thread is about to
+    /// run: `login.active` is the real gate.
+    fn mark_account_logging_in(&self) -> Result<(), IpcError> {
+        #[cfg(test)]
+        if self
+            .inner
+            .fail_next_account_component_write
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry));
+        }
+        let current = self
+            .inner
+            .state
+            .component(ComponentName::Account)
+            .map_err(state_error)?;
+        let account = account_value_from(current.as_ref(), AuthStatus::LoggingIn);
+        self.update_component(
+            ComponentName::Account,
+            ComponentStatus::AuthRequired,
+            Some(account_value_json(&account)),
+            None,
+            None,
+            true,
+        )?;
+        Ok(())
+    }
+
+    /// A persisted `logging_in` row cannot be finished after restart: no login thread exists.
+    fn reconcile_persisted_login(&self) {
+        let Ok(Some(record)) = self.inner.state.component(ComponentName::Account) else {
+            return;
+        };
+        let logging_in = record
+            .value
+            .as_ref()
+            .and_then(|value| value.get("auth_status"))
+            .and_then(Value::as_str)
+            == Some("logging_in");
+        if !logging_in {
+            return;
+        }
+        let session = self.inner.state.session_json().ok().flatten();
+        let restored = crate::state::account_record_from_session(session.as_ref());
+        let _ = self.inner.state.set_component(
+            ComponentName::Account,
+            restored.status,
+            restored.value,
+            Some(now_rfc3339()),
+            None,
+            false,
+        );
     }
 
     fn spawn_logout_retry(&self, pending: Value) {
@@ -2230,7 +2426,7 @@ mod tests {
     }
 
     impl LocalBackend for BrowserSessionBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
             let unavailable = || Err(BackendError::unavailable());
             RefreshOutcome {
                 quota: unavailable(),
@@ -2259,12 +2455,10 @@ mod tests {
             cookie_header: &str,
         ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
             if self.reject {
-                return Err(BackendError {
-                    error: IpcError::new(
-                        ErrorCode::AuthenticationRequired,
-                        RecoveryAction::ConfigureProvider,
-                    ),
-                });
+                return Err(BackendError::new(IpcError::new(
+                    ErrorCode::AuthenticationRequired,
+                    RecoveryAction::ConfigureProvider,
+                )));
             }
             Ok(crate::providers::ValidatedBrowserSession {
                 cookie_header: cookie_header.to_owned(),
@@ -2280,7 +2474,7 @@ mod tests {
     }
 
     impl LocalBackend for ChildLeakBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
             let (parent, _) = self
                 .state
                 .running_refresh_attempt()
@@ -3072,7 +3266,7 @@ mod tests {
     }
 
     impl LocalBackend for NamedLoginBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
             self.refreshing.hold();
             let unavailable = || Err(BackendError::unavailable());
             RefreshOutcome {
@@ -3121,7 +3315,12 @@ mod tests {
     }
 
     impl LocalBackend for EarlyAccountBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(
+            &self,
+            _: Arc<AtomicBool>,
+            updates: &dyn RefreshSink,
+            _: bool,
+        ) -> RefreshOutcome {
             updates.account(Ok(self.account()));
             self.collecting.hold();
             // A conditional read answered 304 hands back the Account it already had. Restating
@@ -3168,7 +3367,12 @@ mod tests {
     }
 
     impl LocalBackend for EarlyQuotaBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(
+            &self,
+            _: Arc<AtomicBool>,
+            updates: &dyn RefreshSink,
+            _: bool,
+        ) -> RefreshOutcome {
             updates.quota(Ok(self.quota()));
             self.collecting.hold();
             RefreshOutcome {
@@ -3483,6 +3687,196 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    fn login_request() -> IpcRequest {
+        serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "login",
+            "operation": "login",
+            "payload": {}
+        }))
+        .expect("request")
+    }
+
+    fn wait_login_idle(service: &LocalService) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while service.inner.login.lock().expect("login").active.is_some()
+            && Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+        assert!(service.inner.login.lock().expect("login").active.is_none());
+    }
+
+    #[test]
+    fn a_failing_account_component_write_does_not_leak_login_active() {
+        let root = std::env::temp_dir().join(format!("quota-login-write-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state,
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        service
+            .inner
+            .fail_next_account_component_write
+            .store(true, Ordering::Release);
+
+        let first = service.handle(login_request());
+        assert!(first.error.is_none(), "{first:?}");
+        assert_eq!(
+            first
+                .result
+                .as_ref()
+                .and_then(|value| value.get("authorize_url")),
+            Some(&serde_json::json!("http://127.0.0.1/quota-login"))
+        );
+        wait_login_idle(&service);
+
+        let second = service.handle(login_request());
+        assert!(second.error.is_none(), "{second:?}");
+
+        service.shutdown();
+        wait_login_idle(&service);
+        drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unusable_session_row_is_cleared_and_login_proceeds() {
+        let root = std::env::temp_dir().join(format!("quota-login-unusable-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "status": "expired",
+                "account_id": "account_1"
+            }))
+            .expect("session");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let response = service.handle(login_request());
+        assert!(response.error.is_none(), "{response:?}");
+        assert!(state.session_json().expect("session").is_none());
+        wait_login_idle(&service);
+
+        let second = service.handle(login_request());
+        assert!(second.error.is_none(), "{second:?}");
+
+        service.shutdown();
+        wait_login_idle(&service);
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn an_active_session_still_refuses_login() {
+        let root = std::env::temp_dir().join(format!("quota-login-active-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state.write_session_json(&named_session()).expect("session");
+        let service = LocalService::new(
+            state,
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let response = service.handle(login_request());
+        assert_eq!(
+            response.error.map(|error| error.code),
+            Some(ErrorCode::Busy)
+        );
+
+        service.shutdown();
+        drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_persisted_logging_in_component_resets_when_the_service_starts() {
+        let root = std::env::temp_dir().join(format!("quota-login-stale-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::AuthRequired,
+                Some(account_value_json(&AccountComponentValue {
+                    auth_status: AuthStatus::LoggingIn,
+                    account_id: None,
+                    display_label: None,
+                    device_id: None,
+                    device_generation: None,
+                    account_summary: None,
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("logging_in");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let account = account_component(&service);
+        assert_eq!(account["value"]["auth_status"], "signed_out");
+        assert_eq!(account["status"], "signed_out");
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_persisted_logging_in_component_with_an_active_session_resets_to_signed_in() {
+        let root = std::env::temp_dir().join(format!("quota-login-stale-in-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state.write_session_json(&named_session()).expect("session");
+        state
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::AuthRequired,
+                Some(account_value_json(&AccountComponentValue {
+                    auth_status: AuthStatus::LoggingIn,
+                    account_id: None,
+                    display_label: None,
+                    device_id: None,
+                    device_generation: None,
+                    account_summary: None,
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("logging_in");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let account = account_component(&service);
+        assert_eq!(account["value"]["auth_status"], "signed_in");
+        assert_eq!(account["value"]["account_id"], "account_1");
+        assert_eq!(account["value"]["display_label"], "octocat");
+        assert_eq!(account["status"], "stale");
+        assert!(account["value"]["account_summary"].is_null());
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn signed_out_state_retains_a_lost_session_error() {
         let root = std::env::temp_dir().join(format!("quota-auth-lost-{}", Uuid::new_v4()));
@@ -3526,9 +3920,10 @@ mod tests {
         for (error_code, expected_code) in cases.into_iter().zip(expected) {
             service.apply_component_result(
                 ComponentName::Account,
-                Err(BackendError {
-                    error: IpcError::new(error_code, RecoveryAction::Login),
-                }),
+                Err(BackendError::new(IpcError::new(
+                    error_code,
+                    RecoveryAction::Login,
+                ))),
             );
             let account = state
                 .component(ComponentName::Account)
@@ -3642,7 +4037,7 @@ mod tests {
     }
 
     impl LocalBackend for GatedBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink) -> RefreshOutcome {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
             *self.started.0.lock().expect("started") = true;
             self.started.1.notify_all();
             let (lock, cond) = &*self.gate;
@@ -3743,6 +4138,208 @@ mod tests {
 
         assert_eq!(backend.complete_calls.load(Ordering::SeqCst), 0);
 
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    struct RecordingLaneBackend {
+        quota_trigger: Mutex<Option<DiagnosticAttemptTrigger>>,
+        account_trigger: Mutex<Option<DiagnosticAttemptTrigger>>,
+        account_calls: AtomicUsize,
+        quota_started: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        quota_gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl RecordingLaneBackend {
+        fn new() -> Self {
+            Self {
+                quota_trigger: Mutex::new(None),
+                account_trigger: Mutex::new(None),
+                account_calls: AtomicUsize::new(0),
+                quota_started: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+                quota_gate: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            }
+        }
+
+        fn wait_quota_started(&self) {
+            let (lock, cond) = &*self.quota_started;
+            let mut started = lock.lock().expect("started");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !*started {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(!remaining.is_zero(), "quota lane never started");
+                let (guard, _) = cond.wait_timeout(started, remaining).expect("wait");
+                started = guard;
+            }
+        }
+
+        fn release_quota(&self) {
+            *self.quota_gate.0.lock().expect("gate") = true;
+            self.quota_gate.1.notify_all();
+        }
+    }
+
+    impl LocalBackend for RecordingLaneBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
+            unavailable_refresh_outcome()
+        }
+
+        fn refresh_quota(
+            &self,
+            _: Arc<AtomicBool>,
+            _: &dyn RefreshSink,
+            trigger: DiagnosticAttemptTrigger,
+        ) -> RefreshOutcome {
+            *self.quota_trigger.lock().expect("quota trigger") = Some(trigger);
+            *self.quota_started.0.lock().expect("started") = true;
+            self.quota_started.1.notify_all();
+            let (lock, cond) = &*self.quota_gate;
+            let mut open = lock.lock().expect("gate");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !*open {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (guard, _) = cond.wait_timeout(open, remaining).expect("wait");
+                open = guard;
+            }
+            RefreshOutcome {
+                quota: Ok(serde_json::json!({})),
+                usage: Err(BackendError::cancelled()),
+                account: Err(BackendError::cancelled()),
+                pricing: Err(BackendError::cancelled()),
+                overview: None,
+            }
+        }
+
+        fn refresh_account(
+            &self,
+            _: Arc<AtomicBool>,
+            _: &dyn RefreshSink,
+            trigger: DiagnosticAttemptTrigger,
+        ) -> Result<Value, BackendError> {
+            *self.account_trigger.lock().expect("account trigger") = Some(trigger);
+            self.account_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"auth_status": "signed_in"}))
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
+    fn wait_lanes_idle(service: &LocalService) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let refresh = service.inner.refresh.lock().expect("refresh");
+            let idle = refresh.active.is_none()
+                && refresh.quota.is_none()
+                && refresh.usage.is_none()
+                && refresh.account.is_none()
+                && !refresh.pending
+                && !refresh.pending_quota
+                && !refresh.pending_usage
+                && !refresh.pending_account;
+            drop(refresh);
+            if idle {
+                return;
+            }
+            assert!(Instant::now() < deadline, "lanes still running");
+            thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn scheduled_lanes_record_a_scheduled_trigger() {
+        let root = std::env::temp_dir().join(format!("quota-lane-trigger-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = Arc::new(RecordingLaneBackend::new());
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        assert!(service.request_scheduled_lanes().accepted);
+        backend.wait_quota_started();
+        backend.release_quota();
+        wait_lanes_idle(&service);
+        assert_eq!(
+            *backend.quota_trigger.lock().expect("quota trigger"),
+            Some(DiagnosticAttemptTrigger::Scheduled)
+        );
+
+        service.request_account_sync();
+        wait_lanes_idle(&service);
+        assert_eq!(
+            *backend.account_trigger.lock().expect("account trigger"),
+            Some(DiagnosticAttemptTrigger::Scheduled)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_blocked_account_poll_is_kept_pending() {
+        let root = std::env::temp_dir().join(format!("quota-account-pending-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = Arc::new(RecordingLaneBackend::new());
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+
+        assert!(
+            service
+                .request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled)
+                .accepted
+        );
+        backend.wait_quota_started();
+        let blocked =
+            service.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
+        assert!(!blocked.accepted);
+        assert!(blocked.pending);
+        {
+            let refresh = service.inner.refresh.lock().expect("refresh");
+            assert!(refresh.pending_account);
+            assert!(refresh.account.is_none());
+        }
+        assert_eq!(backend.account_calls.load(Ordering::SeqCst), 0);
+        backend.release_quota();
+        wait_lanes_idle(&service);
+        assert!(backend.account_calls.load(Ordering::SeqCst) >= 1);
+        assert_eq!(
+            *backend.account_trigger.lock().expect("account trigger"),
+            Some(DiagnosticAttemptTrigger::Scheduled)
+        );
+
+        service.shutdown();
         drop(service);
         drop(backend);
         drop(state);

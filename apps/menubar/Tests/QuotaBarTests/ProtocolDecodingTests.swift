@@ -305,6 +305,34 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
 }
 
 @Test
+func decodesLoginResultIncludingAuthorizeURL() throws {
+  let data = Data(
+    #"""
+    {
+      "status": "logging_in",
+      "account_id": null,
+      "device_id": null,
+      "device_generation": null,
+      "authorize_url": "http://127.0.0.1:9/callback"
+    }
+    """#.utf8
+  )
+  let result = try QuotaWireCodec.makeDecoder().decode(LocalServiceLoginResult.self, from: data)
+  #expect(result.status == .loggingIn)
+  #expect(result.authorizeURL == "http://127.0.0.1:9/callback")
+
+  let extra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"authorize_url\": \"http://127.0.0.1:9/callback\"",
+      with: "\"authorize_url\": \"http://127.0.0.1:9/callback\",\n      \"extra\": true"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceLoginResult.self, from: extra)
+  }
+}
+
+@Test
 func decodesCacheStateAndRejectsUnknownKeys() throws {
   let data = Data(
     #"""

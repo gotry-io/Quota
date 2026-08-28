@@ -2,112 +2,177 @@ import Foundation
 import QuotaPresentation
 import QuotaWire
 
-/// What the menu-bar item shows. Persisted in UserDefaults so the choice survives relaunch.
-enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
-  case icon
-  case percent
-  case iconAndPercent = "icon_and_percent"
-
-  static let storageKey = "menubar.style"
-  static let fallback = MenuBarStylePreference.iconAndPercent
-
-  var id: Self { self }
-
-  var label: String {
-    switch self {
-    case .icon: "Icon"
-    case .percent: "Percent"
-    case .iconAndPercent: "Icon and percent"
-    }
-  }
-
-  var showsIcon: Bool { self != .percent }
-  var showsPercent: Bool { self != .icon }
+/// One status item's label and the identity macOS uses to keep its position.
+struct MenuBarStatusItemSpec: Equatable, Sendable {
+  let id: MenuBarStatusItemID
+  let label: MenuBarLabelModel
 }
 
-/// Which subscription the menu-bar item answers for: whichever is closest to running out, or
-/// one named provider for a person who only cares about that one.
-enum MenuBarProviderPreference: RawRepresentable, Hashable, Identifiable, Sendable {
-  case automatic
-  case provider(ProviderID)
-
-  static let storageKey = "menubar.provider"
-  static let fallback = MenuBarProviderPreference.automatic
-  private static let automaticRawValue = "automatic"
-
-  init?(rawValue: String) {
-    if rawValue == Self.automaticRawValue {
-      self = .automatic
-      return
-    }
-    guard let provider = ProviderID(rawValue: rawValue) else { return nil }
-    self = .provider(provider)
-  }
-
-  var rawValue: String {
-    switch self {
-    case .automatic: Self.automaticRawValue
-    case .provider(let provider): provider.rawValue
-    }
-  }
-
-  var id: String { rawValue }
-
-  var label: String {
-    switch self {
-    case .automatic: "Automatic"
-    case .provider(let provider): provider.displayName
-    }
-  }
-
-  /// Automatic, then the providers Overview is actually showing, in Overview's own order. A
-  /// provider hidden from Overview is not a choice, because its number is not on screen anywhere.
-  static func choices(visibleProviders: [ProviderID]) -> [MenuBarProviderPreference] {
-    [.automatic] + visibleProviders.map(MenuBarProviderPreference.provider)
-  }
-}
-
-/// The mark the item wears: the provider the number belongs to, or Quota's own when there is no
-/// number to attribute.
-enum MenuBarLabelIcon: Equatable, Sendable {
+/// The mark one cell wears: the provider the number belongs to, or Quota's own when there is
+/// no number to attribute.
+enum MenuBarLabelIcon: Equatable, Hashable, Sendable {
   case quota
   case provider(ProviderID)
 }
 
-/// The menu-bar item's content: a mark, and the remaining percent of the subscription the
-/// person chose to watch — by default the one closest to running out.
-///
-/// The point of the item is that the tightest number is readable without opening anything,
-/// so it names a single reading rather than an average or a count. A reading that no longer
-/// describes live quota answers for nothing, and a menu bar with nothing to say is the mark
-/// alone.
-struct MenuBarLabelModel: Equatable, Sendable {
+/// One reading in the menu bar: a mark, a remaining percent, or both.
+struct MenuBarLabelCell: Equatable, Hashable, Sendable {
   let icon: MenuBarLabelIcon?
   let text: String?
+}
+
+/// The menu-bar item's content: one or more readings composed into a template image.
+///
+/// The point of an item is that a remaining percent is readable without opening anything, so
+/// each cell names a single reading rather than an average or a count. A reading that no
+/// longer describes live quota answers for nothing: a lone item falls back to Quota's mark,
+/// and a packed item keeps that provider's mark so the strip does not jump.
+struct MenuBarLabelModel: Equatable, Hashable, Sendable {
+  let cells: [MenuBarLabelCell]
   let accessibilityLabel: String
 
-  /// The menu bar renders as a template image, so low quota cannot be said in color. Below
-  /// this percent the text says it in punctuation instead.
-  static let warningPercent: Double = 10
+  var icon: MenuBarLabelIcon? { cells.count == 1 ? cells.first?.icon : nil }
+  var text: String? { cells.count == 1 ? cells.first?.text : nil }
 
+  init(icon: MenuBarLabelIcon?, text: String?, accessibilityLabel: String) {
+    self.init(
+      cells: [MenuBarLabelCell(icon: icon, text: text)],
+      accessibilityLabel: accessibilityLabel
+    )
+  }
+
+  init(cells: [MenuBarLabelCell], accessibilityLabel: String) {
+    self.cells = cells
+    self.accessibilityLabel = accessibilityLabel
+  }
+
+  static let empty = MenuBarLabelModel(
+    icon: .quota,
+    text: nil,
+    accessibilityLabel: "QuotaBar"
+  )
+
+  /// One label, for callers that still answer a single item.
   static func make(
     overview: [LocalServiceOverviewItem],
     style: MenuBarStylePreference,
     provider: MenuBarProviderPreference,
+    arrangement: MenuBarArrangementPreference = .combined,
+    now: Date,
+    visibleProviders: [ProviderID]? = nil
+  ) -> MenuBarLabelModel {
+    specs(
+      overview: overview,
+      style: style,
+      provider: provider,
+      arrangement: arrangement,
+      visibleProviders: visibleProviders ?? provider.selected,
+      now: now
+    ).first?.label ?? .empty
+  }
+
+  static func specs(
+    overview: [LocalServiceOverviewItem],
+    style: MenuBarStylePreference,
+    provider: MenuBarProviderPreference,
+    arrangement: MenuBarArrangementPreference,
+    visibleProviders: [ProviderID],
+    now: Date
+  ) -> [MenuBarStatusItemSpec] {
+    specs(
+      overview: overview,
+      style: style,
+      layout: .resolve(
+        selection: provider,
+        arrangement: arrangement,
+        visibleProviders: visibleProviders
+      ),
+      now: now
+    )
+  }
+
+  /// The status items the resolved layout should occupy, in Overview order.
+  static func specs(
+    overview: [LocalServiceOverviewItem],
+    style: MenuBarStylePreference,
+    layout: MenuBarLayout,
+    now: Date
+  ) -> [MenuBarStatusItemSpec] {
+    let style = layout.effectiveStyle(style)
+    switch layout {
+    case .automatic:
+      return [
+        MenuBarStatusItemSpec(
+          id: .automatic,
+          label: label(overview: overview, style: style, allowed: nil, now: now)
+        )
+      ]
+    case .packed(let providers):
+      return [
+        MenuBarStatusItemSpec(
+          id: .combined,
+          label: packedLabel(overview: overview, style: style, providers: providers, now: now)
+        )
+      ]
+    case .items(let providers):
+      return providers.map { id in
+        MenuBarStatusItemSpec(
+          id: .provider(id),
+          label: label(overview: overview, style: style, allowed: id, now: now)
+        )
+      }
+    }
+  }
+
+  private static func packedLabel(
+    overview: [LocalServiceOverviewItem],
+    style: MenuBarStylePreference,
+    providers: [ProviderID],
     now: Date
   ) -> MenuBarLabelModel {
+    var cells: [MenuBarLabelCell] = []
+    var spoken: [String] = ["QuotaBar"]
+    for id in providers {
+      let part = label(
+        overview: overview,
+        style: style,
+        allowed: id,
+        absentIcon: .provider(id),
+        now: now
+      )
+      cells.append(contentsOf: part.cells)
+      if let text = part.text {
+        spoken.append("\(id.displayName) \(text) remaining")
+      } else {
+        spoken.append(id.displayName)
+      }
+    }
+    return MenuBarLabelModel(cells: cells, accessibilityLabel: spoken.joined(separator: ", "))
+  }
+
+  private static func label(
+    overview: [LocalServiceOverviewItem],
+    style: MenuBarStylePreference,
+    allowed: ProviderID?,
+    absentIcon: MenuBarLabelIcon = .quota,
+    now: Date
+  ) -> MenuBarLabelModel {
+    if !style.showsPercent {
+      return .empty
+    }
     guard
-      style.showsPercent,
-      let tightest = tightestReading(in: overview, provider: provider, now: now)
+      let tightest = tightestReading(
+        in: overview,
+        allowed: allowed.map { [$0] },
+        now: now
+      )
     else {
-      // Nothing to attribute, so the mark is Quota's own — including for Percent, because an
-      // item with no content cannot be clicked.
-      return MenuBarLabelModel(icon: .quota, text: nil, accessibilityLabel: "QuotaBar")
+      return MenuBarLabelModel(icon: absentIcon, text: nil, accessibilityLabel: "QuotaBar")
     }
     let percent = RemainingQuotaFormat.percent(tightest.remainingPercent)
     return MenuBarLabelModel(
       icon: style.showsIcon ? .provider(tightest.provider) : nil,
-      text: tightest.remainingPercent < warningPercent ? "!\(percent)" : percent,
+      text: percent,
       accessibilityLabel: "QuotaBar, \(tightest.provider.displayName) \(percent) remaining"
     )
   }
@@ -118,18 +183,18 @@ struct MenuBarLabelModel: Equatable, Sendable {
   }
 
   /// The smallest remaining percent any window of any current reading reports, among the
-  /// readings the provider choice allows.
+  /// readings `allowed` names — or every current reading when `allowed` is nil.
   ///
   /// Balance-only windows carry no budget to be a percent of, so they cannot be the
   /// constraint; every other window can.
   private static func tightestReading(
     in overview: [LocalServiceOverviewItem],
-    provider preference: MenuBarProviderPreference,
+    allowed: Set<ProviderID>?,
     now: Date
   ) -> Reading? {
     var tightest: Reading?
     for item in overview where isCurrent(item, now: now) {
-      if case .provider(let chosen) = preference, item.identity.provider != chosen { continue }
+      if let allowed, !allowed.contains(item.identity.provider) { continue }
       for window in item.snapshot.windows where window.showsPercentMeter {
         guard tightest.map({ window.remainingPercent < $0.remainingPercent }) ?? true else {
           continue

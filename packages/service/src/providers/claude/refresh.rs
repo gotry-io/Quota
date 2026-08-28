@@ -7,12 +7,14 @@
 //! sign-in for the rest of the day, which is a true statement about a credential and a useless
 //! one about the account.
 //!
-//! So an expired grant — and nothing else — earns one bounded `claude mcp list`, run by the
-//! shared renewal in [`crate::providers::common`], which owns every bound this has: the empty
-//! private working directory, the minimal environment, the one spawn, the hourly floor, the
-//! Keychain memo this refresh has to forget because Claude Code rewrites that entry in place,
-//! and the verdict read back off the credential. What is here is the part only Claude Code has
-//! — which invocation renews.
+//! So an expired grant — or a Keychain item this process was refused, when the file holds no
+//! usable grant — earns one bounded `claude mcp list`, run by the shared renewal in
+//! [`crate::providers::common`], which owns every bound this has: the empty private working
+//! directory, the minimal environment, the one spawn, the hourly floor, the Keychain memo this
+//! refresh has to forget because Claude Code rewrites that entry in place, and the verdict
+//! read back off the credential. What is here is the part only Claude Code has — which
+//! invocation renews. A scheduled refresh still waits out that hour; a Recheck or a
+//! manual refresh skips that hour.
 //!
 //! Why that command. Claude Code refreshes on its own startup path rather than on request, so
 //! the question is which invocation reaches that path without doing anything else. `auth status
@@ -61,16 +63,27 @@ const DUMB_TERMINAL: [(&str, &str); 1] = [("TERM", "dumb")];
 /// needs, and it is still short enough that a hung CLI cannot hold a five-minute refresh.
 pub const RENEWAL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Renews an expired Claude Code sign-in through the CLI that owns it, at most once an hour.
+/// Renews an expired Claude Code sign-in through the CLI that owns it, at most once an hour
+/// on the scheduled path.
 ///
 /// Returns the attempt to persist, and `None` when no attempt was made — an unexpired token, a
-/// credential with no refresh token in it, no Claude Code on this Mac, a cancelled refresh, or
-/// an attempt already made this hour.
+/// credential with nothing to renew from and no withheld Keychain item, no Claude Code on this
+/// Mac, a cancelled refresh, or an attempt already made this hour.
 pub fn renew_expired_sign_in(
     context: &mut CollectionContext,
     environment: &ProbeEnvironment,
     attempted: Option<&RenewalAttempt>,
     now: i64,
+) -> Option<RenewalAttempt> {
+    renew_expired_sign_in_for(context, environment, attempted, now, false)
+}
+
+pub(crate) fn renew_expired_sign_in_for(
+    context: &mut CollectionContext,
+    environment: &ProbeEnvironment,
+    attempted: Option<&RenewalAttempt>,
+    now: i64,
+    force: bool,
 ) -> Option<RenewalAttempt> {
     let plan = RenewalPlan {
         binary: CLAUDE_BINARY,
@@ -81,10 +94,11 @@ pub fn renew_expired_sign_in(
         // Not the negation: an emptied entry is neither, which is how a Claude Code that
         // signed itself out is told apart from one that could not renew.
         usable: &super::sign_in_usable,
+        identity: &super::credential_identity,
         rewrites_keychain: true,
         drive: &drive,
     };
-    renew_sign_in(&plan, context, environment, attempted, now)
+    renew_sign_in(&plan, context, environment, attempted, now, force)
 }
 
 /// Nothing to say. `claude mcp list` renews on its own startup path and then reports on MCP
@@ -291,9 +305,55 @@ mod tests {
         }
     }
 
+    /// A reading the endpoint rejected is not a live sign-in, even when `expiresAt` still
+    /// has hours left. Asking Claude Code to start is what may rewrite the credential; a
+    /// run that leaves it untouched is a failed attempt, not a renewal.
+    #[test]
+    fn a_live_grant_is_asked_when_a_rejected_reading_forces_it() {
+        #[cfg(unix)]
+        {
+            let live = credentials(hours_from_now(8), "live", "refresh");
+            let (directory, mut context, environment) = fixture("forced-live", &live);
+            let log = directory.join("spawns.log");
+            let credential = directory.join("claude-config/.credentials.json");
+            install(
+                &directory,
+                &renewing_script(
+                    &log,
+                    &credential,
+                    &credentials(hours_from_now(8), "fresh", "rotated"),
+                ),
+            );
+            assert!(!super::super::sign_in_expiring(&context));
+            assert!(super::super::sign_in_usable(&context));
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
+            assert_eq!(spawns(&log), 1);
+            assert_eq!(grant(&context).expect("credentials").access_token, "fresh");
+            let _ = fs::remove_dir_all(&directory);
+
+            let (directory, mut context, environment) = fixture("forced-unchanged", &live);
+            let log = directory.join("spawns.log");
+            install(
+                &directory,
+                &format!("#!/bin/sh\necho \"ran $*\" >> {}\nexit 0\n", log.display()),
+            );
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading still earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Failed);
+            assert_eq!(spawns(&log), 1);
+            assert_eq!(grant(&context).expect("credentials").access_token, "live");
+            let _ = fs::remove_dir_all(&directory);
+        }
+    }
+
     /// Nothing renews a credential that holds no refresh token, so nothing is started for one.
     /// Claude Code 2.1.x leaves a Keychain item holding only `mcpOAuth` behind, which is not a
-    /// Claude sign-in at all, and an emptied entry is one no number of attempts would restore.
+    /// Claude sign-in at all, and an emptied entry with no Keychain item beside it is one no
+    /// number of attempts would restore. A withheld Keychain item is a different case.
     #[test]
     fn a_credential_with_nothing_to_renew_from_starts_nothing() {
         #[cfg(unix)]
@@ -319,6 +379,46 @@ mod tests {
                 assert_eq!(spawns(&log), 0, "{name}");
                 let _ = fs::remove_dir_all(&directory);
             }
+        }
+    }
+
+    /// An emptied file is what an older Claude Code left behind, not proof that this Mac is
+    /// signed out, when the live grant lives in a Keychain item this process was refused.
+    /// Asking Claude Code to start is how that grant gets rewritten into the file.
+    #[test]
+    fn a_signed_out_file_beside_a_refused_keychain_is_renewed() {
+        #[cfg(all(unix, target_os = "macos"))]
+        {
+            let (directory, mut context, environment) = fixture("signed-out-refused", SIGNED_OUT);
+            context
+                .environment
+                .insert("HOME".to_owned(), directory.to_string_lossy().into_owned());
+            context
+                .keychain
+                .set(crate::providers::common::KeychainSecret::Refused)
+                .expect("unread");
+            assert!(context.allows_host_keychain());
+            assert!(super::super::sign_in_expiring(&context));
+
+            let log = directory.join("spawns.log");
+            let credential = directory.join("claude-config/.credentials.json");
+            install(
+                &directory,
+                &renewing_script(
+                    &log,
+                    &credential,
+                    &credentials(hours_from_now(8), "fresh", "rotated"),
+                ),
+            );
+
+            let attempt = renew_expired_sign_in(&mut context, &environment, None, 10_000)
+                .expect("a withheld Keychain item earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Renewed);
+            assert_eq!(spawns(&log), 1);
+            assert_eq!(grant(&context).expect("credentials").access_token, "fresh");
+            assert!(!super::super::sign_in_expiring(&context));
+
+            let _ = fs::remove_dir_all(&directory);
         }
     }
 

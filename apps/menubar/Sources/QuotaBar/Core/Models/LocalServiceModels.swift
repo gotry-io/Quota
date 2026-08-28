@@ -537,24 +537,29 @@ struct LocalServiceLoginResult: Decodable, Sendable {
   let accountID: String?
   let deviceID: String?
   let deviceGeneration: Int?
+  let authorizeURL: String?
 
   private enum CodingKeys: String, CodingKey {
     case status
     case accountID = "accountId"
     case deviceID = "deviceId"
     case deviceGeneration
+    case authorizeURL = "authorizeUrl"
   }
 
 }
 
 extension LocalServiceLoginResult {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["status", "accountId", "deviceId", "deviceGeneration"])
+    try decoder.rejectUnknownWireKeys([
+      "status", "accountId", "deviceId", "deviceGeneration", "authorizeUrl",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     status = try container.decode(LocalServiceAuthStatus.self, forKey: .status)
     accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
+    authorizeURL = try container.decodeIfPresent(String.self, forKey: .authorizeURL)
   }
 }
 

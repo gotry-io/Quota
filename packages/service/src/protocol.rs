@@ -370,6 +370,9 @@ pub struct LoginResult {
     pub account_id: Option<String>,
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
+    /// Authorize URL the app opens. The service owns PKCE, the loopback listener, and the
+    /// exchange; it never launches a browser. Absent on `cancel_login`.
+    pub authorize_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

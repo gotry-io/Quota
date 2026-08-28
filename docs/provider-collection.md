@@ -48,7 +48,8 @@ while a provider's own grant is renewed by opening that provider's program.
 A scheduled refresh starts at most three kinds of process, none of them a provider CLI reading
 quota: the macOS Keychain lookup that finds Claude Code's grant, the `--version` a newly installed
 provider CLI earns, and the one renewal an already-expired Claude Code, Codex, or Grok credential
-earns. Each is listed with its trigger and its bounds under
+earns — Claude Code also earns one when the file holds no usable grant and the Keychain item was
+refused. Each is listed with its trigger and its bounds under
 [Bounded subprocesses](#bounded-subprocesses). Requests
 otherwise identify as `Quota/<version>`, except where a section below says the provider only answers
 its own client.
@@ -107,9 +108,9 @@ tells a program that signed itself out from one that could not renew.
 
 | Process | Trigger | Bounds |
 | --- | --- | --- |
-| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran, plus one that asks only whether the entry exists when reading the secret failed; secret held in a redacted type |
+| `/usr/bin/security` | Claude Code's Keychain grant, when collection home is the process `HOME` | Once per refresh, shared by discovery and collection, plus one more when a renewal actually ran and this refresh had held a Keychain secret (a refusal is kept, so a second prompt is not the price of asking Claude Code to start), plus one that asks only whether the entry exists when reading the secret failed; secret held in a redacted type |
 | `<binary> --version` | The installed binary's fingerprint is absent or changed, for Claude Code or Codex when this device holds a sign-in for it | Once per installed binary, never more than once an hour; 5 s, 4 KiB, no stdin, `HOME` + `PATH`, empty owner-only cwd created for the run |
-| The renewal — `claude mcp list`, `codex -s read-only -a never app-server`, or `grok agent stdio` | That provider's local credential is already expired or within a minute of expiry; Claude Code additionally needs a `claudeAiOauth` refresh token to renew from, and Codex an OAuth grant rather than a personal access token | Once an hour per provider whatever the outcome; 64 KiB of stdout, stderr discarded, empty owner-only cwd created for the run, `HOME` + `PATH` + the variable that names the provider's credential home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`) + the fixed pair that provider's plan names, which is `TERM=dumb` for Claude Code and nothing for the other two. The deadline is the CLI's own: 10 s for Claude Code, 8 s for Codex, 5 s for Grok |
+| The renewal — `claude mcp list`, `codex -s read-only -a never app-server`, or `grok agent stdio` | That provider's local credential is already expired or within a minute of expiry, **or** the official collection for a discovered grant came back `auth_required` in this refresh (the local clock is not the account). Claude Code additionally needs a `claudeAiOauth` refresh token to renew from, or a Keychain item this process was refused when the file holds no usable grant; Codex an OAuth grant rather than a personal access token | Once an hour per provider on a scheduled refresh, whatever the outcome; a Recheck or a manual refresh skips that hour. 64 KiB of stdout, stderr discarded, empty owner-only cwd created for the run, `HOME` + `PATH` + the variable that names the provider's credential home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`) + the fixed pair that provider's plan names, which is `TERM=dumb` for Claude Code and nothing for the other two. The deadline is the CLI's own: 10 s for Claude Code, 8 s for Codex, 5 s for Grok |
 
 Each is started as an explicit executable with an argument array, never through a shell, and is
 terminated on success, failure, timeout, and cancellation. The binary is resolved by the rules
@@ -170,7 +171,7 @@ Acquisition happens once, in QuotaBar, and never during a refresh:
    `ChatGPT-Account-Id` from whoami (`chatgpt_account_id`). PAT identity comes from whoami, not a
    stale managed-workspace account id. Only HTTP 401/403 falls through to OAuth; a successful but
    malformed WHAM body is reported as an error.
-3. An OAuth access token that is expired or within one minute of expiry is the one case where
+3. An OAuth access token that is expired or within one minute of expiry is the first case where
    this build starts Codex. That token lives about ten days and only the Codex CLI can renew it,
    so a Mac that has not opened Codex in a fortnight would otherwise report an expired sign-in
    until someone does. The expiry is the `exp` in the access token's own JWT payload, decoded
@@ -179,6 +180,15 @@ Acquisition happens once, in QuotaBar, and never during a refresh:
    the CLI is the thing that can tell. The `id_token`'s one-hour expiry is not staleness; it is
    only read for identity. A personal-access-token-only `auth.json` is not renewable by anything
    and earns nothing.
+
+   The second case is a WHAM reading that answers `auth_required` while the JWT still looks in
+   date: ChatGPT can retire a token this build would still spend. Collection runs first; if
+   that official rung is `auth_required` and this Mac holds an OAuth grant, the same bounded
+   `codex app-server` runs once and collection runs again in the same refresh. A PAT-only file,
+   or a Mac that never signed in, still starts nothing. The CLI's own gate remains that JWT
+   `exp` — a spawn against a token the CLI still considers live may leave `auth.json`
+   untouched, and an unchanged file is still the failure signal. The hour between attempts
+   still applies, so a grant the CLI will not renew is not asked every five minutes.
 
    On the refresh worker, before collection, `codex -s read-only -a never app-server` is run once
    — the CLI's own words for a sandbox that cannot write and an approval policy that never asks.
@@ -243,35 +253,46 @@ reset-credit redemption are not used.
    process `HOME`. Isolated or remapped homes do not read the live Keychain.
 2. Parse only `claudeAiOauth`; a document without it is not a Claude sign-in, which is what a
    Keychain item holding only `mcpOAuth` is. An entry with the object but no `accessToken` is a
-   Claude Code that signed itself out — it empties the tokens in place and sets `expiresAt` to 0 —
-   and is reported as `auth_required` under its own source, whose recovery is "Claude Code is
-   signed out. Run `claude` and sign in again." A grant needs `accessToken` with a usable
-   `user:profile` scope. The Keychain entry wins unless it is the only expiring one of the two, an
-   emptied entry counting as expiring; a Keychain that withheld its entry outranks an emptied file
-   beside it, because that file is what an older Claude Code left behind and says nothing about
-   the grant this device was refused.
-3. A grant that is expired or within one minute of expiry, and that carries a non-empty
-   `refreshToken`, is the one case where this build starts Claude Code. Its access token lives
-   about eight hours and only Claude Code renews it, so a Mac that has not opened it since
-   breakfast would otherwise report an expired sign-in all day. On the refresh worker, before
-   collection, `claude mcp list` is run once. That command is chosen by experiment against 2.1.246:
-   `claude auth status --json` reports the expired token without renewing, `claude doctor` reaches
-   the CLI's refresh path only when the environment already carries a running Claude Code session's
-   variables, and `mcp list` reaches it deterministically under an `env -i`-style environment of
-   `HOME`, `PATH`, `TERM=dumb`, and `CLAUDE_CONFIG_DIR` where this device sets one — leaving an
-   unexpired credential untouched. Its one side effect is that it health-checks approved MCP
-   servers; started in an empty private directory created for the run, that reaches the
-   user-scoped servers in `~/.claude.json` and no project's `.mcp.json`, and the deadline is what
-   keeps a slow server from holding the refresh. Bounded to ten seconds — measured here at
-   2.97–3.46 s renewing and 2.05–2.44 s not — with 64 KiB of stdout read only to bound it and
-   discarded, stderr discarded, and no stdin. At most one attempt per hour, recorded in
-   `cache.sqlite` metadata with the time and the outcome, so a Claude Code that
-   cannot renew is not started every five minutes. Afterwards the credential is read again, the
-   Keychain read of this refresh forgotten first because Claude Code rewrites that entry in place:
-   a grant with time left continues to step 4 in the same refresh; an emptied entry is the
-   signed-out outcome above; anything else is `auth_required` with "Open Claude Code to refresh the
-   sign-in". No Claude Code on this Mac, no refresh token in the entry, and no `claudeAiOauth` at
-   all each mean no attempt and no record.
+   Claude Code that signed itself out — it empties the tokens in place and sets `expiresAt` to 0.
+   Recovery depends on the Keychain: an emptied file with no Keychain item is `auth_required`
+   under its own source, "Claude Code is signed out. Run `claude` and sign in again." A Keychain
+   item this process was refused is `access_denied`, "QuotaBar could not read Claude Code's
+   Keychain item. Open Claude Code to refresh the sign-in" — Claude Code can read a grant this
+   process cannot, and opening it has been seen to rewrite the file from that item. A grant needs
+   `accessToken` with a usable `user:profile` scope. The Keychain entry wins unless it is the only
+   expiring one of the two, an emptied entry counting as expiring; a Keychain that withheld its
+   entry outranks an emptied file beside it, because that file is what an older Claude Code left
+   behind and says nothing about the grant this device was refused.
+3. This build starts Claude Code when a grant is expired or within one minute of expiry and
+   carries a non-empty `refreshToken`, **or** when the file holds no usable grant and the
+   Keychain item exists but this process was refused it. Its access token lives about eight hours
+   and only Claude Code renews it, so a Mac that has not opened it since breakfast would
+   otherwise report an expired sign-in all day; a withheld Keychain item next to an emptied file
+   is the same hole, because Claude Code writes the live grant where this process cannot read it.
+   If the official OAuth reading then answers `auth_required` while this Mac still holds a
+   grant, the same `mcp list` is asked once more in that refresh — the local clock is not the
+   account — and collection runs again. A Mac with nothing to renew from still starts nothing.
+   On the refresh worker, before collection, `claude mcp list` is run once. That command is
+   chosen by experiment against 2.1.246: `claude auth status --json` reports the expired token
+   without renewing, `claude doctor` reaches the CLI's refresh path only when the environment
+   already carries a running Claude Code session's variables, and `mcp list` reaches it
+   deterministically under an `env -i`-style environment of `HOME`, `PATH`, `TERM=dumb`, and
+   `CLAUDE_CONFIG_DIR` where this device sets one — leaving an unexpired credential untouched.
+   Its one side effect is that it health-checks approved MCP servers; started in an empty private
+   directory created for the run, that reaches the user-scoped servers in `~/.claude.json` and no
+   project's `.mcp.json`, and the deadline is what keeps a slow server from holding the refresh.
+   Bounded to ten seconds — measured here at 2.97–3.46 s renewing and 2.05–2.44 s not — with
+   64 KiB of stdout read only to bound it and discarded, stderr discarded, and no stdin. A
+   scheduled refresh records the attempt in `cache.sqlite` metadata and will not ask again for an
+   hour, whatever the outcome; a Recheck or a manual refresh skips that hour so it can ask
+   immediately. Afterwards the credential is read again. A Keychain secret this refresh actually
+   held is forgotten first, because Claude Code rewrites that entry in place; a refusal is kept,
+   so the collector is not sent through a second prompt for a grant the CLI may have rewritten
+   into the file. A grant with time left continues to step 4 in the same refresh; an emptied
+   entry with no Keychain item is the signed-out outcome above; a withheld Keychain item is
+   `access_denied` as above; anything else is `auth_required` with "Open Claude Code to refresh
+   the sign-in". No Claude Code on this Mac, no refresh token in a readable entry, no
+   `claudeAiOauth` at all, and no withheld Keychain item each mean no attempt and no record.
 4. Call `GET https://api.anthropic.com/api/oauth/usage` with
    `anthropic-beta: oauth-2025-04-20`.
 5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
@@ -456,10 +477,12 @@ upload partitions are summarized by the QuotaBar diagnostics report.
 1. Discover `$GROK_HOME/auth.json` or `~/.grok/auth.json`.
 2. Prefer the non-empty `https://auth.x.ai::<client-id>` entry with the latest expiry, then legacy
    sign-in entries.
-3. A cached token that is expired or within one minute of expiry is the one case where this build
-   starts a provider's CLI. Grok's access token lives about six hours and only the Grok CLI can
-   renew it, so a Mac that has not opened Grok since breakfast would otherwise report an expired
-   sign-in all day. On the refresh worker, before collection, `grok agent stdio` is run once:
+3. A cached token that is expired or within one minute of expiry is the first case where this
+   build starts a provider's CLI. Grok's access token lives about six hours and only the Grok CLI
+   can renew it, so a Mac that has not opened Grok since breakfast would otherwise report an
+   expired sign-in all day. If the official reading then answers `auth_required` while this Mac
+   still holds a grant, the same CLI is asked once more in that refresh. On the refresh worker,
+   before collection, `grok agent stdio` is run once:
    `initialize`, then `authenticate` with `methodId: cached_token`, which renews from the refresh
    token the CLI already holds. The reply is read before stdin closes, because closing it is how a
    stdio agent is told to shut down. `cached_token` is the only method ever asked for — the method

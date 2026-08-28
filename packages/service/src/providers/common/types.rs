@@ -282,14 +282,20 @@ impl CollectionContext {
         self.keychain.get_or_init(read)
     }
 
-    /// Forgets that read, so the next ask starts a fresh `/usr/bin/security`.
+    /// Forgets a secret this refresh actually held, so the next ask starts a fresh
+    /// `/usr/bin/security`.
     ///
     /// Called for one plan: Claude Code's, whose CLI rewrites the Keychain entry in place.  A
     /// memo taken before it ran describes the grant that was replaced, and every collector
-    /// after it would spend a token that no longer exists.  No other renewal may call this —
-    /// the memo is what holds a refresh to one Keychain read — and it is `&mut` because the
-    /// renewal runs before any collector has a clone.
+    /// after it would spend a token that no longer exists.  A refusal is an access decision,
+    /// not a secret: keeping it avoids a second prompt for a grant Claude Code rewrites into
+    /// the file this collector can already read.  No other renewal may call this — the memo
+    /// is what holds a refresh to one Keychain read — and it is `&mut` because the renewal
+    /// runs before any collector has a clone.
     pub fn forget_keychain(&mut self) {
+        if matches!(self.keychain.get(), Some(KeychainSecret::Refused)) {
+            return;
+        }
         self.keychain = Arc::new(OnceLock::new());
     }
 }
@@ -577,6 +583,27 @@ mod tests {
             format!("{:?}", KeychainSecret::Found(b"sk-ant-secret".to_vec())),
             "KeychainSecret::Found(<redacted>)"
         );
+    }
+
+    /// A refusal is an access decision, not a secret. Forgetting it would send the collector
+    /// through a second prompt for a grant Claude Code may already have rewritten into the file.
+    #[test]
+    fn forgetting_the_keychain_keeps_a_refusal() {
+        let mut context = CollectionContext::default();
+        context.keychain_secret(|| KeychainSecret::Refused);
+        context.forget_keychain();
+        assert!(matches!(
+            context.keychain_secret(|| panic!("refusal was forgotten")),
+            KeychainSecret::Refused
+        ));
+
+        let mut context = CollectionContext::default();
+        context.keychain_secret(|| KeychainSecret::Found(b"stale".to_vec()));
+        context.forget_keychain();
+        assert!(matches!(
+            context.keychain_secret(|| KeychainSecret::Absent),
+            KeychainSecret::Absent
+        ));
     }
 
     #[test]

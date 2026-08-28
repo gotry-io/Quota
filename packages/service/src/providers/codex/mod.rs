@@ -273,6 +273,17 @@ fn rewritten_since(context: &CollectionContext, stamped: Option<i64>) -> bool {
     }
 }
 
+/// The access token and last-refresh stamp this refresh would spend. Compared before and
+/// after a spawn so a forced run is `Renewed` only when Codex actually rewrote `auth.json`.
+fn credential_identity(context: &CollectionContext) -> Option<String> {
+    let credentials = load_auth(context)?.oauth?;
+    Some(format!(
+        "{}:{}",
+        credentials.access_token,
+        credentials.last_refresh.unwrap_or(0)
+    ))
+}
+
 fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
     collect_pat_at(token, context, WHOAMI_URL, USAGE_URL)
 }

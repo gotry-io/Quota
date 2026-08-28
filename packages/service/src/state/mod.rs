@@ -526,26 +526,14 @@ impl StateStore {
         let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
         let cache_reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
+        let session = self.session_json()?;
         self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
             self.remembered_revision.store(revision, Ordering::Release);
             let quota = read_component(conn, ComponentName::Quota)?;
             let usage = read_component(conn, ComponentName::Usage)?;
-            let account =
-                read_component(conn, ComponentName::Account)?.unwrap_or_else(|| ComponentRecord {
-                    status: ComponentStatus::SignedOut,
-                    value: Some(serde_json::json!({
-                        "auth_status": "signed_out",
-                        "account_id": null,
-                        "display_label": null,
-                        "device_id": null,
-                        "device_generation": null,
-                        "account_summary": null
-                    })),
-                    updated_at: None,
-                    last_error: None,
-                    refreshing: false,
-                });
+            let account = read_component(conn, ComponentName::Account)?
+                .unwrap_or_else(|| account_record_from_session(session.as_ref()));
             let mut usage_periods = read_usage_periods(conn)?;
             let account_usage_available = usage_upload_enabled
                 && account
@@ -1155,13 +1143,13 @@ impl StateStore {
     }
 
     pub fn set_refreshing(&self, name: ComponentName, refreshing: bool) -> Result<u64, StateError> {
-        let current = self.component(name)?.unwrap_or_else(|| {
-            ComponentRecord::empty(if name == ComponentName::Account {
-                ComponentStatus::SignedOut
-            } else {
-                ComponentStatus::Unavailable
-            })
-        });
+        let current = match self.component(name)? {
+            Some(record) => record,
+            None if name == ComponentName::Account => {
+                account_record_from_session(self.session_json()?.as_ref())
+            }
+            None => ComponentRecord::empty(ComponentStatus::Unavailable),
+        };
         self.set_component(
             name,
             current.status,
@@ -1185,6 +1173,11 @@ impl StateStore {
             tx.commit()?;
             Ok(revision)
         })
+    }
+
+    /// The Overview rows the last refresh wrote.
+    pub fn overview(&self) -> Result<Vec<QuotaOverviewItem>, StateError> {
+        self.with_cache(read_overview)
     }
 
     pub fn current_revision(&self) -> Result<u64, StateError> {
@@ -1349,6 +1342,25 @@ impl StateStore {
         Ok(())
         })?;
         self.bump_revision()
+    }
+
+    /// Stamps `last_refreshed_at` on the active session without advancing epoch.
+    ///
+    /// The epoch changes only when the token family rotates, a login installs a session, or
+    /// logout clears it ([ADR 0027](../../../docs/decisions/0027-one-token-per-client.md)).
+    pub fn touch_session_last_refreshed_at(&self, at: &str) -> Result<bool, StateError> {
+        self.with_identity_mut(|conn| {
+            let changed = conn.execute(
+                "UPDATE session
+                 SET payload_json = COALESCE(
+                   json_set(payload_json, '$.last_refreshed_at', ?1),
+                   payload_json
+                 )
+                 WHERE id = 1 AND json_extract(payload_json, '$.status') = 'active'",
+                params![at],
+            )?;
+            Ok(changed > 0)
+        })
     }
 
     /// Replaces the session only if its epoch is unchanged.  The returned epoch is the new
@@ -2764,6 +2776,59 @@ impl ComponentRecord {
             refreshing: false,
         }
     }
+}
+
+/// Account auth as identity knows it, used when the disposable cache has no component.
+pub(crate) fn account_record_from_session(session: Option<&Value>) -> ComponentRecord {
+    match session
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+    {
+        Some("active") => ComponentRecord {
+            status: ComponentStatus::Stale,
+            value: Some(account_value_from_session(session, "signed_in")),
+            updated_at: None,
+            last_error: None,
+            refreshing: false,
+        },
+        Some("logout_pending") => ComponentRecord {
+            status: ComponentStatus::Ready,
+            value: Some(account_value_from_session(session, "logout_pending")),
+            updated_at: None,
+            last_error: None,
+            refreshing: false,
+        },
+        _ => ComponentRecord {
+            status: ComponentStatus::SignedOut,
+            value: Some(serde_json::json!({
+                "auth_status": "signed_out",
+                "account_id": null,
+                "display_label": null,
+                "device_id": null,
+                "device_generation": null,
+                "account_summary": null
+            })),
+            updated_at: None,
+            last_error: None,
+            refreshing: false,
+        },
+    }
+}
+
+fn account_value_from_session(session: Option<&Value>, auth_status: &str) -> Value {
+    let session = session.unwrap_or(&Value::Null);
+    serde_json::json!({
+        "auth_status": auth_status,
+        "account_id": session.get("account_id").and_then(Value::as_str),
+        "display_label": session.get("display_label").and_then(Value::as_str),
+        "device_id": session.get("device_id").and_then(Value::as_str),
+        "device_generation": session
+            .get("device_generation")
+            .and_then(|value| value.as_u64().or_else(|| {
+                value.as_i64().and_then(|n| u64::try_from(n).ok())
+            })),
+        "account_summary": null
+    })
 }
 
 fn read_component(
@@ -4205,6 +4270,40 @@ mod tests {
     }
 
     #[test]
+    fn last_refreshed_at_does_not_advance_session_epoch() {
+        let root = std::env::temp_dir().join(format!("quota-session-touch-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&serde_json::json!({
+                "status": "active",
+                "account_id": "account",
+                "device_id": "device"
+            }))
+            .expect("active");
+        let (_, epoch) = store
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        assert!(
+            store
+                .touch_session_last_refreshed_at("2026-08-28T20:00:00Z")
+                .expect("touch")
+        );
+        let (session, after) = store
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        assert_eq!(after, epoch);
+        assert_eq!(
+            session.get("last_refreshed_at").and_then(Value::as_str),
+            Some("2026-08-28T20:00:00Z")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn pricing_catalog_and_etag_commit_together() {
         let root = std::env::temp_dir().join(format!("quota-pricing-state-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -4991,6 +5090,35 @@ mod tests {
         })
     }
 
+    #[test]
+    fn a_cache_with_no_account_component_snapshots_an_active_session_as_signed_in() {
+        let root = temp_root("account-from-identity");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "display_label": "octocat",
+                "device_id": "device_1",
+                "device_generation": 2
+            }))
+            .expect("session");
+
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.account.status, ComponentStatus::Stale);
+        let value = snapshot.account.value.expect("account value");
+        assert_eq!(value["auth_status"], "signed_in");
+        assert_eq!(value["account_id"], "account_1");
+        assert_eq!(value["display_label"], "octocat");
+        assert_eq!(value["device_id"], "device_1");
+        assert_eq!(value["device_generation"], 2);
+        assert!(value["account_summary"].is_null());
+
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     /// The whole point of the split: a cache nothing can read costs this device its history for
     /// one refresh, and costs it nothing else.
     #[test]
@@ -5261,7 +5389,7 @@ mod tests {
                 account_label TEXT, updated_at TEXT NOT NULL);
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              INSERT INTO installation VALUES (1, 'released-installation', NULL);
-             INSERT INTO session VALUES (1, '{\"status\":\"active\"}', 4);
+             INSERT INTO session VALUES (1, '{\"status\":\"active\",\"account_id\":\"account_1\",\"device_id\":\"device_1\",\"device_generation\":1,\"session\":{\"access_token\":\"qb_access_token_synthetic\",\"refresh_token\":\"qbr_refresh_token_synthetic\"}}', 4);
              INSERT INTO metadata VALUES ('usage_upload_enabled', '0');",
         )
         .expect("released rows");

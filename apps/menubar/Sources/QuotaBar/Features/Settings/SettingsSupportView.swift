@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The confirmation Reset Local Data raises. It is an app-owned popup at the panel root, like
-/// Sign Out and Disconnect: a MenuBarExtra panel is not a window a system alert can sit over.
+/// Sign Out and Disconnect: the menu panel is not a window a system alert can sit over.
 enum ResetLocalDataCopy {
   static let title = "Reset Local Data?"
   static let confirmTitle = "Reset Local Data"

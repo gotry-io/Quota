@@ -112,19 +112,24 @@ targets stay at least 28pt. Technical strings and chevrons never receive primary
 
 ## Menu bar item
 
-The item is the product's first sentence: the tightest number is legible without opening anything.
-It is a template mark plus the remaining percent of one current subscription. By default that is the
-most constrained one — the smallest remaining percent across every window of every Overview reading
-that still describes live quota. A reading the source reported as failed, or one the shared
-freshness rule has aged out, answers for nothing. Balance-only windows have no budget to be a
-percent of and never set it. Ageing out is a fact about the clock rather than about anything the
-service says, so the item re-asks the question once a minute — the freshness rule's smallest
-unit — and a Mac that stopped collecting loses its number without waiting for an event that is
-never coming. The item is only rebuilt when that answer changed.
+The item is the product's first sentence: remaining quota is legible without opening anything.
+Each status item is a template mark plus the remaining percent of one current subscription — or,
+when **Combined**, up to three such readings packed into **one** template image. By default the
+bar shows **Automatic**: the most constrained current subscription — the smallest remaining
+percent across every window of every Overview reading that still describes live quota. A reading
+the source reported as failed, or one the shared freshness rule has aged out, answers for
+nothing. Balance-only windows have no budget to be a percent of and never set it. Ageing out is a
+fact about the clock rather than about anything the service says, so each item re-asks the
+question once a minute — the freshness rule's smallest unit — and a Mac that stopped collecting
+loses its number without waiting for an event that is never coming. An item is only rebuilt when
+that answer changed.
 
-The mark and the number are composed into **one template image**, which is what the menu bar is
-given. A status item is one image to AppKit, and AppKit places it exactly as it places every other
-one; a stack of views asks two layout systems to agree about where a baseline is, and they do not.
+The mark and the number are composed into **one template image per status item**, which is what
+the menu bar is given. A status item is one image to AppKit, and AppKit places it exactly as it
+places every other one; a stack of views asks two layout systems to agree about where a baseline
+is, and they do not. QuotaBar owns the items through `NSStatusItem` so several can share one
+panel; each item has a stable autosave name so macOS can keep a `⌘`-dragged position, and unused
+items are removed without recreating the ones that remain.
 
 The image is the standard status-item height — the bar's own thickness less the padding every item
 leaves, which is 18pt in the 22pt bar macOS ships — drawn at 2× and marked template. The mark is the
@@ -132,23 +137,32 @@ brand of the provider the number belongs to, fitted **by its ink** into a 14.5pt
 assets fill their own viewBox by wildly different amounts, and matching the box instead of the ink
 would make one provider's logo tower over another's, and all of them over the SF Symbol glyphs
 beside them. Quota's own mark appears in exactly two places: the Icon style, which says nothing about
-a provider, and an item with no current number to attribute.
+a provider, and a lone item with no current number to attribute. A Combined cell whose provider has
+no current reading keeps that provider's mark so the strip does not jump, and never borrows another
+provider's number.
 
 The number follows 4pt after the mark, set in the **menu-bar font** with monospaced digits so the
 item does not twitch as it moves, and its baseline is placed so the digits' cap-height middle is the
 image's middle. A line box would center the room it reserves for descenders no digit uses, which is
-how a number ends up riding high next to a mark. The status bar renders a template image, so low
-quota cannot be said in color; below 10% remaining the text takes a `!` prefix.
+how a number ends up riding high next to a mark. Packed cells sit 8pt apart. The status bar renders
+a template image, so remaining quota is not said in color.
 `MenuBarLabelLayoutTests` renders the image and measures the drawn pixels: the mark's ink and the
 digits' ink share a center within a quarter point, and every mark lands at the same size.
 
-Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default),
-and → **Provider** chooses **Automatic** — the tightest current subscription — or one provider from
-those Overview is showing. Both persist in UserDefaults. A chosen provider with no current
-reading shows the mark alone and never borrows another provider's number, and **Percent** likewise
-falls back to the mark alone when there is no percent to show, because an item with no content
-cannot be clicked. VoiceOver announces **QuotaBar**, the provider the number belongs to, and the
-remaining percent.
+Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default).
+→ **Provider** chooses **Automatic** — the tightest current subscription — or any set of providers
+Overview is showing. Two or three named providers can be **Combined** into one item or **Separate**
+as one item each; Combined is the default arrangement for that size, and a fourth named provider
+makes the bar Separate. More than one named provider always draws as Icon and percent, because
+Icon-only and Percent-only cannot say whose number it is. The stored Style is left alone and
+applies again when the bar is back to one reading. Style choosing takes effect and returns;
+Provider is a set of toggles and stays until Back. Both the named set and the arrangement persist
+in UserDefaults. A chosen provider with no current reading shows the mark alone and never borrows
+another provider's number, and **Percent** likewise falls back to the mark alone when there is no
+percent to show, because an item with no content cannot be clicked. VoiceOver announces
+**QuotaBar**, the provider each number belongs to, and the remaining percent. Clicking a Separate
+item opens the shared panel on that provider; Combined and Automatic open the same panel without
+changing page.
 
 ## Shell
 
@@ -270,8 +284,11 @@ Settings section order is fixed:
 The Account group on Settings is one row deep in every state:
 
 - Signed out or not checked: one standard-height **Sign In** row.
-- Login running: one standard-height browser completion row with **Cancel**. Cancellation sends the
-  typed service operation and closes the browser flow.
+- Login running: one standard-height browser completion row with **Copy Link** and **Cancel**.
+  Cancellation sends the typed service operation and closes the browser flow. Copy Link puts the
+  authorize URL on the pasteboard. If QuotaBar could not open the browser, the row stays in this
+  state and the error reads **QuotaBar could not open your browser. Copy the sign-in link and open
+  it yourself.**
 - Signed in: one row titled with the account label, which opens the **Account** page.
 - Logout pending: one standard-height status row with **Retry Logout**.
 - Removed or expired device session: use the same **Sign In** action and never show raw reason codes
@@ -289,11 +306,13 @@ then the **Support** destination. Choosing an interval takes effect and returns,
 Style. It is how often this Mac collects provider quota; Account summary still polls every
 minute, and a window reset can collect quota once before the next interval.
 
-**Menu Bar Style** and **Menu Bar Provider** are one list each, with no section header to repeat the
-page title. Every option is one ordinary settings row; the one in force carries an accent checkmark;
-choosing takes effect and returns, because there is nothing else on the page to confirm. The Provider
-page lists **Automatic** first, without a mark because it is not a provider, then the providers
-Overview is showing, in Overview's order, each with its catalog brand mark.
+**Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
+ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
+returns, because there is nothing else on the page to confirm. **Menu Bar Provider** lists
+**Automatic** first, without a mark because it is not a provider, then the providers Overview is
+showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
+named set; named rows toggle and the page stays. When two or more are named, **Combined** and
+**Separate** follow in a second group; Combined is unavailable past three.
 
 Support is where help lives, and it asks the service nothing on its own: opening it starts no
 check and costs no refresh. **Help** contains the **Diagnostics** destination, **Feedback**, and

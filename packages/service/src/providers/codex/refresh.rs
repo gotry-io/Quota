@@ -65,6 +65,16 @@ pub fn renew_expired_sign_in(
     attempted: Option<&RenewalAttempt>,
     now: i64,
 ) -> Option<RenewalAttempt> {
+    renew_expired_sign_in_for(context, environment, attempted, now, false)
+}
+
+pub(crate) fn renew_expired_sign_in_for(
+    context: &mut CollectionContext,
+    environment: &ProbeEnvironment,
+    attempted: Option<&RenewalAttempt>,
+    now: i64,
+    force: bool,
+) -> Option<RenewalAttempt> {
     // What the file said before the CLI ran, so a renewal is still recognised when the token
     // it wrote carries no readable expiry of its own.
     let stamped = super::last_refresh(context);
@@ -86,10 +96,11 @@ pub fn renew_expired_sign_in(
         // Not the negation: an `auth.json` the CLI removed, or emptied of its tokens, is
         // neither, and that third answer is a Codex that signed itself out.
         usable: &usable,
+        identity: &super::credential_identity,
         rewrites_keychain: false,
         drive: &drive,
     };
-    renew_sign_in(&plan, context, environment, attempted, now)
+    renew_sign_in(&plan, context, environment, attempted, now, force)
 }
 
 /// The handshake, naming this build rather than pretending to be an editor.
@@ -317,6 +328,80 @@ mod tests {
                 );
                 assert!(
                     renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none(),
+                    "{name}"
+                );
+                assert_eq!(spawns(&log), 0, "{name}");
+                let _ = fs::remove_dir_all(&directory);
+            }
+        }
+    }
+
+    /// A reading the endpoint rejected is not a live sign-in, even when the access token's
+    /// own `exp` still has days left. Asking Codex to start is what may rewrite `auth.json`;
+    /// a PAT-only file, or one with no grant at all, still starts nothing.
+    #[test]
+    fn a_live_oauth_grant_is_asked_when_a_rejected_reading_forces_it() {
+        #[cfg(unix)]
+        {
+            let live = auth_json(&access_token(hours_from_now(240)), "2026-08-26T11:00:00Z");
+            let (directory, mut context, environment) = fixture("forced-live", &live);
+            let log = directory.join("spawns.log");
+            let auth = directory.join("codex-home/auth.json");
+            install(
+                &directory,
+                &renewing_script(
+                    &log,
+                    &auth,
+                    &auth_json(&access_token(hours_from_now(240)), "2026-08-28T12:00:00Z"),
+                ),
+            );
+            assert!(!super::super::sign_in_expiring(&context));
+            assert!(super::super::sign_in_usable(&context));
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading earns an attempt");
+            assert_eq!(
+                attempt.outcome,
+                crate::providers::common::RenewalOutcome::Renewed
+            );
+            assert_eq!(spawns(&log), 1);
+            let _ = fs::remove_dir_all(&directory);
+
+            let (directory, mut context, environment) = fixture("forced-unchanged", &live);
+            let log = directory.join("spawns.log");
+            install(
+                &directory,
+                &format!("#!/bin/sh\necho \"ran $*\" >> {}\nexit 0\n", log.display()),
+            );
+            let attempt =
+                super::renew_expired_sign_in_for(&mut context, &environment, None, 10_000, true)
+                    .expect("a rejected reading still earns an attempt");
+            assert_eq!(attempt.outcome, RenewalOutcome::Failed);
+            assert_eq!(spawns(&log), 1);
+            let _ = fs::remove_dir_all(&directory);
+
+            for (name, document) in [
+                (
+                    "pat-only",
+                    "{\"personal_access_token\": \"pat-token\"}".to_owned(),
+                ),
+                ("no-tokens", "{\"auth_mode\": \"chatgpt\"}".to_owned()),
+            ] {
+                let (directory, mut context, environment) = fixture(name, &document);
+                let log = directory.join("spawns.log");
+                install(
+                    &directory,
+                    &renewing_script(&log, &directory.join("ignored.json"), "{}"),
+                );
+                assert!(
+                    super::renew_expired_sign_in_for(
+                        &mut context,
+                        &environment,
+                        None,
+                        10_000,
+                        true,
+                    )
+                    .is_none(),
                     "{name}"
                 );
                 assert_eq!(spawns(&log), 0, "{name}");

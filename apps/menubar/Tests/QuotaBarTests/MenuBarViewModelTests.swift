@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import QuotaWire
 import Testing
@@ -251,6 +252,53 @@ func repeatedCancelTapsSendOneCancelLogin() async throws {
 }
 
 @Test @MainActor
+func loginBusyErrorStaysVisibleOverASignedOutComponentError() async throws {
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: signedOutWithSessionEndedState(),
+      loginError: .remote(LocalServiceRemoteError(code: .busy, recoveryAction: .retry))
+    )
+  )
+  await model.refreshIfNeeded()
+  #expect(
+    model.accountErrorMessage == "The account session ended. Sign in again to continue syncing."
+  )
+
+  model.startLogin()
+  await settle {
+    model.accountErrorMessage == "The request could not be completed. Try again."
+  }
+
+  #expect(model.accountErrorMessage == "The request could not be completed. Try again.")
+  #expect(model.accountActionErrorMessage == "The request could not be completed. Try again.")
+}
+
+@Test @MainActor
+func aBrowserThatWillNotOpenKeepsSignInPendingAndOffersTheLink() async throws {
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: loggingInState(),
+      authorizeURL: "http://127.0.0.1/quota-login"
+    ),
+    loginURLOpener: StubLoginURLOpener(opens: false)
+  )
+  await model.refreshIfNeeded()
+
+  model.startLogin()
+  await settle { model.canCopyLoginLink }
+
+  #expect(model.isLoggingIn)
+  #expect(model.canCopyLoginLink)
+  #expect(
+    model.accountErrorMessage
+      == "QuotaBar could not open your browser. Copy the sign-in link and open it yourself."
+  )
+
+  model.copyLoginLink()
+  #expect(NSPasteboard.general.string(forType: .string) == "http://127.0.0.1/quota-login")
+}
+
+@Test @MainActor
 func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
   let model = MenuBarViewModel(
     client: StubLocalService(
@@ -466,7 +514,6 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
 
 @Test @MainActor
 func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
-  let now = Date(timeIntervalSince1970: 1_786_300_000)
   let state = LocalServiceState(
     ipcVersion: 1,
     revision: 2,
@@ -572,6 +619,40 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   )
 }
 
+private func signedOutWithSessionEndedState() -> LocalServiceState {
+  LocalServiceState(
+    ipcVersion: 1,
+    revision: 1,
+    usageUploadEnabled: true,
+    quotaRefreshIntervalSeconds: 300,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .signedOut,
+      value: LocalServiceAccountState(
+        authStatus: .signedOut,
+        accountID: nil,
+        displayLabel: nil,
+        deviceID: nil,
+        deviceGeneration: nil,
+        accountSummary: nil
+      ),
+      updatedAt: nil,
+      lastError: LocalServiceRemoteError(
+        code: .authenticationRequired,
+        recoveryAction: .login
+      ),
+      refreshing: false
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    overview: [],
+    cache: .settled
+  )
+}
+
 private func loggingInState() -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
@@ -668,6 +749,14 @@ private actor CallRecord {
   }
 }
 
+private struct StubLoginURLOpener: LoginURLOpening {
+  let opens: Bool
+
+  func open(_ url: URL) -> Bool {
+    opens
+  }
+}
+
 private struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
@@ -677,6 +766,8 @@ private struct StubLocalService: LocalServiceServing {
   let cancelRecord: CallRecord?
   let shutdownRecord: CallRecord?
   let shutdownAnswerDelayNanoseconds: UInt64
+  let loginError: LocalServiceClientError?
+  let authorizeURL: String?
 
   init(
     state: LocalServiceState,
@@ -685,7 +776,9 @@ private struct StubLocalService: LocalServiceServing {
     cancelFails: Bool = false,
     cancelRecord: CallRecord? = nil,
     shutdownRecord: CallRecord? = nil,
-    shutdownAnswerDelayNanoseconds: UInt64 = 0
+    shutdownAnswerDelayNanoseconds: UInt64 = 0,
+    loginError: LocalServiceClientError? = nil,
+    authorizeURL: String? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -695,6 +788,8 @@ private struct StubLocalService: LocalServiceServing {
     self.cancelRecord = cancelRecord
     self.shutdownRecord = shutdownRecord
     self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
+    self.loginError = loginError
+    self.authorizeURL = authorizeURL
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -729,11 +824,15 @@ private struct StubLocalService: LocalServiceServing {
     if loginDelayNanoseconds > 0 {
       try await Task.sleep(nanoseconds: loginDelayNanoseconds)
     }
+    if let loginError {
+      throw loginError
+    }
     return LocalServiceLoginResult(
       status: .loggingIn,
       accountID: nil,
       deviceID: nil,
-      deviceGeneration: nil
+      deviceGeneration: nil,
+      authorizeURL: authorizeURL
     )
   }
   func cancelLogin() async throws {
