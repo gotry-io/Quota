@@ -2466,18 +2466,50 @@ impl LocalBackend for NativeBackend {
         // provider that answers in twenty seconds or a scan of every Usage file. It is published
         // the moment it lands, which is what names the account and fills its totals while the
         // rest of this refresh is still running.
-        let (quota, usage, read_account) = thread::scope(|scope| {
+        let previous_quota = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let had_active_session = self
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .is_some_and(|session| session.get("status").and_then(Value::as_str) == Some("active"));
+        let (quota, usage, read_account, quota_put, quota_accepted) = thread::scope(|scope| {
             let quota_job = scope.spawn(|| self.collect_quota(quota_cancel));
             let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
             let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
             let quota_result = quota_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
+            updates.quota(match &quota_result {
+                Ok(value) => Ok(value.clone()),
+                Err(error) => Err(error.clone()),
+            });
+            let account_result = account_job.join().unwrap_or(None);
+            let (quota_put, quota_accepted) = if had_active_session {
+                self.upload_quota_after_collection(
+                    &quota_result,
+                    previous_quota.as_ref(),
+                    cancel.as_ref(),
+                    updates,
+                )
+            } else {
+                (false, false)
+            };
             let usage_result = usage_job
                 .join()
                 .unwrap_or_else(|_| Err(BackendError::unavailable()));
-            let account_result = account_job.join().unwrap_or(None);
-            (quota_result, usage_result, account_result)
+            (
+                quota_result,
+                usage_result,
+                account_result,
+                quota_put,
+                quota_accepted,
+            )
         });
         let cached_catalog = self
             .state
@@ -2540,16 +2572,6 @@ impl LocalBackend for NativeBackend {
                     .and_then(|component| component.value)
             })
             .flatten();
-        let previous_quota = quota_value
-            .is_ok()
-            .then(|| {
-                self.state
-                    .component(crate::protocol::ComponentName::Quota)
-                    .ok()
-                    .flatten()
-                    .and_then(|component| component.value)
-            })
-            .flatten();
         // What the Account read already answered, or nothing when there was no session to read
         // with at the time.
         let mut account_value: Option<Result<Value, BackendError>> = read_account;
@@ -2580,7 +2602,7 @@ impl LocalBackend for NativeBackend {
                         // Whether this refresh put something in the Account that was not there
                         // when it read one.
                         let mut uploaded = false;
-                        if let Ok(quota_payload) = &quota_value {
+                        if !quota_put && let Ok(quota_payload) = &quota_value {
                             let restated = failure_status_snapshots(
                                 quota_payload,
                                 previous_quota.as_ref(),
@@ -2598,6 +2620,7 @@ impl LocalBackend for NativeBackend {
                                 }
                             }
                         }
+                        uploaded |= quota_accepted;
                         let usage_upload_enabled = match self.state.usage_upload_enabled() {
                             Ok(enabled) => enabled,
                             Err(_) => {
@@ -2736,6 +2759,173 @@ impl LocalBackend for NativeBackend {
         }
     }
 
+    fn refresh_account(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+    ) -> Result<Value, BackendError> {
+        self.read_account(cancel.as_ref(), updates)
+            .unwrap_or_else(|| {
+                Err(BackendError {
+                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+                })
+            })
+    }
+
+    fn refresh_quota(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        let previous_quota = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let quota = self.collect_quota(cancel.clone());
+        updates.quota(match &quota {
+            Ok(value) => Ok(value.clone()),
+            Err(error) => Err(error.clone()),
+        });
+        let _ = self.upload_quota_after_collection(
+            &quota,
+            previous_quota.as_ref(),
+            cancel.as_ref(),
+            updates,
+        );
+        let account = self
+            .read_account(cancel.as_ref(), updates)
+            .unwrap_or_else(|| {
+                Err(BackendError {
+                    error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
+                })
+            });
+        let stored_account = self
+            .state
+            .component(crate::protocol::ComponentName::Account)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let overview = quota.as_ref().ok().map(|payload| {
+            self.build_overview(
+                payload,
+                account.as_ref().ok().cloned().or(stored_account).as_ref(),
+            )
+        });
+        RefreshOutcome {
+            quota,
+            usage: Err(BackendError::cancelled()),
+            account,
+            pricing: Err(BackendError::cancelled()),
+            overview,
+        }
+    }
+
+    fn refresh_usage(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        let usage = self.collect_usage(cancel.clone());
+        let cached_catalog = self
+            .state
+            .component(crate::protocol::ComponentName::Pricing)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| serde_json::from_value(value).ok());
+        let cached_model_catalog = self
+            .state
+            .model_catalog()
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::model_catalog::validate_model_catalog_value(&value)
+                    .valid
+                    .then(|| serde_json::from_value(value).ok())
+                    .flatten()
+            })
+            .or_else(|| Some(crate::model_catalog::bundled_model_catalog()));
+        let (pricing, model_catalog_refresh) = thread::scope(|scope| {
+            let pricing_job = scope.spawn(|| self.refresh_pricing());
+            let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());
+            (
+                pricing_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+                model_catalog_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+            )
+        });
+        let catalog = pricing
+            .as_ref()
+            .ok()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or(cached_catalog);
+        let model_catalog = model_catalog_refresh
+            .as_ref()
+            .ok()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or(cached_model_catalog);
+        let usage_collection = usage.ok();
+        let usage_value = match usage_collection.as_ref() {
+            Some(value) => self.usage_report(value, catalog.as_ref(), model_catalog.as_ref()),
+            None => Err(BackendError::unavailable()),
+        };
+        let mut account_value = None;
+        if let Ok(Some(session)) = self.state.session_json()
+            && session.get("status").and_then(Value::as_str) == Some("active")
+            && self.state.usage_upload_enabled().unwrap_or(false)
+            && usage_collection.is_some()
+        {
+            let mut account_sync_error = None;
+            let context_result = effective_usage_lower_bound(&session).and_then(|lower_bound| {
+                self.state
+                    .ensure_usage_context(
+                        session
+                            .get("account_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        session
+                            .get("device_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        session
+                            .get("device_generation")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                        session
+                            .get("usage_sync_revision")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                        &lower_bound,
+                    )
+                    .map_err(|_| BackendError::unavailable())
+            });
+            if let Err(error) = context_result {
+                record_account_sync_error(&mut account_sync_error, error);
+            } else if let Err(error) = self.stage_outbox() {
+                record_account_sync_error(&mut account_sync_error, error);
+            } else {
+                match self.drain_outbox() {
+                    Ok(accepted) => {
+                        if accepted {
+                            account_value = self.reread_account(cancel.as_ref(), updates);
+                        }
+                    }
+                    Err(error) => record_account_sync_error(&mut account_sync_error, error),
+                }
+            }
+            if let Some(error) =
+                account_sync_error.filter(|error| error.error.code.requires_login())
+            {
+                self.clear_active_session();
+                account_value = Some(Err(error));
+            }
+        }
+        RefreshOutcome {
+            quota: Ok(Value::Null),
+            usage: usage_value,
+            account: account_value.unwrap_or_else(|| Err(BackendError::cancelled())),
+            pricing,
+            overview: None,
+        }
+    }
+
     fn login(&self, _: &str, cancel: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
         self.account.login(cancel.as_ref())
     }
@@ -2746,6 +2936,46 @@ impl LocalBackend for NativeBackend {
 }
 
 impl NativeBackend {
+    /// Uploads this collection's quota as soon as it exists, without waiting for Usage.
+    ///
+    /// Device control and the Account re-read stay in the writing half of the refresh.
+    fn upload_quota_after_collection(
+        &self,
+        quota_value: &Result<Value, BackendError>,
+        previous_quota: Option<&Value>,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> (bool, bool) {
+        if cancel.load(Ordering::Acquire) {
+            return (false, false);
+        }
+        let Ok(Some(session)) = self.state.session_json() else {
+            return (false, false);
+        };
+        if session.get("status").and_then(Value::as_str) != Some("active") {
+            return (false, false);
+        }
+        let Ok(quota_payload) = quota_value else {
+            return (false, false);
+        };
+        let restated = failure_status_snapshots(quota_payload, previous_quota, Utc::now());
+        match self.account.upload_quota_report(quota_payload, &restated) {
+            Ok(response) => (
+                true,
+                response
+                    .get("accepted")
+                    .and_then(Value::as_array)
+                    .is_some_and(|providers| !providers.is_empty()),
+            ),
+            Err(error) if error.error.code.requires_login() => {
+                self.clear_active_session();
+                updates.account(Err(error));
+                (false, false)
+            }
+            Err(_) => (false, false),
+        }
+    }
+
     fn clear_active_session(&self) {
         if let Ok(Some((session, epoch))) = self.state.session_snapshot()
             && session.get("status").and_then(Value::as_str) == Some("active")
@@ -3668,11 +3898,11 @@ mod tests {
         }]);
         let relay_server = spawn_relay(vec![
             http_json_with_etag(&before, "\"before\""),
+            snapshot_upload(json!(["codex"]), json!([])),
             String::new(),
             String::new(),
             device_control(),
             device_profile(),
-            snapshot_upload(json!(["codex"]), json!([])),
             http_json_with_etag(&after, "\"after\""),
         ]);
         let root =
@@ -3733,11 +3963,11 @@ mod tests {
         let summary = account_summary("octocat");
         let relay_server = spawn_relay(vec![
             http_json_with_etag(&summary, "\"only\""),
+            snapshot_upload(json!([]), json!(["codex"])),
             String::new(),
             String::new(),
             device_control(),
             device_profile(),
-            snapshot_upload(json!([]), json!(["codex"])),
         ]);
         let root =
             std::env::temp_dir().join(format!("quota-account-once-{}", uuid::Uuid::new_v4()));

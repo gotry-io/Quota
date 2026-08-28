@@ -224,6 +224,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       "ipc_version": 1,
       "revision": 0,
       "usage_upload_enabled": true,
+      "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
         "status": "unavailable",

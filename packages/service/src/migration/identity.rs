@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 2;
+const CURRENT_SCHEMA: i64 = 3;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -31,6 +31,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
         match version {
             1 => migration_v1(&tx)?,
             2 => migration_v2(&tx)?,
+            3 => migration_v3(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -103,6 +104,16 @@ fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Quota collection cadence is a preference, default five minutes. Existing identities that
+/// never stored one keep that default; a later Settings change overwrites the row.
+fn migration_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "INSERT OR IGNORE INTO preferences(key, value)
+         VALUES ('quota_refresh_interval_seconds', '300');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +145,15 @@ mod tests {
             )
             .expect("context");
         assert_eq!((generation, sync_revision), (3, 0));
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM preferences WHERE key = 'quota_refresh_interval_seconds'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("cadence after upgrade"),
+            "300"
+        );
     }
 
     #[test]
@@ -156,6 +176,15 @@ mod tests {
             )
             .expect("preference"),
             "1"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM preferences WHERE key = 'quota_refresh_interval_seconds'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("cadence"),
+            "300"
         );
 
         // Re-applying is a no-op: the installation this device already answers as must not

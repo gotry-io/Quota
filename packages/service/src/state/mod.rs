@@ -30,10 +30,11 @@ use uuid::Uuid;
 
 use crate::protocol::{
     BrowserAccessDenialReason, CacheState, ComponentName, ComponentState, ComponentStatus,
-    DiagnosticAttempt, DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
-    DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, IPC_VERSION, IpcError,
-    MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView, QuotaOverviewItem,
-    RecoveryAction, StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
+    DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS, DiagnosticAttempt, DiagnosticAttemptCode,
+    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticReport,
+    ErrorCode, IPC_VERSION, IpcError, MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView,
+    ProviderConfigView, QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, RecoveryAction,
+    StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
     DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
@@ -522,6 +523,7 @@ impl StateStore {
         tolerate_invalid_provider_config: bool,
     ) -> Result<StateSnapshot, StateError> {
         let usage_upload_enabled = self.usage_upload_enabled()?;
+        let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
         let cache_reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
         self.with_cache(|conn| {
@@ -566,6 +568,7 @@ impl StateStore {
                 ipc_version: IPC_VERSION,
                 revision,
                 usage_upload_enabled,
+                quota_refresh_interval_seconds,
                 usage_periods,
                 quota: quota
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
@@ -1234,6 +1237,26 @@ impl StateStore {
                 "usage_upload_enabled",
                 if enabled { "1" } else { "0" },
             )
+        })?;
+        self.bump_revision()
+    }
+
+    pub fn quota_refresh_interval_seconds(&self) -> Result<u64, StateError> {
+        self.with_identity(|conn| {
+            let stored = preference(conn, "quota_refresh_interval_seconds")?;
+            Ok(parse_quota_refresh_interval(stored.as_deref()))
+        })
+    }
+
+    pub fn set_quota_refresh_interval_seconds(&self, seconds: u64) -> Result<u64, StateError> {
+        if !QUOTA_REFRESH_INTERVALS_SECONDS.contains(&seconds) {
+            return Err(StateError::InvalidState);
+        }
+        if self.quota_refresh_interval_seconds()? == seconds {
+            return self.current_revision();
+        }
+        self.with_identity_mut(|conn| {
+            write_preference(conn, "quota_refresh_interval_seconds", &seconds.to_string())
         })?;
         self.bump_revision()
     }
@@ -3480,6 +3503,13 @@ fn lock_with_deadline(lock: &Mutex<Connection>) -> Result<MutexGuard<'_, Connect
             }
         }
     }
+}
+
+fn parse_quota_refresh_interval(stored: Option<&str>) -> u64 {
+    stored
+        .and_then(|value| value.parse().ok())
+        .filter(|seconds| QUOTA_REFRESH_INTERVALS_SECONDS.contains(seconds))
+        .unwrap_or(DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS)
 }
 
 fn preference(conn: &Connection, key: &str) -> Result<Option<String>, StateError> {

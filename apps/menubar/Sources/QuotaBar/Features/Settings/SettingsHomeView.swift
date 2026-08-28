@@ -9,6 +9,7 @@ struct SettingsHomeView: View {
   let onOpenMenuBarStyle: () -> Void
   let onOpenMenuBarProvider: () -> Void
   let onOpenSupport: () -> Void
+  let onOpenRefreshInterval: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
   @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
@@ -81,6 +82,13 @@ struct SettingsHomeView: View {
               ),
               accessibilityLabel: "Launch at Login",
               accessibilityHint: "Start QuotaBar when you log in"
+            )
+            settingsDestinationRow(
+              title: "Refresh Interval",
+              systemImage: "clock",
+              trailing: QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds).label,
+              accessibilityLabel: "Refresh Interval",
+              action: onOpenRefreshInterval
             )
             settingsDestinationRow(
               title: "Support",

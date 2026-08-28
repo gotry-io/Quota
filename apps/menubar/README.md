@@ -27,7 +27,7 @@ Account and writes this Mac's Device
 When it has to rebuild that cache, `get_state.cache.rebuilding` says so and Overview shows one
 notice until the next complete Usage scan. QuotaBar owns presentation, provider visibility
 and ordering preferences, native provider configuration fields, account actions, accessibility, and
-Launch at Login. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
+Launch at Login, and the Quota collection interval. Shared remaining-quota, plan/account label, compact count, Usage cost, and compact
 relative-age text come from [`packages/apple-shared`](../../packages/apple-shared), and the managed
 wire types plus `ProviderID` from its `QuotaWire` module. Private IPC models, the Usage upload and
 local-report types, app-only provider behavior, and session/helper logic stay in this app; QuotaBar

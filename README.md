@@ -32,9 +32,10 @@ QuotaBar holds every request until then. Requests have no deadline of their own:
 answers without taking a lock is what says it is alive, and only a child that leaves two consecutive
 pings unanswered is killed and replaced. The Rust service immediately returns its last valid state,
 then collects provider quota, incrementally indexes Usage logs, refreshes pricing and report-time
-model aliases, and synchronizes a signed-in account in the background. Its five-minute scheduler
-lives only for the QuotaBar process lifetime, so quitting QuotaBar stops local work and
-synchronization.
+model aliases, and synchronizes a signed-in account in the background. Collection cadence is a
+stored preference (1, 2, 5, 10, or 15 minutes; default five). Account summary is read every
+minute with a conditional GET. The scheduler lives only for the QuotaBar process lifetime, so
+quitting QuotaBar stops local work and synchronization.
 
 Swift owns presentation, UI preferences, accessibility, and Launch at Login; shared remaining-quota,
 plan, count, cost, and compact-age copy lives in `packages/apple-shared`, and wire decoding and Relay

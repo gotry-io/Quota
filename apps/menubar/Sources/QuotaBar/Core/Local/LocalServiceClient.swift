@@ -67,6 +67,7 @@ protocol LocalServiceServing: Sendable {
   func cancelLogin() async throws
   func logout() async throws -> LocalServiceLogoutResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
+  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,
@@ -210,6 +211,12 @@ actor LocalServiceClient: LocalServiceServing {
     try await request(
       operation: "set_usage_upload",
       payload: SetUsageUploadPayload(enabled: enabled)
+    )
+  }
+  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
+    try await request(
+      operation: "set_quota_refresh_interval",
+      payload: SetQuotaRefreshIntervalPayload(intervalSeconds: seconds)
     )
   }
 
@@ -801,6 +808,7 @@ private struct EmptyResult: Decodable {
 }
 private struct ProviderPayload: Encodable { let provider: String }
 private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
+private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
 private struct SetProviderConfigPayload: Encodable {
   let provider: String
   let apiKey: String

@@ -142,6 +142,8 @@ final class MenuBarViewModel {
   private(set) var isLoggingOut = false
   private(set) var isUpdatingUsageUpload = false
   private(set) var usageUploadEnabled = true
+  private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
+  private(set) var isUpdatingQuotaRefreshInterval = false
   private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
@@ -583,6 +585,23 @@ final class MenuBarViewModel {
     }
   }
 
+  func setQuotaRefreshInterval(_ interval: QuotaRefreshInterval) async {
+    guard !isUpdatingQuotaRefreshInterval, interval.rawValue != quotaRefreshIntervalSeconds,
+      let client
+    else { return }
+    isUpdatingQuotaRefreshInterval = true
+    defer { isUpdatingQuotaRefreshInterval = false }
+    do {
+      quotaRefreshIntervalSeconds =
+        try await client.setQuotaRefreshInterval(seconds: interval.rawValue).intervalSeconds
+      await reloadState()
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
+  }
+
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,
@@ -944,6 +963,7 @@ final class MenuBarViewModel {
     revision = state.revision
     cache = state.cache
     usageUploadEnabled = state.usageUploadEnabled
+    quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
     usagePeriods = state.usagePeriods
     report = state.quota.value
     localUsage = state.usage.value

@@ -212,7 +212,8 @@ struct MenuBarContentView: View {
         onOpenUsage: { navigate(to: .usage) },
         onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
         onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
-        onOpenSupport: { navigate(to: .support) }
+        onOpenSupport: { navigate(to: .support) },
+        onOpenRefreshInterval: { navigate(to: .quotaRefreshInterval) }
       )
     case .account:
       AccountSettingsView(
@@ -243,6 +244,13 @@ struct MenuBarContentView: View {
         providers: ProviderDisplayOrder.enabledProviders(),
         onSelect: navigateBack
       )
+    case .quotaRefreshInterval:
+      QuotaRefreshIntervalSettingsView(
+        selected: QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds)
+      ) { interval in
+        Task { await model.setQuotaRefreshInterval(interval) }
+        navigateBack()
+      }
     case .support:
       SettingsSupportView(
         onOpenDiagnostics: { navigate(to: .diagnostics) },
@@ -332,6 +340,7 @@ enum MenuBarRoute: Hashable {
   case usage
   case menuBarStyle
   case menuBarProvider
+  case quotaRefreshInterval
   case support
   case diagnostics
 
@@ -346,6 +355,7 @@ enum MenuBarRoute: Hashable {
     // The section header says Menu Bar; a page carries its own context.
     case .menuBarStyle: "Menu Bar Style"
     case .menuBarProvider: "Menu Bar Provider"
+    case .quotaRefreshInterval: "Refresh Interval"
     case .support: "Support"
     case .diagnostics: "Diagnostics"
     }

@@ -284,7 +284,10 @@ Quota contains the **Usage** and **Agents** destinations. The Usage root summary
 totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
 **Style** and **Provider**: two rows that state the choice in force on the right and open a page to
 change it, never a menu that drops over the panel. General contains the native mini **Launch at
-Login** switch, then the **Support** destination.
+Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes, default 5),
+then the **Support** destination. Choosing an interval takes effect and returns, like Menu Bar
+Style. It is how often this Mac collects provider quota; Account summary still polls every
+minute, and a window reset can collect quota once before the next interval.
 
 **Menu Bar Style** and **Menu Bar Provider** are one list each, with no section header to repeat the
 page title. Every option is one ordinary settings row; the one in force carries an accent checkmark;

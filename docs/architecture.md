@@ -61,9 +61,14 @@ including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately
 independent status, last-good value, update time, error/recovery code, and refreshing flag; there
 are five of them — quota, Usage, account, pricing, and providers, the last of which a refresh never
 touches and a configuration change always does. The service begins a background startup refresh once IPC is available,
-emits revisioned `state_changed` events, and schedules refreshes every five minutes; manual refresh
-uses the same single-flight path. A refresh applies a component as soon as it has one rather than
-only at its end — the account read finishes in well under a second while provider collection can
+emits revisioned `state_changed` events, and then waits on one scheduler thread for the next of
+three events: an Account conditional read every minute, a quota collection at the stored interval
+(1, 2, 5, 10, or 15 minutes; default five), and a quota-only catch-up when a window `resets_at`
+falls before the next collection. Usage indexes on the collection tick when the file index is
+dirty, on its own in-flight lane, so a long scan does not postpone the next quota pass. Manual
+refresh and Diagnostics Recheck run both lanes as one coordinated refresh. A refresh applies a
+component as soon as it has one rather than only at its end — the account read finishes in well
+under a second, quota is applied and uploaded before Usage joins, and provider collection can
 take twenty seconds per provider — and the end of a refresh applies a component exactly when it
 differs from what was already published. QuotaBar sends `shutdown` as it terminates, waits at most two
 seconds for the answer, and stdin EOF says the same thing to a helper that never gave one, so nothing

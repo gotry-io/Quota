@@ -1,7 +1,9 @@
 //! Request handling, refresh scheduling, and parent-lifetime shutdown.
 
 pub mod backend;
+pub mod schedule;
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -36,6 +38,17 @@ impl BackendError {
     }
 }
 
+fn unavailable_refresh_outcome() -> RefreshOutcome {
+    let unavailable = || Err(BackendError::unavailable());
+    RefreshOutcome {
+        quota: unavailable(),
+        usage: unavailable(),
+        account: unavailable(),
+        pricing: unavailable(),
+        overview: None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LoginOutcome {
     pub session: Value,
@@ -60,6 +73,9 @@ pub struct RefreshOutcome {
 /// wants the end of the refresh discards these and loses nothing.
 pub trait RefreshSink: Sync {
     fn account(&self, result: Result<Value, BackendError>);
+    fn quota(&self, result: Result<Value, BackendError>) {
+        let _ = result;
+    }
 }
 
 /// A sink for a caller that wants only the finished `RefreshOutcome`.
@@ -130,6 +146,25 @@ pub trait LocalBackend: Send + Sync {
     /// parallel, but must order pricing/control, upload/outbox, and overview merging explicitly.
     /// Anything handed to `updates` before this returns is still named in the outcome.
     fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome;
+    /// Account summary only. Used by the one-minute signed-in poll.
+    fn refresh_account(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+    ) -> Result<Value, BackendError> {
+        let _ = (cancel, updates);
+        Err(BackendError::unavailable())
+    }
+    /// Quota collection, upload, and Overview, without Usage. Defaults do not run a full refresh.
+    fn refresh_quota(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        let _ = (cancel, updates);
+        unavailable_refresh_outcome()
+    }
+    /// Usage scan, report, and outbox, without provider collection.
+    fn refresh_usage(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+        let _ = (cancel, updates);
+        unavailable_refresh_outcome()
+    }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -181,9 +216,48 @@ impl LocalBackend for UnavailableBackend {
 }
 
 struct RefreshState {
+    /// Coordinated refresh: startup, manual, Recheck, and settings. Occupies both lanes.
     active: Option<ActiveRefresh>,
     pending: bool,
     pending_trigger: Option<DiagnosticAttemptTrigger>,
+    quota: Option<ActiveRefresh>,
+    usage: Option<ActiveRefresh>,
+    account: Option<ActiveRefresh>,
+    pending_quota: bool,
+    pending_usage: bool,
+}
+
+struct SchedulerPlan {
+    next_quota: Option<Instant>,
+    reset_at: Option<chrono::DateTime<chrono::Utc>>,
+    attempted_resets: HashSet<i64>,
+}
+
+#[derive(Clone, Copy)]
+enum RefreshLane {
+    Quota,
+    Usage,
+    Account,
+}
+
+impl RefreshLane {
+    fn blocked(self, refresh: &RefreshState) -> bool {
+        match self {
+            Self::Quota => refresh.active.is_some() || refresh.quota.is_some(),
+            Self::Usage => refresh.active.is_some() || refresh.usage.is_some(),
+            Self::Account => {
+                refresh.active.is_some() || refresh.quota.is_some() || refresh.account.is_some()
+            }
+        }
+    }
+
+    fn components(self) -> &'static [ComponentName] {
+        match self {
+            Self::Quota => &[ComponentName::Quota],
+            Self::Usage => &[ComponentName::Usage],
+            Self::Account => &[ComponentName::Account],
+        }
+    }
 }
 
 fn coalesce_refresh_trigger(
@@ -222,8 +296,9 @@ struct ServiceInner {
     shutdown: AtomicBool,
     refresh: Mutex<RefreshState>,
     login: Mutex<LoginState>,
+    scheduler: Mutex<SchedulerPlan>,
     scheduler_wakeup: Condvar,
-    scheduler_signal: Mutex<bool>,
+    scheduler_signal: Mutex<schedule::SchedulerSignal>,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
 }
@@ -249,10 +324,20 @@ impl LocalService {
                     active: None,
                     pending: false,
                     pending_trigger: None,
+                    quota: None,
+                    usage: None,
+                    account: None,
+                    pending_quota: false,
+                    pending_usage: false,
                 }),
                 login: Mutex::new(LoginState { active: None }),
+                scheduler: Mutex::new(SchedulerPlan {
+                    next_quota: None,
+                    reset_at: None,
+                    attempted_resets: HashSet::new(),
+                }),
                 scheduler_wakeup: Condvar::new(),
-                scheduler_signal: Mutex::new(false),
+                scheduler_signal: Mutex::new(schedule::SchedulerSignal::Idle),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
             }),
@@ -265,29 +350,118 @@ impl LocalService {
         thread::Builder::new()
             .name("quota-refresh-scheduler".to_owned())
             .spawn(move || {
-                let interval = Duration::from_secs(300);
+                let mut next_account = Instant::now() + schedule::account_sync_interval();
+                let mut next_quota = Instant::now() + service.quota_refresh_interval();
+                service.store_next_quota(next_quota);
                 loop {
+                    if service.is_shutdown() {
+                        break;
+                    }
+                    let reset_at = service.reset_deadline_instant();
+                    let (kind, wake_at) = schedule::next_wake(next_account, next_quota, reset_at);
+                    let wait = wake_at.saturating_duration_since(Instant::now());
                     let signal = service.inner.scheduler_signal.lock();
                     let Ok(signal) = signal else { break };
                     let Ok((mut signal, timeout)) = service
                         .inner
                         .scheduler_wakeup
-                        .wait_timeout_while(signal, interval, |value| !*value)
+                        .wait_timeout_while(signal, wait, |value| {
+                            matches!(value, schedule::SchedulerSignal::Idle)
+                        })
                     else {
                         break;
                     };
                     if service.is_shutdown() {
                         break;
                     }
-                    let should_refresh = timeout.timed_out() || *signal;
-                    if should_refresh {
-                        *signal = false;
-                        drop(signal);
-                        service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Scheduled);
+                    let posted = *signal;
+                    *signal = schedule::SchedulerSignal::Idle;
+                    drop(signal);
+                    if posted != schedule::SchedulerSignal::Idle {
+                        let now = Instant::now();
+                        next_quota = schedule::next_quota_after_signal(
+                            posted,
+                            now,
+                            service.quota_refresh_interval(),
+                            next_quota,
+                        );
+                        service.store_next_quota(next_quota);
+                        continue;
+                    }
+                    if !timeout.timed_out() {
+                        continue;
+                    }
+                    let now = Instant::now();
+                    match kind {
+                        schedule::SchedulerWake::Account => {
+                            next_account = now + schedule::account_sync_interval();
+                            service.request_account_sync();
+                        }
+                        schedule::SchedulerWake::Quota => {
+                            next_quota = now + service.quota_refresh_interval();
+                            next_account = now + schedule::account_sync_interval();
+                            service.store_next_quota(next_quota);
+                            service.request_scheduled_lanes();
+                        }
+                        schedule::SchedulerWake::ResetBoundary => {
+                            service.mark_reset_attempted();
+                            service.request_lane(RefreshLane::Quota);
+                        }
                     }
                 }
             })
             .ok();
+    }
+
+    fn quota_refresh_interval(&self) -> Duration {
+        self.inner
+            .state
+            .quota_refresh_interval_seconds()
+            .ok()
+            .and_then(schedule::quota_refresh_interval)
+            .unwrap_or_else(schedule::default_quota_refresh_interval)
+    }
+
+    fn store_next_quota(&self, next_quota: Instant) {
+        if let Ok(mut plan) = self.inner.scheduler.lock() {
+            plan.next_quota = Some(next_quota);
+        }
+    }
+
+    fn reset_deadline_instant(&self) -> Option<Instant> {
+        let reset_at = self.inner.scheduler.lock().ok()?.reset_at?;
+        let now = Instant::now();
+        schedule::instant_from_utc(reset_at, chrono::Utc::now(), now)
+    }
+
+    fn mark_reset_attempted(&self) {
+        if let Ok(mut plan) = self.inner.scheduler.lock() {
+            if let Some(at) = plan.reset_at.take() {
+                plan.attempted_resets.insert(at.timestamp());
+            }
+            if plan.attempted_resets.len() > 64
+                && let Some(oldest) = plan.attempted_resets.iter().copied().min()
+            {
+                plan.attempted_resets.remove(&oldest);
+            }
+        }
+    }
+
+    fn wake_scheduler(&self, signal: schedule::SchedulerSignal) {
+        if matches!(signal, schedule::SchedulerSignal::Idle) {
+            return;
+        }
+        if let Ok(mut slot) = self.inner.scheduler_signal.lock() {
+            if matches!(*slot, schedule::SchedulerSignal::CadenceChanged)
+                && matches!(signal, schedule::SchedulerSignal::Recalculate)
+            {
+                // A cadence change already restarts the collection clock; a reset wake must
+                // not downgrade it.
+            } else {
+                *slot = signal;
+            }
+            self.inner.scheduler_wakeup.notify_all();
+        }
     }
 
     pub fn handle(&self, request: IpcRequest) -> IpcResponse {
@@ -317,6 +491,9 @@ impl LocalService {
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
             Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
+            Operation::SetQuotaRefreshInterval => {
+                self.set_quota_refresh_interval(&request).map(as_json)
+            }
             Operation::SetProviderConfig => self.set_provider_config(&request).map(as_json),
             Operation::RemoveProviderConfig => self.remove_provider_config(&request).map(as_json),
             Operation::ValidateProviderBrowserSession => self
@@ -344,10 +521,17 @@ impl LocalService {
         if self.inner.shutdown.swap(true, Ordering::AcqRel) {
             return;
         }
-        if let Ok(refresh) = self.inner.refresh.lock()
-            && let Some(active) = &refresh.active
-        {
-            active.cancel.store(true, Ordering::Release);
+        if let Ok(refresh) = self.inner.refresh.lock() {
+            for lane in [
+                &refresh.active,
+                &refresh.quota,
+                &refresh.usage,
+                &refresh.account,
+            ] {
+                if let Some(active) = lane {
+                    active.cancel.store(true, Ordering::Release);
+                }
+            }
         }
         if let Ok(login) = self.inner.login.lock()
             && let Some(cancel) = &login.active
@@ -355,7 +539,7 @@ impl LocalService {
             cancel.store(true, Ordering::Release);
         }
         if let Ok(mut signal) = self.inner.scheduler_signal.lock() {
-            *signal = true;
+            *signal = schedule::SchedulerSignal::Recalculate;
             self.inner.scheduler_wakeup.notify_all();
         }
     }
@@ -412,16 +596,36 @@ impl LocalService {
             let Ok(refresh) = self.inner.refresh.lock() else {
                 return false;
             };
-            let Some(active) = &refresh.active else {
+            if refresh.active.is_none()
+                && refresh.quota.is_none()
+                && refresh.usage.is_none()
+                && refresh.account.is_none()
+            {
                 return true;
-            };
-            active.cancel.store(true, Ordering::Release);
+            }
+            for lane in [
+                &refresh.active,
+                &refresh.quota,
+                &refresh.usage,
+                &refresh.account,
+            ] {
+                if let Some(active) = lane {
+                    active.cancel.store(true, Ordering::Release);
+                }
+            }
         }
         let deadline = Instant::now() + deadline;
         loop {
             thread::sleep(REFRESH_HANDOVER_POLL);
             match self.inner.refresh.lock() {
-                Ok(refresh) if refresh.active.is_none() => return true,
+                Ok(refresh)
+                    if refresh.active.is_none()
+                        && refresh.quota.is_none()
+                        && refresh.usage.is_none()
+                        && refresh.account.is_none() =>
+                {
+                    return true;
+                }
                 Ok(_) => {}
                 Err(_) => return false,
             }
@@ -544,10 +748,17 @@ impl LocalService {
         // Stop the current refresh before changing the durable session epoch. Collectors observe
         // this flag directly; account operations also re-check the epoch around every request, so
         // no later upload stage can start from the signed-out session.
-        if let Ok(refresh) = self.inner.refresh.lock()
-            && let Some(active) = &refresh.active
-        {
-            active.cancel.store(true, Ordering::Release);
+        if let Ok(refresh) = self.inner.refresh.lock() {
+            for lane in [
+                &refresh.active,
+                &refresh.quota,
+                &refresh.usage,
+                &refresh.account,
+            ] {
+                if let Some(active) = lane {
+                    active.cancel.store(true, Ordering::Release);
+                }
+            }
         }
         let Some(session) = self.inner.state.session_json().map_err(state_error)? else {
             self.set_signed_out()?;
@@ -633,6 +844,27 @@ impl LocalService {
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(UsageUploadSetting {
             enabled: payload.enabled,
+        })
+    }
+
+    fn set_quota_refresh_interval(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<QuotaRefreshIntervalSetting, IpcError> {
+        let payload: SetQuotaRefreshIntervalPayload = request.decode_payload()?;
+        if schedule::quota_refresh_interval(payload.interval_seconds).is_none() {
+            return Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            ));
+        }
+        self.inner
+            .state
+            .set_quota_refresh_interval_seconds(payload.interval_seconds)
+            .map_err(state_error)?;
+        self.wake_scheduler(schedule::SchedulerSignal::CadenceChanged);
+        Ok(QuotaRefreshIntervalSetting {
+            interval_seconds: payload.interval_seconds,
         })
     }
 
@@ -815,6 +1047,27 @@ impl LocalService {
     }
 
     fn request_refresh_with_trigger(&self, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
+        match trigger {
+            DiagnosticAttemptTrigger::Scheduled => self.request_scheduled_lanes(),
+            _ => self.request_full(trigger),
+        }
+    }
+
+    fn request_scheduled_lanes(&self) -> RefreshResult {
+        let quota = self.request_lane(RefreshLane::Quota);
+        let usage = self.request_lane(RefreshLane::Usage);
+        RefreshResult {
+            accepted: quota.accepted || usage.accepted,
+            pending: quota.pending || usage.pending,
+            revision: self.inner.state.current_revision().unwrap_or(0),
+        }
+    }
+
+    fn request_account_sync(&self) {
+        let _ = self.request_lane(RefreshLane::Account);
+    }
+
+    fn request_lane(&self, lane: RefreshLane) -> RefreshResult {
         let mut refresh = match self.inner.refresh.lock() {
             Ok(refresh) => refresh,
             Err(_) => {
@@ -825,7 +1078,93 @@ impl LocalService {
                 };
             }
         };
-        if refresh.active.is_some() {
+        if lane.blocked(&refresh) {
+            match lane {
+                RefreshLane::Quota => refresh.pending_quota = true,
+                RefreshLane::Usage => refresh.pending_usage = true,
+                RefreshLane::Account => {}
+            }
+            return RefreshResult {
+                accepted: false,
+                pending: !matches!(lane, RefreshLane::Account),
+                revision: self.inner.state.current_revision().unwrap_or(0),
+            };
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        match lane {
+            RefreshLane::Quota => {
+                refresh.quota = Some(ActiveRefresh {
+                    cancel: cancel.clone(),
+                })
+            }
+            RefreshLane::Usage => {
+                refresh.usage = Some(ActiveRefresh {
+                    cancel: cancel.clone(),
+                })
+            }
+            RefreshLane::Account => {
+                refresh.account = Some(ActiveRefresh {
+                    cancel: cancel.clone(),
+                })
+            }
+        }
+        drop(refresh);
+        for component in lane.components() {
+            let _ = self.inner.state.set_refreshing(*component, true);
+        }
+        self.emit(lane.components().to_vec());
+        let service = self.clone();
+        let spawned = thread::Builder::new()
+            .name(
+                match lane {
+                    RefreshLane::Quota => "quota-quota-lane",
+                    RefreshLane::Usage => "quota-usage-lane",
+                    RefreshLane::Account => "quota-account-sync",
+                }
+                .to_owned(),
+            )
+            .spawn(move || service.run_lane(lane, cancel))
+            .is_ok();
+        if !spawned {
+            self.clear_lane(lane);
+            for component in lane.components() {
+                let _ = self.inner.state.set_refreshing(*component, false);
+            }
+            return RefreshResult {
+                accepted: false,
+                pending: false,
+                revision: self.inner.state.current_revision().unwrap_or(0),
+            };
+        }
+        RefreshResult {
+            accepted: true,
+            pending: false,
+            revision: self.inner.state.current_revision().unwrap_or(0),
+        }
+    }
+
+    fn clear_lane(&self, lane: RefreshLane) {
+        if let Ok(mut refresh) = self.inner.refresh.lock() {
+            match lane {
+                RefreshLane::Quota => refresh.quota = None,
+                RefreshLane::Usage => refresh.usage = None,
+                RefreshLane::Account => refresh.account = None,
+            }
+        }
+    }
+
+    fn request_full(&self, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
+        let mut refresh = match self.inner.refresh.lock() {
+            Ok(refresh) => refresh,
+            Err(_) => {
+                return RefreshResult {
+                    accepted: false,
+                    pending: false,
+                    revision: 0,
+                };
+            }
+        };
+        if refresh.active.is_some() || refresh.quota.is_some() || refresh.usage.is_some() {
             refresh.pending = true;
             refresh.pending_trigger =
                 Some(coalesce_refresh_trigger(refresh.pending_trigger, trigger));
@@ -898,33 +1237,16 @@ impl LocalService {
                         let _ = service.inner.backend.complete_diagnostics();
                     }
                     service.inner.state.checkpoint_cache();
-                    let rerun = service
-                        .inner
-                        .refresh
-                        .lock()
-                        .map(|mut refresh| {
-                            refresh.active = None;
-                            let rerun = refresh.pending.then_some(
-                                refresh
-                                    .pending_trigger
-                                    .take()
-                                    .unwrap_or(DiagnosticAttemptTrigger::Scheduled),
-                            );
-                            refresh.pending = false;
-                            rerun
-                        })
-                        .unwrap_or(None);
+                    if let Ok(mut refresh) = service.inner.refresh.lock() {
+                        refresh.active = None;
+                    }
                     service.emit(vec![
                         ComponentName::Quota,
                         ComponentName::Usage,
                         ComponentName::Account,
                         ComponentName::Pricing,
                     ]);
-                    if let Some(trigger) = rerun
-                        && !service.is_shutdown()
-                    {
-                        let _ = service.request_refresh_with_trigger(trigger);
-                    }
+                    service.maybe_start_pending();
                 })
                 .is_ok();
         if !spawned {
@@ -970,6 +1292,7 @@ impl LocalService {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
+            quota: Mutex::new(None),
         };
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
@@ -991,7 +1314,12 @@ impl LocalService {
             .flatten()
             .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"));
         let completion = refresh_attempt_completion(&outcome, session_required, cancel.as_ref());
-        self.apply_component_result(ComponentName::Quota, outcome.quota);
+        if !updates.already_applied_quota(&outcome.quota) {
+            self.apply_component_result(ComponentName::Quota, outcome.quota.clone());
+        }
+        if let Ok(quota) = &outcome.quota {
+            self.note_reset_boundary(quota);
+        }
         self.apply_component_result(ComponentName::Usage, outcome.usage);
         // The Account is usually already applied, from the read that finished long before this
         // refresh did. Writing the identical value again would only restate it, so the end of a
@@ -1007,6 +1335,159 @@ impl LocalService {
         self.inner
             .state
             .finish_diagnostic_attempt_with_interrupted_children(attempt, &completion);
+    }
+
+    fn maybe_start_pending(&self) {
+        if self.is_shutdown() {
+            return;
+        }
+        let mut refresh = match self.inner.refresh.lock() {
+            Ok(refresh) => refresh,
+            Err(_) => return,
+        };
+        if refresh.active.is_some() || refresh.quota.is_some() || refresh.usage.is_some() {
+            return;
+        }
+        if refresh.pending {
+            let trigger = refresh
+                .pending_trigger
+                .take()
+                .unwrap_or(DiagnosticAttemptTrigger::Scheduled);
+            refresh.pending = false;
+            drop(refresh);
+            let _ = self.request_full(trigger);
+            return;
+        }
+        let quota = refresh.pending_quota;
+        let usage = refresh.pending_usage;
+        refresh.pending_quota = false;
+        refresh.pending_usage = false;
+        drop(refresh);
+        if quota {
+            let _ = self.request_lane(RefreshLane::Quota);
+        }
+        if usage {
+            let _ = self.request_lane(RefreshLane::Usage);
+        }
+    }
+
+    fn run_lane(&self, lane: RefreshLane, cancel: Arc<AtomicBool>) {
+        match lane {
+            RefreshLane::Account => self.run_account_lane(cancel),
+            RefreshLane::Quota => self.run_quota_lane(cancel),
+            RefreshLane::Usage => self.run_usage_lane(cancel),
+        }
+        self.clear_lane(lane);
+        for component in lane.components() {
+            let _ = self.inner.state.set_refreshing(*component, false);
+        }
+        if matches!(lane, RefreshLane::Usage) {
+            let _ = self
+                .inner
+                .state
+                .set_refreshing(ComponentName::Pricing, false);
+        }
+        if !self.is_shutdown() && !matches!(lane, RefreshLane::Account) {
+            let _ = self.inner.backend.complete_diagnostics();
+        }
+        if !matches!(lane, RefreshLane::Account) {
+            self.inner.state.checkpoint_cache();
+        }
+        self.emit(match lane {
+            RefreshLane::Quota => vec![ComponentName::Quota, ComponentName::Account],
+            RefreshLane::Usage => vec![
+                ComponentName::Usage,
+                ComponentName::Pricing,
+                ComponentName::Account,
+            ],
+            RefreshLane::Account => vec![ComponentName::Account],
+        });
+        self.maybe_start_pending();
+    }
+
+    fn run_account_lane(&self, cancel: Arc<AtomicBool>) {
+        let updates = RefreshUpdates {
+            service: self.clone(),
+            account: Mutex::new(None),
+            quota: Mutex::new(None),
+        };
+        if !cancel.load(Ordering::Acquire) && !self.is_shutdown() {
+            let _ = self.inner.backend.refresh_account(cancel, &updates);
+        }
+    }
+
+    fn run_quota_lane(&self, cancel: Arc<AtomicBool>) {
+        let updates = RefreshUpdates {
+            service: self.clone(),
+            account: Mutex::new(None),
+            quota: Mutex::new(None),
+        };
+        let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
+            return;
+        } else {
+            self.inner.backend.refresh_quota(cancel, &updates)
+        };
+        if !updates.already_applied_quota(&outcome.quota) {
+            self.apply_component_result(ComponentName::Quota, outcome.quota.clone());
+        }
+        if let Ok(quota) = &outcome.quota {
+            self.note_reset_boundary(quota);
+        }
+        let account_result = self.account_result_for_session(outcome.account);
+        if !updates.already_applied_account(&account_result) {
+            self.apply_component_result(ComponentName::Account, account_result);
+        }
+        if let Some(overview) = outcome.overview {
+            let _ = self.inner.state.set_overview(&overview);
+        }
+    }
+
+    fn run_usage_lane(&self, cancel: Arc<AtomicBool>) {
+        let updates = RefreshUpdates {
+            service: self.clone(),
+            account: Mutex::new(None),
+            quota: Mutex::new(None),
+        };
+        let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
+            return;
+        } else {
+            self.inner.backend.refresh_usage(cancel, &updates)
+        };
+        self.apply_component_result(ComponentName::Usage, outcome.usage);
+        self.apply_component_result(ComponentName::Pricing, outcome.pricing);
+        let account_result = self.account_result_for_session(outcome.account);
+        let account_is_news = matches!(&account_result, Ok(_))
+            || account_result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.error.code.requires_login());
+        if account_is_news && !updates.already_applied_account(&account_result) {
+            self.apply_component_result(ComponentName::Account, account_result);
+        }
+    }
+
+    fn note_reset_boundary(&self, quota: &Value) {
+        let now_utc = chrono::Utc::now();
+        let now = Instant::now();
+        let (next_quota_at, attempted) = {
+            let Ok(plan) = self.inner.scheduler.lock() else {
+                return;
+            };
+            let next_quota_at = plan
+                .next_quota
+                .and_then(|at| schedule::utc_from_instant(at, now, now_utc))
+                .unwrap_or_else(|| {
+                    now_utc
+                        + chrono::Duration::from_std(self.quota_refresh_interval())
+                            .unwrap_or(chrono::Duration::minutes(5))
+                });
+            (next_quota_at, plan.attempted_resets.clone())
+        };
+        let wake = schedule::next_reset_boundary(quota, now_utc, next_quota_at, &attempted);
+        if let Ok(mut plan) = self.inner.scheduler.lock() {
+            plan.reset_at = wake;
+        }
+        self.wake_scheduler(schedule::SchedulerSignal::Recalculate);
     }
 
     /// A session being signed out never has its Account overwritten by a read taken before it.
@@ -1429,11 +1910,24 @@ impl LocalService {
 struct RefreshUpdates {
     service: LocalService,
     account: Mutex<Option<Result<Value, BackendError>>>,
+    quota: Mutex<Option<Result<Value, BackendError>>>,
 }
 
 impl RefreshUpdates {
     fn already_applied_account(&self, result: &Result<Value, BackendError>) -> bool {
         self.account
+            .lock()
+            .ok()
+            .and_then(|applied| {
+                applied
+                    .as_ref()
+                    .map(|previous| same_component_result(previous, result))
+            })
+            .unwrap_or(false)
+    }
+
+    fn already_applied_quota(&self, result: &Result<Value, BackendError>) -> bool {
+        self.quota
             .lock()
             .ok()
             .and_then(|applied| {
@@ -1457,6 +1951,18 @@ impl RefreshSink for RefreshUpdates {
         self.service
             .apply_component_result(ComponentName::Account, result);
         self.service.emit(vec![ComponentName::Account]);
+    }
+
+    fn quota(&self, result: Result<Value, BackendError>) {
+        if self.already_applied_quota(&result) {
+            return;
+        }
+        if let Ok(mut applied) = self.quota.lock() {
+            *applied = Some(result.clone());
+        }
+        self.service
+            .apply_component_result(ComponentName::Quota, result);
+        self.service.emit(vec![ComponentName::Quota]);
     }
 }
 
@@ -2413,6 +2919,69 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[test]
+    fn setting_quota_refresh_interval_is_durable_and_rejects_unknown_values() {
+        let root = std::env::temp_dir().join(format!("quota-refresh-interval-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink, Arc::new(UnavailableBackend));
+        assert_eq!(
+            state
+                .snapshot()
+                .expect("initial state")
+                .quota_refresh_interval_seconds,
+            300
+        );
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "cadence",
+            "operation": "set_quota_refresh_interval",
+            "payload": {"interval_seconds": 60}
+        }))
+        .expect("request");
+        let response = service.handle(request);
+        assert!(response.error.is_none());
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("interval_seconds"))
+                .and_then(Value::as_u64),
+            Some(60)
+        );
+        assert_eq!(
+            state
+                .snapshot()
+                .expect("updated state")
+                .quota_refresh_interval_seconds,
+            60
+        );
+        let rejected: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "bad-cadence",
+            "operation": "set_quota_refresh_interval",
+            "payload": {"interval_seconds": 7}
+        }))
+        .expect("request");
+        let response = service.handle(rejected);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+        assert_eq!(
+            state
+                .snapshot()
+                .expect("unchanged cadence")
+                .quota_refresh_interval_seconds,
+            60
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     /// A gate a test closes in front of a backend, so it can read the state a person would see
     /// while that backend is provably still working.
     struct Latch {
@@ -2588,6 +3157,50 @@ mod tests {
         }
     }
 
+    struct EarlyQuotaBackend {
+        collecting: Arc<Latch>,
+    }
+
+    impl EarlyQuotaBackend {
+        fn quota(&self) -> Value {
+            serde_json::json!({"captured_at": "2026-08-28T00:00:00Z", "results": []})
+        }
+    }
+
+    impl LocalBackend for EarlyQuotaBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+            updates.quota(Ok(self.quota()));
+            self.collecting.hold();
+            RefreshOutcome {
+                quota: Ok(self.quota()),
+                usage: Err(BackendError::unavailable()),
+                account: Err(BackendError::unavailable()),
+                pricing: Err(BackendError::unavailable()),
+                overview: None,
+            }
+        }
+
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+    }
+
     fn account_component(service: &LocalService) -> Value {
         let request: IpcRequest = serde_json::from_value(serde_json::json!({
             "type": "request",
@@ -2730,6 +3343,63 @@ mod tests {
         assert!(settled["last_error"].is_null());
         assert_eq!(settled["refreshing"], false);
 
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn the_quota_is_applied_while_the_rest_of_the_refresh_is_still_running() {
+        let root = std::env::temp_dir().join(format!("quota-early-quota-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let collecting = Arc::new(Latch::new());
+        let backend = Arc::new(EarlyQuotaBackend {
+            collecting: collecting.clone(),
+        });
+        let service = LocalService::new(state.clone(), sink.clone(), backend.clone());
+
+        assert!(
+            service
+                .request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual)
+                .accepted
+        );
+        collecting.wait_arrived();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = sink.0.lock().expect("events").len();
+            if sink
+                .0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Quota])
+            {
+                let _ = seen;
+                break;
+            }
+            assert!(Instant::now() < deadline, "no quota event was emitted");
+            thread::yield_now();
+        }
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "state",
+            "operation": "get_state",
+            "payload": {}
+        }))
+        .expect("request");
+        let mid = service.handle(request);
+        let quota = mid
+            .result
+            .and_then(|state| state.get("quota").cloned())
+            .expect("quota");
+        assert_eq!(quota["status"], "ready");
+        assert_eq!(quota["value"], backend.quota());
+
+        collecting.release();
+        wait_refresh_idle(&service);
         service.shutdown();
         drop(service);
         drop(state);
