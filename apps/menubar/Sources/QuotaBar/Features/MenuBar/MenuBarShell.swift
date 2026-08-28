@@ -62,7 +62,7 @@ struct MenuBarShell<Content: View>: View {
       MenuBarFooterView(model: model, usageSource: usageSource, now: now)
     }
     .frame(width: QuotaDesign.Layout.panelWidth)
-    // MenuBarExtra often ignores flexible height on first open. Pin the shared ceiling.
+    // Pin the shared ceiling so every page occupies the same panel.
     .frame(height: QuotaDesign.Layout.panelMaxHeight)
     .background(QuotaPalette.panelWash)
   }

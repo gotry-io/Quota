@@ -587,6 +587,7 @@ private struct TemporaryService {
               "ipc_version": 1,
               "revision": revision,
               "usage_upload_enabled": True,
+              "quota_refresh_interval_seconds": 300,
               "usage_periods": {"local": {}, "account": {}},
               "quota": component("unavailable"),
               "usage": component("unavailable"),

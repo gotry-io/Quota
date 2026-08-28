@@ -47,7 +47,7 @@ struct DiagnosticsPageModelTests {
   }
 
   /// Reset Local Data confirms through the panel's own popup, like Sign Out and Disconnect: a
-  /// MenuBarExtra panel is not a window a system alert can sit over. These are the words the
+  /// The menu panel is not a window a system alert can sit over. These are the words the
   /// popup says, so the row and the confirmation cannot drift apart.
   @Test func resetLocalDataConfirmationSaysWhatItDeletes() {
     #expect(ResetLocalDataCopy.title == "Reset Local Data?")

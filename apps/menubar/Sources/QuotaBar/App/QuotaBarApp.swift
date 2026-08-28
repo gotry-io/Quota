@@ -34,10 +34,10 @@ struct QuotaBarApp: App {
         )
         .preferredColorScheme(visualTestConfiguration.colorScheme)
         .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)
-        // A MenuBarExtra panel has no title-bar safe area. Match that geometry in the ordinary
+        // The production panel has no title-bar safe area. Match that geometry in the ordinary
         // Visual QA window so large text cannot be obscured by hidden title-bar chrome.
         .ignoresSafeArea()
-        // MenuBarExtra supplies material in production. The ordinary Visual QA window instead
+        // The production panel supplies material. The ordinary Visual QA window instead
         // uses an opaque system background for deterministic rendering.
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -50,38 +50,22 @@ struct QuotaBarApp: App {
     }
   #else
     @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
-    @State private var model: MenuBarViewModel
-    @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
-      MenuBarStylePreference.fallback
-    @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
-      MenuBarProviderPreference.fallback
 
     init() {
       let model = MenuBarViewModel()
       model.start()
-      _model = State(initialValue: model)
-      appDelegate.model = model
+      appDelegate.attach(model: model)
       Task { @MainActor in
         QuotaBarUpdater.start()
       }
     }
 
     var body: some Scene {
-      MenuBarExtra {
-        MenuBarContentView(model: model)
-      } label: {
-        // The item is drawn for the model's coarse clock rather than for `Date()`: reading it
-        // here is what makes the item re-evaluate when a reading ages out with nothing else
-        // happening. The clock only moves when that verdict does.
-        QuotaMenuBarLabel(
-          label: model.menuBarLabel(
-            style: menuBarStyle,
-            provider: menuBarProvider,
-            now: model.menuBarClock
-          )
-        )
+      // SwiftUI App requires a Scene. Status items and the panel are AppKit-owned; this
+      // empty Settings scene is only the process lifetime, not a settings page.
+      Settings {
+        EmptyView()
       }
-      .menuBarExtraStyle(.window)
     }
   #endif
 }

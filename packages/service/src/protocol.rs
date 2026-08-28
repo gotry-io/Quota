@@ -10,6 +10,11 @@ use serde_json::Value;
 pub const IPC_VERSION: u32 = 1;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
+/// Allowed Quota collection intervals, in seconds. The default is five minutes.
+pub const QUOTA_REFRESH_INTERVALS_SECONDS: [u64; 5] = [60, 120, 300, 600, 900];
+pub const DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS: u64 = 300;
+/// How often a signed-in helper asks Relay for an Account summary without collecting quota.
+pub const ACCOUNT_SYNC_INTERVAL_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +29,7 @@ pub enum Operation {
     CancelLogin,
     Logout,
     SetUsageUpload,
+    SetQuotaRefreshInterval,
     SetProviderConfig,
     RemoveProviderConfig,
     ValidateProviderBrowserSession,
@@ -332,6 +338,12 @@ pub struct SetUsageUploadPayload {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetQuotaRefreshIntervalPayload {
+    pub interval_seconds: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshResult {
@@ -358,6 +370,9 @@ pub struct LoginResult {
     pub account_id: Option<String>,
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
+    /// Authorize URL the app opens. The service owns PKCE, the loopback listener, and the
+    /// exchange; it never launches a browser. Absent on `cancel_login`.
+    pub authorize_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +385,12 @@ pub struct LogoutResult {
 #[serde(deny_unknown_fields)]
 pub struct UsageUploadSetting {
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaRefreshIntervalSetting {
+    pub interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -473,6 +494,7 @@ pub struct StateSnapshot {
     pub ipc_version: u32,
     pub revision: u64,
     pub usage_upload_enabled: bool,
+    pub quota_refresh_interval_seconds: u64,
     pub usage_periods: UsagePeriodCache,
     pub quota: ComponentState,
     pub usage: ComponentState,

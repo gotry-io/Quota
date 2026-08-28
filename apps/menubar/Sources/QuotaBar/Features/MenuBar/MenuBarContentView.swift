@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarContentView: View {
   @Bindable var model: MenuBarViewModel
+  var panelSession: MenuBarPanelSession? = nil
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var navigation: MenuBarNavigationState
   @State private var navigationDirection: NavigationDirection = .forward
@@ -19,6 +20,7 @@ struct MenuBarContentView: View {
 
   init(
     model: MenuBarViewModel,
+    panelSession: MenuBarPanelSession? = nil,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
     performsDiagnosticsCheckOnEntry: Bool = true,
@@ -26,6 +28,7 @@ struct MenuBarContentView: View {
     seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
+    self.panelSession = panelSession
     self.performsInitialRefresh = performsInitialRefresh
     self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
@@ -34,6 +37,8 @@ struct MenuBarContentView: View {
   }
 
   var body: some View {
+    let revealGeneration = panelSession?.revealGeneration ?? 0
+    let revealProvider = panelSession?.revealProvider
     TimelineView(.periodic(from: .now, by: 1)) { context in
       MenuBarShell(
         model: model,
@@ -45,7 +50,11 @@ struct MenuBarContentView: View {
         showsLeadingIcon: navigation.currentRoute == nil,
         trailing: headerTrailingAction
       ) {
-        currentPage(now: context.date)
+        currentPage(
+          now: context.date,
+          revealGeneration: revealGeneration,
+          revealProvider: revealProvider
+        )
           .id(navigation.pageIdentity)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
           .transition(pageTransition)
@@ -58,6 +67,11 @@ struct MenuBarContentView: View {
       guard state != .signedIn, let next = navigation.closing(.account) else { return }
       navigationDirection = .back
       applyNavigation(next)
+    }
+    .onChange(of: revealGeneration) { _, _ in
+      guard revealProvider != nil, navigation.canNavigateBack else { return }
+      navigationDirection = .back
+      applyNavigation(MenuBarNavigationState())
     }
     .task {
       if seedsLaunchAtLogin {
@@ -195,13 +209,19 @@ struct MenuBarContentView: View {
   }
 
   @ViewBuilder
-  private func currentPage(now: Date) -> some View {
+  private func currentPage(
+    now: Date,
+    revealGeneration: UInt,
+    revealProvider: ProviderID?
+  ) -> some View {
     switch navigation.currentRoute {
     case nil:
       QuotaOverviewView(
         model: model,
         enabledProviders: ProviderDisplayOrder.enabledProviders(),
         now: now,
+        revealGeneration: revealGeneration,
+        revealProvider: revealProvider,
         onOpenSettings: openSettings
       )
     case .settings:
@@ -212,7 +232,8 @@ struct MenuBarContentView: View {
         onOpenUsage: { navigate(to: .usage) },
         onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
         onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
-        onOpenSupport: { navigate(to: .support) }
+        onOpenSupport: { navigate(to: .support) },
+        onOpenRefreshInterval: { navigate(to: .quotaRefreshInterval) }
       )
     case .account:
       AccountSettingsView(
@@ -240,9 +261,15 @@ struct MenuBarContentView: View {
       MenuBarStyleSettingsView(onSelect: navigateBack)
     case .menuBarProvider:
       MenuBarProviderSettingsView(
-        providers: ProviderDisplayOrder.enabledProviders(),
-        onSelect: navigateBack
+        providers: ProviderDisplayOrder.enabledProviders()
       )
+    case .quotaRefreshInterval:
+      QuotaRefreshIntervalSettingsView(
+        selected: QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds)
+      ) { interval in
+        Task { await model.setQuotaRefreshInterval(interval) }
+        navigateBack()
+      }
     case .support:
       SettingsSupportView(
         onOpenDiagnostics: { navigate(to: .diagnostics) },
@@ -332,6 +359,7 @@ enum MenuBarRoute: Hashable {
   case usage
   case menuBarStyle
   case menuBarProvider
+  case quotaRefreshInterval
   case support
   case diagnostics
 
@@ -346,6 +374,7 @@ enum MenuBarRoute: Hashable {
     // The section header says Menu Bar; a page carries its own context.
     case .menuBarStyle: "Menu Bar Style"
     case .menuBarProvider: "Menu Bar Provider"
+    case .quotaRefreshInterval: "Refresh Interval"
     case .support: "Support"
     case .diagnostics: "Diagnostics"
     }

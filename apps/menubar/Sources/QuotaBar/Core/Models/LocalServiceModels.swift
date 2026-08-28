@@ -414,6 +414,7 @@ struct LocalServiceState: Decodable, Sendable {
   let ipcVersion: Int
   let revision: Int
   let usageUploadEnabled: Bool
+  let quotaRefreshIntervalSeconds: Int
   let usagePeriods: LocalServiceUsagePeriodCache
   let quota: LocalServiceComponent<QuotaCollectionReport>
   let usage: LocalServiceComponent<LocalUsageReport>
@@ -428,6 +429,7 @@ struct LocalServiceState: Decodable, Sendable {
     case ipcVersion
     case revision
     case usageUploadEnabled
+    case quotaRefreshIntervalSeconds
     case usagePeriods
     case quota
     case usage
@@ -445,6 +447,7 @@ struct LocalServiceState: Decodable, Sendable {
         + "\(item.identity.scope.rawValue)|\(item.identity.sourceID ?? "")"
     }
     guard ipcVersion == Self.supportedIPCVersion, revision >= 0,
+      QuotaRefreshInterval(rawValue: quotaRefreshIntervalSeconds) != nil,
       providers.count <= ProviderID.allCases.count,
       Set(providers.map(\.provider)).count == providers.count,
       providers.allSatisfy({ config in
@@ -483,13 +486,15 @@ struct LocalServiceState: Decodable, Sendable {
 extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "ipcVersion", "revision", "usageUploadEnabled", "usagePeriods", "quota", "usage",
+      "ipcVersion", "revision", "usageUploadEnabled", "quotaRefreshIntervalSeconds",
+      "usagePeriods", "quota", "usage",
       "account", "pricing", "providers", "providerBrowserSessions", "overview", "cache",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
     revision = try container.decode(Int.self, forKey: .revision)
     usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
+    quotaRefreshIntervalSeconds = try container.decode(Int.self, forKey: .quotaRefreshIntervalSeconds)
     usagePeriods = try container.decode(LocalServiceUsagePeriodCache.self, forKey: .usagePeriods)
     quota = try container.decode(LocalServiceComponent<QuotaCollectionReport>.self, forKey: .quota)
     usage = try container.decode(LocalServiceComponent<LocalUsageReport>.self, forKey: .usage)
@@ -532,24 +537,29 @@ struct LocalServiceLoginResult: Decodable, Sendable {
   let accountID: String?
   let deviceID: String?
   let deviceGeneration: Int?
+  let authorizeURL: String?
 
   private enum CodingKeys: String, CodingKey {
     case status
     case accountID = "accountId"
     case deviceID = "deviceId"
     case deviceGeneration
+    case authorizeURL = "authorizeUrl"
   }
 
 }
 
 extension LocalServiceLoginResult {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["status", "accountId", "deviceId", "deviceGeneration"])
+    try decoder.rejectUnknownWireKeys([
+      "status", "accountId", "deviceId", "deviceGeneration", "authorizeUrl",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     status = try container.decode(LocalServiceAuthStatus.self, forKey: .status)
     accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
+    authorizeURL = try container.decodeIfPresent(String.self, forKey: .authorizeURL)
   }
 }
 
@@ -567,6 +577,14 @@ struct LocalServiceUsageUploadSetting: Decodable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case enabled
+  }
+}
+
+struct LocalServiceQuotaRefreshIntervalSetting: Decodable, Sendable {
+  let intervalSeconds: Int
+
+  private enum CodingKeys: String, CodingKey {
+    case intervalSeconds
   }
 }
 

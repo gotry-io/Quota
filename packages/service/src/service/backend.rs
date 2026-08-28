@@ -1,6 +1,7 @@
 //! Production backend adapter.  The service owns orchestration; this adapter owns the concrete
 //! provider, Usage, pricing, and Relay calls and returns only protocol-shaped values.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -128,6 +129,15 @@ fn error_code_wire(code: ErrorCode) -> String {
         .unwrap_or_else(|| "unknown_error".to_owned())
 }
 
+fn failed_sign_in_message(error: &IpcError) -> String {
+    let code = error_code_wire(error.code);
+    if error.code == ErrorCode::Unavailable {
+        format!("{code}: browser could not be opened")
+    } else {
+        format!("The last sign-in did not finish ({code}).")
+    }
+}
+
 fn backend_attempt_error(error: &IpcError) -> (DiagnosticAttemptOutcome, DiagnosticAttemptCode) {
     if error.code == ErrorCode::Cancelled {
         return (
@@ -173,6 +183,24 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
     }
+}
+
+thread_local! {
+    static LANE_ATTEMPT_TRIGGER: Cell<Option<DiagnosticAttemptTrigger>> =
+        const { Cell::new(None) };
+}
+
+struct LaneAttemptTriggerGuard;
+
+impl Drop for LaneAttemptTriggerGuard {
+    fn drop(&mut self) {
+        LANE_ATTEMPT_TRIGGER.with(|slot| slot.set(None));
+    }
+}
+
+fn enter_lane_attempt_trigger(trigger: DiagnosticAttemptTrigger) -> LaneAttemptTriggerGuard {
+    LANE_ATTEMPT_TRIGGER.with(|slot| slot.set(Some(trigger)));
+    LaneAttemptTriggerGuard
 }
 
 pub struct NativeBackend {
@@ -288,18 +316,21 @@ impl NativeBackend {
     /// Opens a journal row for work that is about to run.
     ///
     /// A cache that cannot take the row answers `None`, and the work runs anyway: the journal is
-    /// evidence about collection, not a permit to collect.
+    /// evidence about collection, not a permit to collect. Lane work inherits the trigger the
+    /// scheduler (or a person) started it with; a coordinated refresh's children inherit theirs.
     fn begin_attempt(
         &self,
         kind: DiagnosticAttemptKind,
         subject: Option<&str>,
     ) -> Option<DiagnosticAttemptHandle> {
         let parent = self.state.running_refresh_attempt().ok().flatten();
+        let trigger = parent
+            .map(|(_, trigger)| trigger)
+            .or_else(|| LANE_ATTEMPT_TRIGGER.with(|slot| slot.get()))
+            .unwrap_or(DiagnosticAttemptTrigger::Manual);
         self.state.begin_diagnostic_attempt(
             kind,
-            parent
-                .map(|(_, trigger)| trigger)
-                .unwrap_or(DiagnosticAttemptTrigger::Manual),
+            trigger,
             subject,
             parent.map(|(handle, _)| handle),
         )
@@ -334,7 +365,7 @@ impl NativeBackend {
     /// This is the local-only path used by diagnostic/status callers.  Full refresh remains the
     /// only path that performs account synchronization and outbox work.
     pub fn collect_quota(&self, cancel: Arc<AtomicBool>) -> Result<Value, BackendError> {
-        self.collect_quota_for(ProviderId::ALL, cancel)
+        self.collect_quota_for(ProviderId::ALL, cancel, false)
     }
 
     /// Discover providers through the same provider-owned credential paths used for collection.
@@ -549,6 +580,10 @@ impl NativeBackend {
                     "auth_required" => ProviderId::parse(provider)
                         .map(|id| auth_required_message(id, failing_source.unwrap_or("")))
                         .unwrap_or("The saved sign-in expired or was rejected. Sign in again."),
+                    "access_denied" if provider == "claude" => {
+                        "QuotaBar could not read Claude Code's Keychain item. Open Claude Code \
+                         to refresh the sign-in."
+                    }
                     "access_denied" => {
                         "macOS did not release the saved sign-in for this source. Allow QuotaBar \
                          access in System Settings, then recheck."
@@ -739,6 +774,11 @@ impl NativeBackend {
         };
         let account_error = account.as_ref().and_then(|value| value.last_error.as_ref());
         let account_needs_login = account_error.is_some_and(|value| value.code.requires_login());
+        let failed_sign_in = !account_signed_in
+            && !account_active
+            && account_error.is_some_and(|error| {
+                !error.code.requires_login() && error.code != ErrorCode::Cancelled
+            });
         if account_active || account_signed_in {
             sources.push(DiagnosticSourceState {
                 subject: "account".into(),
@@ -774,6 +814,18 @@ impl NativeBackend {
                     (true, true) => DiagnosticRecovery::Login,
                     (true, false) => DiagnosticRecovery::Retry,
                 },
+            });
+        } else if failed_sign_in {
+            let error = account_error.expect("failed sign-in last_error");
+            sources.push(DiagnosticSourceState {
+                subject: "account".into(),
+                source_id: None,
+                status: DiagnosticStatus::Degraded,
+                last_attempt_at: account_facts.last_attempt_at.clone(),
+                last_success_at: account_facts.last_success_at.clone(),
+                code: Some(error_code_wire(error.code)),
+                message: failed_sign_in_message(error),
+                recovery: DiagnosticRecovery::Login,
             });
         }
 
@@ -1019,12 +1071,16 @@ impl NativeBackend {
             },
             DiagnosticSurface {
                 id: "account".into(),
-                status: match (account_signed_in || account_active, account_degraded) {
-                    (false, _) => DiagnosticStatus::Inactive,
-                    (true, true) => DiagnosticStatus::Degraded,
-                    (true, false) => DiagnosticStatus::Ok,
+                status: if failed_sign_in {
+                    DiagnosticStatus::Degraded
+                } else {
+                    match (account_signed_in || account_active, account_degraded) {
+                        (false, _) => DiagnosticStatus::Inactive,
+                        (true, true) => DiagnosticStatus::Degraded,
+                        (true, false) => DiagnosticStatus::Ok,
+                    }
                 },
-                data: if !account_signed_in && !account_active {
+                data: if failed_sign_in || (!account_signed_in && !account_active) {
                     DiagnosticDataState::Empty
                 } else if account_degraded {
                     DiagnosticDataState::Stale
@@ -1032,26 +1088,30 @@ impl NativeBackend {
                     DiagnosticDataState::Current
                 },
                 last_success_at: account_facts.last_success_at.clone(),
-                message: match (account_signed_in || account_active, account_degraded) {
-                    (false, _) => "This Mac is not signed in to a Quota account.".to_owned(),
-                    (true, true) => {
-                        "Account data on screen is the last copy this Mac read.".to_owned()
+                message: if failed_sign_in {
+                    failed_sign_in_message(account_error.expect("failed sign-in last_error"))
+                } else {
+                    match (account_signed_in || account_active, account_degraded) {
+                        (false, _) => "This Mac is not signed in to a Quota account.".to_owned(),
+                        (true, true) => {
+                            "Account data on screen is the last copy this Mac read.".to_owned()
+                        }
+                        (true, false) => format!(
+                            "Signed in · {}.",
+                            plural(
+                                array_len(
+                                    account
+                                        .as_ref()
+                                        .and_then(|value| value.value.as_ref())
+                                        .and_then(|value| value.get("account_summary")),
+                                    "devices",
+                                ),
+                                "device",
+                            )
+                        ),
                     }
-                    (true, false) => format!(
-                        "Signed in · {}.",
-                        plural(
-                            array_len(
-                                account
-                                    .as_ref()
-                                    .and_then(|value| value.value.as_ref())
-                                    .and_then(|value| value.get("account_summary")),
-                                "devices",
-                            ),
-                            "device",
-                        )
-                    ),
                 },
-                recovery: if account_needs_login && account_degraded {
+                recovery: if failed_sign_in || (account_needs_login && account_degraded) {
                     DiagnosticRecovery::Login
                 } else if account_degraded {
                     DiagnosticRecovery::Retry
@@ -1098,6 +1158,7 @@ impl NativeBackend {
         &self,
         provider_ids: &[ProviderId],
         cancel: Arc<AtomicBool>,
+        bypass_renewal_floor: bool,
     ) -> Result<Value, BackendError> {
         #[cfg(test)]
         if let Some(gate) = &self.collection_gate {
@@ -1134,62 +1195,47 @@ impl NativeBackend {
             })
             .collect::<Vec<_>>();
         context.cli_versions = self.provider_cli_versions(&discovered, &context, &cancel);
-        self.renew_provider_sign_ins(&discovered, &mut context);
-        let attempts =
-            thread::scope(|scope| {
-                let mut jobs = Vec::with_capacity(provider_ids.len());
-                for (provider, sessions) in discovered {
-                    let context = context.clone();
-                    let explicit = configured.contains(provider.as_str());
-                    if sessions.is_empty() && !explicit {
-                        jobs.push((provider, explicit, None, None));
-                        continue;
-                    }
-                    let subject = format!("provider:{}", provider.as_str());
-                    let handle =
-                        self.begin_attempt(DiagnosticAttemptKind::QuotaCollection, Some(&subject));
-                    jobs.push((
-                        provider,
-                        explicit,
-                        handle,
-                        Some(scope.spawn(move || {
-                            collect_discovered_provider(provider, sessions, &context)
-                        })),
-                    ));
+        let attempted = self.renew_provider_sign_ins(
+            &discovered,
+            &mut context,
+            bypass_renewal_floor,
+            &HashSet::new(),
+        );
+        let mut attempts = collect_discovered_jobs(&discovered, &configured, &context, |subject| {
+            self.begin_attempt(DiagnosticAttemptKind::QuotaCollection, Some(subject))
+        });
+        if !cancel.load(Ordering::Acquire) {
+            let retry = providers_needing_forced_renewal(&attempts);
+            let force_for = forced_renewal_targets(&retry, &attempted);
+            if !force_for.is_empty() {
+                let retry_discovered = discovered
+                    .iter()
+                    .filter(|(provider, _)| force_for.contains(provider))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let forced_attempted = self.renew_provider_sign_ins(
+                    &retry_discovered,
+                    &mut context,
+                    bypass_renewal_floor,
+                    &force_for,
+                );
+                if !forced_attempted.is_empty() {
+                    let retried_discovered = retry_discovered
+                        .iter()
+                        .filter(|(provider, _)| forced_attempted.contains(provider))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let retried =
+                        collect_discovered_jobs(&retried_discovered, &configured, &context, |_| {
+                            None
+                        });
+                    merge_collected_jobs(&mut attempts, retried);
                 }
-                jobs.into_iter()
-                    .map(|(provider, explicit, handle, job)| match job {
-                        Some(job) => match job.join() {
-                            Ok(result) => (explicit, handle, result, false),
-                            Err(_) => (
-                                explicit,
-                                handle,
-                                json!({
-                                    "provider": provider,
-                                    "outcome": "error",
-                                    "snapshots": [],
-                                    "sources": []
-                                }),
-                                true,
-                            ),
-                        },
-                        None => (
-                            explicit,
-                            None,
-                            json!({
-                                "provider": provider,
-                                "outcome": "auth_required",
-                                "snapshots": [],
-                                "sources": []
-                            }),
-                            false,
-                        ),
-                    })
-                    .collect::<Vec<_>>()
-            });
+            }
+        }
         let cancelled = cancel.load(Ordering::Acquire);
         let mut results = Vec::with_capacity(attempts.len());
-        for (explicit, handle, mut result, panicked) in attempts {
+        for (_provider, explicit, handle, mut result, panicked) in attempts {
             let result_outcome = result
                 .get("outcome")
                 .and_then(Value::as_str)
@@ -1304,9 +1350,15 @@ impl NativeBackend {
     /// Three providers hold a token only their own program can renew. Grok's lives about six
     /// hours, Claude Code's about eight, Codex's about ten days, so a Mac that has not opened
     /// one of them lately would otherwise report an expired sign-in until someone does. An
-    /// expired grant — and nothing else — earns one bounded run of that CLI, at most once an
-    /// hour whatever it produced. Each provider states which program and which conversation;
-    /// [`crate::providers::common`] owns every bound the three share.
+    /// expired grant — and, for Claude Code, a Keychain item this process was refused when
+    /// the file holds no usable grant — earns one bounded run of that CLI. A scheduled
+    /// refresh asks at most once an hour whatever the last attempt produced. A Recheck or
+    /// a manual refresh skips that hour. Each provider states which program and which
+    /// conversation; [`crate::providers::common`] owns every bound the three share.
+    ///
+    /// `force_for` is the second chance: an official collection that came back
+    /// `auth_required` even though the file still looks in date. The local clock is not the
+    /// account. Those providers are asked even when their expiry predicate is false.
     ///
     /// Runs here, beside the version probe and before collection, so no collector gains the
     /// ability to start a process. Collection reads the credential afterwards and neither
@@ -1315,7 +1367,9 @@ impl NativeBackend {
         &self,
         discovered: &[(ProviderId, Vec<ProviderSession>)],
         context: &mut CollectionContext,
-    ) {
+        bypass_renewal_floor: bool,
+        force_for: &HashSet<ProviderId>,
+    ) -> HashSet<ProviderId> {
         let signed_in = |wanted: ProviderId| {
             discovered
                 .iter()
@@ -1326,7 +1380,7 @@ impl NativeBackend {
             .filter(|provider| signed_in(*provider))
             .collect::<Vec<_>>();
         if wanted.is_empty() {
-            return;
+            return HashSet::new();
         }
         // One read and one write for every provider that asks: the record only exists to hold
         // the hour, and splitting it per provider would split those too.
@@ -1341,43 +1395,55 @@ impl NativeBackend {
         let home = context.home_directory.clone();
         let path = context.env("PATH").map(str::to_owned);
         let mut recorded = false;
+        let mut started = HashSet::new();
         for provider in wanted {
-            let attempted = attempts.get(provider.as_str()).cloned();
+            // Omitting the last attempt is how a Recheck or a manual refresh skips that hour;
+            // the spawn is still recorded, so the next scheduled refresh waits it out.
+            let attempted = if bypass_renewal_floor {
+                None
+            } else {
+                attempts.get(provider.as_str()).cloned()
+            };
             let mut environment = ProbeEnvironment::new(home.clone(), path.clone());
             // A renewal waits on the provider's own network round trip, so it is not bounded
             // like a `--version` read; each CLI states how long its own takes.
+            let force = force_for.contains(&provider);
             let attempt = match provider {
                 ProviderId::Claude => {
                     environment.timeout = claude::refresh::RENEWAL_TIMEOUT;
-                    claude::refresh::renew_expired_sign_in(
+                    claude::refresh::renew_expired_sign_in_for(
                         context,
                         &environment,
                         attempted.as_ref(),
                         now,
+                        force,
                     )
                 }
                 ProviderId::Codex => {
                     environment.timeout = codex::refresh::RENEWAL_TIMEOUT;
-                    codex::refresh::renew_expired_sign_in(
+                    codex::refresh::renew_expired_sign_in_for(
                         context,
                         &environment,
                         attempted.as_ref(),
                         now,
+                        force,
                     )
                 }
                 _ => {
                     environment.timeout = grok::refresh::RENEWAL_TIMEOUT;
-                    grok::refresh::renew_expired_sign_in(
+                    grok::refresh::renew_expired_sign_in_for(
                         context,
                         &environment,
                         attempted.as_ref(),
                         now,
+                        force,
                     )
                 }
             };
             if let Some(attempt) = attempt {
                 attempts.insert(provider.as_str().to_owned(), attempt);
                 recorded = true;
+                started.insert(provider);
             }
         }
         // An attempt that cannot be recorded must not become an attempt every five minutes,
@@ -1385,6 +1451,7 @@ impl NativeBackend {
         if recorded && let Ok(encoded) = serde_json::to_string(&attempts) {
             let _ = self.state.write_provider_refresh_attempts(&encoded);
         }
+        started
     }
 
     fn collection_context(
@@ -1510,9 +1577,10 @@ impl NativeBackend {
                         DiagnosticAttemptOutcome::Failed,
                         Some(DiagnosticAttemptCode::Unavailable),
                     );
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::Unavailable,
+                        RecoveryAction::Retry,
+                    )));
                 }
             };
             let _ = self
@@ -1617,10 +1685,12 @@ impl NativeBackend {
         } else {
             "partial"
         };
-        let generated_at =
-            usage::parse_instant(&usage.generated_at).ok_or_else(|| BackendError {
-                error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-            })?;
+        let generated_at = usage::parse_instant(&usage.generated_at).ok_or_else(|| {
+            BackendError::new(IpcError::new(
+                ErrorCode::InvalidState,
+                RecoveryAction::Retry,
+            ))
+        })?;
         let periods = [
             UsagePeriod::Today,
             UsagePeriod::Last7Days,
@@ -1733,26 +1803,29 @@ impl NativeBackend {
             }
             Ok((next_etag, None)) => {
                 let Some(value) = local else {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::InvalidState,
+                        RecoveryAction::Retry,
+                    )));
                 };
                 if !pricing::validate_pricing_catalog(&value).valid {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::InvalidState,
+                        RecoveryAction::Retry,
+                    )));
                 }
                 self.state
                     .commit_pricing_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
-            Ok((_, Some(_))) => Err(BackendError {
-                error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-            }),
-            Err(error) => Err(BackendError {
-                error: crate::relay::relay_error_for_backend(error),
-            }),
+            Ok((_, Some(_))) => Err(BackendError::new(IpcError::new(
+                ErrorCode::InvalidResponse,
+                RecoveryAction::Retry,
+            ))),
+            Err(error) => Err(BackendError::new(crate::relay::relay_error_for_backend(
+                error,
+            ))),
         }
     }
 
@@ -1775,26 +1848,29 @@ impl NativeBackend {
             }
             Ok((next_etag, None)) => {
                 let Some(value) = local else {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::InvalidState,
+                        RecoveryAction::Retry,
+                    )));
                 };
                 if !crate::model_catalog::validate_model_catalog_value(&value).valid {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::InvalidState,
+                        RecoveryAction::Retry,
+                    )));
                 }
                 self.state
                     .commit_model_catalog(&value, next_etag.as_deref().or(etag.as_deref()))
                     .map_err(|_| BackendError::unavailable())?;
                 Ok(value)
             }
-            Ok((_, Some(_))) => Err(BackendError {
-                error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-            }),
-            Err(error) => Err(BackendError {
-                error: crate::relay::relay_error_for_backend(error),
-            }),
+            Ok((_, Some(_))) => Err(BackendError::new(IpcError::new(
+                ErrorCode::InvalidResponse,
+                RecoveryAction::Retry,
+            ))),
+            Err(error) => Err(BackendError::new(crate::relay::relay_error_for_backend(
+                error,
+            ))),
         }
     }
 
@@ -1874,9 +1950,7 @@ impl NativeBackend {
             .active_session_at_epoch(session_epoch)
             .map_err(|_| BackendError::unavailable())?
         {
-            return Err(BackendError {
-                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-            });
+            return Err(BackendError::session_changed());
         }
         if !self
             .state
@@ -1966,9 +2040,10 @@ impl NativeBackend {
                 if response.get("device_id").and_then(Value::as_str) != Some(device_id)
                     || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
                 {
-                    return Err(BackendError {
-                        error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-                    });
+                    return Err(BackendError::new(IpcError::new(
+                        ErrorCode::InvalidResponse,
+                        RecoveryAction::Retry,
+                    )));
                 }
                 // Accepted and ignored are the same move for this device: an ignored hour is one
                 // a newer scan already replaced or one before this device's deletion watermark,
@@ -2103,12 +2178,8 @@ impl NativeBackend {
         {
             value = Err(error);
         }
-        if value
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.error.code.requires_login())
-        {
-            self.clear_active_session();
+        if let Err(error) = &value {
+            self.clear_session_if_rejected(error);
         }
         self.finish_backend_result_attempt(attempt, &value);
         Some(value)
@@ -2121,7 +2192,8 @@ impl NativeBackend {
     /// only authority for the machine in front of you, so the newer of the two wins and a tie
     /// goes to the local reading.
     fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
-        overview_items(quota, account, Utc::now())
+        let previous = self.state.overview().unwrap_or_default();
+        overview_items(quota, account, &previous, Utc::now())
     }
 }
 
@@ -2130,11 +2202,18 @@ impl NativeBackend {
 fn overview_items(
     quota: &Value,
     account: Option<&Value>,
+    previous: &[QuotaOverviewItem],
     now: DateTime<Utc>,
 ) -> Vec<QuotaOverviewItem> {
     let mut items = Vec::new();
     if let Some(results) = quota.get("results").and_then(Value::as_array) {
         for result in results {
+            if keep_previous_local_overview(result) {
+                if let Some(provider) = result.get("provider").and_then(Value::as_str) {
+                    retain_previous_local_overview(&mut items, previous, provider, now);
+                }
+                continue;
+            }
             for snapshot in result
                 .get("snapshots")
                 .and_then(Value::as_array)
@@ -2219,6 +2298,189 @@ fn overview_items(
     }
     sort_overview_items(&mut items);
     items
+}
+
+fn collect_discovered_jobs(
+    discovered: &[(ProviderId, Vec<ProviderSession>)],
+    configured: &HashSet<String>,
+    context: &CollectionContext,
+    mut begin: impl FnMut(&str) -> Option<DiagnosticAttemptHandle>,
+) -> Vec<(
+    ProviderId,
+    bool,
+    Option<DiagnosticAttemptHandle>,
+    Value,
+    bool,
+)> {
+    thread::scope(|scope| {
+        let mut jobs = Vec::with_capacity(discovered.len());
+        for (provider, sessions) in discovered {
+            let provider = *provider;
+            let sessions = sessions.clone();
+            let context = context.clone();
+            let explicit = configured.contains(provider.as_str());
+            if sessions.is_empty() && !explicit {
+                jobs.push((provider, explicit, None, None));
+                continue;
+            }
+            let subject = format!("provider:{}", provider.as_str());
+            let handle = begin(&subject);
+            jobs.push((
+                provider,
+                explicit,
+                handle,
+                Some(
+                    scope.spawn(move || collect_discovered_provider(provider, sessions, &context)),
+                ),
+            ));
+        }
+        jobs.into_iter()
+            .map(|(provider, explicit, handle, job)| match job {
+                Some(job) => match job.join() {
+                    Ok(result) => (provider, explicit, handle, result, false),
+                    Err(_) => (
+                        provider,
+                        explicit,
+                        handle,
+                        json!({
+                            "provider": provider,
+                            "outcome": "error",
+                            "snapshots": [],
+                            "sources": []
+                        }),
+                        true,
+                    ),
+                },
+                None => (
+                    provider,
+                    explicit,
+                    None,
+                    json!({
+                        "provider": provider,
+                        "outcome": "auth_required",
+                        "snapshots": [],
+                        "sources": []
+                    }),
+                    false,
+                ),
+            })
+            .collect()
+    })
+}
+
+fn merge_collected_jobs(
+    collected: &mut [(
+        ProviderId,
+        bool,
+        Option<DiagnosticAttemptHandle>,
+        Value,
+        bool,
+    )],
+    retried: Vec<(
+        ProviderId,
+        bool,
+        Option<DiagnosticAttemptHandle>,
+        Value,
+        bool,
+    )>,
+) {
+    for (provider, explicit, _, result, panicked) in retried {
+        if let Some(slot) = collected
+            .iter_mut()
+            .find(|(existing, _, _, _, _)| *existing == provider)
+        {
+            slot.1 = explicit;
+            slot.3 = result;
+            slot.4 = panicked;
+        }
+    }
+}
+
+fn providers_needing_forced_renewal(
+    collected: &[(
+        ProviderId,
+        bool,
+        Option<DiagnosticAttemptHandle>,
+        Value,
+        bool,
+    )],
+) -> HashSet<ProviderId> {
+    collected
+        .iter()
+        .filter(|(provider, _, _, result, panicked)| {
+            if *panicked
+                || !matches!(
+                    provider,
+                    ProviderId::Claude | ProviderId::Codex | ProviderId::Grok
+                )
+            {
+                return false;
+            }
+            if result.get("access_denied").and_then(Value::as_bool) == Some(true) {
+                return false;
+            }
+            result.get("outcome").and_then(Value::as_str) == Some("auth_required")
+                && result
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .is_some_and(|sources| !sources.is_empty())
+        })
+        .map(|(provider, _, _, _, _)| *provider)
+        .collect()
+}
+
+/// Rejected readings that still need a CLI ask, minus any this refresh already started.
+///
+/// A Recheck that renewed an expired grant in the first pass is not spawned a second time
+/// just because collection still came back `auth_required`. A scheduled refresh that hit
+/// the hourly floor, found no binary, or declined the force gate is not asked again only
+/// to re-collect the same reading.
+fn forced_renewal_targets(
+    retry: &HashSet<ProviderId>,
+    already_attempted: &HashSet<ProviderId>,
+) -> HashSet<ProviderId> {
+    retry.difference(already_attempted).copied().collect()
+}
+
+/// A failed local collection keeps the last local Overview row for that provider, so one
+/// timeout does not blank the panel. The report itself stays empty-snapshot: that is the
+/// IPC contract, and [`failure_status_snapshots`] restates the last good reading for the
+/// Account. A provider that is no longer discovered or configured is not resurrected.
+fn keep_previous_local_overview(result: &Value) -> bool {
+    let outcome = result.get("outcome").and_then(Value::as_str).unwrap_or("");
+    if !matches!(
+        outcome,
+        "auth_required" | "unavailable" | "unsupported" | "error"
+    ) {
+        return false;
+    }
+    result
+        .get("sources")
+        .and_then(Value::as_array)
+        .is_some_and(|sources| !sources.is_empty())
+        || outcome != "auth_required"
+}
+
+fn retain_previous_local_overview(
+    items: &mut Vec<QuotaOverviewItem>,
+    previous: &[QuotaOverviewItem],
+    provider: &str,
+    now: DateTime<Utc>,
+) {
+    for item in previous {
+        if item.identity.provider != provider {
+            continue;
+        }
+        let Some(local) = item.sources.iter().find(|source| source.kind == "local") else {
+            continue;
+        };
+        if item.selected_source_id != local.source_id {
+            continue;
+        }
+        if let Some(kept) = overview_item(&item.snapshot, "local", "Local", None, now) {
+            merge_overview_item(items, kept);
+        }
+    }
 }
 
 /// This device's own readings, restated with the status its latest collection found.
@@ -2338,8 +2600,7 @@ fn collect_discovered_provider(
         }
         if failure.category == ErrorCategory::AccessDenied {
             result["access_denied"] = json!(true);
-            result["message"] =
-                json!("A saved sign-in is stored here but this Mac was refused it. Check access.");
+            result["message"] = json!(access_denied_message(provider));
         }
         result
     } else {
@@ -2379,6 +2640,16 @@ fn browser_access_denied_message(denial: &crate::state::BrowserAccessDenial) -> 
 /// The source that failed decides it.  A stored browser session is re-added in this app,
 /// while a provider's own grant is renewed by the program that owns it — telling the reader
 /// to "sign in again" left them nowhere to do it.
+fn access_denied_message(provider: ProviderId) -> &'static str {
+    match provider {
+        ProviderId::Claude => {
+            "QuotaBar could not read Claude Code's Keychain item. Open Claude Code to refresh \
+             the sign-in."
+        }
+        _ => "A saved sign-in is stored here but this Mac was refused it. Check access.",
+    }
+}
+
 fn auth_required_message(provider: ProviderId, source_id: &str) -> &'static str {
     if providers::is_browser_session_source(source_id) {
         return "The saved browser session expired or was rejected. Add it again in Settings.";
@@ -2434,51 +2705,90 @@ impl LocalBackend for NativeBackend {
     ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
         let context = self.collection_context(Arc::new(AtomicBool::new(false)))?;
         providers::validate_browser_session(provider, cookie_header, &context).map_err(|error| {
-            BackendError {
-                error: match error.category {
-                    ErrorCategory::AuthRequired => IpcError::new(
-                        ErrorCode::AuthenticationRequired,
-                        RecoveryAction::ConfigureProvider,
-                    ),
-                    ErrorCategory::Unavailable => {
-                        IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
-                    }
-                    // A browser session is pasted in, never read from a credential store, so
-                    // this cannot arise here and is answered as the unavailability it is.
-                    ErrorCategory::AccessDenied => {
-                        IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry)
-                    }
-                    ErrorCategory::Unsupported => {
-                        IpcError::new(ErrorCode::UnsupportedOperation, RecoveryAction::None)
-                    }
-                    ErrorCategory::Error => {
-                        IpcError::new(ErrorCode::ProviderError, RecoveryAction::Retry)
-                    }
-                },
-            }
+            BackendError::new(match error.category {
+                ErrorCategory::AuthRequired => IpcError::new(
+                    ErrorCode::AuthenticationRequired,
+                    RecoveryAction::ConfigureProvider,
+                ),
+                ErrorCategory::Unavailable => {
+                    IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
+                }
+                // A browser session is pasted in, never read from a credential store, so
+                // this cannot arise here and is answered as the unavailability it is.
+                ErrorCategory::AccessDenied => {
+                    IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry)
+                }
+                ErrorCategory::Unsupported => {
+                    IpcError::new(ErrorCode::UnsupportedOperation, RecoveryAction::None)
+                }
+                ErrorCategory::Error => {
+                    IpcError::new(ErrorCode::ProviderError, RecoveryAction::Retry)
+                }
+            })
         })
     }
 
-    fn refresh(&self, cancel: Arc<AtomicBool>, updates: &dyn RefreshSink) -> RefreshOutcome {
+    fn refresh(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        bypass_renewal_floor: bool,
+    ) -> RefreshOutcome {
         let quota_cancel = cancel.clone();
         let usage_cancel = cancel.clone();
         // Reading the Account needs the session and nothing else, so it does not queue behind a
         // provider that answers in twenty seconds or a scan of every Usage file. It is published
         // the moment it lands, which is what names the account and fills its totals while the
         // rest of this refresh is still running.
-        let (quota, usage, read_account) = thread::scope(|scope| {
-            let quota_job = scope.spawn(|| self.collect_quota(quota_cancel));
-            let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
-            let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
-            let quota_result = quota_job
-                .join()
-                .unwrap_or_else(|_| Err(BackendError::unavailable()));
-            let usage_result = usage_job
-                .join()
-                .unwrap_or_else(|_| Err(BackendError::unavailable()));
-            let account_result = account_job.join().unwrap_or(None);
-            (quota_result, usage_result, account_result)
-        });
+        let previous_quota = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let had_active_session = self
+            .state
+            .session_json()
+            .ok()
+            .flatten()
+            .is_some_and(|session| session.get("status").and_then(Value::as_str) == Some("active"));
+        let (quota, usage, read_account, quota_put, quota_accepted, quota_signed_out) =
+            thread::scope(|scope| {
+                let quota_job = scope.spawn(|| {
+                    self.collect_quota_for(ProviderId::ALL, quota_cancel, bypass_renewal_floor)
+                });
+                let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
+                let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
+                let quota_result = quota_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable()));
+                updates.quota(match &quota_result {
+                    Ok(value) => Ok(value.clone()),
+                    Err(error) => Err(error.clone()),
+                });
+                let account_result = account_job.join().unwrap_or(None);
+                let (quota_put, quota_accepted, quota_signed_out) = if had_active_session {
+                    self.upload_quota_after_collection(
+                        &quota_result,
+                        previous_quota.as_ref(),
+                        cancel.as_ref(),
+                        updates,
+                    )
+                } else {
+                    (false, false, None)
+                };
+                let usage_result = usage_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable()));
+                (
+                    quota_result,
+                    usage_result,
+                    account_result,
+                    quota_put,
+                    quota_accepted,
+                    quota_signed_out,
+                )
+            });
         let cached_catalog = self
             .state
             .component(crate::protocol::ComponentName::Pricing)
@@ -2540,19 +2850,12 @@ impl LocalBackend for NativeBackend {
                     .and_then(|component| component.value)
             })
             .flatten();
-        let previous_quota = quota_value
-            .is_ok()
-            .then(|| {
-                self.state
-                    .component(crate::protocol::ComponentName::Quota)
-                    .ok()
-                    .flatten()
-                    .and_then(|component| component.value)
-            })
-            .flatten();
         // What the Account read already answered, or nothing when there was no session to read
-        // with at the time.
-        let mut account_value: Option<Result<Value, BackendError>> = read_account;
+        // with at the time. A Relay rejection on the quota upload may already have ended it.
+        let mut account_value: Option<Result<Value, BackendError>> = match quota_signed_out {
+            Some(error) => Some(Err(error)),
+            None => read_account,
+        };
         let mut overview = None;
         match self.state.session_json() {
             _ if cancel.load(Ordering::Acquire) => {
@@ -2580,7 +2883,7 @@ impl LocalBackend for NativeBackend {
                         // Whether this refresh put something in the Account that was not there
                         // when it read one.
                         let mut uploaded = false;
-                        if let Ok(quota_payload) = &quota_value {
+                        if !quota_put && let Ok(quota_payload) = &quota_value {
                             let restated = failure_status_snapshots(
                                 quota_payload,
                                 previous_quota.as_ref(),
@@ -2598,6 +2901,7 @@ impl LocalBackend for NativeBackend {
                                 }
                             }
                         }
+                        uploaded |= quota_accepted;
                         let usage_upload_enabled = match self.state.usage_upload_enabled() {
                             Ok(enabled) => enabled,
                             Err(_) => {
@@ -2640,39 +2944,17 @@ impl LocalBackend for NativeBackend {
                             }
                         }
                         if usage_upload_enabled && account_sync_error.is_none() {
-                            let before = self.state.outbox_len().unwrap_or(0);
-                            let upload_attempt =
-                                self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
-                            match self.drain_outbox() {
-                                Ok(accepted) => {
-                                    uploaded |= accepted;
-                                    let pending = self.state.outbox_len().unwrap_or(0);
-                                    let (outcome, code) = if before == 0 {
-                                        (
-                                            DiagnosticAttemptOutcome::NoWork,
-                                            Some(DiagnosticAttemptCode::NoWork),
-                                        )
-                                    } else if pending > 0 {
-                                        (
-                                            DiagnosticAttemptOutcome::Partial,
-                                            Some(DiagnosticAttemptCode::Unavailable),
-                                        )
-                                    } else {
-                                        (DiagnosticAttemptOutcome::Success, None)
-                                    };
-                                    self.finish_attempt(upload_attempt, outcome, code);
-                                }
+                            match self.drain_outbox_recorded() {
+                                Ok(accepted) => uploaded |= accepted,
                                 Err(error) => {
-                                    let (outcome, code) = backend_attempt_error(&error.error);
-                                    self.finish_attempt(upload_attempt, outcome, Some(code));
-                                    record_account_sync_error(&mut account_sync_error, error);
+                                    record_account_sync_error(&mut account_sync_error, error)
                                 }
                             }
                         }
                         if let Some(error) =
-                            account_sync_error.filter(|error| error.error.code.requires_login())
+                            account_sync_error.filter(|error| error.sign_out_epoch().is_some())
                         {
-                            self.clear_active_session();
+                            self.clear_session_if_rejected(&error);
                             account_value = Some(Err(error));
                         } else if uploaded
                             && let Some(reread) = self.reread_account(cancel.as_ref(), updates)
@@ -2681,8 +2963,8 @@ impl LocalBackend for NativeBackend {
                         }
                     }
                     Err(error) => {
-                        if error.error.code.requires_login() {
-                            self.clear_active_session();
+                        if error.sign_out_epoch().is_some() {
+                            self.clear_session_if_rejected(&error);
                             account_value = Some(Err(error));
                         }
                     }
@@ -2694,21 +2976,20 @@ impl LocalBackend for NativeBackend {
                 match self.account.logout(&session) {
                     Ok(()) => {
                         self.clear_pending_session();
-                        account_value = Some(Err(BackendError {
-                            error: IpcError::new(
-                                ErrorCode::AuthenticationRequired,
-                                RecoveryAction::Login,
-                            ),
-                        }));
+                        account_value = Some(Err(BackendError::new(IpcError::new(
+                            ErrorCode::AuthenticationRequired,
+                            RecoveryAction::Login,
+                        ))));
                     }
                     Err(error) => account_value = Some(Err(error)),
                 }
             }
             Ok(None) => {}
             Ok(Some(_)) => {
-                account_value = Some(Err(BackendError {
-                    error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-                }));
+                account_value = Some(Err(BackendError::new(IpcError::new(
+                    ErrorCode::InvalidState,
+                    RecoveryAction::Reinstall,
+                ))));
             }
             Err(_) => account_value = Some(Err(BackendError::unavailable())),
         }
@@ -2719,9 +3000,10 @@ impl LocalBackend for NativeBackend {
             account_value = self.read_account(cancel.as_ref(), updates);
         }
         let account_value = account_value.unwrap_or_else(|| {
-            Err(BackendError {
-                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-            })
+            Err(BackendError::new(IpcError::new(
+                ErrorCode::AuthenticationRequired,
+                RecoveryAction::Login,
+            )))
         });
         if let Ok(ref quota_payload) = quota_value {
             let account_for_overview = account_value.as_ref().ok().cloned().or(stored_account);
@@ -2736,6 +3018,203 @@ impl LocalBackend for NativeBackend {
         }
     }
 
+    fn refresh_account(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> Result<Value, BackendError> {
+        let _guard = enter_lane_attempt_trigger(trigger);
+        self.read_account(cancel.as_ref(), updates)
+            .unwrap_or_else(|| {
+                Err(BackendError::new(IpcError::new(
+                    ErrorCode::AuthenticationRequired,
+                    RecoveryAction::Login,
+                )))
+            })
+    }
+
+    fn refresh_quota(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> RefreshOutcome {
+        let _guard = enter_lane_attempt_trigger(trigger);
+        let previous_quota = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let quota = self.collect_quota(cancel.clone());
+        updates.quota(match &quota {
+            Ok(value) => Ok(value.clone()),
+            Err(error) => Err(error.clone()),
+        });
+        // Read first so the Account poll is not skipped for a whole interval, and so a token
+        // inside the refresh margin is rotated before the upload spends it.
+        let mut account = self
+            .read_account(cancel.as_ref(), updates)
+            .unwrap_or_else(|| {
+                Err(BackendError::new(IpcError::new(
+                    ErrorCode::AuthenticationRequired,
+                    RecoveryAction::Login,
+                )))
+            });
+        let (_put, accepted, signed_out) = self.upload_quota_after_collection(
+            &quota,
+            previous_quota.as_ref(),
+            cancel.as_ref(),
+            updates,
+        );
+        if let Some(error) = signed_out {
+            account = Err(error);
+        } else if accepted && let Some(reread) = self.reread_account(cancel.as_ref(), updates) {
+            account = reread;
+        }
+        let stored_account = self
+            .state
+            .component(crate::protocol::ComponentName::Account)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let overview = quota.as_ref().ok().map(|payload| {
+            self.build_overview(
+                payload,
+                account.as_ref().ok().cloned().or(stored_account).as_ref(),
+            )
+        });
+        RefreshOutcome {
+            quota,
+            usage: Err(BackendError::cancelled()),
+            account,
+            pricing: Err(BackendError::cancelled()),
+            overview,
+        }
+    }
+
+    fn refresh_usage(
+        &self,
+        cancel: Arc<AtomicBool>,
+        updates: &dyn RefreshSink,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> RefreshOutcome {
+        let _guard = enter_lane_attempt_trigger(trigger);
+        let usage = self.collect_usage(cancel.clone());
+        let cached_catalog = self
+            .state
+            .component(crate::protocol::ComponentName::Pricing)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| serde_json::from_value(value).ok());
+        let cached_model_catalog = self
+            .state
+            .model_catalog()
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::model_catalog::validate_model_catalog_value(&value)
+                    .valid
+                    .then(|| serde_json::from_value(value).ok())
+                    .flatten()
+            })
+            .or_else(|| Some(crate::model_catalog::bundled_model_catalog()));
+        let (pricing, model_catalog_refresh) = thread::scope(|scope| {
+            let pricing_job = scope.spawn(|| self.refresh_pricing());
+            let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());
+            (
+                pricing_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+                model_catalog_job
+                    .join()
+                    .unwrap_or_else(|_| Err(BackendError::unavailable())),
+            )
+        });
+        let catalog = pricing
+            .as_ref()
+            .ok()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or(cached_catalog);
+        let model_catalog = model_catalog_refresh
+            .as_ref()
+            .ok()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or(cached_model_catalog);
+        let usage_collection = usage.ok();
+        let usage_value = match usage_collection.as_ref() {
+            Some(value) => self.usage_report(value, catalog.as_ref(), model_catalog.as_ref()),
+            None => Err(BackendError::unavailable()),
+        };
+        let mut account_value = None;
+        if let Ok(Some(session)) = self.state.session_json()
+            && session.get("status").and_then(Value::as_str) == Some("active")
+            && self.state.usage_upload_enabled().unwrap_or(false)
+            && usage_collection.is_some()
+        {
+            let mut account_sync_error = None;
+            let context_result = effective_usage_lower_bound(&session).and_then(|lower_bound| {
+                self.state
+                    .ensure_usage_context(
+                        session
+                            .get("account_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        session
+                            .get("device_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        session
+                            .get("device_generation")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                        session
+                            .get("usage_sync_revision")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                        &lower_bound,
+                    )
+                    .map_err(|_| BackendError::unavailable())
+            });
+            if let Err(error) = context_result {
+                record_account_sync_error(&mut account_sync_error, error);
+            } else if let Err(error) = self.stage_outbox() {
+                record_account_sync_error(&mut account_sync_error, error);
+            } else {
+                match self.drain_outbox_recorded() {
+                    Ok(accepted) => {
+                        if accepted {
+                            account_value = self.reread_account(cancel.as_ref(), updates);
+                        }
+                    }
+                    Err(error) => record_account_sync_error(&mut account_sync_error, error),
+                }
+            }
+            if let Some(error) = account_sync_error.filter(|error| error.sign_out_epoch().is_some())
+            {
+                self.clear_session_if_rejected(&error);
+                account_value = Some(Err(error));
+            }
+        }
+        RefreshOutcome {
+            quota: Ok(Value::Null),
+            usage: usage_value,
+            account: account_value.unwrap_or_else(|| Err(BackendError::cancelled())),
+            pricing,
+            overview: None,
+        }
+    }
+
+    fn begin_login(&self) -> Result<String, BackendError> {
+        self.account.begin_login()
+    }
+
+    fn abort_login_preparation(&self) {
+        self.account.abort_pending_login();
+    }
+
     fn login(&self, _: &str, cancel: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
         self.account.login(cancel.as_ref())
     }
@@ -2746,10 +3225,81 @@ impl LocalBackend for NativeBackend {
 }
 
 impl NativeBackend {
-    fn clear_active_session(&self) {
-        if let Ok(Some((session, epoch))) = self.state.session_snapshot()
-            && session.get("status").and_then(Value::as_str) == Some("active")
-        {
+    /// Uploads this collection's quota as soon as it exists, without waiting for Usage.
+    ///
+    /// Device control and the Account re-read stay in the writing half of the refresh.
+    /// The third value is a Relay-originated rejection that ended the session.
+    fn upload_quota_after_collection(
+        &self,
+        quota_value: &Result<Value, BackendError>,
+        previous_quota: Option<&Value>,
+        cancel: &AtomicBool,
+        updates: &dyn RefreshSink,
+    ) -> (bool, bool, Option<BackendError>) {
+        if cancel.load(Ordering::Acquire) {
+            return (false, false, None);
+        }
+        let Ok(Some(session)) = self.state.session_json() else {
+            return (false, false, None);
+        };
+        if session.get("status").and_then(Value::as_str) != Some("active") {
+            return (false, false, None);
+        }
+        let Ok(quota_payload) = quota_value else {
+            return (false, false, None);
+        };
+        let restated = failure_status_snapshots(quota_payload, previous_quota, Utc::now());
+        match self.account.upload_quota_report(quota_payload, &restated) {
+            Ok(response) => (
+                true,
+                response
+                    .get("accepted")
+                    .and_then(Value::as_array)
+                    .is_some_and(|providers| !providers.is_empty()),
+                None,
+            ),
+            Err(error) if error.sign_out_epoch().is_some() => {
+                self.clear_session_if_rejected(&error);
+                updates.account(Err(error.clone()));
+                (false, false, Some(error))
+            }
+            Err(_) => (false, false, None),
+        }
+    }
+
+    /// Sends staged hours and records the `usage_upload` journal row the drain earns.
+    fn drain_outbox_recorded(&self) -> Result<bool, BackendError> {
+        let before = self.state.outbox_len().unwrap_or(0);
+        let upload_attempt = self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
+        match self.drain_outbox() {
+            Ok(accepted) => {
+                let pending = self.state.outbox_len().unwrap_or(0);
+                let (outcome, code) = if before == 0 {
+                    (
+                        DiagnosticAttemptOutcome::NoWork,
+                        Some(DiagnosticAttemptCode::NoWork),
+                    )
+                } else if pending > 0 {
+                    (
+                        DiagnosticAttemptOutcome::Partial,
+                        Some(DiagnosticAttemptCode::Unavailable),
+                    )
+                } else {
+                    (DiagnosticAttemptOutcome::Success, None)
+                };
+                self.finish_attempt(upload_attempt, outcome, code);
+                Ok(accepted)
+            }
+            Err(error) => {
+                let (outcome, code) = backend_attempt_error(&error.error);
+                self.finish_attempt(upload_attempt, outcome, Some(code));
+                Err(error)
+            }
+        }
+    }
+
+    fn clear_session_if_rejected(&self, error: &BackendError) {
+        if let Some(epoch) = error.sign_out_epoch() {
             let _ = self.state.clear_session_if_epoch(epoch);
         }
     }
@@ -2945,9 +3495,10 @@ fn fold_leaves(leaves: &[Value]) -> Result<(Value, Value), BackendError> {
 }
 
 fn invalid_usage_detail() -> BackendError {
-    BackendError {
-        error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
-    }
+    BackendError::new(IpcError::new(
+        ErrorCode::InvalidResponse,
+        RecoveryAction::Retry,
+    ))
 }
 
 fn usage_date_range(rows: &[DatedUsageRow], fallback_date: &str) -> (String, String) {
@@ -3003,9 +3554,10 @@ fn effective_usage_lower_bound(session: &Value) -> Result<String, BackendError> 
 }
 
 fn invalid_local_state() -> BackendError {
-    BackendError {
-        error: IpcError::new(ErrorCode::InvalidState, RecoveryAction::Reinstall),
-    }
+    BackendError::new(IpcError::new(
+        ErrorCode::InvalidState,
+        RecoveryAction::Reinstall,
+    ))
 }
 
 /// Prefer the first session-authority failure over later non-auth sync diagnostics.
@@ -3277,6 +3829,97 @@ mod tests {
         }
     }
 
+    fn spawn_gated_relay(
+        responses: Vec<String>,
+        delay: std::time::Duration,
+        arrived: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    ) -> MockRelay {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("relay listener");
+        listener.set_nonblocking(true).expect("relay nonblocking");
+        let address = listener.local_addr().expect("relay address");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let server = std::thread::spawn(move || {
+            let mut recorded = Vec::new();
+            let mut responses = responses.into_iter();
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("relay stream");
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                            .expect("relay timeout");
+                        let mut request = [0_u8; 8_192];
+                        let read = stream.read(&mut request).unwrap_or(0);
+                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        {
+                            let (lock, cond) = arrived.as_ref();
+                            *lock.lock().expect("gate") = true;
+                            cond.notify_all();
+                        }
+                        std::thread::sleep(delay);
+                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2))
+                    }
+                    Err(_) => break,
+                }
+            }
+            recorded
+        });
+        MockRelay {
+            origin: format!("http://{address}"),
+            stop,
+            server,
+        }
+    }
+
+    fn wait_arrived_gate(arrived: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) {
+        let (lock, cond) = arrived.as_ref();
+        let mut ready = lock.lock().expect("gate");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !*ready {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(), "relay never received a request");
+            let (guard, _) = cond.wait_timeout(ready, remaining).expect("wait");
+            ready = guard;
+        }
+    }
+
+    fn http_unauthorized() -> String {
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+    }
+
+    fn token_refresh_response() -> String {
+        relay_json(&json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "token_type": "Bearer",
+            "account_id": "account_1",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "session": {
+                "access_token": "qb_access_token_rotatedxx",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_rotatedx",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
+        }))
+    }
+
+    fn near_expiry_session() -> Value {
+        let mut session = active_session();
+        session["session"]["access_expires_at"] = json!(
+            Utc::now()
+                .checked_add_signed(Duration::seconds(30))
+                .expect("expiry")
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+        );
+        session
+    }
+
     fn summary_requests(sent: &[String]) -> usize {
         sent.iter()
             .filter(|head| head.starts_with("GET /api/v6/account/summary"))
@@ -3419,7 +4062,7 @@ mod tests {
             account: std::sync::Mutex::new(None),
         };
 
-        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates, false);
 
         // Collection was still waiting when the Account was published: opening the gate is what
         // let it run at all.
@@ -3489,7 +4132,7 @@ mod tests {
 
         let outcome = std::thread::scope(|scope| {
             let refreshing =
-                scope.spawn(|| backend.refresh(Arc::new(AtomicBool::new(false)), &updates));
+                scope.spawn(|| backend.refresh(Arc::new(AtomicBool::new(false)), &updates, false));
             // Both halves of the refresh are parked. The Account read has already decided — it
             // found no session — and collection has not finished. The sign-in lands between the
             // two, with nothing about the ordering left to a clock.
@@ -3650,6 +4293,112 @@ mod tests {
         (state, backend)
     }
 
+    #[test]
+    fn account_read_session_changed_leaves_the_session_installed() {
+        let arrived = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let relay_server = spawn_gated_relay(
+            vec![token_refresh_response()],
+            std::time::Duration::from_millis(150),
+            arrived.clone(),
+        );
+        let root =
+            std::env::temp_dir().join(format!("quota-session-changed-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .write_session_json(&near_expiry_session())
+            .expect("near-expiry session");
+        let reader = std::thread::spawn(move || backend.account_read(&AtomicBool::new(false)));
+        wait_arrived_gate(&arrived);
+        state
+            .write_session_json(&active_session())
+            .expect("rotated session");
+        let result = reader.join().expect("account_read");
+        let error = result
+            .expect("an active session was present")
+            .expect_err("session-changed");
+        assert!(error.is_session_changed(), "{error:?}");
+        assert!(!error.error.code.requires_login());
+        let session = state.session_json().expect("session").expect("installed");
+        assert_eq!(
+            session.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        drop(relay_server.finish());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_relay_401_at_epoch_n_does_not_clear_epoch_n_plus_one() {
+        let arrived = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let relay_server = spawn_gated_relay(
+            vec![http_unauthorized()],
+            std::time::Duration::from_millis(150),
+            arrived.clone(),
+        );
+        let root = std::env::temp_dir().join(format!("quota-401-epoch-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        let (_, epoch) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        let reader = std::thread::spawn(move || backend.account_read(&AtomicBool::new(false)));
+        wait_arrived_gate(&arrived);
+        state
+            .write_session_json(&active_session())
+            .expect("newer session");
+        let result = reader.join().expect("account_read");
+        let error = result
+            .expect("an active session was present")
+            .expect_err("relay 401");
+        assert_eq!(error.error.code, ErrorCode::AuthenticationRequired);
+        assert_eq!(error.sign_out_epoch(), Some(epoch));
+        let (session, after) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session still installed");
+        assert_ne!(after, epoch);
+        assert_eq!(
+            session.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        drop(relay_server.finish());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn upload_quota_after_collection_refreshes_a_near_expiry_token_first() {
+        let relay_server = spawn_relay(vec![
+            token_refresh_response(),
+            snapshot_upload(json!(["codex"]), json!([])),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-upload-refresh-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        state
+            .write_session_json(&near_expiry_session())
+            .expect("near-expiry session");
+        let updates = RecordingUpdates::default();
+        let (put, accepted, signed_out) = backend.upload_quota_after_collection(
+            &Ok(previous_quota_report()),
+            None,
+            &AtomicBool::new(false),
+            &updates,
+        );
+        assert!(put);
+        assert!(accepted);
+        assert!(signed_out.is_none());
+        let sent = relay_server.finish();
+        assert!(sent[0].starts_with("POST /oauth/v2/token"), "{sent:?}");
+        assert!(
+            sent.iter()
+                .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
+            "{sent:?}"
+        );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     /// What this Mac just uploaded belongs in its own Account view now, not in five minutes.
     ///
     /// The refresh reads the Account first — that is what makes it feel instant — and reads it
@@ -3668,11 +4417,11 @@ mod tests {
         }]);
         let relay_server = spawn_relay(vec![
             http_json_with_etag(&before, "\"before\""),
+            snapshot_upload(json!(["codex"]), json!([])),
             String::new(),
             String::new(),
             device_control(),
             device_profile(),
-            snapshot_upload(json!(["codex"]), json!([])),
             http_json_with_etag(&after, "\"after\""),
         ]);
         let root =
@@ -3690,7 +4439,7 @@ mod tests {
             .expect("previous quota");
         let updates = RecordingUpdates::default();
 
-        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates, false);
 
         let account = outcome.account.expect("account outcome");
         assert_eq!(account["account_summary"], after);
@@ -3733,11 +4482,11 @@ mod tests {
         let summary = account_summary("octocat");
         let relay_server = spawn_relay(vec![
             http_json_with_etag(&summary, "\"only\""),
+            snapshot_upload(json!([]), json!(["codex"])),
             String::new(),
             String::new(),
             device_control(),
             device_profile(),
-            snapshot_upload(json!([]), json!(["codex"])),
         ]);
         let root =
             std::env::temp_dir().join(format!("quota-account-once-{}", uuid::Uuid::new_v4()));
@@ -3754,7 +4503,7 @@ mod tests {
             .expect("previous quota");
         let updates = RecordingUpdates::default();
 
-        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates);
+        let outcome = backend.refresh(Arc::new(AtomicBool::new(false)), &updates, false);
 
         assert_eq!(
             outcome.account.expect("account outcome")["account_summary"],
@@ -3784,9 +4533,7 @@ mod tests {
             let mut slot = None;
             record_account_sync_error(
                 &mut slot,
-                BackendError {
-                    error: IpcError::new(code, RecoveryAction::Login),
-                },
+                BackendError::new(IpcError::new(code, RecoveryAction::Login)),
             );
             record_account_sync_error(&mut slot, BackendError::unavailable());
             let error = slot.expect("retained requires-login error");
@@ -3798,9 +4545,10 @@ mod tests {
         record_account_sync_error(&mut slot, BackendError::unavailable());
         record_account_sync_error(
             &mut slot,
-            BackendError {
-                error: IpcError::new(ErrorCode::AuthenticationRequired, RecoveryAction::Login),
-            },
+            BackendError::new(IpcError::new(
+                ErrorCode::AuthenticationRequired,
+                RecoveryAction::Login,
+            )),
         );
         assert_eq!(
             slot.expect("promoted requires-login error").error.code,
@@ -4199,7 +4947,12 @@ mod tests {
                     .unwrap_or(0)
             };
 
-            backend.renew_provider_sign_ins(&discovered, &mut context);
+            let first =
+                backend.renew_provider_sign_ins(&discovered, &mut context, false, &HashSet::new());
+            assert_eq!(
+                first,
+                HashSet::from([ProviderId::Claude, ProviderId::Codex, ProviderId::Grok])
+            );
             assert_eq!(
                 (spawns("grok"), spawns("claude"), spawns("codex")),
                 (1, 1, 1)
@@ -4243,7 +4996,11 @@ mod tests {
             }
 
             // Tokens with time left are not sign-in problems, so nothing is started.
-            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert!(
+                backend
+                    .renew_provider_sign_ins(&discovered, &mut context, false, &HashSet::new())
+                    .is_empty()
+            );
             assert_eq!(
                 (spawns("grok"), spawns("claude"), spawns("codex")),
                 (1, 1, 1)
@@ -4255,24 +5012,46 @@ mod tests {
             fs::write(&credential, claude_credentials(1_577_836_800_000, "stale"))
                 .expect("credential");
             fs::write(&codex_auth, codex_credentials(1_577_836_800)).expect("codex auth");
-            backend.renew_provider_sign_ins(&discovered, &mut context);
+            assert!(
+                backend
+                    .renew_provider_sign_ins(&discovered, &mut context, false, &HashSet::new())
+                    .is_empty()
+            );
             assert_eq!(
                 (spawns("grok"), spawns("claude"), spawns("codex")),
                 (1, 1, 1)
             );
 
-            // A Mac that never signed into any of them never looks for a binary at all.
-            backend.renew_provider_sign_ins(
-                &[
-                    (ProviderId::Grok, Vec::new()),
-                    (ProviderId::Claude, Vec::new()),
-                    (ProviderId::Codex, Vec::new()),
-                ],
-                &mut context,
+            // A Recheck or a manual refresh skips that hour, so it can ask again immediately.
+            let recheck =
+                backend.renew_provider_sign_ins(&discovered, &mut context, true, &HashSet::new());
+            assert_eq!(
+                recheck,
+                HashSet::from([ProviderId::Claude, ProviderId::Codex, ProviderId::Grok])
             );
             assert_eq!(
                 (spawns("grok"), spawns("claude"), spawns("codex")),
-                (1, 1, 1)
+                (2, 2, 2)
+            );
+
+            // A Mac that never signed into any of them never looks for a binary at all.
+            assert!(
+                backend
+                    .renew_provider_sign_ins(
+                        &[
+                            (ProviderId::Grok, Vec::new()),
+                            (ProviderId::Claude, Vec::new()),
+                            (ProviderId::Codex, Vec::new()),
+                        ],
+                        &mut context,
+                        false,
+                        &HashSet::new(),
+                    )
+                    .is_empty()
+            );
+            assert_eq!(
+                (spawns("grok"), spawns("claude"), spawns("codex")),
+                (2, 2, 2)
             );
 
             // And the rest of the refresh is exactly where it was.
@@ -4633,6 +5412,65 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_name_a_failed_sign_in_from_account_last_error() {
+        let root =
+            std::env::temp_dir().join(format!("quota-failed-signin-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::SignedOut,
+                Some(serde_json::json!({
+                    "auth_status": "signed_out",
+                    "account_id": null,
+                    "display_label": null,
+                    "device_id": null,
+                    "device_generation": null,
+                    "account_summary": null
+                })),
+                None,
+                Some(IpcError::new(ErrorCode::Unavailable, RecoveryAction::Retry)),
+                false,
+            )
+            .expect("failed login");
+        let mut backend = NativeBackend::new(
+            state,
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        backend.home = root.join("home");
+        backend.environment.clear();
+        let report = backend.diagnostic_report().expect("diagnostics");
+        let surface = report
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == "account")
+            .expect("account surface");
+        assert_eq!(surface.status, DiagnosticStatus::Degraded);
+        assert_eq!(surface.recovery, DiagnosticRecovery::Login);
+        assert!(
+            surface.message.contains("unavailable"),
+            "{}",
+            surface.message
+        );
+        assert!(
+            surface.message.contains("browser could not be opened"),
+            "{}",
+            surface.message
+        );
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.subject == "account")
+            .expect("account source");
+        assert_eq!(source.code.as_deref(), Some("unavailable"));
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn a_rebuilding_cache_reports_local_usage_as_partial() {
         let root = std::env::temp_dir().join(format!("quota-rebuilding-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -4768,6 +5606,156 @@ mod tests {
         assert!(failure_status_snapshots(&report, None, now).is_empty());
     }
 
+    #[test]
+    fn a_failed_round_keeps_the_previous_local_overview_item() {
+        let now = DateTime::parse_from_rfc3339("2026-08-28T08:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let snapshot = |used: f64, observed_at: &str| {
+            json!({
+                "provider": "grok",
+                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
+                "windows": [{"id": "monthly", "title": "Monthly", "used_percent": used}],
+                "status": "available",
+                "observed_at": observed_at
+            })
+        };
+        let previous = vec![
+            overview_item(
+                &snapshot(12.0, "2026-08-28T07:45:00Z"),
+                "local",
+                "Local",
+                None,
+                now,
+            )
+            .expect("previous local item"),
+        ];
+        let timed_out = json!({
+            "results": [{
+                "provider": "grok",
+                "outcome": "unavailable",
+                "snapshots": [],
+                "sources": [{
+                    "source_id": "grok_billing_api",
+                    "outcome": "unavailable",
+                    "category": "unavailable"
+                }]
+            }]
+        });
+        let items = overview_items(&timed_out, None, &previous, now);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].identity.provider, "grok");
+        assert_eq!(
+            items[0].snapshot["windows"][0]["used_percent"].as_f64(),
+            Some(12.0)
+        );
+        assert_eq!(items[0].selected_source_id, "local");
+        assert!(!items[0].is_stale);
+
+        let replaced = json!({
+            "results": [{
+                "provider": "grok",
+                "outcome": "success",
+                "snapshots": [snapshot(20.0, "2026-08-28T07:55:00Z")]
+            }]
+        });
+        let items = overview_items(&replaced, None, &previous, now);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].snapshot["windows"][0]["used_percent"].as_f64(),
+            Some(20.0)
+        );
+
+        let empty_success = json!({
+            "results": [{
+                "provider": "grok",
+                "outcome": "success",
+                "snapshots": []
+            }]
+        });
+        assert!(overview_items(&empty_success, None, &previous, now).is_empty());
+
+        // A provider this refresh no longer discovered is not resurrected.
+        let unsigned = json!({
+            "results": [{
+                "provider": "grok",
+                "outcome": "auth_required",
+                "snapshots": [],
+                "sources": []
+            }]
+        });
+        assert!(overview_items(&unsigned, None, &previous, now).is_empty());
+    }
+
+    #[test]
+    fn a_rejected_official_reading_asks_the_owning_cli_again() {
+        let auth_required = |provider: &str, source: &str| {
+            (
+                ProviderId::parse(provider).expect("provider"),
+                false,
+                None,
+                json!({
+                    "provider": provider,
+                    "outcome": "auth_required",
+                    "snapshots": [],
+                    "sources": [{
+                        "source_id": source,
+                        "outcome": "auth_required",
+                        "category": "auth_required"
+                    }]
+                }),
+                false,
+            )
+        };
+        let retry = providers_needing_forced_renewal(&[
+            auth_required("codex", "chatgpt_usage_api"),
+            auth_required("claude", "anthropic_oauth_usage_api"),
+            auth_required("cursor", "cursor_dashboard_api"),
+            (
+                ProviderId::Grok,
+                false,
+                None,
+                json!({
+                    "provider": "grok",
+                    "outcome": "success",
+                    "snapshots": [{}],
+                    "sources": [{"source_id": "grok_billing_api", "outcome": "success"}]
+                }),
+                false,
+            ),
+            (
+                ProviderId::Kimi,
+                false,
+                None,
+                json!({
+                    "provider": "kimi",
+                    "outcome": "auth_required",
+                    "snapshots": [],
+                    "sources": []
+                }),
+                false,
+            ),
+        ]);
+        assert!(retry.contains(&ProviderId::Codex));
+        assert!(retry.contains(&ProviderId::Claude));
+        assert!(!retry.contains(&ProviderId::Cursor));
+        assert!(!retry.contains(&ProviderId::Grok));
+        assert!(!retry.contains(&ProviderId::Kimi));
+    }
+
+    #[test]
+    fn a_forced_pass_skips_providers_already_asked() {
+        let retry = HashSet::from([ProviderId::Claude, ProviderId::Codex, ProviderId::Grok]);
+        // Recheck already spawned for an expired grant in the first pass.
+        assert_eq!(
+            forced_renewal_targets(&retry, &HashSet::from([ProviderId::Codex])),
+            HashSet::from([ProviderId::Claude, ProviderId::Grok])
+        );
+        assert!(forced_renewal_targets(&retry, &retry).is_empty());
+        // A scheduled refresh that started nothing (in-date grants): rejected readings are asked.
+        assert_eq!(forced_renewal_targets(&retry, &HashSet::new()), retry);
+    }
+
     /// A source that cannot be reached ends the refresh with its own name.  This used to
     /// fall through to a provider CLI, so being offline for a moment started programs.
     #[test]
@@ -4901,6 +5889,46 @@ mod tests {
             }]))
         );
         fs::remove_dir_all(&home).expect("cleanup");
+
+        // A withheld Keychain item is not a terminal sign-in: Claude Code can still read it.
+        #[cfg(target_os = "macos")]
+        {
+            let refused_home =
+                std::env::temp_dir().join(format!("quota-claude-refused-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(refused_home.join(".claude")).expect("home");
+            fs::write(
+                refused_home.join(".claude/.credentials.json"),
+                "{\"claudeAiOauth\": {\"accessToken\": \"\", \"refreshToken\": \"\", \"expiresAt\": 0}}",
+            )
+            .expect("credential");
+            let refused = CollectionContext {
+                home_directory: refused_home.clone(),
+                environment: HashMap::from([(
+                    "HOME".to_owned(),
+                    refused_home.to_string_lossy().into_owned(),
+                )]),
+                now: Some("2026-08-15T08:00:00Z".to_owned()),
+                ..CollectionContext::default()
+            };
+            refused
+                .keychain
+                .set(crate::providers::common::KeychainSecret::Refused)
+                .expect("unread");
+            let sessions = providers::discover(ProviderId::Claude, &refused);
+            assert_eq!(sessions.len(), 1);
+            let denied = collect_discovered_provider(ProviderId::Claude, sessions, &refused);
+            assert_eq!(
+                denied.get("access_denied").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                denied.get("message").and_then(Value::as_str),
+                Some(
+                    "QuotaBar could not read Claude Code's Keychain item. Open Claude Code to refresh the sign-in."
+                )
+            );
+            fs::remove_dir_all(&refused_home).expect("cleanup");
+        }
     }
 
     /// Every reader resolves one subscription the same way, so the rule is stated once as
@@ -5003,7 +6031,7 @@ mod tests {
             let now = DateTime::parse_from_rfc3339(case["now"].as_str().expect("now"))
                 .expect("instant")
                 .with_timezone(&Utc);
-            let items = overview_items(&quota, Some(&account), now);
+            let items = overview_items(&quota, Some(&account), &[], now);
             let expected = case["expected"].as_array().expect("expected");
             assert_eq!(items.len(), expected.len(), "{name}");
             for (item, expected) in items.iter().zip(expected) {

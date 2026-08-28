@@ -5,6 +5,8 @@ struct QuotaOverviewView: View {
   let model: MenuBarViewModel
   let enabledProviders: [ProviderID]
   let now: Date
+  var revealGeneration: UInt = 0
+  var revealProvider: ProviderID? = nil
   let onOpenSettings: () -> Void
 
   var body: some View {
@@ -47,15 +49,21 @@ struct QuotaOverviewView: View {
         )
       }
     case .content(let providers, let refreshWarning):
-      ScrollView {
-        VStack(spacing: QuotaDesign.Spacing.sm) {
-          if model.showsCacheRebuildNotice {
-            CacheRebuildNotice()
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(spacing: QuotaDesign.Spacing.sm) {
+            if model.showsCacheRebuildNotice {
+              CacheRebuildNotice()
+            }
+            loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
           }
-          loadedProviderContent(providers: providers, refreshWarning: refreshWarning, now: now)
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+        .onAppear { scrollOverview(proxy) }
+        .onChange(of: revealGeneration) { _, _ in
+          scrollOverview(proxy)
+        }
       }
     }
   }
@@ -73,11 +81,17 @@ struct QuotaOverviewView: View {
 
       ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
         ProviderQuotaView(presentation: provider, now: now)
+          .id(provider.id)
 
         if index < providers.count - 1 {
           Divider()
         }
       }
     }
+  }
+
+  private func scrollOverview(_ proxy: ScrollViewProxy) {
+    guard let id = revealProvider else { return }
+    proxy.scrollTo(id, anchor: .top)
   }
 }

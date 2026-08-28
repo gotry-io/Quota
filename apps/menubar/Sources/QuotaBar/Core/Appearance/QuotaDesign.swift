@@ -7,7 +7,7 @@ enum QuotaDesign {
 
   enum Layout {
     static let panelWidth: CGFloat = 320
-    /// Fixed panel height for every page. MenuBarExtra first-open ignores flexible heights.
+    /// Fixed panel height for every page so first open and later pages share one ceiling.
     static let panelMaxHeight: CGFloat = 480
 
     /// Single horizontal gutter for header, page body, and footer.

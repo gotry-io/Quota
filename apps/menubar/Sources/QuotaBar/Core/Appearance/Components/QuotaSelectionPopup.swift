@@ -6,7 +6,7 @@ struct QuotaSelectionChoice: Identifiable, Equatable {
   let subtitle: String?
 }
 
-/// App-owned single-selection surface for the MenuBarExtra panel.
+/// App-owned single-selection surface for the menu panel.
 struct QuotaSelectionPopup: View {
   let title: String
   let message: String

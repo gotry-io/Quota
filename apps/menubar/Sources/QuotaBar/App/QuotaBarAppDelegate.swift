@@ -6,7 +6,21 @@ import AppKit
 /// the process dying, so a service that is mid-write finishes before its pipe disappears.
 @MainActor
 final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
-  var model: MenuBarViewModel?
+  private var model: MenuBarViewModel?
+  private var statusItems: MenuBarStatusItemController?
+
+  func attach(model: MenuBarViewModel) {
+    self.model = model
+  }
+
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    startStatusItemsIfNeeded()
+  }
+
+  private func startStatusItemsIfNeeded() {
+    guard statusItems == nil, let model else { return }
+    statusItems = MenuBarStatusItemController(model: model)
+  }
 
   /// `terminateLater` is what makes an asynchronous last message possible: AppKit runs the run
   /// loop until `reply(toApplicationShouldTerminate:)`, so nothing here blocks the main thread
@@ -20,6 +34,8 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminate(
     _ sender: NSApplication
   ) -> NSApplication.TerminateReply {
+    statusItems?.invalidate()
+    statusItems = nil
     guard let model else { return .terminateNow }
     self.model = nil
     Task { @MainActor in

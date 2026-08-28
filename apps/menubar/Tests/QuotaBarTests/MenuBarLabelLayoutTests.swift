@@ -72,6 +72,22 @@ struct MenuBarLabelLayoutTests {
     #expect(abs(text.midY - ink.height / 2) <= tolerance)
   }
 
+  @Test
+  func packedReadingsShareOneTemplateImageTallerThanNeitherCellAlone() {
+    let packed = MenuBarLabelModel(
+      cells: [
+        MenuBarLabelCell(icon: .provider(.codex), text: "68%"),
+        MenuBarLabelCell(icon: .provider(.claude), text: "27%"),
+      ],
+      accessibilityLabel: "QuotaBar, Codex 68% remaining, Claude Code 27% remaining"
+    )
+    let one = MenuBarItemImage.make(iconAndPercent)
+    let two = MenuBarItemImage.make(packed)
+    #expect(two.isTemplate)
+    #expect(two.size.height == one.size.height)
+    #expect(two.size.width > one.size.width + MenuBarItemImage.cellSpacing)
+  }
+
   private var iconAndPercent: MenuBarLabelModel {
     MenuBarLabelModel(
       icon: .provider(.codex),

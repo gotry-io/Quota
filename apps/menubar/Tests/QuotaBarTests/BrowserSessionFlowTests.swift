@@ -375,6 +375,7 @@ private actor FlowService: LocalServiceServing {
   func cancelLogin() async throws {}
   func logout() async throws -> LocalServiceLogoutResult { throw LocalServiceClientError.serviceMissing }
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting { throw LocalServiceClientError.serviceMissing }
+  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting { throw LocalServiceClientError.serviceMissing }
   func setProviderConfig(_ provider: ProviderID, apiKey: String, baseURL: String?) async throws -> LocalServiceProviderConfig { throw LocalServiceClientError.serviceMissing }
   func removeProviderConfig(_ provider: ProviderID) async throws -> LocalServiceProviderConfig { throw LocalServiceClientError.serviceMissing }
   func validateProviderBrowserSession(
@@ -421,6 +422,7 @@ private func flowState() -> LocalServiceState {
     ipcVersion: 1,
     revision: 1,
     usageUploadEnabled: true,
+    quotaRefreshIntervalSeconds: 300,
     usagePeriods: LocalServiceUsagePeriodCache(local: emptyPeriods, account: emptyPeriods),
     quota: empty(),
     usage: empty(),

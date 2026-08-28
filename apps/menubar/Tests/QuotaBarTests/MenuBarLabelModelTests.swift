@@ -120,13 +120,27 @@ struct MenuBarLabelModelTests {
   func theStoredProviderChoiceSurvivesButAnUnknownIdIsNotAChoice() {
     #expect(MenuBarProviderPreference(rawValue: "automatic") == .automatic)
     #expect(MenuBarProviderPreference(rawValue: "codex") == .provider(.codex))
+    #expect(MenuBarProviderPreference(rawValue: "codex,claude") == .providers([.codex, .claude]))
     #expect(MenuBarProviderPreference(rawValue: "not_a_provider") == nil)
     #expect(MenuBarProviderPreference.fallback == .automatic)
     #expect(MenuBarProviderPreference.storageKey == "menubar.provider")
+    #expect(MenuBarProviderPreference.combinedLimit == 3)
   }
 
   @Test
-  func lowRemainingQuotaSaysSoInPunctuationBecauseTheMenuBarHasNoColor() {
+  func togglingNamedProvidersLeavesAutomaticWhenTheSetIsEmpty() {
+    let visible: [ProviderID] = [.grok, .codex, .claude]
+    let one = MenuBarProviderPreference.automatic.toggling(.codex, visibleProviders: visible)
+    #expect(one == .provider(.codex))
+    let two = one.toggling(.claude, visibleProviders: visible)
+    #expect(two.selected == [.codex, .claude])
+    let none = two.toggling(.codex, visibleProviders: visible).toggling(
+      .claude, visibleProviders: visible)
+    #expect(none == .automatic)
+  }
+
+  @Test
+  func lowRemainingQuotaIsStillAPercent() {
     let label = MenuBarLabelModel.make(
       overview: [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 92)])],
       style: .iconAndPercent,
@@ -134,12 +148,12 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    #expect(label.text == "!8%")
+    #expect(label.text == "8%")
     #expect(label.accessibilityLabel == "QuotaBar, Codex 8% remaining")
   }
 
   @Test
-  func tenPercentIsNotYetAWarning() {
+  func tenPercentIsAPercentLikeAnyOther() {
     let label = MenuBarLabelModel.make(
       overview: [item(fingerprint: "codex", windows: [window(id: "weekly", usedPercent: 90)])],
       style: .iconAndPercent,
@@ -148,6 +162,158 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(label.text == "10%")
+  }
+
+  @Test
+  func combinedPacksTwoReadingsIntoOneItemAndSeparateDoesNot() {
+    let combined = MenuBarLabelModel.specs(
+      overview: mixedProviders,
+      style: .iconAndPercent,
+      provider: .providers([.codex, .claude]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .claude, .grok],
+      now: now
+    )
+    #expect(combined.count == 1)
+    #expect(combined[0].id == .combined)
+    #expect(combined[0].label.cells.count == 2)
+    #expect(combined[0].label.cells[0] == MenuBarLabelCell(icon: .provider(.codex), text: "68%"))
+    #expect(combined[0].label.cells[1] == MenuBarLabelCell(icon: .provider(.claude), text: "27%"))
+    #expect(
+      combined[0].label.accessibilityLabel
+        == "QuotaBar, Codex 68% remaining, Claude Code 27% remaining"
+    )
+
+    let separate = MenuBarLabelModel.specs(
+      overview: mixedProviders,
+      style: .percent,
+      provider: .providers([.codex, .claude]),
+      arrangement: .separate,
+      visibleProviders: [.codex, .claude, .grok],
+      now: now
+    )
+    #expect(separate.map(\.id) == [.provider(.codex), .provider(.claude)])
+    #expect(separate[0].label.icon == .provider(.codex))
+    #expect(separate[0].label.text == "68%")
+    #expect(separate[1].label.text == "27%")
+  }
+
+  @Test
+  func combinedKeepsAStaleProvidersMarkAndDoesNotBorrowAnotherNumber() {
+    let specs = MenuBarLabelModel.specs(
+      overview: mixedProviders,
+      style: .iconAndPercent,
+      provider: .providers([.claude, .grok]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .claude, .grok],
+      now: now
+    )
+    #expect(specs.count == 1)
+    #expect(specs[0].label.cells == [
+      MenuBarLabelCell(icon: .provider(.claude), text: "27%"),
+      MenuBarLabelCell(icon: .provider(.grok), text: nil),
+    ])
+  }
+
+  @Test
+  func moreThanThreeNamedProvidersCannotStayCombined() {
+    let specs = MenuBarLabelModel.specs(
+      overview: mixedProviders + [
+        item(
+          provider: .cursor,
+          fingerprint: "cursor",
+          windows: [window(id: "weekly", usedPercent: 40)]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .providers([.codex, .claude, .cursor, .grok]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .claude, .grok, .cursor],
+      now: now
+    )
+    #expect(specs.map(\.id) == [
+      .provider(.codex), .provider(.claude), .provider(.grok), .provider(.cursor),
+    ])
+  }
+
+  @Test
+  func layoutResolvesVisibleProvidersWithoutRewritingTheStoredChoice() {
+    let visible: [ProviderID] = [.codex, .claude, .grok]
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .automatic,
+        arrangement: .separate,
+        visibleProviders: visible
+      ) == .automatic
+    )
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .provider(.codex),
+        arrangement: .combined,
+        visibleProviders: visible
+      ) == .items([.codex])
+    )
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .providers([.codex, .claude]),
+        arrangement: .combined,
+        visibleProviders: visible
+      ) == .packed([.codex, .claude])
+    )
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .providers([.codex, .claude, .cursor, .grok]),
+        arrangement: .combined,
+        visibleProviders: [.codex, .claude, .grok, .cursor]
+      ) == .items([.codex, .claude, .grok, .cursor])
+    )
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .providers([.codex, .claude]),
+        arrangement: .combined,
+        visibleProviders: [.grok]
+      ) == .automatic
+    )
+  }
+
+  @Test
+  func moreThanOneReadingDrawsIconAndPercentWithoutChangingTheStoredStyle() {
+    let specs = MenuBarLabelModel.specs(
+      overview: mixedProviders,
+      style: .percent,
+      provider: .providers([.codex, .claude]),
+      arrangement: .separate,
+      visibleProviders: [.codex, .claude],
+      now: now
+    )
+    #expect(specs[0].label.icon == .provider(.codex))
+    #expect(specs[0].label.text == "68%")
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .providers([.codex, .claude]),
+        arrangement: .separate,
+        visibleProviders: [.codex, .claude]
+      ).effectiveStyle(.icon) == .iconAndPercent
+    )
+  }
+
+  @Test
+  func summaryNamesTheArrangementOnceThereIsMoreThanOneProvider() {
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .automatic,
+        arrangement: .separate,
+        visibleProviders: [.codex]
+      ).settingsSummary == "Automatic"
+    )
+    #expect(
+      MenuBarLayout.resolve(
+        selection: .providers([.codex, .claude]),
+        arrangement: .combined,
+        visibleProviders: [.codex, .claude]
+      ).settingsSummary == "Codex, Claude Code · Combined"
+    )
+    #expect(MenuBarArrangementPreference.fallback == .combined)
   }
 
   @Test

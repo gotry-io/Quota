@@ -24,6 +24,10 @@ enum MenuBarItemImage {
   /// Optical gap between the mark and the number.
   nonisolated static let markSpacing: CGFloat = 4
 
+  /// Gap between packed readings in one item. Wider than mark-to-number so the
+  /// cells read as neighbors rather than one mark with two numbers.
+  nonisolated static let cellSpacing: CGFloat = 8
+
   /// Menu-bar items are drawn at the backing scale; two covers every shipping Mac.
   nonisolated static let scale: CGFloat = 2
 
@@ -42,7 +46,7 @@ enum MenuBarItemImage {
     return NSFont(descriptor: descriptor, size: base.pointSize) ?? base
   }
 
-  private static var cached: (key: MenuBarLabelModel, height: CGFloat, image: NSImage)?
+  private static var cached: [MenuBarLabelModel: (height: CGFloat, image: NSImage)] = [:]
 
   /// `samplingScale` exists so the same drawing can be measured finely; the item itself always
   /// ships at the backing scale.
@@ -51,12 +55,22 @@ enum MenuBarItemImage {
     guard samplingScale == scale else {
       return draw(label, height: height, scale: samplingScale)
     }
-    if let cached, cached.key == label, cached.height == height {
+    if let cached = cached[label], cached.height == height {
       return cached.image
     }
     let image = draw(label, height: height, scale: scale)
-    cached = (label, height, image)
+    cached[label] = (height, image)
     return image
+  }
+
+  private struct PreparedCell {
+    var mark: PlacedMark?
+    var text: (line: CTLine, width: CGFloat)?
+
+    var width: CGFloat {
+      let spacing = mark != nil && text != nil ? markSpacing : 0
+      return (mark?.inkWidth ?? 0) + spacing + (text?.width ?? 0)
+    }
   }
 
   private static func draw(
@@ -64,10 +78,17 @@ enum MenuBarItemImage {
     height: CGFloat,
     scale: CGFloat
   ) -> NSImage {
-    let mark = label.icon.flatMap { placedMark($0, height: height) }
-    let text = label.text.map(line(for:))
-    let spacing = mark != nil && text != nil ? markSpacing : 0
-    let width = max(((mark?.inkWidth ?? 0) + spacing + (text?.width ?? 0)).rounded(.up), 1)
+    let prepared = label.cells.map {
+      PreparedCell(
+        mark: $0.icon.flatMap { placedMark($0, height: height) },
+        text: $0.text.map(line(for:))
+      )
+    }
+    var totalWidth = prepared.map(\.width).reduce(0, +)
+    if prepared.count > 1 {
+      totalWidth += CGFloat(prepared.count - 1) * cellSpacing
+    }
+    let width = max(totalWidth.rounded(.up), 1)
     let size = NSSize(width: width, height: height)
 
     guard
@@ -94,25 +115,34 @@ enum MenuBarItemImage {
     NSColor.clear.setFill()
     NSRect(origin: .zero, size: size).fill()
 
-    if let mark {
-      mark.image.draw(
-        in: mark.frame,
-        from: .zero,
-        operation: .sourceOver,
-        fraction: 1,
-        respectFlipped: true,
-        hints: [.interpolation: NSImageInterpolation.high]
-      )
-    }
-    if let text, let cgContext = context?.cgContext {
-      // The digits stand on the baseline and reach a cap height up, so putting their middle on
-      // the item's middle is what centering a number means. A line box would center the room it
-      // reserves for descenders no digit uses instead.
-      cgContext.textPosition = CGPoint(
-        x: (mark?.inkWidth ?? 0) + spacing,
-        y: (height - textFont.capHeight) / 2
-      )
-      CTLineDraw(text.line, cgContext)
+    var x: CGFloat = 0
+    for (index, cell) in prepared.enumerated() {
+      if index > 0 { x += cellSpacing }
+      if let mark = cell.mark {
+        var frame = mark.frame
+        frame.origin.x += x
+        mark.image.draw(
+          in: frame,
+          from: .zero,
+          operation: .sourceOver,
+          fraction: 1,
+          respectFlipped: true,
+          hints: [.interpolation: NSImageInterpolation.high]
+        )
+      }
+      if let text = cell.text, let cgContext = context?.cgContext {
+        // The digits stand on the baseline and reach a cap height up, so putting their middle
+        // on the item's middle is what centering a number means. A line box would center the
+        // room it reserves for descenders no digit uses instead.
+        let textX =
+          x + (cell.mark?.inkWidth ?? 0) + (cell.mark != nil && cell.text != nil ? markSpacing : 0)
+        cgContext.textPosition = CGPoint(
+          x: textX,
+          y: (height - textFont.capHeight) / 2
+        )
+        CTLineDraw(text.line, cgContext)
+      }
+      x += cell.width
     }
     NSGraphicsContext.restoreGraphicsState()
 

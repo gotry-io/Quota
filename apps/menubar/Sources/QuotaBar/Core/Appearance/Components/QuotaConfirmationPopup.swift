@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// App-owned confirmation surface for actions that cannot use a system alert in MenuBarExtra.
+/// App-owned confirmation surface for actions that cannot use a system alert in the menu panel.
 struct QuotaConfirmationPopup: View {
   let title: String
   let message: String

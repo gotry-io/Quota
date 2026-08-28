@@ -23,6 +23,12 @@ and revocation is one family update. Ending a session is not a scope: holding it
 the proof, which is what `POST /oauth/v2/revoke` asks for, so `session:revoke:self` and the
 `POST /api/v2/device/logout` route that never had a caller are both deleted.
 
+QuotaBar's local session row has an epoch beside the JSON payload. That epoch is the compare-and-swap
+identity for the token family on this Mac: it advances when login installs a session, when a refresh
+rotates the family, or when logout clears the row. Bookkeeping such as `last_refreshed_at` updates
+the payload in place and leaves the epoch alone. A local miss against that epoch is not a Relay
+rejection; it does not sign the device out.
+
 **QuotaCLI is retired, and the OAuth Device Authorization Grant with it.** `apps/cli`, its release
 workflow, the Linux CI tier, and the root scripts and hook branch feeding them are deleted. Nothing
 else used `POST /oauth/v2/device/code`, `POST /oauth/v2/device/authorize`, the device-code branch of

@@ -92,8 +92,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
-  answers with a static no-store page that drops the query from history. It is the only grant a
-  collection client has: there is no headless or second-screen flow to authorize.
+  answers with a static no-store page that drops the query from history. The service owns PKCE, the
+  listener, and the exchange; QuotaBar opens the URL
+  ([ADR 0025](decisions/0025-one-session-system.md)). It is the only grant a collection client has:
+  there is no headless or second-screen flow to authorize.
 - The `quota-ios` client's authority is scoped by
   [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
   [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in

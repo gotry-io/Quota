@@ -10,9 +10,10 @@
 //!
 //! A provider supplies a [`RenewalPlan`] and nothing else: which program, which arguments,
 //! which of this device's variables the child inherits, whether the sign-in is expiring,
-//! whether it is usable, and how to talk to the child. Everything around that — resolving the
-//! binary, the private empty working directory, the minimal environment, the one bounded
-//! spawn, the hourly floor, and the verdict — is here, once.
+//! whether it is usable, a fingerprint of the credential, and how to talk to the child.
+//! Everything around that — resolving the binary, the private empty working directory, the
+//! minimal environment, the one bounded spawn, the hourly floor, and the verdict — is here,
+//! once.
 //!
 //! What no plan may do: submit a refresh token, write a provider's credential, or ask for an
 //! authentication method that waits for a person. Only the CLI that owns a token may spend it,
@@ -91,6 +92,10 @@ pub struct RenewalPlan<'a> {
     pub expiring: &'a dyn Fn(&CollectionContext) -> bool,
     /// Whether the credential now holds a token this refresh can use.
     pub usable: &'a dyn Fn(&CollectionContext) -> bool,
+    /// A fingerprint of the credential as it stands. Captured before the spawn and compared
+    /// afterwards so a forced run on a grant that still looks in date is `Renewed` only when
+    /// the CLI actually rewrote it.
+    pub identity: &'a dyn Fn(&CollectionContext) -> Option<String>,
     /// Whether the CLI rewrites the Keychain entry this refresh memoized. Only Claude Code's
     /// does; a provider whose credential is a file on disk is read fresh either way, and
     /// dropping the memo for it would buy a second `/usr/bin/security` for nothing.
@@ -111,12 +116,19 @@ pub fn within_renewal_floor(attempted: Option<&RenewalAttempt>, now: i64) -> boo
     })
 }
 
-/// Renews an expiring sign-in through the CLI that owns it, at most once an hour.
+/// Renews an expiring sign-in through the CLI that owns it, at most once an hour on the
+/// scheduled path.
 ///
 /// Returns the attempt to persist, and `None` when no attempt was made — a sign-in with time
 /// left, nothing to renew from, no such CLI on this Mac, a cancelled refresh, or an attempt
 /// already made this hour. Those are not failures to record: nothing was started, so nothing
-/// needs rate-limiting.
+/// needs rate-limiting. A Recheck or a manual refresh skips that hour; the spawn is still
+/// recorded, and the next scheduled refresh waits the hour.
+///
+/// `force` is the other gate: an official collection that came back `auth_required` even
+/// though the credential on disk still looks in date. The local clock is not the account.
+/// A forced run still will not start a CLI when this Mac holds nothing that CLI could
+/// renew — no grant, or a grant that is neither expiring nor usable.
 ///
 /// Takes the context by `&mut` so a plan that says its CLI rewrites the Keychain can forget
 /// this refresh's one Keychain read. That memo is the only one; every renewal runs before any
@@ -130,8 +142,18 @@ pub fn renew_sign_in(
     environment: &ProbeEnvironment,
     attempted: Option<&RenewalAttempt>,
     now: i64,
+    force: bool,
 ) -> Option<RenewalAttempt> {
-    if context.cancelled() || !(plan.expiring)(context) {
+    if context.cancelled() {
+        return None;
+    }
+    let expiring = (plan.expiring)(context);
+    if !force && !expiring {
+        return None;
+    }
+    // Forced by a rejected reading, but this Mac has no grant the CLI could spend: a PAT-only
+    // Codex, a signed-out Claude Code with no Keychain item, a Grok file that is gone.
+    if force && !expiring && !(plan.usable)(context) {
         return None;
     }
     // A Mac without the CLI has nothing to ask, and reports the sign-in it has.
@@ -139,22 +161,30 @@ pub fn renew_sign_in(
     if within_renewal_floor(attempted, now) {
         return None;
     }
+    let before = (plan.identity)(context);
     renew(plan, &binary, context, environment);
     if plan.rewrites_keychain {
         context.forget_keychain();
     }
     // The CLI's exit status is not the answer; the credential is. A build that leaves non-zero
     // after rewriting the token has still renewed it, and one that leaves cleanly without
-    // touching it has not.
-    Some(RenewalAttempt {
-        attempted_at: now,
-        outcome: if (plan.usable)(context) {
-            RenewalOutcome::Renewed
-        } else if (plan.expiring)(context) {
+    // touching it has not. A forced run on a grant that still looks in date is `Renewed` only
+    // when that fingerprint moved: Claude Code's `mcp list` makes no API call for one, and
+    // recording a renewal that never happened would hide a token the server already rejected.
+    let outcome = if (plan.usable)(context) {
+        if force && !expiring && (plan.identity)(context) == before {
             RenewalOutcome::Failed
         } else {
-            RenewalOutcome::SignedOut
-        },
+            RenewalOutcome::Renewed
+        }
+    } else if (plan.expiring)(context) {
+        RenewalOutcome::Failed
+    } else {
+        RenewalOutcome::SignedOut
+    };
+    Some(RenewalAttempt {
+        attempted_at: now,
+        outcome,
     })
 }
 
