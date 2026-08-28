@@ -11,25 +11,26 @@ struct MenuBarContentView: View {
   @State private var isLogoutConfirmationPresented = false
   @State private var usageSource: UsageSource = .account
   @State private var usagePeriod: UsagePeriod = .today
-  @State private var support = SupportPageModel()
+  @State private var diagnostics = DiagnosticsPageModel()
+  @State private var isResetConfirmationPresented = false
   private let performsInitialRefresh: Bool
-  private let performsSupportCheckOnEntry: Bool
+  private let performsDiagnosticsCheckOnEntry: Bool
   private let seedsLaunchAtLogin: Bool
 
   init(
     model: MenuBarViewModel,
     initialPath: [MenuBarRoute] = [],
     performsInitialRefresh: Bool = true,
-    performsSupportCheckOnEntry: Bool = true,
-    supportModel: SupportPageModel? = nil,
+    performsDiagnosticsCheckOnEntry: Bool = true,
+    diagnosticsModel: DiagnosticsPageModel? = nil,
     seedsLaunchAtLogin: Bool = true
   ) {
     self.model = model
     self.performsInitialRefresh = performsInitialRefresh
-    self.performsSupportCheckOnEntry = performsSupportCheckOnEntry
+    self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
-    _support = State(initialValue: supportModel ?? SupportPageModel())
+    _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
   }
 
   var body: some View {
@@ -80,15 +81,15 @@ struct MenuBarContentView: View {
           isLogoutConfirmationPresented = false
           Task { await model.logout() }
         }
-      } else if support.isResetConfirmationPresented {
+      } else if isResetConfirmationPresented {
         QuotaConfirmationPopup(
           title: ResetLocalDataCopy.title,
           message: ResetLocalDataCopy.message,
           confirmTitle: ResetLocalDataCopy.confirmTitle,
-          onCancel: { support.isResetConfirmationPresented = false }
+          onCancel: { isResetConfirmationPresented = false }
         ) {
-          support.isResetConfirmationPresented = false
-          Task { await resetLocalData() }
+          isResetConfirmationPresented = false
+          Task { await model.resetLocalData() }
         }
       } else if let popup = model.browserSessionPopup {
         providerBrowserSessionPopup(popup)
@@ -100,7 +101,7 @@ struct MenuBarContentView: View {
   /// under it takes neither pointer nor VoiceOver.
   private var isPopupPresented: Bool {
     isLogoutConfirmationPresented
-      || support.isResetConfirmationPresented
+      || isResetConfirmationPresented
       || model.browserSessionPopup != nil
   }
 
@@ -182,11 +183,11 @@ struct MenuBarContentView: View {
     {
       return .usageSource(usageSource) { usageSource = $0 }
     }
-    if navigation.currentRoute == .support, support.showsHeaderActions {
-      return .support(
-        isChecking: support.isLoading,
-        canRecheck: support.canRecheck,
-        onRecheck: { Task { await runSupportCheck() } }
+    if navigation.currentRoute == .diagnostics, diagnostics.showsHeaderActions {
+      return .diagnostics(
+        isChecking: diagnostics.isLoading,
+        canRecheck: diagnostics.canRecheck,
+        onRecheck: { Task { await runDiagnosticsCheck() } }
       )
     }
     if !navigation.canNavigateBack { return .openSettings(openSettings) }
@@ -244,13 +245,18 @@ struct MenuBarContentView: View {
       )
     case .support:
       SettingsSupportView(
-        state: support.pageState,
-        model: support,
-        onRetry: { Task { await runSupportCheck() } }
+        onOpenDiagnostics: { navigate(to: .diagnostics) },
+        onRequestResetLocalData: { isResetConfirmationPresented = true }
+      )
+    case .diagnostics:
+      SettingsDiagnosticsView(
+        state: diagnostics.pageState,
+        model: diagnostics,
+        onRetry: { Task { await runDiagnosticsCheck() } }
       )
       .task {
-        guard performsSupportCheckOnEntry else { return }
-        await runSupportCheck()
+        guard performsDiagnosticsCheckOnEntry else { return }
+        await runDiagnosticsCheck()
       }
     }
   }
@@ -259,21 +265,16 @@ struct MenuBarContentView: View {
     navigate(to: .settings)
   }
 
-  private func runSupportCheck() async {
-    await support.runCheck { try await model.diagnose() }
-  }
-
-  private func resetLocalData() async {
-    await model.resetLocalData()
-    await runSupportCheck()
+  private func runDiagnosticsCheck() async {
+    await diagnostics.runCheck { try await model.diagnose() }
   }
 
   private func navigate(to route: MenuBarRoute) {
     navigationDirection = .forward
     var next = navigation
     next.open(route)
-    if route == .support {
-      support.prepareForEntry()
+    if route == .diagnostics {
+      diagnostics.prepareForEntry()
     }
     applyNavigation(next)
   }
@@ -332,6 +333,7 @@ enum MenuBarRoute: Hashable {
   case menuBarStyle
   case menuBarProvider
   case support
+  case diagnostics
 
   var title: String {
     switch self {
@@ -345,6 +347,7 @@ enum MenuBarRoute: Hashable {
     case .menuBarStyle: "Menu Bar Style"
     case .menuBarProvider: "Menu Bar Provider"
     case .support: "Support"
+    case .diagnostics: "Diagnostics"
     }
   }
 }

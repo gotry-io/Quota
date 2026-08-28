@@ -149,7 +149,7 @@ final class MenuBarViewModel {
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
   private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
   /// A read macOS refused, which is a different state from finding no session: it stands until
-  /// the reader changes a permission, and the Support page carries it too.
+  /// the reader changes a permission, and the Diagnostics page carries it too.
   private(set) var browserSessionAccessDenials: [ProviderID: BrowserAccessDenial] = [:]
   private(set) var browserSessionWaitingProvider: ProviderID?
   private(set) var canCancelBrowserSessionLogin = false
@@ -795,7 +795,7 @@ final class MenuBarViewModel {
     }
   }
 
-  /// Shows the refusal here, and tells the service so the Support page carries it too. A
+  /// Shows the refusal here, and tells the service so the Diagnostics page carries it too. A
   /// permission this Mac was refused is a local fact, and the report is where a person looks
   /// for local facts.
   private func recordBrowserAccessDenial(

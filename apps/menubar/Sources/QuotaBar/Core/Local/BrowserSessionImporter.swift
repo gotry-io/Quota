@@ -45,7 +45,7 @@ enum BrowserSessionReadOutcome: Equatable, Sendable {
   case found([BrowserSessionCookieCandidate])
 }
 
-/// One refused read, in the two facts a reader and the Support page both need.
+/// One refused read, in the two facts a reader and the Diagnostics page both need.
 struct BrowserAccessDenial: Equatable, Sendable {
   let browserName: String
   let reason: BrowserAccessDenialReason

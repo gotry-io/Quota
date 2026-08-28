@@ -18,7 +18,7 @@ never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read f
 session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
 [security baseline](docs/security.md).
 
-The QuotaBar Settings **Support** page renders one service-owned report. It lists the four
+The QuotaBar Settings **Support › Diagnostics** page renders one service-owned report. It lists the four
 user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account — and the
 sources behind them, each with one sentence naming what happened and what to do about it. The
 service writes that sentence; QuotaBar renders it

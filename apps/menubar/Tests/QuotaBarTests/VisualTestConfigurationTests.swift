@@ -46,6 +46,7 @@
       ("menu-bar-style", "Menu Bar Style", 2),
       ("menu-bar-provider", "Menu Bar Provider", 2),
       ("support", "Support", 2),
+      ("diagnostics", "Diagnostics", 3),
     ]
 
     for expectation in routeExpectations {
@@ -219,21 +220,21 @@
   }
 
   @Test @MainActor
-  func supportVisualFixturesCoverLoadingContentStaleAndErrorStates() throws {
+  func diagnosticsVisualFixturesCoverLoadingContentStaleAndErrorStates() throws {
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
 
     let loading = try configuration(fixture: .loading, referenceDate: referenceDate)
-      .makeSupportModel()
+      .makeDiagnosticsModel()
     guard case .loading = loading.pageState else {
-      Issue.record("Expected Support loading fixture.")
+      Issue.record("Expected Diagnostics loading fixture.")
       return
     }
     #expect(!loading.showsHeaderActions)
 
     let content = try configuration(fixture: .content, referenceDate: referenceDate)
-      .makeSupportModel()
+      .makeDiagnosticsModel()
     guard case .report(let contentReport, false, nil) = content.pageState else {
-      Issue.record("Expected Support content fixture.")
+      Issue.record("Expected Diagnostics content fixture.")
       return
     }
     #expect(contentReport.summary.operation == .healthy)
@@ -241,17 +242,17 @@
     #expect(content.showsHeaderActions)
 
     let stale = try configuration(fixture: .cachedRefreshError, referenceDate: referenceDate)
-      .makeSupportModel()
+      .makeDiagnosticsModel()
     guard case .report(_, false, let warning?) = stale.pageState else {
-      Issue.record("Expected Support stale-content fixture.")
+      Issue.record("Expected Diagnostics stale-content fixture.")
       return
     }
     #expect(warning.contains("Showing the last report"))
 
     let unavailable = try configuration(fixture: .unavailable, referenceDate: referenceDate)
-      .makeSupportModel()
+      .makeDiagnosticsModel()
     guard case .error(let message) = unavailable.pageState else {
-      Issue.record("Expected Support unavailable fixture.")
+      Issue.record("Expected Diagnostics unavailable fixture.")
       return
     }
     #expect(message.contains("local service"))

@@ -72,7 +72,7 @@ syncs after QuotaBar exits and a second client takes the owner lock only after t
 The private `diagnose` operation is the single local diagnostic boundary. Its `schema_version: 3`
 report evaluates the fixed Quota Overview, This Device Usage, Account Usage, and Account surfaces,
 then lists the sources behind them, each with one sentence the service writes. QuotaBar renders it
-on the Support page; it reads no SQLite or source logs there and maps no code to copy of its own.
+on the Diagnostics page; it reads no SQLite or source logs there and maps no code to copy of its own.
 Diagnostics never evaluate a refresh in flight: the cache holds one completed report, replaced only
 after quota, Usage, Account, pricing, Overview, and sync state have been applied, so `generated_at`
 tells a caller whether a newer evaluation exists, and Recheck joins the single-flight refresh and

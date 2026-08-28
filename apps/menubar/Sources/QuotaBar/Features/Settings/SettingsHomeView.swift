@@ -204,30 +204,4 @@ struct SettingsHomeView: View {
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint(accessibilityHint)
   }
-
-  private func settingsDestinationRow(
-    title: String,
-    systemImage: String,
-    trailing: String = "",
-    accessibilityLabel: String,
-    action: @escaping () -> Void
-  ) -> some View {
-    Button(action: action) {
-      SettingsListRow(title: title, systemImage: systemImage) {
-        HStack(spacing: QuotaDesign.Spacing.xxs) {
-          if !trailing.isEmpty {
-            Text(trailing)
-              .quotaListSecondaryStyle()
-              .lineLimit(1)
-          }
-          Image(systemName: "chevron.right")
-            .quotaChevronStyle()
-        }
-      }
-    }
-    .buttonStyle(QuotaListRowButtonStyle())
-    .accessibilityLabel(accessibilityLabel)
-    .accessibilityHint(trailing)
-  }
-
 }

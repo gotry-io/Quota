@@ -71,6 +71,7 @@
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
     case support
+    case diagnostics
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -86,6 +87,7 @@
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
       case .support: [.settings, .support]
+      case .diagnostics: [.settings, .support, .diagnostics]
       }
     }
   }
@@ -180,24 +182,24 @@
     }
 
     @MainActor
-    func makeSupportModel() -> SupportPageModel {
-      guard dataSource == .fixture else { return SupportPageModel() }
+    func makeDiagnosticsModel() -> DiagnosticsPageModel {
+      guard dataSource == .fixture else { return DiagnosticsPageModel() }
       switch fixture {
       case .loading:
-        return SupportPageModel(isLoading: true)
+        return DiagnosticsPageModel(isLoading: true)
       case .content:
-        return SupportPageModel(report: supportVisualReport(at: referenceDate))
+        return DiagnosticsPageModel(report: diagnosticsVisualReport(at: referenceDate))
       case .cachedRefreshError:
-        return SupportPageModel(
-          report: supportVisualReport(at: referenceDate),
+        return DiagnosticsPageModel(
+          report: diagnosticsVisualReport(at: referenceDate),
           errorMessage: "The latest check failed. Showing the last report."
         )
       case .empty:
-        return SupportPageModel(report: signedOutSupportVisualReport(at: referenceDate))
+        return DiagnosticsPageModel(report: signedOutDiagnosticsVisualReport(at: referenceDate))
       case .unavailable:
-        return SupportPageModel(errorMessage: "The bundled local service could not be started.")
+        return DiagnosticsPageModel(errorMessage: "The bundled local service could not be started.")
       case .cacheRebuilding:
-        return SupportPageModel(report: supportVisualReport(at: referenceDate))
+        return DiagnosticsPageModel(report: diagnosticsVisualReport(at: referenceDate))
       }
     }
 
@@ -244,7 +246,7 @@
     )
   }
 
-  private func supportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+  private func diagnosticsVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
     LocalServiceDiagnosticReport(
       generatedAt: date,
       client: LocalServiceDiagnosticClient(name: "QuotaBar", version: "Visual QA"),
@@ -280,8 +282,8 @@
     )
   }
 
-  private func signedOutSupportVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
-    let report = supportVisualReport(at: date)
+  private func signedOutDiagnosticsVisualReport(at date: Date) -> LocalServiceDiagnosticReport {
+    let report = diagnosticsVisualReport(at: date)
     return LocalServiceDiagnosticReport(
       generatedAt: report.generatedAt,
       client: report.client,
