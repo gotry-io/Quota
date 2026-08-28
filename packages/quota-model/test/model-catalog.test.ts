@@ -32,25 +32,15 @@ describe("report-time model catalog", () => {
     ).toBeUndefined();
   });
 
-  it("names a model's vendor from its name, and from its channel only when no family claims it", () => {
-    expect(resolveProvider(MODEL_CATALOG, { ...row("grok-4.5"), billing_channel: "unknown" })).toBe(
-      "xai",
-    );
-    expect(
-      resolveProvider(MODEL_CATALOG, { ...row("Claude-Opus-5"), billing_channel: "openrouter" }),
-    ).toBe("anthropic");
+  it("names a model's vendor from its name alone; the channel is not an input", () => {
+    expect(resolveProvider(MODEL_CATALOG, row("grok-4.5"))).toBe("xai");
+    expect(resolveProvider(MODEL_CATALOG, row("Claude-Opus-5"))).toBe("anthropic");
     expect(resolveProvider(MODEL_CATALOG, row("k2p5"))).toBe("moonshot");
     expect(resolveProvider(MODEL_CATALOG, row("gemini-3-pro"))).toBe("google");
-    expect(
-      resolveProvider(MODEL_CATALOG, { ...row("composer-1.5"), billing_channel: "unknown" }),
-    ).toBe("cursor");
-    expect(resolveProvider(MODEL_CATALOG, row("big-pickle"))).toBe("openai");
-    expect(
-      resolveProvider(MODEL_CATALOG, { ...row("big-pickle"), billing_channel: "azure_openai" }),
-    ).toBe("openai");
-    expect(
-      resolveProvider(MODEL_CATALOG, { ...row("big-pickle"), billing_channel: "openrouter" }),
-    ).toBe("unknown");
+    expect(resolveProvider(MODEL_CATALOG, row("composer-1.5"))).toBe("cursor");
+    // An endpoint alias names no vendor, whichever provider id reached it.
+    expect(resolveProvider(MODEL_CATALOG, row("ep-20260811103923-jzct4"))).toBe("unknown");
+    expect(resolveProvider(MODEL_CATALOG, row("big-pickle"))).toBe("unknown");
   });
 
   it("takes the longest family and rejects a duplicate or misspelt one", () => {

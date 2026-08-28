@@ -186,25 +186,6 @@ impl InferenceProvider {
     }
 }
 
-impl BillingChannel {
-    /// The vendor this channel belongs to, for a model name no family claims.
-    ///
-    /// A vendor's own endpoint says who made the model; a gateway or an unknown channel says
-    /// nothing about that.
-    pub fn fallback_provider(self) -> InferenceProvider {
-        match self {
-            Self::OpenaiDirect | Self::AzureOpenai => InferenceProvider::Openai,
-            Self::AnthropicDirect => InferenceProvider::Anthropic,
-            Self::XaiDirect => InferenceProvider::Xai,
-            Self::MoonshotDirect => InferenceProvider::Moonshot,
-            Self::DeepseekDirect => InferenceProvider::Deepseek,
-            Self::AwsBedrock | Self::GoogleVertex | Self::Openrouter | Self::Unknown => {
-                InferenceProvider::Unknown
-            }
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, Serialize, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelSource {
