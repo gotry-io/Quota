@@ -37,12 +37,15 @@ enum ConfigBaseUrl {
     Value(String),
 }
 
+/// The writer stores an absent base URL as JSON `null`, so `null` reads as missing rather than
+/// failing the file — which is every saved key, since Settings never asks for a base URL.
 impl<'de> Deserialize<'de> for ConfigBaseUrl {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        String::deserialize(deserializer).map(Self::Value)
+        Option::<String>::deserialize(deserializer)
+            .map(|value| value.map_or(Self::Missing, Self::Value))
     }
 }
 
@@ -271,6 +274,22 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
+    /// Settings saves a key with `"base_url": null`. That is the file every saved key lives in,
+    /// and it must read as the key with the provider's fixed URL, not as no key at all.
+    #[test]
+    fn a_saved_key_with_a_null_base_url_is_the_key() {
+        let path = temp_path("config/providers-null-base.json");
+        write_config(
+            &path,
+            r#"{"schema_version":1,"providers":{"deepseek":{"api_key":"sk-saved","base_url":null}}}"#,
+        );
+        let context = context_with_config(path.clone(), &[]);
+        let credentials = resolve_api_key(&context, ProviderId::DeepSeek, "test_source").unwrap();
+        assert_eq!(credentials.api_key, "sk-saved");
+        assert_eq!(credentials.source, "config:deepseek");
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn base_url_environment_is_not_used_as_an_api_key() {
         let path = temp_path("config/providers.json");
@@ -294,9 +313,12 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
+    /// An empty saved base URL is not a URL, so that entry is refused and the environment
+    /// answers. A `null` one is the writer's spelling of "none": the saved key stands, with the
+    /// URL the environment or the provider supplies.
     #[test]
-    fn rejects_empty_or_null_saved_base_urls_instead_of_using_them() {
-        for base_url in ["\"\"", "null"] {
+    fn an_empty_saved_base_url_is_refused_and_a_null_one_means_none() {
+        for (base_url, expected_key) in [("\"\"", "sk-env"), ("null", "sk-config")] {
             let path = temp_path("config/providers.json");
             write_config(
                 &path,
@@ -313,7 +335,8 @@ mod tests {
             );
             let credentials =
                 resolve_api_key(&context, ProviderId::LiteLlm, "test_source").unwrap();
-            assert_eq!(credentials.api_key, "sk-env");
+            assert_eq!(credentials.api_key, expected_key, "base_url {base_url}");
+            assert_eq!(credentials.base_url, "https://proxy.example.test");
             let _ = fs::remove_file(path);
         }
     }
