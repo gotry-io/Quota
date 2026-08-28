@@ -23,15 +23,15 @@ struct FooterFreshnessTests {
   }
 }
 
-struct SupportHeaderActionTests {
+struct DiagnosticsHeaderActionTests {
   @Test
   func copyAccessibilityLabels() {
-    #expect(SupportHeaderAction.copyAccessibilityLabel(didCopy: false) == "Copy report")
-    #expect(SupportHeaderAction.copyAccessibilityLabel(didCopy: true) == "Report copied")
-    #expect(SupportHeaderAction.recheckLabel == "Recheck")
-    #expect(SupportHeaderAction.recheckAccessibilityLabel(isChecking: false) == "Recheck")
-    #expect(SupportHeaderAction.recheckAccessibilityLabel(isChecking: true) == "Checking")
-    #expect(SupportHeaderAction.copyFeedbackDuration == .seconds(2))
+    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: false) == "Copy report")
+    #expect(DiagnosticsHeaderAction.copyAccessibilityLabel(didCopy: true) == "Report copied")
+    #expect(DiagnosticsHeaderAction.recheckLabel == "Recheck")
+    #expect(DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: false) == "Recheck")
+    #expect(DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: true) == "Checking")
+    #expect(DiagnosticsHeaderAction.copyFeedbackDuration == .seconds(2))
   }
 }
 

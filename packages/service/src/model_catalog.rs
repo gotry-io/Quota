@@ -1,7 +1,8 @@
 //! Report-time model identity normalization.
 //!
 //! Model catalog data is never applied to Usage facts or pricing inputs.  It only supplies a
-//! deterministic canonical key while a report is built from the retained raw model text.
+//! deterministic canonical key, and the vendor a model name belongs to, while a report is built
+//! from the retained raw model text.
 
 use std::collections::BTreeSet;
 
@@ -14,6 +15,16 @@ use crate::usage::{InferenceProvider, UsageAgent, UsageRow};
 pub const MAX_MODEL_CATALOG_MODELS: usize = 512;
 pub const MAX_MODEL_CATALOG_ALIASES_PER_MODEL: usize = 32;
 pub const MAX_MODEL_CATALOG_ALIASES: usize = 4_096;
+pub const MAX_MODEL_CATALOG_FAMILIES: usize = 256;
+pub const MAX_MODEL_CATALOG_FAMILY_PREFIX_LENGTH: usize = 64;
+
+/// A model family: every reported model whose name begins with `prefix`, compared ASCII
+/// case-insensitively, belongs to `provider`. The longest matching prefix decides.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelCatalogFamily {
+    pub prefix: String,
+    pub provider: InferenceProvider,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelCatalogAlias {
@@ -37,7 +48,17 @@ pub struct ModelCatalogModel {
 pub struct ModelCatalog {
     pub schema_version: u8,
     pub revision: String,
+    /// Absent from catalogs published before families existed; those name no vendor.
+    #[serde(default)]
+    pub families: Vec<ModelCatalogFamily>,
     pub models: Vec<ModelCatalogModel>,
+}
+
+/// The catalog this build shipped with, for a device that has not yet read a newer one from
+/// Relay — a first launch, or a Mac that is offline — so vendor grouping does not wait on it.
+pub fn bundled_model_catalog() -> ModelCatalog {
+    serde_json::from_str(include_str!("../../protocol/catalog/model-catalog.json"))
+        .expect("the checked-in model catalog parses")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +109,30 @@ pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationR
     }
     if catalog.models.is_empty() || catalog.models.len() > MAX_MODEL_CATALOG_MODELS {
         issues.push(invalid("models", "invalid model catalog model count"));
+    }
+    if catalog.families.len() > MAX_MODEL_CATALOG_FAMILIES {
+        issues.push(invalid("families", "too many model catalog families"));
+    }
+    let mut prefixes = BTreeSet::new();
+    for (index, family) in catalog.families.iter().enumerate() {
+        if !family_prefix(&family.prefix) {
+            issues.push(invalid(
+                &format!("families[{index}].prefix"),
+                "invalid family prefix",
+            ));
+        }
+        if family.provider == InferenceProvider::Unknown {
+            issues.push(invalid(
+                &format!("families[{index}].provider"),
+                "a family names a vendor",
+            ));
+        }
+        if !prefixes.insert(family.prefix.clone()) {
+            issues.push(invalid(
+                &format!("families[{index}].prefix"),
+                "duplicate family prefix",
+            ));
+        }
     }
     let mut ids = BTreeSet::new();
     let mut alias_count = 0usize;
@@ -151,6 +196,24 @@ pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationR
     }
 }
 
+/// The company whose model answered this row.
+///
+/// The model's name decides, through the catalog's family rules: the longest prefix that
+/// matches, ASCII case-insensitively, names the provider. A name no family claims — or any name
+/// when there is no catalog — falls back to the vendor the billing channel belongs to.
+pub fn resolve_provider(catalog: Option<&ModelCatalog>, row: &UsageRow) -> InferenceProvider {
+    let model = row.model.to_ascii_lowercase();
+    catalog
+        .into_iter()
+        .flat_map(|catalog| catalog.families.iter())
+        .filter(|family| model.starts_with(family.prefix.as_str()))
+        .max_by_key(|family| family.prefix.len())
+        .map_or_else(
+            || row.billing_channel.fallback_provider(),
+            |family| family.provider,
+        )
+}
+
 /// The canonical model this row reports, as of the day it was measured.
 ///
 /// An alias carries an effective range, so the day the row fell in is what decides which
@@ -163,13 +226,14 @@ pub fn resolve_model(catalog: &ModelCatalog, row: &UsageRow, date: &str) -> Opti
     {
         return Some(model.canonical_id.clone());
     }
+    let provider = resolve_provider(Some(catalog), row);
     let matches = catalog
         .models
         .iter()
         .filter(|model| {
             model.aliases.iter().any(|alias| {
                 alias.reported_model == row.model
-                    && alias.provider == row.billing_channel.into()
+                    && alias.provider == provider
                     && alias.agent.is_none_or(|agent| agent == row.agent)
                     && alias
                         .effective_from
@@ -256,6 +320,21 @@ fn model_text(value: &str) -> bool {
     !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
 }
 
+/// Lowercase ASCII model text, so one spelling of a family exists and a match is exact.
+fn family_prefix(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    value.len() <= MAX_MODEL_CATALOG_FAMILY_PREFIX_LENGTH
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || "._-".contains(character)
+        })
+}
+
 fn invalid(path: &str, message: &str) -> ModelCatalogValidationIssue {
     ModelCatalogValidationIssue::InvalidSchema {
         path: path.to_owned(),
@@ -272,6 +351,12 @@ mod tests {
         serde_json::from_value(json!({
             "schema_version": 2,
             "revision": "test-1",
+            "families": [
+                {"prefix": "g", "provider": "google"},
+                {"prefix": "gpt-", "provider": "openai"},
+                {"prefix": "grok", "provider": "xai"},
+                {"prefix": "claude", "provider": "anthropic"}
+            ],
             "models": [{
                 "canonical_id": "gpt-5.5",
                 "aliases": [{
@@ -294,14 +379,93 @@ mod tests {
             resolve_model(&catalog, &alias, DATE).as_deref(),
             Some("gpt-5.5")
         );
+        // The alias is scoped to OpenAI, and the name says OpenAI whoever billed it.
         alias.billing_channel = crate::usage::BillingChannel::Openrouter;
+        assert_eq!(
+            resolve_model(&catalog, &alias, DATE).as_deref(),
+            Some("gpt-5.5")
+        );
+        alias.agent = UsageAgent::ClaudeCode;
         assert_eq!(resolve_model(&catalog, &alias, DATE), None);
+        alias.agent = UsageAgent::Codex;
         alias.model = "gpt-5.5".into();
         assert_eq!(
             resolve_model(&catalog, &alias, DATE).as_deref(),
             Some("gpt-5.5")
         );
         assert_eq!(alias.model, "gpt-5.5");
+    }
+
+    /// The name decides the vendor; the agent and the channel do not. A name no family
+    /// claims is the vendor's own when its channel is a vendor's, and unknown when the channel
+    /// is a gateway or unknown.
+    #[test]
+    fn a_models_name_decides_its_vendor_and_the_channel_only_fills_in_for_an_unclaimed_name() {
+        use crate::usage::BillingChannel;
+        let catalog = catalog();
+
+        let mut grok = row("grok-4.5");
+        grok.agent = UsageAgent::ClaudeCode;
+        grok.billing_channel = BillingChannel::Unknown;
+        assert_eq!(
+            resolve_provider(Some(&catalog), &grok),
+            InferenceProvider::Xai
+        );
+
+        let mut via_gateway = row("Claude-Opus-5");
+        via_gateway.billing_channel = BillingChannel::Openrouter;
+        assert_eq!(
+            resolve_provider(Some(&catalog), &via_gateway),
+            InferenceProvider::Anthropic
+        );
+
+        // The longest family wins: `gpt-` is OpenAI even though `g` alone would be Google here.
+        assert_eq!(
+            resolve_provider(Some(&catalog), &row("GPT-5.5[1m]")),
+            InferenceProvider::Openai
+        );
+
+        let mut unclaimed = row("big-pickle");
+        assert_eq!(
+            resolve_provider(Some(&catalog), &unclaimed),
+            InferenceProvider::Openai
+        );
+        unclaimed.billing_channel = BillingChannel::AzureOpenai;
+        assert_eq!(
+            resolve_provider(Some(&catalog), &unclaimed),
+            InferenceProvider::Openai
+        );
+        unclaimed.billing_channel = BillingChannel::Openrouter;
+        assert_eq!(
+            resolve_provider(Some(&catalog), &unclaimed),
+            InferenceProvider::Unknown
+        );
+        assert_eq!(
+            resolve_provider(None, &grok),
+            InferenceProvider::Unknown,
+            "without a catalog only the channel speaks"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_or_misspelt_families() {
+        let mut value = serde_json::to_value(catalog()).expect("json");
+        value["families"] = json!([
+            {"prefix": "grok", "provider": "xai"},
+            {"prefix": "grok", "provider": "xai"},
+            {"prefix": "GPT-", "provider": "openai"},
+            {"prefix": "mystery", "provider": "unknown"}
+        ]);
+        let result = validate_model_catalog_value(&value);
+        assert!(!result.valid);
+        assert_eq!(result.issues.len(), 3, "{:?}", result.issues);
+    }
+
+    #[test]
+    fn the_bundled_catalog_is_the_checked_in_one() {
+        let bundled = bundled_model_catalog();
+        assert!(validate_model_catalog(&bundled).valid);
+        assert!(!bundled.families.is_empty());
     }
 
     #[test]

@@ -9,13 +9,16 @@ export function signInHref(returnTo: string = DASHBOARD_PATH): string {
     : `${SIGN_IN_PATH}?return_to=${encodeURIComponent(returnTo)}`;
 }
 
+/**
+ * The same table QuotaBar's `PlanDisplay` carries, keyed with every separator dropped: plan
+ * slugs arrive as `supergrok_heavy`, `super-grok`, or `pro lite`, and one entry per spelling is
+ * the table drifting one spelling at a time.
+ */
 const KNOWN_PLANS: Readonly<Record<string, string>> = {
   free: "Free",
   plus: "Plus",
   pro: "Pro",
   prolite: "Pro Lite",
-  pro_lite: "Pro Lite",
-  "pro-lite": "Pro Lite",
   max: "Max",
   team: "Team",
   business: "Business",
@@ -23,15 +26,14 @@ const KNOWN_PLANS: Readonly<Record<string, string>> = {
   edu: "Edu",
   education: "Education",
   supergrok: "SuperGrok",
-  super_grok: "SuperGrok",
-  "super-grok": "SuperGrok",
+  supergrokheavy: "SuperGrok Heavy",
   super: "Super",
 };
 
 export function planDisplayName(raw: string | undefined): string | undefined {
   const value = raw?.trim();
   if (!value) return undefined;
-  const known = KNOWN_PLANS[value.toLowerCase().replaceAll(" ", "")];
+  const known = KNOWN_PLANS[value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")];
   if (known) return known;
   if (/[A-Z\s]/.test(value)) return value;
   return value

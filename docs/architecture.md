@@ -72,7 +72,7 @@ syncs after QuotaBar exits and a second client takes the owner lock only after t
 The private `diagnose` operation is the single local diagnostic boundary. Its `schema_version: 3`
 report evaluates the fixed Quota Overview, This Device Usage, Account Usage, and Account surfaces,
 then lists the sources behind them, each with one sentence the service writes. QuotaBar renders it
-on the Support page; it reads no SQLite or source logs there and maps no code to copy of its own.
+on the Diagnostics page; it reads no SQLite or source logs there and maps no code to copy of its own.
 Diagnostics never evaluate a refresh in flight: the cache holds one completed report, replaced only
 after quota, Usage, Account, pricing, Overview, and sync state have been applied, so `generated_at`
 tells a caller whether a newer evaluation exists, and Recheck joins the single-flight refresh and
@@ -153,7 +153,11 @@ The hour is the unit ([ADR 0024](decisions/0024-hour-versioned-usage-and-daily-r
 recomputes only the UTC hours whose records moved, folding each from the records this device retains,
 and leaves an hour whose facts came out the same untouched. Each recomputed hour carries a monotonic
 scan revision and an upload names whole hours carrying it, so Relay replaces an hour only for a
-strictly newer scan and a retry is a comparison rather than a sequence. A scan that came up short
+strictly newer scan and a retry is a comparison rather than a sequence. The upload identity a device
+stages under is the account, device, generation, Relay's usage sync revision, and the deletion lower
+bound; a change to any of them re-seeds every retained hour, so a device meeting an account for the
+first time sends everything it holds, and Relay can ask for everything again by advancing the
+revision it returns from `/api/v2/device/sync`. A scan that came up short
 marks that hour `partial`, and a read reports a period `partial` when any hour behind it was. An hour
 past 512 distinct rows folds its smallest into `other`, a period's agent tree folds its smallest model
 leaves into `other` past 200, and a bounded read marks truncated unpriced-model detail with
@@ -165,9 +169,10 @@ no version of its own and moves with `ipc_version`. State snapshots separately c
 detail. `total_tokens` is input plus output; cache-read and cache-write tokens are named input
 subsets; reasoning is an output subset; `messages` sums normalized usage-bearing model output facts
 and is not a session count, because sessions are not collected. The Rust report groups facts by the
-agent that emitted the usage, then each model under the inference provider derived from the fact's
-billing channel — agent and model text never choose that provider. QuotaBar renders agent groups only
-on the Usage detail page; Overview stays quota-only.
+agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
+model's name by the model catalog's family rules — the agent and the billing channel never choose
+that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).
+QuotaBar renders agent groups only on the Usage detail page; Overview stays quota-only.
 
 Local periods fold from the hourly facts with SQL at refresh time, so no read loads the record
 history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are bounded by the
@@ -180,12 +185,13 @@ generation continue when Usage upload is disabled: the service neither stages no
 synchronization stay independent.
 
 Report-time model normalization is a separate derived view over
-`packages/protocol/catalog/model-catalog.json`, matched on an exact `reported_model` plus inference
-`provider` alias and never rewriting the raw text a fact was collected with
+`packages/protocol/catalog/model-catalog.json`: the vendor a model name belongs to by explicit family
+prefix, then an exact `reported_model` plus vendor alias, never rewriting the raw text a fact was
+collected with
 ([ADR 0009](decisions/0009-versioned-model-catalog.md)). Account summaries carry
-`usage.agents[].providers[].models[]`, derived by Relay from retained normalized facts so the
-row-level client, billing-channel provider, and model relationship survives across Devices; clients
-never reconstruct ownership from independent breakdowns or model text. Every billing channel Relay
+`usage.agents[].providers[].models[]`, derived by Relay from retained normalized facts with the same
+catalog so the row-level client, vendor, and model relationship survives across Devices; clients
+never reconstruct ownership from independent breakdowns. Every billing channel Relay
 stores is reported as stored — a client that cannot represent one has to update, which is not a
 reason to rewrite facts on the way out. See [provider strategies](provider-collection.md) for the
 provider ids that resolve each channel.

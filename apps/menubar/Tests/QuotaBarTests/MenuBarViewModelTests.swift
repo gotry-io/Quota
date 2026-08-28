@@ -332,8 +332,11 @@ private func settle(
   }
 }
 
+/// Overview answers how much is left. A row another device's reading fills has answered, so
+/// this Mac's own failed collection stays off it; the failure shows only when this Mac's reading
+/// is the one on the row — it says why that reading stopped moving — or when there is none.
 @Test @MainActor
-func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws {
+func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async throws {
   let now = Date(timeIntervalSince1970: 1_786_300_000)
   let snapshot = QuotaSnapshot(
     provider: .codex,
@@ -347,7 +350,7 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     status: .available,
     observedAt: now
   )
-  let source = LocalServiceOverviewSource(
+  let deviceSource = LocalServiceOverviewSource(
     sourceID: "device:other",
     kind: .device,
     deviceID: "other",
@@ -355,7 +358,19 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     observedAt: now,
     isStale: false
   )
-  func state(sources: [QuotaCollectionSource]) -> LocalServiceState {
+  let localSource = LocalServiceOverviewSource(
+    sourceID: "chatgpt_usage_api",
+    kind: .local,
+    deviceID: nil,
+    displayName: "OAuth",
+    observedAt: now.addingTimeInterval(-3_600),
+    isStale: true
+  )
+  func state(
+    reading: [LocalServiceOverviewSource],
+    selected: LocalServiceOverviewSource,
+    sources: [QuotaCollectionSource]
+  ) -> LocalServiceState {
     LocalServiceState(
       ipcVersion: 1,
       revision: 3,
@@ -392,18 +407,24 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
             sourceID: nil
           ),
           snapshot: snapshot,
-          sources: [source],
-          selectedSourceID: source.sourceID,
-          selectedSourceDisplayName: source.displayName,
-          isStale: false
+          sources: reading,
+          selectedSourceID: selected.sourceID,
+          selectedSourceDisplayName: selected.displayName,
+          isStale: selected.isStale
         )
       ],
       cache: .settled
     )
   }
 
-  func codexRow(sources: [QuotaCollectionSource]) async -> ProviderQuotaPresentation? {
-    let model = MenuBarViewModel(client: StubLocalService(state: state(sources: sources)))
+  func codexRow(
+    reading: [LocalServiceOverviewSource],
+    selected: LocalServiceOverviewSource,
+    sources: [QuotaCollectionSource]
+  ) async -> ProviderQuotaPresentation? {
+    let model = MenuBarViewModel(
+      client: StubLocalService(state: state(reading: reading, selected: selected, sources: sources))
+    )
     await model.refreshIfNeeded()
     guard case .content(let providers, _) = model.overviewState(enabledProviders: [.codex]) else {
       Issue.record("Expected quota content")
@@ -411,20 +432,29 @@ func anotherDeviceReadingDoesNotHideThisMacsOwnCollectionFailure() async throws 
     }
     return providers.first
   }
-
-  // This Mac holds a Codex sign-in and could not read it. The MacBook Air's reading fills
-  // the row; it does not mean anything about this Mac.  The status names the rung that
-  // failed, so the reader knows which of Codex's readings to go fix.
-  let tried = await codexRow(sources: [
+  let failedHere = [
     QuotaCollectionSource(
       sourceID: "chatgpt_usage_api", outcome: .unavailable, category: .unavailable)
-  ])
-  #expect(tried?.accounts.count == 1)
-  #expect(tried?.status?.kind == .unavailable)
-  #expect(tried?.status?.title == "OAuth · Unavailable")
+  ]
+
+  // This Mac holds a Codex sign-in and could not read it, and the MacBook Air's reading is the
+  // one on the row. The row has its answer; what went wrong here is the provider page's.
+  let filledByDevice = await codexRow(
+    reading: [localSource, deviceSource], selected: deviceSource, sources: failedHere)
+  #expect(filledByDevice?.accounts.count == 1)
+  #expect(filledByDevice?.status == nil)
+
+  // The same failure with this Mac's own reading on the row: the status names the rung that
+  // failed, so the reader knows why the numbers stopped moving and which reading to go fix.
+  let ownReading = await codexRow(
+    reading: [localSource], selected: localSource, sources: failedHere)
+  #expect(ownReading?.accounts.count == 1)
+  #expect(ownReading?.status?.kind == .unavailable)
+  #expect(ownReading?.status?.title == "OAuth · Unavailable")
 
   // A Mac that never had Codex has nothing to recover, so the account keeps the row quiet.
-  let neverConfigured = await codexRow(sources: [])
+  let neverConfigured = await codexRow(
+    reading: [deviceSource], selected: deviceSource, sources: [])
   #expect(neverConfigured?.accounts.count == 1)
   #expect(neverConfigured?.status == nil)
 }

@@ -1397,75 +1397,6 @@ impl StateStore {
         })
     }
 
-    /// Reserves the per-installation Usage privacy lower bound for an account.  The first account
-    /// may backfill retained history; every later account starts at its login instant.
-    pub fn upload_lower_bound(
-        &self,
-        account_id: &str,
-        login_at: &str,
-    ) -> Result<String, StateError> {
-        let login_at = DateTime::parse_from_rfc3339(login_at)
-            .map_err(|_| StateError::InvalidState)?
-            .to_rfc3339_opts(SecondsFormat::Secs, true);
-        if account_id.is_empty() {
-            return Err(StateError::InvalidState);
-        }
-        self.with_identity_mut(|conn| {
-            let tx = conn.transaction()?;
-            let (installation_id, payload_json): (String, Option<String>) = tx.query_row(
-                "SELECT installation_id, payload_json FROM installation WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            let mut payload = payload_json
-                .map(|value| serde_json::from_str::<Value>(&value))
-                .transpose()?
-                .unwrap_or_else(|| {
-                    serde_json::json!({
-                        "schema_version": 1,
-                        "installation_id": installation_id,
-                        "account_bindings": []
-                    })
-                });
-            let bindings = payload
-                .get_mut("account_bindings")
-                .and_then(Value::as_array_mut)
-                .ok_or(StateError::InvalidState)?;
-            if let Some(existing) = bindings.iter().find(|binding| {
-                binding.get("account_id").and_then(Value::as_str) == Some(account_id)
-            }) {
-                let lower_bound = existing
-                    .get("upload_not_before")
-                    .and_then(Value::as_str)
-                    .ok_or(StateError::InvalidState)?;
-                let lower_bound = DateTime::parse_from_rfc3339(lower_bound)
-                    .map_err(|_| StateError::InvalidState)?
-                    .to_rfc3339_opts(SecondsFormat::AutoSi, true);
-                tx.commit()?;
-                return Ok(lower_bound);
-            }
-            if bindings.len() >= 32 {
-                return Err(StateError::InvalidState);
-            }
-            let lower_bound = if bindings.is_empty() {
-                "1970-01-01T00:00:00Z".to_owned()
-            } else {
-                login_at
-            };
-            bindings.push(serde_json::json!({
-                "account_id": account_id,
-                "upload_not_before": lower_bound,
-            }));
-            tx.execute(
-                "UPDATE installation SET payload_json = ?1 WHERE id = 1",
-                params![serde_json::to_string(&payload)?],
-            )?;
-            tx.commit()?;
-            let _ = self.bump_revision();
-            Ok(lower_bound)
-        })
-    }
-
     pub fn provider_config(&self, provider: &str) -> Result<Option<ProviderSecret>, StateError> {
         let file = read_provider_file(&self.root)?;
         Ok(file.providers.get(provider).cloned())
@@ -2095,12 +2026,14 @@ impl StateStore {
     /// A new account or device generation owes that Account every hour this device still holds
     /// at or after its privacy lower bound, so the dirty set is rebuilt from the stored facts
     /// and the old queue is dropped: requests staged for one identity cannot be replayed under
-    /// another.
+    /// another. Relay's usage sync revision is part of that identity, so Relay can ask a device
+    /// to send everything again by advancing it.
     pub fn ensure_usage_context(
         &self,
         account_id: &str,
         device_id: &str,
         generation: u64,
+        sync_revision: u64,
         lower_bound: &str,
     ) -> Result<u64, StateError> {
         let lower_bound =
@@ -2109,19 +2042,28 @@ impl StateStore {
             return Err(StateError::InvalidState);
         }
         let unchanged = self.with_identity(|conn| {
-            let current: Option<(String, String, i64, String)> = conn
+            let current: Option<(String, String, i64, i64, String)> = conn
                 .query_row(
-                    "SELECT account_id, device_id, generation, lower_bound
+                    "SELECT account_id, device_id, generation, sync_revision, lower_bound
                      FROM usage_upload_context WHERE id = 1",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
                 )
                 .optional()?;
             Ok(current.is_some_and(|current| {
                 current.0 == account_id
                     && current.1 == device_id
                     && current.2 == generation as i64
-                    && current.3 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                    && current.3 == sync_revision as i64
+                    && current.4 == lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
             }))
         })?;
         if unchanged {
@@ -2160,17 +2102,19 @@ impl StateStore {
             tx.execute("DELETE FROM usage_outbox", [])?;
             tx.execute(
                 "INSERT INTO usage_upload_context(
-                id, account_id, device_id, generation, lower_bound
-             ) VALUES (1, ?1, ?2, ?3, ?4)
+                id, account_id, device_id, generation, sync_revision, lower_bound
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
                 device_id = excluded.device_id,
                 generation = excluded.generation,
+                sync_revision = excluded.sync_revision,
                 lower_bound = excluded.lower_bound",
                 params![
                     account_id,
                     device_id,
                     generation,
+                    sync_revision,
                     lower_bound.to_rfc3339_opts(SecondsFormat::AutoSi, true)
                 ],
             )?;
@@ -4459,7 +4403,7 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = StateStore::open(&root).expect("state");
         store
-            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
+            .ensure_usage_context("account_test", "device_test", 1, 0, "2026-08-10T00:00:00Z")
             .expect("context");
         store
             .stage_outbox_entries(
@@ -4483,7 +4427,7 @@ mod tests {
         }
 
         let revision = store
-            .ensure_usage_context("account_test", "device_test", 1, "2026-08-10T00:00:00Z")
+            .ensure_usage_context("account_test", "device_test", 1, 0, "2026-08-10T00:00:00Z")
             .expect("unchanged context");
         assert!(revision > 0);
         let entries = store.outbox_entries().expect("entries");
@@ -4520,7 +4464,7 @@ mod tests {
             )
             .expect("scan");
         store
-            .ensure_usage_context("account_a", "device_a", 1, "2026-08-10T00:00:00Z")
+            .ensure_usage_context("account_a", "device_a", 1, 0, "2026-08-10T00:00:00Z")
             .expect("first identity");
         let dirty = dirty_hours(&store);
         assert_eq!(dirty.len(), 1);
@@ -4535,10 +4479,66 @@ mod tests {
             .expect("stage");
 
         store
-            .ensure_usage_context("account_b", "device_b", 2, "1970-01-01T00:00:00Z")
+            .ensure_usage_context("account_b", "device_b", 2, 0, "1970-01-01T00:00:00Z")
             .expect("second identity");
         assert!(store.outbox_entries().expect("entries").is_empty());
         assert_eq!(dirty_hours(&store).len(), 2);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Relay advancing the device's usage sync revision is the one thing Relay can say that
+    /// means "send it all again": the same account, device, and generation re-seed every
+    /// retained hour, and what was staged under the old revision is dropped.
+    #[test]
+    fn a_relay_sync_revision_advance_reseeds_every_retained_hour() {
+        let root = std::env::temp_dir().join(format!("quota-outbox-revision-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(
+                    vec![
+                        usage_event("2026-08-09T12:15:00Z", 1),
+                        usage_event("2026-08-10T12:15:00Z", 2),
+                    ],
+                    1,
+                ),
+                3,
+            )
+            .expect("scan");
+        store
+            .ensure_usage_context("account_a", "device_a", 1, 0, "1970-01-01T00:00:00Z")
+            .expect("identity");
+        assert_eq!(dirty_hours(&store).len(), 2);
+        store
+            .forget_dirty_usage_hours_before("2026-08-11T00:00:00Z")
+            .expect("drained");
+        assert!(dirty_hours(&store).is_empty());
+        store
+            .stage_outbox_entries(
+                "account_a",
+                "device_a",
+                1,
+                &[outbox_entry("2026-08-10T12:00:00Z", 3)],
+            )
+            .expect("stage");
+
+        store
+            .ensure_usage_context("account_a", "device_a", 1, 1, "1970-01-01T00:00:00Z")
+            .expect("advanced revision");
+        assert!(store.outbox_entries().expect("entries").is_empty());
+        assert_eq!(dirty_hours(&store).len(), 2);
+
+        store
+            .ensure_usage_context("account_a", "device_a", 1, 1, "1970-01-01T00:00:00Z")
+            .expect("same revision");
+        assert_eq!(
+            dirty_hours(&store).len(),
+            2,
+            "unchanged identity re-seeds nothing"
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

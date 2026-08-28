@@ -539,18 +539,16 @@ private struct UsageProviderIcon: View {
 }
 
 extension InferenceProvider {
+  /// No owned Google mark yet, so Google takes the semantic symbol rather than a borrowed logo.
   fileprivate var brandAssetName: String? {
     switch self {
     case .openai: "openai"
-    case .azureOpenAI: "azureai"
     case .anthropic: "claude"
-    case .awsBedrock: "bedrock"
-    case .googleVertex: "vertexai"
-    case .openrouter: "openrouter"
     case .xai: "grok"
     case .moonshot: "kimi"
     case .deepseek: "deepseek"
-    case .unknown: nil
+    case .cursor: "cursor"
+    case .google, .unknown: nil
     }
   }
 

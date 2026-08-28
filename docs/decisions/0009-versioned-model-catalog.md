@@ -44,6 +44,16 @@ never model names.
 retry. Account summaries always carry the catalog revision and the agent groups, and a rejected
 read is reported as the error it is.
 
+**Updated 2026-08-27:** the catalog also names the vendor a model belongs to. A Usage summary's
+`provider` is the company whose model answered — OpenAI, Anthropic, Google, xAI, Moonshot,
+DeepSeek, Cursor — resolved from the raw model name by the catalog's `families`: explicit lowercase
+prefixes, matched ASCII case-insensitively, longest prefix winning. The billing channel stays on
+the fact for pricing and audit, and fills in only for a name no family claims, when it is a
+vendor's own endpoint; a gateway (OpenRouter, Bedrock, Vertex, Azure) is never a group of its
+own. Aliases are still exact tuples; the case-insensitive rule is the family list's alone, because
+a family is a reviewed statement about a name, not a guess. The Rust service ships the checked-in
+catalog and uses it until Relay's has been read, so a first launch groups the same way.
+
 ## Consequences
 
 Catalog updates are derived-view changes: the next report can regroup all retained raw rows without

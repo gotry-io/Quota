@@ -1,10 +1,10 @@
 import {
   type DatedUsageRow,
   foldPreparedUsageCosts,
-  inferenceProvider,
   type PreparedUsageCosts,
   prepareUsageCosts,
   resolveModel,
+  resolveProvider,
 } from "@gotry-io/quota-model";
 import {
   type AccountUsage,
@@ -180,7 +180,7 @@ function buildAgentTree(
   for (const index of indexes) {
     const fact = facts[index];
     if (!fact) throw new UsageSummaryLimitError();
-    const provider = inferenceProvider(fact.billing_channel);
+    const provider = resolveProvider(modelCatalog, fact);
     const model = resolveModel(modelCatalog, fact) ?? fact.model;
     const key = leafKey(fact.agent, provider, model);
     let leaf = leaves.get(key);

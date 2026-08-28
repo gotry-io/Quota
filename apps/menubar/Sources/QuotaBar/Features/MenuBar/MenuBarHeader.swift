@@ -7,7 +7,7 @@ struct MenuBarHeader: View {
     case openSettings(() -> Void)
     case overflowMenu
     case usageSource(UsageSource, (UsageSource) -> Void)
-    case support(
+    case diagnostics(
       isChecking: Bool,
       canRecheck: Bool,
       onRecheck: () -> Void
@@ -165,8 +165,8 @@ struct MenuBarHeader: View {
       .fixedSize()
       .accessibilityLabel("Usage source")
       .accessibilityValue(source.label)
-    case .support(let isChecking, let canRecheck, let onRecheck):
-      supportRecheckButton(
+    case .diagnostics(let isChecking, let canRecheck, let onRecheck):
+      diagnosticsRecheckButton(
         isChecking: isChecking,
         isEnabled: canRecheck,
         action: onRecheck
@@ -174,12 +174,12 @@ struct MenuBarHeader: View {
     }
   }
 
-  private func supportRecheckButton(
+  private func diagnosticsRecheckButton(
     isChecking: Bool,
     isEnabled: Bool,
     action: @escaping () -> Void
   ) -> some View {
-    let accessibilityLabel = SupportHeaderAction.recheckAccessibilityLabel(
+    let accessibilityLabel = DiagnosticsHeaderAction.recheckAccessibilityLabel(
       isChecking: isChecking
     )
     return Button(action: action) {

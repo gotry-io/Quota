@@ -1003,7 +1003,7 @@
           "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
         },
         "providers": {
-          "maxItems": 10,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema28"
@@ -1020,14 +1020,12 @@
           "type": "string",
           "enum": [
             "openai",
-            "azure_openai",
             "anthropic",
-            "aws_bedrock",
-            "google_vertex",
-            "openrouter",
+            "google",
             "xai",
             "moonshot",
             "deepseek",
+            "cursor",
             "unknown"
           ]
         },

@@ -522,34 +522,37 @@ export function agentDisplayName(agent: string): string {
   return AGENT_DISPLAY_NAMES[agent as BillingAgent] ?? "Unknown";
 }
 
+/**
+ * The company whose model answered, which is what a Usage summary groups by.
+ *
+ * It is resolved from the model's name by the model catalog's family rules, so the same model
+ * lands in the same group whichever agent ran it and whichever channel billed it. The channel
+ * stays on the fact for pricing; a gateway is never a group of its own.
+ */
 const InferenceProviderSchema = z.enum([
   "openai",
-  "azure_openai",
   "anthropic",
-  "aws_bedrock",
-  "google_vertex",
-  "openrouter",
+  "google",
   "xai",
   "moonshot",
   "deepseek",
+  "cursor",
   "unknown",
 ]);
 export type InferenceProvider = z.infer<typeof InferenceProviderSchema>;
 
 const INFERENCE_PROVIDER_DISPLAY_NAMES: Readonly<Record<InferenceProvider, string>> = {
   openai: "OpenAI",
-  azure_openai: "Azure OpenAI",
   anthropic: "Anthropic",
-  aws_bedrock: "AWS Bedrock",
-  google_vertex: "Google Vertex AI",
-  openrouter: "OpenRouter",
+  google: "Google",
   xai: "xAI",
   moonshot: "Moonshot AI",
   deepseek: "DeepSeek",
+  cursor: "Cursor",
   unknown: "Unknown Provider",
 };
 
-/** The words the Apple clients already say for the company that ran the inference. */
+/** The words the Apple clients already say for the company whose model answered. */
 export function inferenceProviderDisplayName(provider: string): string {
   return INFERENCE_PROVIDER_DISPLAY_NAMES[provider as InferenceProvider] ?? "Unknown Provider";
 }
@@ -557,6 +560,7 @@ export function inferenceProviderDisplayName(provider: string): string {
 const MAXIMUM_MODEL_CATALOG_MODELS = 512;
 const MAXIMUM_MODEL_CATALOG_ALIASES_PER_MODEL = 32;
 export const MAXIMUM_MODEL_CATALOG_ALIASES = 4_096;
+export const MAXIMUM_MODEL_CATALOG_FAMILIES = 256;
 
 export const BillingChannelSchema = z.enum([
   "openai_direct",
@@ -603,10 +607,27 @@ const ModelCatalogModelSchema = z
   .strict();
 export type ModelCatalogModel = z.infer<typeof ModelCatalogModelSchema>;
 
+/**
+ * A model family: every reported model whose name begins with `prefix`, compared ASCII
+ * case-insensitively, belongs to `provider`. The longest matching prefix decides.
+ */
+const ModelCatalogFamilySchema = z
+  .object({
+    prefix: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, "A family prefix is lowercase ASCII model text."),
+    provider: InferenceProviderSchema.exclude(["unknown"]),
+  })
+  .strict();
+export type ModelCatalogFamily = z.infer<typeof ModelCatalogFamilySchema>;
+
 export const ModelCatalogSchema = z
   .object({
     schema_version: z.literal(2),
     revision: OpaqueIdSchema,
+    families: z.array(ModelCatalogFamilySchema).max(MAXIMUM_MODEL_CATALOG_FAMILIES),
     models: z.array(ModelCatalogModelSchema).min(1).max(MAXIMUM_MODEL_CATALOG_MODELS),
   })
   .strict();

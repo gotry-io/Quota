@@ -934,7 +934,7 @@ fn cursor_store_db_reads_usage_shaped_blobs() {
 }
 
 #[test]
-fn cursor_default_roots_cover_home_and_desktop_state() {
+fn cursor_default_roots_are_the_usage_subtrees_and_desktop_state() {
     let home = root("cursor-home");
     let options = UsageScanOptions {
         home_directory: Some(home.clone()),
@@ -945,7 +945,14 @@ fn cursor_default_roots_cover_home_and_desktop_state() {
         ..UsageScanOptions::default()
     };
     let roots = super::scan::roots_for(UsageAgent::Cursor, &options);
-    assert!(roots.iter().any(|path| path == &home.join(".cursor")));
+    assert!(
+        roots
+            .iter()
+            .any(|path| path == &home.join(".cursor/projects"))
+    );
+    assert!(roots.iter().any(|path| path == &home.join(".cursor/chats")));
+    // The home itself is not a root: `~/.cursor/extensions` alone exceeds the discovery bounds.
+    assert!(roots.iter().all(|path| path != &home.join(".cursor")));
     assert!(roots.iter().any(|path| path.ends_with("state.vscdb")));
     let _ = fs::remove_dir_all(home);
 }
@@ -1510,8 +1517,10 @@ fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
     assert_eq!(rows[0].model, "GPT-5.5[1m]");
 }
 
+/// The vendor comes from the model's name: a Grok model Codex reached through some channel it
+/// could not name is still xAI's, beside the OpenAI model in the same client.
 #[test]
-fn local_summary_groups_client_provider_model_and_counts_output_messages() {
+fn local_summary_groups_client_vendor_model_and_counts_output_messages() {
     let mut codex = test_fact("2026-08-02T12:00:00Z", "gpt-5.5");
     codex.input_tokens = 100;
     codex.cache_read_tokens = 20;
@@ -1519,15 +1528,17 @@ fn local_summary_groups_client_provider_model_and_counts_output_messages() {
     codex.output_tokens = 40;
     codex.reasoning_tokens = 15;
     codex.requests = 2;
-    let mut anthropic = test_fact("2026-08-02T13:00:00Z", "gpt-5.5");
-    anthropic.agent = UsageAgent::Codex;
-    anthropic.billing_channel = BillingChannel::AnthropicDirect;
-    anthropic.input_tokens = 50;
-    anthropic.cache_write_inferred_tokens = 5;
-    anthropic.output_tokens = 10;
-    anthropic.requests = 1;
+    let mut grok = test_fact("2026-08-02T13:00:00Z", "grok-4.5");
+    grok.agent = UsageAgent::Codex;
+    grok.billing_channel = BillingChannel::Unknown;
+    grok.channel_source = ChannelSource::Unknown;
+    grok.input_tokens = 50;
+    grok.cache_write_inferred_tokens = 5;
+    grok.output_tokens = 10;
+    grok.requests = 1;
 
-    let summary = build_local_usage_summary(&[codex, anthropic], None, None).expect("summary");
+    let catalog = crate::model_catalog::bundled_model_catalog();
+    let summary = build_local_usage_summary(&[codex, grok], None, Some(&catalog)).expect("summary");
 
     assert_eq!(summary.totals.total_tokens, 200);
     assert_eq!(summary.totals.input_tokens, 150);
@@ -1546,9 +1557,9 @@ fn local_summary_groups_client_provider_model_and_counts_output_messages() {
     assert_eq!(summary.agents[0].providers[0].models[0].model, "gpt-5.5");
     assert_eq!(
         summary.agents[0].providers[1].provider,
-        InferenceProvider::Anthropic
+        InferenceProvider::Xai
     );
-    assert_eq!(summary.agents[0].providers[1].models[0].model, "gpt-5.5");
+    assert_eq!(summary.agents[0].providers[1].models[0].model, "grok-4.5");
 }
 
 #[test]

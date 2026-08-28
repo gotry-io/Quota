@@ -1,6 +1,68 @@
 {
   "schema_version": 2,
-  "revision": "official-2026-08-11-1",
+  "revision": "official-2026-08-27-1",
+  "families": [
+    {
+      "prefix": "gpt-",
+      "provider": "openai"
+    },
+    {
+      "prefix": "o1",
+      "provider": "openai"
+    },
+    {
+      "prefix": "o3",
+      "provider": "openai"
+    },
+    {
+      "prefix": "o4",
+      "provider": "openai"
+    },
+    {
+      "prefix": "chatgpt-",
+      "provider": "openai"
+    },
+    {
+      "prefix": "codex",
+      "provider": "openai"
+    },
+    {
+      "prefix": "claude",
+      "provider": "anthropic"
+    },
+    {
+      "prefix": "gemini",
+      "provider": "google"
+    },
+    {
+      "prefix": "gemma",
+      "provider": "google"
+    },
+    {
+      "prefix": "grok",
+      "provider": "xai"
+    },
+    {
+      "prefix": "kimi",
+      "provider": "moonshot"
+    },
+    {
+      "prefix": "k2",
+      "provider": "moonshot"
+    },
+    {
+      "prefix": "moonshot",
+      "provider": "moonshot"
+    },
+    {
+      "prefix": "deepseek",
+      "provider": "deepseek"
+    },
+    {
+      "prefix": "composer",
+      "provider": "cursor"
+    }
+  ],
   "models": [
     {
       "canonical_id": "gpt-5.5",

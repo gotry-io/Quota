@@ -1,5 +1,5 @@
 import { type DatedUsageRow, MODEL_CATALOG, type ModelCatalog } from "@gotry-io/quota-protocol";
-import { resolveModel, validateModelCatalog } from "../src/index.ts";
+import { resolveModel, resolveProvider, validateModelCatalog } from "../src/index.ts";
 import { describe, expect, it } from "vitest";
 
 describe("report-time model catalog", () => {
@@ -11,12 +11,13 @@ describe("report-time model catalog", () => {
   it("requires exact provider, client, and date scope for aliases", () => {
     const alias = row("GPT-5.5[1m]");
     expect(resolveModel(MODEL_CATALOG, alias)).toBe("gpt-5.5");
+    // The alias is scoped to OpenAI, and the name says OpenAI whoever billed it.
     expect(
       resolveModel(MODEL_CATALOG, {
         ...alias,
         billing_channel: "openrouter",
       }),
-    ).toBeUndefined();
+    ).toBe("gpt-5.5");
     expect(
       resolveModel(MODEL_CATALOG, {
         ...alias,
@@ -29,6 +30,58 @@ describe("report-time model catalog", () => {
         date: "2026-01-01",
       }),
     ).toBeUndefined();
+  });
+
+  it("names a model's vendor from its name, and from its channel only when no family claims it", () => {
+    expect(resolveProvider(MODEL_CATALOG, { ...row("grok-4.5"), billing_channel: "unknown" })).toBe(
+      "xai",
+    );
+    expect(
+      resolveProvider(MODEL_CATALOG, { ...row("Claude-Opus-5"), billing_channel: "openrouter" }),
+    ).toBe("anthropic");
+    expect(resolveProvider(MODEL_CATALOG, row("k2p5"))).toBe("moonshot");
+    expect(resolveProvider(MODEL_CATALOG, row("gemini-3-pro"))).toBe("google");
+    expect(
+      resolveProvider(MODEL_CATALOG, { ...row("composer-1.5"), billing_channel: "unknown" }),
+    ).toBe("cursor");
+    expect(resolveProvider(MODEL_CATALOG, row("big-pickle"))).toBe("openai");
+    expect(
+      resolveProvider(MODEL_CATALOG, { ...row("big-pickle"), billing_channel: "azure_openai" }),
+    ).toBe("openai");
+    expect(
+      resolveProvider(MODEL_CATALOG, { ...row("big-pickle"), billing_channel: "openrouter" }),
+    ).toBe("unknown");
+  });
+
+  it("takes the longest family and rejects a duplicate or misspelt one", () => {
+    const layered: ModelCatalog = {
+      ...MODEL_CATALOG,
+      families: [
+        { prefix: "g", provider: "google" },
+        { prefix: "gpt-", provider: "openai" },
+      ],
+    };
+    expect(validateModelCatalog(layered)).toMatchObject({ valid: true });
+    expect(resolveProvider(layered, row("gpt-5.5"))).toBe("openai");
+    expect(resolveProvider(layered, row("gemma-4"))).toBe("google");
+    expect(
+      validateModelCatalog({
+        ...MODEL_CATALOG,
+        families: [
+          { prefix: "grok", provider: "xai" },
+          { prefix: "grok", provider: "xai" },
+        ],
+      }),
+    ).toMatchObject({
+      valid: false,
+      issues: [{ code: "duplicate_family_prefix", prefix: "grok" }],
+    });
+    expect(
+      validateModelCatalog({
+        ...MODEL_CATALOG,
+        families: [{ prefix: "GPT-", provider: "openai" }],
+      }),
+    ).toMatchObject({ valid: false });
   });
 
   it("keeps unknown model text unresolved and rejects overlapping aliases", () => {

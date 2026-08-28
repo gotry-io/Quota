@@ -149,7 +149,7 @@ final class MenuBarViewModel {
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
   private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
   /// A read macOS refused, which is a different state from finding no session: it stands until
-  /// the reader changes a permission, and the Support page carries it too.
+  /// the reader changes a permission, and the Diagnostics page carries it too.
   private(set) var browserSessionAccessDenials: [ProviderID: BrowserAccessDenial] = [:]
   private(set) var browserSessionWaitingProvider: ProviderID?
   private(set) var canCancelBrowserSessionLogin = false
@@ -795,7 +795,7 @@ final class MenuBarViewModel {
     }
   }
 
-  /// Shows the refusal here, and tells the service so the Support page carries it too. A
+  /// Shows the refusal here, and tells the service so the Diagnostics page carries it too. A
   /// permission this Mac was refused is a local fact, and the report is where a person looks
   /// for local facts.
   private func recordBrowserAccessDenial(
@@ -898,12 +898,14 @@ final class MenuBarViewModel {
     let providers: [ProviderQuotaPresentation] = enabledProviders.compactMap { provider in
       let accounts = displaySnapshots(for: provider)
       let result = result(for: provider)
-      // A local failure is about this Mac. Another device's reading fills the row but does
-      // not mean collection here is fine, so the failure still shows. A provider that was
-      // never set up here has nothing to recover and stays quiet once the account covers it.
-      let collectedHere = !(result?.sources.isEmpty ?? true)
+      // Overview asks how much is left, and a row filled by another device's reading has
+      // answered. This Mac's own failed collection is then the provider page's and
+      // Diagnostics' subject, not the row's. It shows on the row only when this Mac's reading
+      // is the one on it — the failure says why that reading stopped moving — or when there
+      // is no reading at all.
       let status =
-        accounts.isEmpty || collectedHere ? result.flatMap(ProviderStatusCopy.from) : nil
+        accounts.isEmpty || showsThisMacsReading(for: provider)
+        ? result.flatMap(ProviderStatusCopy.from) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
       return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
     }
@@ -914,6 +916,14 @@ final class MenuBarViewModel {
       return .loading
     }
     return .content(providers: providers, refreshWarning: errorMessage)
+  }
+
+  /// Whether any reading Overview shows for the provider was taken on this Mac.
+  private func showsThisMacsReading(for provider: ProviderID) -> Bool {
+    overview.contains { item in
+      item.identity.provider == provider
+        && item.sources.contains { $0.sourceID == item.selectedSourceID && $0.kind == .local }
+    }
   }
 
   private func reloadState() async {

@@ -156,7 +156,7 @@ The header shows:
 
 - Overview: Quota mark, **QuotaBar**, and Settings gear.
 - Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
-  edge because the choice changes the whole page. Support places one icon-only **Recheck**
+  edge because the choice changes the whole page. Diagnostics places one icon-only **Recheck**
   (`arrow.clockwise`) action there only after a report exists; initial loading and full-page failure
   leave the header action area empty. Recheck starts or joins the real private-service refresh and
   waits for a newer evaluation; while checking, its icon becomes a small spinner and the action is
@@ -191,6 +191,7 @@ Overview
     ├── Menu Bar Style
     ├── Menu Bar Provider
     ├── Support
+    │   └── Diagnostics
     └── Agents
         └── Provider
 ```
@@ -232,9 +233,11 @@ value or add a third Overview quota row.
 Expired `valid_until` and explicit stale status use stale presentation. A provider authentication
 failure is a setup task, not a generic network error. Never display collector raw output.
 
-A local collection failure is about this Mac, so an account device's reading fills the row without
-hiding it: the row shows both. A provider this Mac never set up reports no discovered source and
-stays quiet once the account covers it, because there is nothing here to recover.
+Overview asks how much is left, and a row another device's reading fills has answered it. This
+Mac's own failed collection then stays off the row — it is the provider detail page's and
+Diagnostics' subject — and the row shows the other device's reading alone. The failure shows on the
+row only when this Mac's own reading is the one on it, where it says why that reading stopped
+moving, or when there is no reading to show at all.
 
 An account device's reading names why it is not current rather than only that it is not, in the
 shared freshness words: **Sign-in needed**, **Unavailable**, **Unsupported**, **Can’t refresh** for
@@ -288,10 +291,19 @@ page title. Every option is one ordinary settings row; the one in force carries 
 choosing takes effect and returns, because there is nothing else on the page to confirm. The Provider
 page lists **Automatic** first, without a mark because it is not a provider, then the providers
 Overview is showing, in Overview's order, each with its catalog brand mark.
-Support is the diagnostic page. It is backed by the private `diagnose` operation and opens with the
-report's status line: a semantic icon, **All systems working** / **Some checks need attention** /
-**Action needed**, and a fixed locale-shortened evaluation time (`Checked 3:40 PM`), not relative
-age.
+
+Support is where help lives, and it asks the service nothing on its own: opening it starts no
+check and costs no refresh. **Help** contains the **Diagnostics** destination, **Feedback**, and
+**Reset Local Data**. Reset Local Data always confirms first and says plainly that collected quota
+and Usage history are deleted and rebuilt and that the person stays signed in. That confirmation is
+`QuotaConfirmationPopup` at the panel root, like Sign Out and Disconnect. **About** stays last with
+Website, version, and **Updates**, which opens Sparkle's standard updater; Sparkle also
+checks on a daily schedule after launch.
+
+Diagnostics is the diagnostic page, one level inside Support. It is backed by the private
+`diagnose` operation and opens with the report's status line: a semantic icon, **All systems
+working** / **Some checks need attention** / **Action needed**, and a fixed locale-shortened
+evaluation time (`Checked 3:40 PM`), not relative age.
 
 **Data** contains Quota Overview, This Mac Usage, Account Usage, and Account only, in that order.
 **Sources** follows it and appears only when the service sent any: one row per provider, Usage
@@ -300,15 +312,11 @@ Every subtitle on both lists is the sentence the service wrote — never a raw s
 code, or a metric key — and each row carries a semantic icon (accent check, grey inactive dash,
 orange warning, red blocked mark).
 
-**Help** follows with **Copy Report**, **Feedback**, and **Reset Local Data**. Copy Report writes the
-human-readable text report, including the recent work the page does not list, and its row title
-becomes **Report Copied** for about two seconds. Reset Local Data always confirms first and says
-plainly that collected quota and Usage history are deleted and rebuilt and that the person stays
-signed in. That confirmation is `QuotaConfirmationPopup` at the panel root, like Sign Out and
-Disconnect, and leaving Support takes the question with it. **About** stays last with Website, version, and **Check for Updates**, which opens
-Sparkle's standard updater; Sparkle also checks on a daily schedule after launch.
+**Report** follows with **Copy Report**, which writes the human-readable text report, including the
+recent work the page does not list, and whose row title becomes **Report Copied** for about two
+seconds. It lives here rather than on Support because here is where the report exists.
 
-Recheck lives only in the page header; opening Support resets and requests a real refresh so
+Recheck lives only in the page header; opening Diagnostics resets and requests a real refresh so
 re-entry never silently shows a previous report. That initial check uses a centered page Loading
 state. Its failure uses a centered Error state with **Retry** as the only recovery action and no
 header actions. A later Recheck preserves the last completed report; failure adds a fixed inline
@@ -370,11 +378,12 @@ The default page contains:
 - Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
   and message metrics in a two-column grid. Headline values use the primary text tone; grid labels
   stay muted while their values use the secondary tone.
-- Models: grouped by inference provider, independent of the collecting client. Every model remains a
+- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
+  — independent of the collecting client and of who billed the request. Every model remains a
   static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
 
-Provider headings use the structured inference-provider brand mark; never infer an icon from model
-text. Model rows have no repeated icon and align under the provider label. When no owned brand asset
+Provider headings use the brand mark of the structured provider the service sent; the client never
+reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
 exists, use an honest semantic system symbol rather than another provider's logo. Approved
 monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
 Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
@@ -473,8 +482,8 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 Prefer these components over page-local replicas. In-section actions never mix an accent capsule
 with a system or bordered control. **Save** and empty-state **Retry** use compact primary. Browser
 Session **Sign In**, **Cancel**, **Remove**, and **Disconnect** use secondary; destructive labels
-use the destructive variant. Support's Recheck is a header icon action only; Copy Report and Reset
-Local Data are Settings list rows. Full-width Settings rows such as **Sign Out** stay list rows. Do not use
+use the destructive variant. Diagnostics' Recheck is a header icon action only; Copy Report and
+Reset Local Data are Settings list rows. Full-width Settings rows such as **Sign Out** stay list rows. Do not use
 `ButtonStyle.bordered` or an unstyled system button inside the panel. Provider assets remain in
 `Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
 
@@ -489,8 +498,8 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 ## Accessibility and input
 
 - Every icon-only button has an accessibility label and Help tooltip.
-- Support's Recheck header icon announces **Recheck**, or **Checking** while a check runs. Copy
-  Report announces **Copy report**, then **Report copied**; Reset Local Data announces what it
+- Diagnostics' Recheck header icon announces **Recheck**, or **Checking** while a check runs.
+  Copy Report announces **Copy report**, then **Report copied**; Reset Local Data announces what it
   deletes. The status line VoiceOver label includes the fixed check time. Data and Sources status
   icons use distinct shapes and announce Working, Needs attention, Unavailable, or Off, and each row
   announces the service's own sentence rather than a wire code.
@@ -508,7 +517,7 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
 setup variants (CLI, API key, and browser session), Devices, Usage, Menu Bar Style, Menu Bar
-Provider, and Support. Inspect
+Provider, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

@@ -48,7 +48,7 @@ browser application; SweetCookieKit 0.5.2 enumerates its profiles with logging d
 only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie header at a
 time to Rust for validation/commit; it never calls provider APIs or persists the header. A store
 macOS refuses ends the attempt and is shown as its own state — with the grant to change, not "no
-session found" — and reaches the Support page as the `browser_access_denied` source. Cursor prefers
+session found" — and reaches the Diagnostics page as the `browser_access_denied` source. Cursor prefers
 a signed-in Cursor.app session and uses the browser session as its fallback; Codex, Claude, Grok,
 and Kimi reach theirs only when their own credential is missing or has been rejected. Browser
 cookies stay local.
@@ -57,12 +57,12 @@ Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
 among them and never slices totals or infers client/provider/model ownership.
 
-Packaged builds embed Sparkle 2. Support's **Check for Updates** action, and Sparkle's daily
+Packaged builds embed Sparkle 2. Support's **Updates** action, and Sparkle's daily
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
 check for updates.
 
-Settings' **Support** page is backed by the private `diagnose` IPC operation and renders one
-bounded, redacted report. The service evaluates the four Quota/Usage
+Settings' **Support › Diagnostics** page is backed by the private `diagnose` IPC operation and
+renders one bounded, redacted report; Support itself asks the service nothing. The service evaluates the four Quota/Usage
 surfaces and the sources behind them and writes one sentence per row; Swift strictly decodes and
 renders it, and never maps a code to copy of its own. **Show in Overview** remains
 presentation-only and never requests local collection. Account provider data remains healthy without
@@ -113,7 +113,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|menu-bar-style|menu-bar-provider|support
+--route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|menu-bar-style|menu-bar-provider|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

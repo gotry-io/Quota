@@ -142,64 +142,65 @@ impl BillingChannel {
     }
 }
 
+/// The company whose model answered, which is what a Usage summary groups by.
+///
+/// It is resolved from the model's name by the model catalog's family rules, so the same model
+/// lands in the same group whichever agent ran it and whichever channel billed it. The channel
+/// stays on the fact for pricing; a gateway is never a group of its own.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, Serialize, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceProvider {
     Openai,
-    AzureOpenai,
     Anthropic,
-    AwsBedrock,
-    GoogleVertex,
-    Openrouter,
+    Google,
     Xai,
     Moonshot,
     Deepseek,
+    Cursor,
     Unknown,
 }
 
 impl InferenceProvider {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 8] = [
         Self::Openai,
-        Self::AzureOpenai,
         Self::Anthropic,
-        Self::AwsBedrock,
-        Self::GoogleVertex,
-        Self::Openrouter,
+        Self::Google,
         Self::Xai,
         Self::Moonshot,
         Self::Deepseek,
+        Self::Cursor,
         Self::Unknown,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Openai => "openai",
-            Self::AzureOpenai => "azure_openai",
             Self::Anthropic => "anthropic",
-            Self::AwsBedrock => "aws_bedrock",
-            Self::GoogleVertex => "google_vertex",
-            Self::Openrouter => "openrouter",
+            Self::Google => "google",
             Self::Xai => "xai",
             Self::Moonshot => "moonshot",
             Self::Deepseek => "deepseek",
+            Self::Cursor => "cursor",
             Self::Unknown => "unknown",
         }
     }
 }
 
-impl From<BillingChannel> for InferenceProvider {
-    fn from(channel: BillingChannel) -> Self {
-        match channel {
-            BillingChannel::OpenaiDirect => Self::Openai,
-            BillingChannel::AzureOpenai => Self::AzureOpenai,
-            BillingChannel::AnthropicDirect => Self::Anthropic,
-            BillingChannel::AwsBedrock => Self::AwsBedrock,
-            BillingChannel::GoogleVertex => Self::GoogleVertex,
-            BillingChannel::Openrouter => Self::Openrouter,
-            BillingChannel::XaiDirect => Self::Xai,
-            BillingChannel::MoonshotDirect => Self::Moonshot,
-            BillingChannel::DeepseekDirect => Self::Deepseek,
-            BillingChannel::Unknown => Self::Unknown,
+impl BillingChannel {
+    /// The vendor this channel belongs to, for a model name no family claims.
+    ///
+    /// A vendor's own endpoint says who made the model; a gateway or an unknown channel says
+    /// nothing about that.
+    pub fn fallback_provider(self) -> InferenceProvider {
+        match self {
+            Self::OpenaiDirect | Self::AzureOpenai => InferenceProvider::Openai,
+            Self::AnthropicDirect => InferenceProvider::Anthropic,
+            Self::XaiDirect => InferenceProvider::Xai,
+            Self::MoonshotDirect => InferenceProvider::Moonshot,
+            Self::DeepseekDirect => InferenceProvider::Deepseek,
+            Self::AwsBedrock | Self::GoogleVertex | Self::Openrouter | Self::Unknown => {
+                InferenceProvider::Unknown
+            }
         }
     }
 }
@@ -746,7 +747,10 @@ pub fn build_local_usage_summary(
         let mut provider_groups: BTreeMap<InferenceProvider, Vec<usize>> = BTreeMap::new();
         for index in agent_indexes {
             provider_groups
-                .entry(rows[index].billing_channel.into())
+                .entry(crate::model_catalog::resolve_provider(
+                    model_catalog,
+                    &rows[index].row,
+                ))
                 .or_default()
                 .push(index);
         }

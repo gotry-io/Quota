@@ -61,8 +61,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   [ADR 0022](decisions/0022-minimal-diagnostics.md), seven days and 5,000 rows; a failed journal
   write is counted on stderr and blocks nothing.
 - The installation ID is a random UUID; Relay stores only an account-scoped HMAC of it derived with
-  `QUOTA_INSTALLATION_KEY`, the raw ID is never logged or used as a global identifier, and switching
-  Account sets a new upload lower bound.
+  `QUOTA_INSTALLATION_KEY`, and the raw ID is never logged or used as a global identifier. Every
+  account signed in on this Mac is owed every hour it still holds; the only upload lower bound is
+  the deletion watermark Relay states for a deleted Device.
 - Account reads answer a conditional request from a version stamp over the rows they project, never
   from a cached body. A 304 asserts only that those rows and the catalog revisions are unchanged, is
   issued to the principal that asked, and is `private, no-cache` so no shared cache may hold it.
