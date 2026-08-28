@@ -172,13 +172,17 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
             }
         }
         UsageAgent::Cursor => {
-            let mut roots = vec![env("CURSOR_HOME").unwrap_or_else(|| home.join(".cursor"))];
+            // Only the two subtrees that hold Usage. The Cursor home also holds `extensions/`,
+            // a node_modules forest deeper and wider than the discovery bounds; walking it from
+            // the home stopped the scan at the bound before it ever reached `projects/`.
+            let root = env("CURSOR_HOME").unwrap_or_else(|| home.join(".cursor"));
             let xdg = env("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
-            roots.push(
+            vec![
+                root.join("projects"),
+                root.join("chats"),
                 home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
-            );
-            roots.push(xdg.join("Cursor/User/globalStorage/state.vscdb"));
-            roots
+                xdg.join("Cursor/User/globalStorage/state.vscdb"),
+            ]
         }
     }
 }

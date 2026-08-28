@@ -683,6 +683,13 @@ impl NativeBackend {
                      the rest.",
                     DiagnosticRecovery::Automatic,
                 ),
+                (false, Some(reason @ ("discovery_limit" | "record_limit"))) => (
+                    DiagnosticStatus::Degraded,
+                    Some(reason),
+                    "This Usage source is larger than one scan reads, so the part past that \
+                     bound was not read.",
+                    DiagnosticRecovery::None,
+                ),
                 (false, Some(reason)) => (
                     DiagnosticStatus::Degraded,
                     Some(reason),

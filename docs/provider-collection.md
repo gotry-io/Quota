@@ -411,8 +411,11 @@ make an otherwise unpriced fact priced.
 
 ### Cursor Usage
 
-1. Discover `$CURSOR_HOME` or `~/.cursor` for Composer JSONL under `projects/*/agent-transcripts`
-   and CLI `store.db` files under `chats`. Also open the desktop `state.vscdb` at
+1. Discover Composer JSONL under `projects/*/agent-transcripts` and CLI `store.db` files under
+   `chats`, both inside `$CURSOR_HOME` or `~/.cursor`. Those two subtrees are the discovery roots;
+   the Cursor home itself is not walked, because its `extensions/` tree alone exceeds the
+   discovery bounds and would end the scan before it reached `projects/`. Also open the desktop
+   `state.vscdb` at
    `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS and
    `$XDG_CONFIG_HOME/Cursor/User/globalStorage/state.vscdb` on Linux, defaulting `XDG_CONFIG_HOME`
    to `~/.config`. Rust opens those SQLite files read-only and never mutates Cursor-owned stores.

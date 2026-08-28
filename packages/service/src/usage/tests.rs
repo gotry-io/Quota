@@ -934,7 +934,7 @@ fn cursor_store_db_reads_usage_shaped_blobs() {
 }
 
 #[test]
-fn cursor_default_roots_cover_home_and_desktop_state() {
+fn cursor_default_roots_are_the_usage_subtrees_and_desktop_state() {
     let home = root("cursor-home");
     let options = UsageScanOptions {
         home_directory: Some(home.clone()),
@@ -945,7 +945,14 @@ fn cursor_default_roots_cover_home_and_desktop_state() {
         ..UsageScanOptions::default()
     };
     let roots = super::scan::roots_for(UsageAgent::Cursor, &options);
-    assert!(roots.iter().any(|path| path == &home.join(".cursor")));
+    assert!(
+        roots
+            .iter()
+            .any(|path| path == &home.join(".cursor/projects"))
+    );
+    assert!(roots.iter().any(|path| path == &home.join(".cursor/chats")));
+    // The home itself is not a root: `~/.cursor/extensions` alone exceeds the discovery bounds.
+    assert!(roots.iter().all(|path| path != &home.join(".cursor")));
     assert!(roots.iter().any(|path| path.ends_with("state.vscdb")));
     let _ = fs::remove_dir_all(home);
 }
