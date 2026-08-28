@@ -199,8 +199,8 @@ pub fn validate_model_catalog(catalog: &ModelCatalog) -> ModelCatalogValidationR
 /// The company whose model answered this row.
 ///
 /// The model's name decides, through the catalog's family rules: the longest prefix that
-/// matches, ASCII case-insensitively, names the provider. A name no family claims — or any name
-/// when there is no catalog — falls back to the vendor the billing channel belongs to.
+/// matches, ASCII case-insensitively, names the provider. A name no family claims is unknown —
+/// the channel that billed it says who was paid, not who made the model, so it is not consulted.
 pub fn resolve_provider(catalog: Option<&ModelCatalog>, row: &UsageRow) -> InferenceProvider {
     let model = row.model.to_ascii_lowercase();
     catalog
@@ -208,10 +208,7 @@ pub fn resolve_provider(catalog: Option<&ModelCatalog>, row: &UsageRow) -> Infer
         .flat_map(|catalog| catalog.families.iter())
         .filter(|family| model.starts_with(family.prefix.as_str()))
         .max_by_key(|family| family.prefix.len())
-        .map_or_else(
-            || row.billing_channel.fallback_provider(),
-            |family| family.provider,
-        )
+        .map_or(InferenceProvider::Unknown, |family| family.provider)
 }
 
 /// The canonical model this row reports, as of the day it was measured.
@@ -396,11 +393,11 @@ mod tests {
         assert_eq!(alias.model, "gpt-5.5");
     }
 
-    /// The name decides the vendor; the agent and the channel do not. A name no family
-    /// claims is the vendor's own when its channel is a vendor's, and unknown when the channel
-    /// is a gateway or unknown.
+    /// The name decides the vendor; the agent and the channel do not. A name no family claims
+    /// is unknown whatever channel billed it: an endpoint alias reached through a vendor's own
+    /// provider id still says nothing about whose model answered.
     #[test]
-    fn a_models_name_decides_its_vendor_and_the_channel_only_fills_in_for_an_unclaimed_name() {
+    fn a_models_name_decides_its_vendor_and_an_unclaimed_name_is_unknown() {
         use crate::usage::BillingChannel;
         let catalog = catalog();
 
@@ -425,25 +422,23 @@ mod tests {
             InferenceProvider::Openai
         );
 
-        let mut unclaimed = row("big-pickle");
-        assert_eq!(
-            resolve_provider(Some(&catalog), &unclaimed),
-            InferenceProvider::Openai
-        );
-        unclaimed.billing_channel = BillingChannel::AzureOpenai;
-        assert_eq!(
-            resolve_provider(Some(&catalog), &unclaimed),
-            InferenceProvider::Openai
-        );
-        unclaimed.billing_channel = BillingChannel::Openrouter;
-        assert_eq!(
-            resolve_provider(Some(&catalog), &unclaimed),
-            InferenceProvider::Unknown
-        );
+        for channel in [
+            BillingChannel::OpenaiDirect,
+            BillingChannel::AzureOpenai,
+            BillingChannel::Openrouter,
+        ] {
+            let mut unclaimed = row("ep-20260811103923-jzct4");
+            unclaimed.billing_channel = channel;
+            assert_eq!(
+                resolve_provider(Some(&catalog), &unclaimed),
+                InferenceProvider::Unknown,
+                "{channel:?}"
+            );
+        }
         assert_eq!(
             resolve_provider(None, &grok),
             InferenceProvider::Unknown,
-            "without a catalog only the channel speaks"
+            "without a catalog no name is claimed"
         );
     }
 

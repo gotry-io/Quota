@@ -437,13 +437,12 @@ export function validateModelCatalog(input: unknown): ModelCatalogValidationResu
  * The company whose model answered this row.
  *
  * The model's name decides, through the catalog's family rules: the longest prefix that
- * matches, ASCII case-insensitively, names the provider. A name no family claims falls back
- * to the vendor the billing channel belongs to, when the channel is a vendor's own; a gateway
- * or an unknown channel says nothing about who made the model.
+ * matches, ASCII case-insensitively, names the provider. A name no family claims is unknown —
+ * the channel that billed it says who was paid, not who made the model, so it is not consulted.
  */
 export function resolveProvider(
   catalog: ModelCatalog,
-  row: Pick<DatedUsageRow, "model" | "billing_channel">,
+  row: Pick<DatedUsageRow, "model">,
 ): InferenceProvider {
   const model = row.model.toLowerCase();
   let match: ModelCatalog["families"][number] | undefined;
@@ -452,7 +451,7 @@ export function resolveProvider(
       match = family;
     }
   }
-  return match?.provider ?? fallbackProvider(row.billing_channel);
+  return match?.provider ?? "unknown";
 }
 
 /** Resolve an exact canonical ID or explicitly scoped alias. */
@@ -499,25 +498,6 @@ function aliasesOverlap(
     left.effective_to === undefined ||
     right.effective_from < left.effective_to;
   return startsOverlap && endsOverlap;
-}
-
-/** The vendor a billing channel belongs to, for a model name no family claims. */
-export function fallbackProvider(channel: BillingChannel): InferenceProvider {
-  switch (channel) {
-    case "openai_direct":
-    case "azure_openai":
-      return "openai";
-    case "anthropic_direct":
-      return "anthropic";
-    case "xai_direct":
-      return "xai";
-    case "moonshot_direct":
-      return "moonshot";
-    case "deepseek_direct":
-      return "deepseek";
-    default:
-      return "unknown";
-  }
 }
 
 export type PricingResolution =

@@ -1479,6 +1479,7 @@ fn model_catalog_revision_regroups_retained_rows_without_rewriting_them() {
     let mut catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
         "schema_version": 2,
         "revision": "test-before",
+        "families": [{"prefix": "gpt-", "provider": "openai"}],
         "models": [{
             "canonical_id": "gpt-5.5",
             "aliases": [{"reported_model":"gpt-5.5-alias","provider":"openai"}]

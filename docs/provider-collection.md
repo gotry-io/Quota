@@ -319,10 +319,9 @@ Provider grouping is by the vendor whose model answered, resolved from the raw m
 model catalog's family rules ([ADR 0009](decisions/0009-versioned-model-catalog.md)); `client`
 records which agent emitted the usage-bearing output, and neither the agent nor the billing channel
 chooses the group. The billing channel stays on every fact, resolved as the sections below say,
-because pricing and audit depend on it; it fills in a vendor only for a model name no family claims,
-and only when it is a vendor's own endpoint. Summaries are nested as
-`agents[].providers[].models[]`; a name no family or vendor channel claims is the `unknown`
-provider within its originating client.
+because pricing and audit depend on it; it says who was paid, not who made the model, and is never
+consulted for the group. Summaries are nested as `agents[].providers[].models[]`; a name no family
+claims is the `unknown` provider within its originating client.
 
 A provider id resolves a channel only when it is a registered id that authenticates against that
 vendor's own endpoints. Gateway spellings that merely proxy a vendor, such as an `-oauth` suffix on a
