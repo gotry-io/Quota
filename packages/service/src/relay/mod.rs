@@ -1333,7 +1333,7 @@ impl AccountManager {
     }
 
     fn finalize_login(&self, response: &Value) -> Result<LoginOutcome, BackendError> {
-        let mut session = session_from_token_response(response).map_err(|_| BackendError {
+        let session = session_from_token_response(response).map_err(|_| BackendError {
             error: crate::protocol::IpcError::new(
                 crate::protocol::ErrorCode::InvalidResponse,
                 crate::protocol::RecoveryAction::Retry,
@@ -1344,22 +1344,6 @@ impl AccountManager {
             .and_then(Value::as_str)
             .ok_or_else(BackendError::unavailable)?
             .to_owned();
-        let upload_not_before = match self
-            .state
-            .upload_lower_bound(&account_id, &crate::state::now_rfc3339())
-        {
-            Ok(value) => value,
-            Err(_) => {
-                // The Relay has already issued both refresh families.  If the local privacy
-                // binding cannot be committed, retain only a durable revoke job instead of
-                // returning an error that strands live credentials in memory.
-                if let Some(pending) = pending_session_from_active(&session) {
-                    let _ = self.state.write_session_json(&pending);
-                }
-                return Err(BackendError::unavailable());
-            }
-        };
-        session["upload_not_before"] = Value::String(upload_not_before);
         let account = AccountComponentValue {
             auth_status: AuthStatus::SignedIn,
             account_id: Some(account_id),
@@ -2027,7 +2011,6 @@ fn session_from_token_response(response: &Value) -> Result<Value, RelayError> {
         "device_generation": generation,
         "usage_sync_revision": usage_sync_revision,
         "usage_deleted_before": usage_deleted_before,
-        "upload_not_before": "1970-01-01T00:00:00Z",
         "session": {
             "access_token": issued["access_token"],
             "access_expires_at": issued["access_expires_at"],

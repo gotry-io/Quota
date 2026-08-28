@@ -2625,6 +2625,10 @@ impl LocalBackend for NativeBackend {
                                                 .get("device_generation")
                                                 .and_then(Value::as_u64)
                                                 .unwrap_or_default(),
+                                            current_session
+                                                .get("usage_sync_revision")
+                                                .and_then(Value::as_u64)
+                                                .unwrap_or_default(),
                                             &lower_bound,
                                         )
                                         .map_err(|_| BackendError::unavailable())
@@ -2981,13 +2985,13 @@ fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
     })
 }
 
+/// The instant before which this device uploads nothing.
+///
+/// Every account signed in on this Mac is owed every hour it still holds, so the only bound is
+/// the one Relay states: the watermark Delete Device set for this device, before which deleted
+/// data must not be restored. A device that was never deleted starts at the epoch.
 fn effective_usage_lower_bound(session: &Value) -> Result<String, BackendError> {
-    let left = session
-        .get("upload_not_before")
-        .and_then(Value::as_str)
-        .ok_or_else(invalid_local_state)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).map_err(|_| invalid_local_state()))?;
-    let right = match session.get("usage_deleted_before") {
+    let bound = match session.get("usage_deleted_before") {
         Some(Value::Null) => DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
             .map_err(|_| invalid_local_state())?,
         Some(Value::String(value)) => {
@@ -2995,7 +2999,7 @@ fn effective_usage_lower_bound(session: &Value) -> Result<String, BackendError> 
         }
         _ => return Err(invalid_local_state()),
     };
-    Ok(left.max(right).to_rfc3339_opts(SecondsFormat::AutoSi, true))
+    Ok(bound.to_rfc3339_opts(SecondsFormat::AutoSi, true))
 }
 
 fn invalid_local_state() -> BackendError {
@@ -3557,7 +3561,6 @@ mod tests {
             "device_generation": 1,
             "usage_sync_revision": 0,
             "usage_deleted_before": null,
-            "upload_not_before": "1970-01-01T00:00:00Z",
             "session": {
                 "access_token": "qb_access_token_synthetic",
                 "access_expires_at": "2099-01-01T00:00:00Z",
@@ -5660,7 +5663,7 @@ mod tests {
         let now = Utc::now();
         let hour = |back: i64| floor_utc_hour(&(now - Duration::hours(back)));
         let mut session = active_session();
-        session["upload_not_before"] = json!(hour(3));
+        session["usage_deleted_before"] = json!(hour(3));
         state.write_session_json(&session).expect("session");
         for back in [4, 2, 0] {
             state
@@ -6083,28 +6086,25 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Relay's deletion watermark is the whole bound, kept to the instant; a device never
+    /// deleted starts at the epoch, and a session that cannot say which it is fails closed.
     #[test]
     fn usage_lower_bound_is_precise_and_fails_closed() {
-        let session = json!({
-            "upload_not_before": "2026-08-10T00:00:00Z",
-            "usage_deleted_before": "2026-08-10T00:00:00.123Z"
-        });
         assert_eq!(
-            effective_usage_lower_bound(&session).expect("lower bound"),
+            effective_usage_lower_bound(&json!({
+                "usage_deleted_before": "2026-08-10T00:00:00.123Z"
+            }))
+            .expect("lower bound"),
             "2026-08-10T00:00:00.123Z"
         );
-        assert!(
-            effective_usage_lower_bound(&json!({
-                "upload_not_before": "invalid",
-                "usage_deleted_before": null
-            }))
-            .is_err()
+        assert_eq!(
+            effective_usage_lower_bound(&json!({ "usage_deleted_before": null }))
+                .expect("lower bound"),
+            "1970-01-01T00:00:00Z"
         );
         assert!(
-            effective_usage_lower_bound(&json!({
-                "upload_not_before": "2026-08-10T00:00:00Z"
-            }))
-            .is_err()
+            effective_usage_lower_bound(&json!({ "usage_deleted_before": "invalid" })).is_err()
         );
+        assert!(effective_usage_lower_bound(&json!({})).is_err());
     }
 }

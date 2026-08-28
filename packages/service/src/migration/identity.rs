@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 1;
+const CURRENT_SCHEMA: i64 = 2;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -30,6 +30,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
         let tx = conn.transaction()?;
         match version {
             1 => migration_v1(&tx)?,
+            2 => migration_v2(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -92,9 +93,48 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Relay's usage sync revision joins the upload identity, so a revision Relay advances re-seeds
+/// every retained hour the same way a new account or device generation does. An image written
+/// before it existed has never seen one, which is what zero says.
+fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE usage_upload_context ADD COLUMN sync_revision INTEGER NOT NULL DEFAULT 0;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A v1 image keeps its upload identity across the upgrade and starts at revision zero.
+    #[test]
+    fn a_v1_image_gains_the_sync_revision_without_losing_its_upload_identity() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx).expect("v1");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');
+             INSERT INTO usage_upload_context(id, account_id, device_id, generation, lower_bound)
+             VALUES (1, 'account', 'device', 3, '1970-01-01T00:00:00Z');",
+        )
+        .expect("v1 rows");
+        tx.commit().expect("commit");
+
+        apply(&mut conn).expect("upgrade");
+        let (generation, sync_revision): (i64, i64) = conn
+            .query_row(
+                "SELECT generation, sync_revision FROM usage_upload_context WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("context");
+        assert_eq!((generation, sync_revision), (3, 0));
+    }
 
     #[test]
     fn a_fresh_identity_names_this_installation_and_keeps_the_upload_default() {

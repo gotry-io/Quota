@@ -153,7 +153,11 @@ The hour is the unit ([ADR 0024](decisions/0024-hour-versioned-usage-and-daily-r
 recomputes only the UTC hours whose records moved, folding each from the records this device retains,
 and leaves an hour whose facts came out the same untouched. Each recomputed hour carries a monotonic
 scan revision and an upload names whole hours carrying it, so Relay replaces an hour only for a
-strictly newer scan and a retry is a comparison rather than a sequence. A scan that came up short
+strictly newer scan and a retry is a comparison rather than a sequence. The upload identity a device
+stages under is the account, device, generation, Relay's usage sync revision, and the deletion lower
+bound; a change to any of them re-seeds every retained hour, so a device meeting an account for the
+first time sends everything it holds, and Relay can ask for everything again by advancing the
+revision it returns from `/api/v2/device/sync`. A scan that came up short
 marks that hour `partial`, and a read reports a period `partial` when any hour behind it was. An hour
 past 512 distinct rows folds its smallest into `other`, a period's agent tree folds its smallest model
 leaves into `other` past 200, and a bounded read marks truncated unpriced-model detail with
@@ -181,12 +185,13 @@ generation continue when Usage upload is disabled: the service neither stages no
 synchronization stay independent.
 
 Report-time model normalization is a separate derived view over
-`packages/protocol/catalog/model-catalog.json`, matched on an exact `reported_model` plus inference
-`provider` alias and never rewriting the raw text a fact was collected with
+`packages/protocol/catalog/model-catalog.json`: the vendor a model name belongs to by explicit family
+prefix, then an exact `reported_model` plus vendor alias, never rewriting the raw text a fact was
+collected with
 ([ADR 0009](decisions/0009-versioned-model-catalog.md)). Account summaries carry
-`usage.agents[].providers[].models[]`, derived by Relay from retained normalized facts so the
-row-level client, billing-channel provider, and model relationship survives across Devices; clients
-never reconstruct ownership from independent breakdowns or model text. Every billing channel Relay
+`usage.agents[].providers[].models[]`, derived by Relay from retained normalized facts with the same
+catalog so the row-level client, vendor, and model relationship survives across Devices; clients
+never reconstruct ownership from independent breakdowns. Every billing channel Relay
 stores is reported as stored — a client that cannot represent one has to update, which is not a
 reason to rewrite facts on the way out. See [provider strategies](provider-collection.md) for the
 provider ids that resolve each channel.
