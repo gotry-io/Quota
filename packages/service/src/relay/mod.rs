@@ -1036,10 +1036,12 @@ fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
         if !valid_read_enum(object.get("agent").and_then(Value::as_str)) {
             return Err(RelayError::InvalidResponse);
         }
+        // Bounded by the wire's leaf cap, not by the vocabulary this build knows: a vendor a
+        // newer Relay names is read as unknown, not refused along with the whole summary.
         let providers = object
             .get("providers")
             .and_then(Value::as_array)
-            .filter(|providers| providers.len() <= crate::usage::InferenceProvider::ALL.len())
+            .filter(|providers| providers.len() <= 200)
             .ok_or(RelayError::InvalidResponse)?;
         for provider in providers {
             require_response_fields(provider, &["provider", "models"])?;

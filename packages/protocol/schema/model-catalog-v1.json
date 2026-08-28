@@ -12,16 +12,23 @@
     "revision": {
       "$ref": "#/$defs/__schema0"
     },
+    "families": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema1"
+      }
+    },
     "models": {
       "minItems": 1,
       "maxItems": 512,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema1"
+        "$ref": "#/$defs/__schema2"
       }
     }
   },
-  "required": ["schema_version", "revision", "models"],
+  "required": ["schema_version", "revision", "families", "models"],
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
@@ -33,6 +40,23 @@
     "__schema1": {
       "type": "object",
       "properties": {
+        "prefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["openai", "anthropic", "google", "xai", "moonshot", "deepseek", "cursor"]
+        }
+      },
+      "required": ["prefix", "provider"],
+      "additionalProperties": false
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
         "canonical_id": {
           "$ref": "#/$defs/__schema0"
         },
@@ -41,68 +65,57 @@
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema2"
+            "$ref": "#/$defs/__schema3"
           }
         }
       },
       "required": ["canonical_id", "aliases"],
       "additionalProperties": false
     },
-    "__schema2": {
+    "__schema3": {
       "type": "object",
       "properties": {
         "reported_model": {
-          "$ref": "#/$defs/__schema3"
-        },
-        "provider": {
           "$ref": "#/$defs/__schema4"
         },
-        "agent": {
+        "provider": {
           "$ref": "#/$defs/__schema5"
         },
-        "effective_from": {
+        "agent": {
           "$ref": "#/$defs/__schema6"
         },
+        "effective_from": {
+          "$ref": "#/$defs/__schema7"
+        },
         "effective_to": {
-          "$ref": "#/$defs/__schema8"
+          "$ref": "#/$defs/__schema9"
         }
       },
       "required": ["reported_model", "provider"],
       "additionalProperties": false
     },
-    "__schema3": {
+    "__schema4": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?=[\\s\\S]{1,128}$)(?![\\s\\S]*\\p{Cc})[\\s\\S]+$"
     },
-    "__schema4": {
-      "type": "string",
-      "enum": [
-        "openai",
-        "azure_openai",
-        "anthropic",
-        "aws_bedrock",
-        "google_vertex",
-        "openrouter",
-        "xai",
-        "moonshot",
-        "deepseek",
-        "unknown"
-      ]
-    },
     "__schema5": {
+      "type": "string",
+      "enum": ["openai", "anthropic", "google", "xai", "moonshot", "deepseek", "cursor", "unknown"]
+    },
+    "__schema6": {
       "type": "string",
       "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
     },
-    "__schema6": {
-      "$ref": "#/$defs/__schema7"
-    },
     "__schema7": {
+      "$ref": "#/$defs/__schema8"
+    },
+    "__schema8": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
-    "__schema8": {
-      "$ref": "#/$defs/__schema7"
+    "__schema9": {
+      "$ref": "#/$defs/__schema8"
     }
   }
 }

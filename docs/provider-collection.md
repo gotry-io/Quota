@@ -315,12 +315,14 @@ count, and sessions are intentionally not collected. In v3 summaries, `total_tok
 `input_tokens + output_tokens`; cache-read and cache-write input tokens are subsets of input, and
 reasoning tokens are a subset of output.
 
-Provider grouping uses the normalized fact's explicit billing channel, including a documented
-collector-owned default where the source has one. It never derives provider ownership from model
-text or from `client`. The local-v3 `provider` is the channel's inference provider; `client` records
-which agent emitted the usage-bearing output. Summaries are nested as
-`agents[].providers[].models[]`; unknown channels remain the `unknown` provider within their
-originating client.
+Provider grouping is by the vendor whose model answered, resolved from the raw model name by the
+model catalog's family rules ([ADR 0009](decisions/0009-versioned-model-catalog.md)); `client`
+records which agent emitted the usage-bearing output, and neither the agent nor the billing channel
+chooses the group. The billing channel stays on every fact, resolved as the sections below say,
+because pricing and audit depend on it; it fills in a vendor only for a model name no family claims,
+and only when it is a vendor's own endpoint. Summaries are nested as
+`agents[].providers[].models[]`; a name no family or vendor channel claims is the `unknown`
+provider within its originating client.
 
 A provider id resolves a channel only when it is a registered id that authenticates against that
 vendor's own endpoints. Gateway spellings that merely proxy a vendor, such as an `-oauth` suffix on a
@@ -334,9 +336,11 @@ channels newer than a released client to `unknown`.
 
 Collectors preserve every non-empty bounded `model` value exactly as reported, including punctuation,
 case, and unknown provider strings. Model cleanup is applied only while building a report from the
-stored facts. The shared catalog matches an explicit `reported_model` and inference `provider`, with
-optional exact agent `client` and `[effective_from, effective_to)` UTC-date scope; it does not use regex,
-automatic case/trim rules, fuzzy matching, or inferred aliases. Resolved model groups use the stable
+stored facts. The shared catalog names a model's vendor by explicit lowercase `families` prefixes,
+matched ASCII case-insensitively with the longest prefix winning, and matches an alias on an explicit
+`reported_model` and that vendor, with optional exact agent `client` and
+`[effective_from, effective_to)` UTC-date scope; it does not use regex, fuzzy matching, or inferred
+aliases. Resolved model groups use the stable
 canonical ID, while unresolved breakdowns retain the raw value. Updating the catalog regroups
 historical rows on the next report without reparsing source files or modifying SQLite/Relay facts.
 This view is independent of pricing: pricing sees the raw model first, and normalization does not

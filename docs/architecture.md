@@ -165,9 +165,10 @@ no version of its own and moves with `ipc_version`. State snapshots separately c
 detail. `total_tokens` is input plus output; cache-read and cache-write tokens are named input
 subsets; reasoning is an output subset; `messages` sums normalized usage-bearing model output facts
 and is not a session count, because sessions are not collected. The Rust report groups facts by the
-agent that emitted the usage, then each model under the inference provider derived from the fact's
-billing channel — agent and model text never choose that provider. QuotaBar renders agent groups only
-on the Usage detail page; Overview stays quota-only.
+agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
+model's name by the model catalog's family rules — the agent and the billing channel never choose
+that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).
+QuotaBar renders agent groups only on the Usage detail page; Overview stays quota-only.
 
 Local periods fold from the hourly facts with SQL at refresh time, so no read loads the record
 history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are bounded by the

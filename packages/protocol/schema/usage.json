@@ -456,7 +456,7 @@
           "$ref": "#/$defs/__schema3"
         },
         "providers": {
-          "maxItems": 10,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema30"
@@ -473,14 +473,12 @@
           "type": "string",
           "enum": [
             "openai",
-            "azure_openai",
             "anthropic",
-            "aws_bedrock",
-            "google_vertex",
-            "openrouter",
+            "google",
             "xai",
             "moonshot",
             "deepseek",
+            "cursor",
             "unknown"
           ]
         },

@@ -24,29 +24,29 @@ public enum BillingChannel: String, Codable, Sendable, TolerantWireEnum {
   case unknown
 }
 
+/// The company whose model answered, which is what a Usage summary groups by.
+///
+/// The service resolves it from the model's name; a gateway that merely billed the request is
+/// never a group of its own.
 public enum InferenceProvider: String, CaseIterable, Codable, Sendable, TolerantWireEnum {
   case openai
-  case azureOpenAI = "azure_openai"
   case anthropic
-  case awsBedrock = "aws_bedrock"
-  case googleVertex = "google_vertex"
-  case openrouter
+  case google
   case xai
   case moonshot
   case deepseek
+  case cursor
   case unknown
 
   public var displayName: String {
     switch self {
     case .openai: "OpenAI"
-    case .azureOpenAI: "Azure OpenAI"
     case .anthropic: "Anthropic"
-    case .awsBedrock: "AWS Bedrock"
-    case .googleVertex: "Google Vertex AI"
-    case .openrouter: "OpenRouter"
+    case .google: "Google"
     case .xai: "xAI"
     case .moonshot: "Moonshot AI"
     case .deepseek: "DeepSeek"
+    case .cursor: "Cursor"
     case .unknown: "Unknown Provider"
     }
   }
@@ -593,8 +593,10 @@ public struct UsageAgentUsage: Codable, Equatable, Sendable {
     }
   }
 
+  /// Bounded by the wire's leaf cap, not by the vocabulary this build knows: a vendor a newer
+  /// Relay names is read as `.unknown`, not refused along with the whole summary.
   public var isValid: Bool {
-    providers.count <= InferenceProvider.allCases.count && providers.allSatisfy(\.isValid)
+    providers.count <= 200 && providers.allSatisfy(\.isValid)
   }
 
   private enum CodingKeys: String, CodingKey {

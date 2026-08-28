@@ -378,11 +378,12 @@ The default page contains:
 - Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
   and message metrics in a two-column grid. Headline values use the primary text tone; grid labels
   stay muted while their values use the secondary tone.
-- Models: grouped by inference provider, independent of the collecting client. Every model remains a
+- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
+  — independent of the collecting client and of who billed the request. Every model remains a
   static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
 
-Provider headings use the structured inference-provider brand mark; never infer an icon from model
-text. Model rows have no repeated icon and align under the provider label. When no owned brand asset
+Provider headings use the brand mark of the structured provider the service sent; the client never
+reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
 exists, use an honest semantic system symbol rather than another provider's logo. Approved
 monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
 Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt

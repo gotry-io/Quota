@@ -2486,12 +2486,20 @@ impl LocalBackend for NativeBackend {
             .flatten()
             .and_then(|component| component.value)
             .and_then(|value| serde_json::from_value(value).ok());
-        let cached_model_catalog = self.state.model_catalog().ok().flatten().and_then(|value| {
-            crate::model_catalog::validate_model_catalog_value(&value)
-                .valid
-                .then(|| serde_json::from_value(value).ok())
-                .flatten()
-        });
+        // Relay's catalog is the published one; the build's own copy stands in until a device
+        // has read it, so vendor grouping does not wait on a first successful fetch.
+        let cached_model_catalog = self
+            .state
+            .model_catalog()
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::model_catalog::validate_model_catalog_value(&value)
+                    .valid
+                    .then(|| serde_json::from_value(value).ok())
+                    .flatten()
+            })
+            .or_else(|| Some(crate::model_catalog::bundled_model_catalog()));
         let (pricing, model_catalog_refresh) = thread::scope(|scope| {
             let pricing_job = scope.spawn(|| self.refresh_pricing());
             let model_catalog_job = scope.spawn(|| self.refresh_model_catalog());

@@ -357,6 +357,7 @@ export function validatePricingCatalog(input: unknown): PricingCatalogValidation
 
 export type ModelCatalogValidationIssue =
   | { code: "invalid_schema"; path: string; message: string }
+  | { code: "duplicate_family_prefix"; prefix: string }
   | { code: "duplicate_canonical_id"; canonical_id: string }
   | { code: "ambiguous_aliases"; reported_model: string; provider: InferenceProvider };
 
@@ -379,6 +380,13 @@ export function validateModelCatalog(input: unknown): ModelCatalogValidationResu
   }
 
   const issues: ModelCatalogValidationIssue[] = [];
+  const prefixes = new Set<string>();
+  for (const family of parsed.data.families) {
+    if (prefixes.has(family.prefix)) {
+      issues.push({ code: "duplicate_family_prefix", prefix: family.prefix });
+    }
+    prefixes.add(family.prefix);
+  }
   const ids = new Set<string>();
   let aliasCount = 0;
   for (const model of parsed.data.models) {
@@ -425,6 +433,28 @@ export function validateModelCatalog(input: unknown): ModelCatalogValidationResu
   return issues.length === 0 ? { valid: true, catalog: parsed.data } : { valid: false, issues };
 }
 
+/**
+ * The company whose model answered this row.
+ *
+ * The model's name decides, through the catalog's family rules: the longest prefix that
+ * matches, ASCII case-insensitively, names the provider. A name no family claims falls back
+ * to the vendor the billing channel belongs to, when the channel is a vendor's own; a gateway
+ * or an unknown channel says nothing about who made the model.
+ */
+export function resolveProvider(
+  catalog: ModelCatalog,
+  row: Pick<DatedUsageRow, "model" | "billing_channel">,
+): InferenceProvider {
+  const model = row.model.toLowerCase();
+  let match: ModelCatalog["families"][number] | undefined;
+  for (const family of catalog.families) {
+    if (model.startsWith(family.prefix) && family.prefix.length > (match?.prefix.length ?? 0)) {
+      match = family;
+    }
+  }
+  return match?.provider ?? fallbackProvider(row.billing_channel);
+}
+
 /** Resolve an exact canonical ID or explicitly scoped alias. */
 export function resolveModel(
   catalog: ModelCatalog,
@@ -433,7 +463,7 @@ export function resolveModel(
   const canonical = catalog.models.find((model) => model.canonical_id === row.model);
   if (canonical) return canonical.canonical_id;
   const date = row.date;
-  const provider = inferenceProvider(row.billing_channel);
+  const provider = resolveProvider(catalog, row);
   const matches = catalog.models.flatMap((model) =>
     model.aliases
       .filter(
@@ -471,9 +501,11 @@ function aliasesOverlap(
   return startsOverlap && endsOverlap;
 }
 
-export function inferenceProvider(channel: BillingChannel): InferenceProvider {
+/** The vendor a billing channel belongs to, for a model name no family claims. */
+export function fallbackProvider(channel: BillingChannel): InferenceProvider {
   switch (channel) {
     case "openai_direct":
+    case "azure_openai":
       return "openai";
     case "anthropic_direct":
       return "anthropic";
@@ -484,7 +516,7 @@ export function inferenceProvider(channel: BillingChannel): InferenceProvider {
     case "deepseek_direct":
       return "deepseek";
     default:
-      return channel;
+      return "unknown";
   }
 }
 
