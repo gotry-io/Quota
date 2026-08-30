@@ -290,18 +290,18 @@ fn quota_windows(
         windows.push(window);
     }
     if let Some(on_demand) = individual.and_then(|value| obj_get(value, "onDemand"))
-        && let Some(window) = money_window("on_demand", "On-demand", on_demand, reset.clone())
+        && let Some(window) = money_window("on_demand", "On-Demand", on_demand, reset.clone())
     {
         windows.push(window);
     }
     if let Some(pooled) = team.and_then(|value| obj_get(value, "pooled"))
-        && let Some(window) = money_window("team_pool", "Team pool", pooled, reset.clone())
+        && let Some(window) = money_window("team_pool", "Team Pool", pooled, reset.clone())
     {
         windows.push(window);
     }
     if let Some(on_demand) = team.and_then(|value| obj_get(value, "onDemand"))
         && let Some(window) =
-            money_window("team_on_demand", "Team on-demand", on_demand, reset.clone())
+            money_window("team_on_demand", "Team On-Demand", on_demand, reset.clone())
     {
         windows.push(window);
     }

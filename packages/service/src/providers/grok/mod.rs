@@ -331,7 +331,7 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
     {
         Some(value) if value.contains("weekly") => "Weekly",
         Some(value) if value.contains("monthly") => "Monthly",
-        _ => "Billing cycle",
+        _ => "Billing Cycle",
     };
     Ok(QuotaWindow {
         id: "billing_cycle".to_owned(),

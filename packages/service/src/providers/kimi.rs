@@ -443,7 +443,7 @@ fn map_windows(data: &Usage) -> Vec<QuotaWindow> {
         windows.push(window("weekly", "Weekly", detail));
     }
     if let Some(detail) = &data.five_hour {
-        windows.push(window("five_hour", "5 hour", detail));
+        windows.push(window("five_hour", "5 Hours", detail));
     }
     windows
 }

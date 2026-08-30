@@ -187,10 +187,10 @@ fn map_windows(credits: Option<&Credits>, key: Option<&Key>) -> Vec<QuotaWindow>
     {
         let remaining = (limit - used).max(0.0);
         let (id, title) = match key.reset.as_deref() {
-            Some("daily") => ("key_daily", "API key daily"),
-            Some("weekly") => ("key_weekly", "API key weekly"),
-            Some("monthly") => ("key_monthly", "API key monthly"),
-            _ => ("key_budget", "API key budget"),
+            Some("daily") => ("key_daily", "API Key Daily"),
+            Some("weekly") => ("key_weekly", "API Key Weekly"),
+            Some("monthly") => ("key_monthly", "API Key Monthly"),
+            _ => ("key_budget", "API Key Budget"),
         };
         windows.push(QuotaWindow {
             id: id.to_owned(),

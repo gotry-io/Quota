@@ -303,7 +303,7 @@ private enum OverviewWidgetPreviewFixtures {
       WidgetQuotaItem(
         providerID: "codex",
         providerDisplayName: "Codex",
-        windowTitle: "5 hour",
+        windowTitle: "5 Hours",
         remainingPercent: 68,
         hasLimit: true,
         resetsAt: now.addingTimeInterval(2_700)
@@ -311,7 +311,7 @@ private enum OverviewWidgetPreviewFixtures {
       WidgetQuotaItem(
         providerID: "claude",
         providerDisplayName: "Claude Code",
-        windowTitle: "Session",
+        windowTitle: "5 Hours",
         remainingPercent: 53,
         hasLimit: true,
         resetsAt: now.addingTimeInterval(7_200)

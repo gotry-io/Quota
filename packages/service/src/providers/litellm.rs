@@ -266,7 +266,7 @@ fn map_windows(personal: Option<&Budget>, team: Option<&Budget>) -> Vec<QuotaWin
         let remaining = (limit - budget.spend).max(0.0);
         Some(QuotaWindow {
             id: id.to_owned(),
-            title: format!("{} budget", budget.label),
+            title: format!("{} Budget", budget.label),
             used_percent: clamp_percent(budget.spend / limit * 100.0),
             resets_at: budget.reset.clone(),
             duration_seconds: None,

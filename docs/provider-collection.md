@@ -230,7 +230,10 @@ Acquisition happens in QuotaBar, never during a refresh:
 5. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
-   window is not labeled as 5-hour. A null code-review object is absent, not malformed.
+   window is not labeled **5 Hours**. Additional `limit_name` values are Title Case
+   (`gpt-reserve` → **GPT Reserve**). Spark is **Codex Spark 5 Hours** / **Codex Spark Weekly**;
+   Code Review is **Code Review 5 Hours** / **Code Review Weekly**. A null code-review object is
+   absent, not malformed.
 6. Do not fall back after a successful but malformed response; report the parser failure instead.
 7. If neither credential exists or both answer `auth_required`, and a stored ChatGPT
    [browser session](#browser-session) exists, read `GET https://chatgpt.com/api/auth/session`
@@ -304,9 +307,11 @@ reset-credit redemption are not used.
    `claudeAiOauth` at all, and no withheld Keychain item each mean no attempt and no record.
 4. Call `GET https://api.anthropic.com/api/oauth/usage` with
    `anthropic-beta: oauth-2025-04-20`.
-5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Every
-   weekly limit meters one seven-day cycle, so a weekly window that reports no reset of its own —
-   model-scoped or not — takes the seven-day window's reset.
+5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Titles are
+   **5 Hours**, **Weekly**, **Sonnet Weekly**, **Opus Weekly**, **OAuth Apps Weekly**,
+   **{Model} Only**, **Daily Routines**, and **Extra Usage**. Every weekly limit meters one
+   seven-day cycle, so a weekly window that reports no reset of its own — model-scoped or not —
+   takes the seven-day window's reset.
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
@@ -530,7 +535,7 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    QuotaBar acquires those cookies from `grok.com` / `www.grok.com`.
 
 The billing RPC exposes only the reset instant, whichever credential reached it: 20–45 days out is
-**Monthly**, anything nearer is the **Weekly** credit pool, and no reset stays **Billing cycle**.
+**Monthly**, anything nearer is the **Weekly** credit pool, and no reset stays **Billing Cycle**.
 
 The local service never submits the refresh token itself, never writes `auth.json`, and never
 starts Grok's interactive browser login. That CLI is solely responsible for refresh-token rotation
@@ -561,7 +566,8 @@ Aligned with CodexBar's OpenRouter provider (credits + API-key limit meters).
    convert that state to malformed-data `error`.
 3. Map windows (remaining is always `100 - used_percent` in consumers). Absolute USD fields are
    optional protocol extensions for credits-class UIs:
-   - **API key budget** (primary when present): when `limit > 0`, used amount prefers
+   - **API Key Budget** (primary when present; **API Key Daily** / **Weekly** / **Monthly** when
+     `limit_reset` names a period): when `limit > 0`, used amount prefers
      `limit - clamp(limit_remaining)`, else the spend field matching `limit_reset`
      (`usage_daily` / `usage_weekly` / `usage_monthly`), else cumulative `usage`. Emit
      `remaining_value` / `limit_value` / `value_unit: "usd"` alongside `used_percent`.
@@ -616,7 +622,7 @@ Aligned with CodexBar's Kimi Code Automatic order: API key → CLI credential �
 2. Call `GET {base}/coding/v1/usages` with `Authorization: Bearer <key>`.
 3. Map windows:
    - **Weekly** from top-level `usage` (request counts; `value_unit: "count"`).
-   - **5 hour** only from `limits[]` where window duration is exactly 300 minutes (also when it is
+   - **5 Hours** only from `limits[]` where window duration is exactly 300 minutes (also when it is
      the only entry).
 4. If no API key is configured, or the Code API returns 401/403, read
    `$KIMI_CODE_HOME/credentials/kimi-code.json` or `~/.kimi-code/credentials/kimi-code.json`
@@ -691,7 +697,7 @@ managed Account.
    and Other Models windows map from `individualUsage.plan.autoPercentUsed` and `apiPercentUsed`.
    Other Models also carries the included API dollar remaining from `plan.used` / `limit` /
    `remaining` (cents). Cursor Models is percent-only. `totalPercentUsed` is not a third quota.
-   Individual, on-demand, team pool, and team on-demand cents-based limits map to remaining USD
+   Individual, **On-Demand**, **Team Pool**, and **Team On-Demand** cents-based limits map to remaining USD
    windows. HTTP 401/403 is `auth_required`; malformed/partial payloads do not expose provider
    response data.
 6. Two dashboard calls are best-effort with a five-second cap; neither failure fails the refresh:
@@ -702,7 +708,7 @@ managed Account.
    - `GET https://cursor.com/api/usage?user=<sub>` with the `/api/auth/me` subject is the legacy
      request-based plan. When `gpt-4.maxRequestUsage` is positive, a single **Requests** window
      (`numRequestsTotal`, else `numRequests`; `value_unit: "count"`) replaces Cursor Models, Other
-     Models, and Grok Bot, which only describe usage-based pricing. On-demand and team windows
+     Models, and Grok Bot, which only describe usage-based pricing. On-Demand and team windows
      remain.
 7. Catalog `account_sync` is true, so Cursor snapshots enter managed envelopes and Account
    summaries. Browser cookies and the Cursor.app access token still never leave the local service.
