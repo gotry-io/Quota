@@ -208,6 +208,7 @@ Overview
     │   └── Diagnostics
     └── Agents
         └── Provider
+            └── Source
 ```
 
 ### Overview
@@ -218,7 +219,15 @@ observation. Swift never repeats that policy. Never add or average percentages a
 
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
 totals stay on the Usage detail page in Settings and never create or extend an Overview provider
-group. What today cost is the shell's bottom bar, not an Overview row.
+group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
+the only Overview destination into that agent's Settings page (`Settings → Agents → Provider`).
+It is a destination at `minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
+name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
+extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
+has margin from the panel edge. Overview is not a Settings group and does not use the group's
+4pt nested inset. Quota windows, account labels, and status detail under it are static
+reading content and do not take that surface. The heading remains keyboard and VoiceOver
+reachable. Back follows the stack.
 
 Each quota observation shows:
 
@@ -436,48 +445,117 @@ Summary and model values use two fractional digits to preserve the single-line l
 ### Agents
 
 Agents has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
-reordering and VoiceOver Move Up/Move Down actions. A quiet desktop symbol means an account device
-has a presentable observation for that provider.
+reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
+name — `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
+one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
+configured**, or **Not signed in** — so the list says which agent needs attention before it is
+opened. The Settings home **Agents** row trails **3 shown** and, when any shown agent has no
+working credential and no device reporting it, **· 1 needs sign-in**.
 
-Provider detail contains:
+Provider detail is read top to bottom as three questions — is it shown, what is it reporting,
+how does this Mac sign in — and contains exactly these sections, in this order:
 
-- **Overview**: provider-wide visibility switch;
-- **Reporting From**: This Mac or account device display names, the source kind, and the shared
-  freshness line for that reading;
-- **This Mac Sign-in**: the catalog-provided copyable official-provider command, shown with Browser
-  Session unless that session is catalog `exclusive` (Cursor); or
-- **This Mac Configuration**: native secure API-key entry, optional base URL when catalog-enabled,
-  masked saved state, Save, and Remove; and
-- **Browser Session** when catalog-enabled (Cursor, Codex, Claude, Grok, Kimi): disconnected
-  **Sign In**, bounded **Waiting / Cancel**, non-cancellable **Connecting** after commit begins, or
-  a connected masked account with only **Disconnect**. Sign In, Cancel, and Disconnect are the same compact secondary
-  control; do not use an accent capsule or explanatory body copy on this surface. Confirmed
-  disconnect is likewise non-cancellable. There is no switch-account action; a different account is
-  disconnect, then sign in. A read macOS refused is its own row, carried by
-  `exclamationmark.triangle` rather than the generic `exclamationmark.circle`, and it replaces the
-  ordinary error line rather than stacking with it.
+- **Overview**: one **Show in Overview** switch, no subtitle. Visibility is provider-wide and
+  presentation-only.
+- **Accounts**: one group for every subscription. Each account is a bold row inside the group —
+  the masked account label, or **Account 1**, **Account 2** when there is no label, so two
+  accounts cannot share a blank name — with the compact source menu as that row's trailing
+  control; its sources follow as indented destination rows, and a hairline separates one
+  account from the next. The menu uses `fieldFill` on the 24pt compact surface
+  (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
+  **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
+  size. It opens an app-owned floating menu (the same material as Settings overflow), not a
+  system Menu. Choice rows use `fieldMinHeight` (32pt); the first item is **Automatic** with
+  the quiet line **Newest live reading** under it, the rest are the available sources with no
+  subtitle and no leading icons; the accent checkmark after the title is the only selected mark.
+  Escape or a click outside the trigger and list dismisses it. VoiceOver names the control
+  **Show from** and states the mode (Automatic or Pinned), the source Overview is actually
+  showing, and the freshness. Source rows are destinations only — device icon, name, the shared
+  freshness line trailing, `chevron.right` — and never select. The source Overview is actually
+  showing uses a filled device icon in accent; other devices stay outline in body. VoiceOver adds
+  **Showing on Overview**. A pin whose source has gone is dropped and Automatic resumes. With no
+  subscription yet the group holds one line: **No readings yet. Sign in below to start
+  reporting.**
+- **Source**: a read-only page titled with the source display name. Under **Quota** it states
+  freshness, then that source's remaining-quota windows. It does not repeat the source name,
+  source type, account label, or plan. If the snapshot is not yet available it keeps the
+  freshness line and does not invent empty quota. If the source has gone: **This source is no
+  longer reporting.** There is no **Use this source** action; selection stays on the provider
+  page menu.
+- **Sign-in**: one group listing every credential rung this Mac has for the provider, in the
+  order collection tries them, each with the verdict the last collection reached. Rung rows
+  are `SignInRungPresentation`'s: **Codex CLI** / **Claude Code CLI** / **Grok CLI** /
+  **Kimi Code CLI** (`terminal`), **API Key** (`key`, a destination row to the API Key page),
+  **Cursor App** (`macwindow`), and **Browser Sign-in** (`safari`, a switch). The trailing
+  status word is **Signed in**, **Configured**, or **On** in accent; **Not signed in**, **Not
+  configured**, or **Rejected** in warning; **Unavailable** in body with the collection message
+  as the subtitle. A CLI rung that is not signed in shows the catalog-provided copyable command
+  as an indented `QuotaCommandRow` under it; a signed-in one shows no command. Kimi's key and
+  CLI-file rungs answer the report by different source ids (`kimi_code_usages_api`,
+  `kimi_code_cli_credential`), so each row carries its own verdict. Cursor is catalog
+  `exclusive`: it has no command row, and its first rung is the Cursor.app session.
+- **API Key**: a page for the providers with a key rung — native secure entry, optional base URL
+  when catalog-enabled, the masked saved state, Save, and Remove. The Agent page row shows the
+  masked key and status only.
+- **Browser Sign-in** is a rung row, not its own section: the switch's subtitle says what it
+  is a fallback for while off (**Fallback when the CLI is signed out**), then **Looking for
+  sign-ins…**, the accounts found, or where it looked and did not find one — **No sign-in in
+  Chrome · Safari not checked** — so a browser that was read and held nothing never reads as
+  one that was never opened. Off means QuotaBar does not
+  read cookie jars. On asks for consent, then scans every allowed browser when this Mac has no
+  usable official credential, and stores every validated session. A read macOS refused is its
+  own line under the row, carried by `exclamationmark.triangle` rather than the generic
+  `exclamationmark.circle`, and it replaces the ordinary error line rather than stacking with
+  it.
 
-Browser-session login uses app-owned selection/confirmation popups at the panel root, never system
-alerts or sheets. Login is pinned to one supported browser; an unsupported default HTTPS handler
-requires a browser selection before opening the URL. One unambiguous new account may commit
-automatically; multiple accounts require selection. Lists scroll within the panel; the popup owns
-focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and accessibility-hidden.
+Turning Browser Sign-in on uses an app-owned confirmation popup at the panel root, never a system
+alert or sheet. There is no browser picker, account picker, Sign In, or Disconnect. The popup
+owns focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and
+accessibility-hidden.
+
+After consent, QuotaBar preflights the browsers installed on this Mac and only then reads jars
+it is already allowed to open. Whatever is still missing opens the **Browser Access** window —
+a floating window rather than a page in the menu extra, because the extra closes on the click
+in System Settings that Full Disk Access needs, and the QuotaBar icon has to be dragged from
+somewhere that stays open. The window activates QuotaBar so it takes keyboard focus; Escape and
+⌘W close it; it keeps the place the person last put it and never moves itself. It lists every
+installed browser QuotaBar could read, one row each, with the browser's own icon, what stands in
+front of its cookies, and at most one action: **Open Settings…** on Safari without Full Disk
+Access, **Allow…** on a Chrome-family browser whose Keychain item still needs Always Allow
+(disabled with a spinner while the system prompt is up), **Ready** with an accent checkmark on a
+browser that can be read, and **Not set up yet** on a Chrome-family browser that has not created
+its Keychain item. Firefox is listed as **Ready** with **No permission needed**. While Safari
+needs Full Disk Access the window also holds a guidance block whose copy leads with turning on
+the switch beside QuotaBar — the read macOS refused during the probe already lists the app there,
+unchecked — and offers the icon to drag in only for the case it is not listed yet. That drag is a
+plain file drag of QuotaBar.app, on the pasteboard from the first pixel; it starts after a 4pt
+threshold, ignores modifier keys, brings System Settings forward first so the list is the window
+under the cursor, and a drop accepted with System Settings in front moves to the relaunch step
+exactly as **Open Settings…** does. After **Open Settings…** the window adds one more row,
+**Relaunch QuotaBar**, whose copy says to relaunch once QuotaBar is in the list — never that the
+grant is already on, which this process cannot know. The window closes on its own when nothing is
+outstanding. Dismissing it leaves Browser Sign-in on.
+
+On the Agent page the outstanding grants are one indented destination row under the switch — **Browser
+Access** with a one-line summary such as **Safari and Chrome need permission** or **Relaunch
+QuotaBar to finish granting Full Disk Access** — that opens the window; there are no per-browser
+rows or action labels in the panel. The row disappears when every installed browser is readable.
+Scheduled refreshes never prompt: they skip Safari without Full Disk Access and any Chrome-family
+browser whose Keychain ACL is not already allowed, and record each as a refusal.
 
 **Consent copy.** Reading another program's cookie jar is the one thing this app does that a person
-has to agree to, so a confirmation popup states what is about to happen before it happens, once the
-browser is known and before any store is opened. Cancel and Escape read nothing. The message says,
-in this order and in plain sentences: which browser will be read, by name; which hosts and which
-cookie names, both quoted from the catalog so the sheet cannot promise a narrower read than the one
-that follows; the permission macOS will ask for, naming only the gatekeeper that browser actually
-has (Full Disk Access for Safari, the "Chrome Safe Storage" Keychain item for a Chrome-family
-browser, neither for Firefox); that the accepted session is stored in QuotaBar's local service
-database on this Mac until disconnected; and that nothing about it is uploaded. Confirm reads
-**Read Cookies**, never "OK" or "Allow".
+has to agree to, so turning **Browser Sign-in** on states what is about to happen before any store
+is opened. Cancel and Escape read nothing. The message is two sentences: that QuotaBar will read
+that provider's sign-in cookies — the cookie names and hosts, both quoted from the catalog — that
+browsers on this Mac hold; and that accepted sessions stay in QuotaBar's local service database
+until the scan is turned off and are never uploaded. It does not list macOS permissions: which one
+each browser needs is only known per installed browser, and the Browser Access window says it
+there. Confirm reads **Read Cookies**, never "OK" or "Allow".
 
 **Refusal copy.** A store macOS would not open is a different state from finding no session, and it
 never reads as one. Each refusal names the browser and the single next action — grant Full Disk
 Access, allow the Keychain item, or quit the browser and retry — and never a store path, a profile
-name, or the underlying error's text. It ends the attempt rather than continuing to poll.
+name, or the underlying error's text. The scan continues with the other browsers.
 
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
@@ -488,10 +566,12 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | --- | --- |
 | `MenuBarShell` | Fixed header/body/footer geometry |
 | `MenuBarHeader` | Back/title/root actions and keyboard-safe transient menu |
-| `SettingsSection` | Quiet label plus adaptive group surface |
+| `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
+| Browser Access window | Floating window independent of the menu extra; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
 | `QuotaListRowButtonStyle` | Nested hover/press feedback with full-row hit target |
@@ -502,9 +582,9 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 | `QuotaSectionStateView` | Left-aligned Loading, Empty, or Error scoped to one section |
 
 Prefer these components over page-local replicas. In-section actions never mix an accent capsule
-with a system or bordered control. **Save** and empty-state **Retry** use compact primary. Browser
-Session **Sign In**, **Cancel**, **Remove**, and **Disconnect** use secondary; destructive labels
-use the destructive variant. Diagnostics' Recheck is a header icon action only; Copy Report and
+with a system or bordered control. **Save** and empty-state **Retry** use compact primary.
+**Remove** uses secondary with the destructive variant. Browser Session is a **Browser Sign-in**
+switch, not a pair of in-section actions. Diagnostics' Recheck is a header icon action only; Copy Report and
 Reset Local Data are Settings list rows. Full-width Settings rows such as **Sign Out** stay list rows. Do not use
 `ButtonStyle.bordered` or an unstyled system button inside the panel. Provider assets remain in
 `Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
@@ -538,8 +618,8 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), Devices, Usage, Menu Bar Style, Menu Bar
-Provider, Support, and Diagnostics. Inspect
+setup variants (CLI, API key, and browser session), a source, Devices, Usage, Menu Bar
+Style, Menu Bar Provider, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

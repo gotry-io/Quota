@@ -17,6 +17,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
             vec![ProviderSession {
                 provider: ProviderId::OpenRouter,
                 credential_source: credentials.source,
+                cookie_header: None,
             }]
         })
         .unwrap_or_default()

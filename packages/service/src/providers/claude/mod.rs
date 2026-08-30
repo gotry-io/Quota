@@ -102,6 +102,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
             .map(|entry| ProviderSession {
                 provider: ProviderId::Claude,
                 credential_source: entry.source().to_owned(),
+                cookie_header: None,
             }),
         context,
     )
@@ -125,7 +126,12 @@ pub fn collect(
         ProviderId::Claude,
         SOURCE,
         || collect_official(context),
-        || web::collect(context),
+        || {
+            let cookie = context
+                .cookie_for_session(session)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+            web::collect(context, cookie)
+        },
     )
 }
 
@@ -868,7 +874,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context
             .browser_sessions
-            .insert(ProviderId::Claude, "sessionKey=sk-ant-ok".to_owned());
+            .insert(ProviderId::Claude, vec!["sessionKey=sk-ant-ok".to_owned()]);
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(
@@ -887,6 +893,7 @@ mod tests {
         let official = ProviderSession {
             provider: ProviderId::Claude,
             credential_source: ".credentials.json".to_owned(),
+            cookie_header: None,
         };
         // Nothing on disk and nothing stored: the credential path's verdict is the answer.
         assert_eq!(
@@ -899,7 +906,7 @@ mod tests {
         // names itself. The header is one this rung rejects without a request.
         context
             .browser_sessions
-            .insert(ProviderId::Claude, "lastActiveOrg=org-2".to_owned());
+            .insert(ProviderId::Claude, vec!["lastActiveOrg=org-2".to_owned()]);
         assert_eq!(
             collect(&official, &context)
                 .expect_err("stored session")

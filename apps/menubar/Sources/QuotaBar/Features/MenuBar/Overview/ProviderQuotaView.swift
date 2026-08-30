@@ -5,10 +5,24 @@ import SwiftUI
 struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
   let now: Date
+  let onOpenProvider: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
-      providerHeader
+      Button(action: onOpenProvider) {
+        providerHeader
+          .padding(.horizontal, QuotaDesign.Spacing.sm)
+          .frame(
+            maxWidth: .infinity,
+            minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+            alignment: .leading
+          )
+          .contentShape(Rectangle())
+      }
+      .padding(.horizontal, -QuotaDesign.Spacing.sm)
+      .buttonStyle(QuotaListRowButtonStyle(surfaceInset: 0))
+      .accessibilityLabel(headerAccessibilityLabel)
+      .accessibilityHint("Opens \(presentation.provider.displayName) settings")
 
       if let detail = presentation.status?.detail {
         Text(detail)
@@ -28,7 +42,14 @@ struct ProviderQuotaView: View {
       }
     }
     .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
-    .accessibilityElement(children: .combine)
+  }
+
+  private var headerAccessibilityLabel: String {
+    if let title = presentation.status?.title {
+      "\(presentation.provider.displayName). \(title)"
+    } else {
+      presentation.provider.displayName
+    }
   }
 
   private var providerHeader: some View {
@@ -49,6 +70,10 @@ struct ProviderQuotaView: View {
       }
 
       Spacer(minLength: 0)
+
+      Image(systemName: "chevron.right")
+        .quotaChevronStyle()
+        .accessibilityHidden(true)
     }
   }
 }
@@ -108,7 +133,7 @@ private struct AccountQuotaView: View {
   }
 }
 
-private struct QuotaWindowRow: View {
+struct QuotaWindowRow: View {
   let window: QuotaWindow
   let provider: ProviderID
   let isStale: Bool

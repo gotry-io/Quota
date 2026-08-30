@@ -116,16 +116,19 @@ public struct AccountDevice: Codable, Equatable, Identifiable, Sendable {
 public struct QuotaSubscriptionSource: Codable, Equatable, Sendable {
   public let deviceID: String
   public let observedAt: Date
+  public let snapshot: QuotaSnapshot?
 
-  public init(deviceID: String, observedAt: Date) {
+  public init(deviceID: String, observedAt: Date, snapshot: QuotaSnapshot?) {
     self.deviceID = deviceID
     self.observedAt = observedAt
+    self.snapshot = snapshot
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     deviceID = try container.decode(String.self, forKey: .deviceID)
     observedAt = try container.decode(Date.self, forKey: .observedAt)
+    snapshot = try container.decodeIfPresent(QuotaSnapshot.self, forKey: .snapshot)
     guard WireValidation.isOpaqueID(deviceID) else {
       throw DecodingError.dataCorruptedError(
         forKey: .deviceID,
@@ -138,6 +141,7 @@ public struct QuotaSubscriptionSource: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case deviceID = "deviceId"
     case observedAt
+    case snapshot
   }
 }
 

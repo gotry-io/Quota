@@ -20,6 +20,11 @@ num-bigint = "0.4.6"
 num-traits = "0.2.19"
 rand = "0.8.5"
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# macOS speaks TLS through Secure Transport: edge firewalls that fingerprint rustls handshakes
+# (cursor.com on Vercel) refuse them with a 403 page. See `HttpClient::with_timeout`.
+[target.'cfg(target_os = "macos")'.dependencies]
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "native-tls"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

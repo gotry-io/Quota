@@ -525,6 +525,7 @@ impl StateStore {
         let usage_upload_enabled = self.usage_upload_enabled()?;
         let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
+        let browser_scan_enabled = self.browser_scan_enabled_providers()?;
         let cache_reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
         let session = self.session_json()?;
         self.with_cache(|conn| {
@@ -570,6 +571,7 @@ impl StateStore {
                     .to_wire(),
                 providers,
                 provider_browser_sessions,
+                browser_scan_enabled,
                 overview,
                 cache: CacheState {
                     rebuilding: metadata_flag(conn, REBUILDING_KEY)?,
@@ -1254,6 +1256,57 @@ impl StateStore {
         self.bump_revision()
     }
 
+    pub fn overview_source_pins(&self) -> Result<HashMap<String, String>, StateError> {
+        self.with_identity(|conn| {
+            let stored = preference(conn, OVERVIEW_SOURCE_PINS_KEY)?;
+            Ok(parse_overview_source_pins(stored.as_deref()))
+        })
+    }
+
+    pub fn set_overview_source_pin(
+        &self,
+        identity_key: &str,
+        pin: Option<&str>,
+    ) -> Result<u64, StateError> {
+        if !is_overview_pin_key(identity_key) {
+            return Err(StateError::InvalidState);
+        }
+        if let Some(pin) = pin
+            && !is_overview_pin_value(pin)
+        {
+            return Err(StateError::InvalidState);
+        }
+        let mut pins = self.overview_source_pins()?;
+        match pin {
+            Some(pin) => {
+                pins.insert(identity_key.to_owned(), pin.to_owned());
+            }
+            None => {
+                pins.remove(identity_key);
+            }
+        }
+        let encoded = serde_json::to_string(&pins)?;
+        self.with_identity_mut(|conn| write_preference(conn, OVERVIEW_SOURCE_PINS_KEY, &encoded))?;
+        self.bump_revision()
+    }
+
+    pub fn replace_overview_source_pins(
+        &self,
+        pins: &HashMap<String, String>,
+    ) -> Result<u64, StateError> {
+        for (key, pin) in pins {
+            if !is_overview_pin_key(key) || !is_overview_pin_value(pin) {
+                return Err(StateError::InvalidState);
+            }
+        }
+        if self.overview_source_pins()? == *pins {
+            return self.current_revision();
+        }
+        let encoded = serde_json::to_string(pins)?;
+        self.with_identity_mut(|conn| write_preference(conn, OVERVIEW_SOURCE_PINS_KEY, &encoded))?;
+        self.bump_revision()
+    }
+
     pub fn session_json(&self) -> Result<Option<Value>, StateError> {
         self.with_identity(|conn| {
             let raw: Option<String> = conn
@@ -1474,35 +1527,20 @@ impl StateStore {
         self.current_revision()
     }
 
-    pub fn provider_browser_session(
-        &self,
-        provider: &str,
-    ) -> Result<Option<ProviderBrowserSession>, StateError> {
-        self.with_identity(|conn| {
-            let session = conn
-                .query_row(
-                    "SELECT cookie_header, account_fingerprint, account_label
-             FROM provider_browser_sessions WHERE provider = ?1",
-                    [provider],
-                    |row| {
-                        Ok(ProviderBrowserSession {
-                            cookie_header: row.get(0)?,
-                            account_fingerprint: row.get(1)?,
-                            account_label: row.get(2)?,
-                        })
-                    },
-                )
-                .optional()?;
-            session
-                .map(|session| validate_browser_session(provider, session))
-                .transpose()
-        })
-    }
-
     pub fn provider_browser_sessions(
         &self,
     ) -> Result<Vec<(crate::catalog::ProviderId, ProviderBrowserSession)>, StateError> {
         self.with_identity(read_provider_browser_sessions)
+    }
+
+    pub fn provider_browser_session(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ProviderBrowserSession>, StateError> {
+        Ok(self
+            .provider_browser_sessions_for(provider)?
+            .into_iter()
+            .next())
     }
 
     pub fn set_provider_browser_session(
@@ -1510,32 +1548,101 @@ impl StateStore {
         provider: &str,
         session: &ProviderBrowserSession,
     ) -> Result<u64, StateError> {
-        validate_browser_session(provider, session.clone())?;
+        self.replace_provider_browser_sessions(provider, std::slice::from_ref(session))
+    }
+
+    pub fn remove_provider_browser_session(&self, provider: &str) -> Result<u64, StateError> {
+        self.remove_provider_browser_sessions(provider)
+    }
+
+    pub fn provider_browser_sessions_for(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<ProviderBrowserSession>, StateError> {
+        Ok(self
+            .provider_browser_sessions()?
+            .into_iter()
+            .filter(|(id, _)| id.as_str() == provider)
+            .map(|(_, session)| session)
+            .collect())
+    }
+
+    pub fn browser_scan_enabled(&self, provider: &str) -> Result<bool, StateError> {
+        let key = browser_scan_preference_key(provider);
+        self.with_identity(|conn| Ok(preference(conn, &key)?.as_deref() == Some("1")))
+    }
+
+    pub fn browser_scan_enabled_providers(&self) -> Result<Vec<String>, StateError> {
+        self.with_identity(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT key FROM preferences WHERE key LIKE 'browser_scan:%' AND value = '1'",
+            )?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            let mut providers = Vec::new();
+            for row in rows {
+                let key: String = row?;
+                if let Some(provider) = key.strip_prefix("browser_scan:") {
+                    providers.push(provider.to_owned());
+                }
+            }
+            providers.sort();
+            Ok(providers)
+        })
+    }
+
+    pub fn set_browser_scan_enabled(
+        &self,
+        provider: &str,
+        enabled: bool,
+    ) -> Result<u64, StateError> {
+        let key = browser_scan_preference_key(provider);
+        self.with_identity_mut(|conn| {
+            write_preference(conn, &key, if enabled { "1" } else { "0" })
+        })?;
+        if !enabled {
+            let _ = self.remove_provider_browser_sessions(provider)?;
+        }
+        self.bump_revision()
+    }
+
+    pub fn replace_provider_browser_sessions(
+        &self,
+        provider: &str,
+        sessions: &[ProviderBrowserSession],
+    ) -> Result<u64, StateError> {
+        for session in sessions {
+            validate_browser_session(provider, session.clone())?;
+        }
+        let current = self.provider_browser_sessions_for(provider)?;
+        if browser_sessions_equivalent(&current, sessions) {
+            return self.current_revision();
+        }
         self.with_identity_mut(|conn| {
             conn.execute(
-                "INSERT INTO provider_browser_sessions(
-                provider, cookie_header,
-                account_fingerprint, account_label, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(provider) DO UPDATE SET
-                cookie_header = excluded.cookie_header,
-                account_fingerprint = excluded.account_fingerprint,
-                account_label = excluded.account_label,
-                updated_at = excluded.updated_at",
-                params![
-                    provider,
-                    session.cookie_header,
-                    session.account_fingerprint,
-                    session.account_label,
-                    now_rfc3339()
-                ],
+                "DELETE FROM provider_browser_sessions WHERE provider = ?1",
+                [provider],
             )?;
+            for session in sessions {
+                conn.execute(
+                    "INSERT INTO provider_browser_sessions(
+                        provider, cookie_header,
+                        account_fingerprint, account_label, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        provider,
+                        session.cookie_header,
+                        session.account_fingerprint,
+                        session.account_label,
+                        now_rfc3339()
+                    ],
+                )?;
+            }
             Ok(())
         })?;
         self.bump_revision()
     }
 
-    pub fn remove_provider_browser_session(&self, provider: &str) -> Result<u64, StateError> {
+    pub fn remove_provider_browser_sessions(&self, provider: &str) -> Result<u64, StateError> {
         let removed = self.with_identity_mut(|conn| {
             Ok(conn.execute(
                 "DELETE FROM provider_browser_sessions WHERE provider = ?1",
@@ -2382,6 +2489,27 @@ fn validate_browser_session(
         return Err(StateError::InvalidState);
     }
     Ok(session)
+}
+
+fn browser_sessions_equivalent(
+    left: &[ProviderBrowserSession],
+    right: &[ProviderBrowserSession],
+) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let key = |session: &ProviderBrowserSession| {
+        (
+            session.account_fingerprint.clone(),
+            session.cookie_header.clone(),
+            session.account_label.clone(),
+        )
+    };
+    let mut left_keys: Vec<_> = left.iter().map(key).collect();
+    let mut right_keys: Vec<_> = right.iter().map(key).collect();
+    left_keys.sort_unstable();
+    right_keys.sort_unstable();
+    left_keys == right_keys
 }
 
 /// One staged upload: an hour, the version of the scan behind it, and its rows.
@@ -3568,6 +3696,26 @@ fn lock_with_deadline(lock: &Mutex<Connection>) -> Result<MutexGuard<'_, Connect
             }
         }
     }
+}
+
+const OVERVIEW_SOURCE_PINS_KEY: &str = "overview_source_pins";
+
+fn parse_overview_source_pins(stored: Option<&str>) -> HashMap<String, String> {
+    stored
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default()
+}
+
+fn is_overview_pin_key(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && !value.contains('\0')
+}
+
+fn is_overview_pin_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && !value.contains('\0')
+}
+
+fn browser_scan_preference_key(provider: &str) -> String {
+    format!("browser_scan:{provider}")
 }
 
 fn parse_quota_refresh_interval(stored: Option<&str>) -> u64 {

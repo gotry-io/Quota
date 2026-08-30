@@ -160,7 +160,7 @@ private struct MenuBarChoiceGroup<Content: View>: View {
 }
 
 /// One option: its name, and a checkmark on the one in force.
-private struct MenuBarChoiceRow<Leading: View>: View {
+struct MenuBarChoiceRow<Leading: View>: View {
   let title: String
   var subtitle: String? = nil
   let isSelected: Bool

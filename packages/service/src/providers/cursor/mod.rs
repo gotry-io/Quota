@@ -37,6 +37,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
         app::usable_session(context).then(|| ProviderSession {
             provider: ProviderId::Cursor,
             credential_source: app::SOURCE.to_owned(),
+            cookie_header: None,
         }),
         context,
     )
@@ -140,7 +141,7 @@ pub fn collect(
         },
         || {
             let cookie_header = context
-                .browser_session(ProviderId::Cursor)
+                .cookie_for_session(session)
                 .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
             collect_with_cookie(cookie_header, context, WEB_SOURCE)
         },
@@ -463,7 +464,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context
             .browser_sessions
-            .insert(ProviderId::Cursor, "wos-session=stored".to_owned());
+            .insert(ProviderId::Cursor, vec!["wos-session=stored".to_owned()]);
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].credential_source, BROWSER_SESSION_SOURCE);
@@ -482,10 +483,11 @@ mod tests {
         };
         context
             .browser_sessions
-            .insert(ProviderId::Cursor, "wos-session=stored".to_owned());
+            .insert(ProviderId::Cursor, vec!["wos-session=stored".to_owned()]);
         let session = |credential_source: &str| ProviderSession {
             provider: ProviderId::Cursor,
             credential_source: credential_source.to_owned(),
+            cookie_header: None,
         };
 
         let app = collect(&session(app::SOURCE), &context).expect_err("cancelled");

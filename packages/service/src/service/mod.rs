@@ -13,6 +13,7 @@ use crate::protocol::*;
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
 };
+use chrono::Utc;
 use serde_json::Value;
 
 pub trait EventSink: Send + Sync {
@@ -608,17 +609,18 @@ impl LocalService {
             Operation::SetQuotaRefreshInterval => {
                 self.set_quota_refresh_interval(&request).map(as_json)
             }
+            Operation::SetOverviewSourcePin => self.set_overview_source_pin(&request).map(as_json),
             Operation::SetProviderConfig => self.set_provider_config(&request).map(as_json),
             Operation::RemoveProviderConfig => self.remove_provider_config(&request).map(as_json),
             Operation::ValidateProviderBrowserSession => self
                 .validate_provider_browser_session(&request)
                 .map(as_json),
-            Operation::CommitProviderBrowserSession => {
-                self.commit_provider_browser_session(&request).map(as_json)
+            Operation::SetProviderBrowserScan => {
+                self.set_provider_browser_scan(&request).map(as_json)
             }
-            Operation::RemoveProviderBrowserSession => {
-                self.remove_provider_browser_session(&request).map(as_json)
-            }
+            Operation::ReplaceProviderBrowserSessions => self
+                .replace_provider_browser_sessions(&request)
+                .map(as_json),
             Operation::Shutdown => self.shutdown_response(&request).map(as_json),
         };
         match result {
@@ -983,6 +985,110 @@ impl LocalService {
         })
     }
 
+    fn set_overview_source_pin(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<OverviewSourcePinSetting, IpcError> {
+        let payload: SetOverviewSourcePinPayload = request.decode_payload()?;
+        if payload.provider.is_empty()
+            || payload.fingerprint.is_empty()
+            || payload.pin.as_ref().is_some_and(|pin| pin.is_empty())
+            || crate::catalog::ProviderId::parse(&payload.provider).is_none()
+        {
+            return Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            ));
+        }
+        let identity = match payload.scope.as_str() {
+            "global" if payload.identity_source_id.is_none() => QuotaOverviewIdentity {
+                provider: payload.provider,
+                fingerprint: payload.fingerprint,
+                scope: payload.scope,
+                source_id: None,
+            },
+            "source" => match payload.identity_source_id {
+                Some(source_id) if !source_id.is_empty() => QuotaOverviewIdentity {
+                    provider: payload.provider,
+                    fingerprint: payload.fingerprint,
+                    scope: payload.scope,
+                    source_id: Some(source_id),
+                },
+                _ => {
+                    return Err(IpcError::new(
+                        ErrorCode::InvalidRequest,
+                        RecoveryAction::None,
+                    ));
+                }
+            },
+            _ => {
+                return Err(IpcError::new(
+                    ErrorCode::InvalidRequest,
+                    RecoveryAction::None,
+                ));
+            }
+        };
+        let overview = self.inner.state.overview().map_err(state_error)?;
+        let Some(item) = overview.iter().find(|item| item.identity == identity) else {
+            return Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            ));
+        };
+        // A source without its reading can be seen but not shown: pinning it would put the
+        // automatic reading under that source's name.
+        if let Some(pin) = payload.pin.as_deref()
+            && !item
+                .sources
+                .iter()
+                .any(|source| source.source_id == pin && source.snapshot.is_some())
+        {
+            return Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                RecoveryAction::None,
+            ));
+        }
+        let identity_key = backend::overview_identity_key(&identity);
+        self.inner
+            .state
+            .set_overview_source_pin(&identity_key, payload.pin.as_deref())
+            .map_err(state_error)?;
+        self.rebuild_overview()?;
+        self.emit(vec![ComponentName::Quota]);
+        Ok(OverviewSourcePinSetting {
+            identity_key,
+            pin: payload.pin,
+        })
+    }
+
+    fn rebuild_overview(&self) -> Result<(), IpcError> {
+        let snapshot = self.inner.state.snapshot().map_err(state_error)?;
+        let Some(quota) = snapshot.quota.value else {
+            return Ok(());
+        };
+        let previous = self.inner.state.overview().map_err(state_error)?;
+        let pins = self
+            .inner
+            .state
+            .overview_source_pins()
+            .map_err(state_error)?;
+        let (items, kept) = backend::overview_items_and_pins(
+            &quota,
+            snapshot.account.value.as_ref(),
+            &previous,
+            &pins,
+            Utc::now(),
+        );
+        if kept != pins {
+            self.inner
+                .state
+                .replace_overview_source_pins(&kept)
+                .map_err(state_error)?;
+        }
+        self.inner.state.set_overview(&items).map_err(state_error)?;
+        Ok(())
+    }
+
     fn remove_provider_config(&self, request: &IpcRequest) -> Result<ProviderConfigView, IpcError> {
         let payload: ProviderPayload = request.decode_payload()?;
         provider_credential_config(&payload.provider)?;
@@ -1011,89 +1117,105 @@ impl LocalService {
         })
     }
 
-    /// Ends one sign-in attempt, whichever way it went.
-    ///
-    /// A session is validated again and stored. A refusal stores no session and records why the
-    /// store could not be read, so the Support page can say so instead of leaving the reader to
-    /// conclude they are not signed in.
-    fn commit_provider_browser_session(
+    fn set_provider_browser_scan(
         &self,
         request: &IpcRequest,
-    ) -> Result<ProviderBrowserSessionView, IpcError> {
-        let payload: CommitProviderBrowserSessionPayload = request.decode_payload()?;
+    ) -> Result<ProviderBrowserScanSetting, IpcError> {
+        let payload: SetProviderBrowserScanPayload = request.decode_payload()?;
         let provider = browser_session_provider(&payload.provider)?;
-        match (payload.cookie_header.as_deref(), payload.access_denied) {
-            (Some(cookie_header), None) => self.commit_browser_session(provider, cookie_header),
-            (None, Some(denial)) => self.record_browser_access_denial(provider, denial),
-            // Naming both, or neither, is not an attempt this service can answer.
-            _ => Err(IpcError::new(
-                ErrorCode::InvalidRequest,
-                RecoveryAction::None,
-            )),
-        }
-    }
-
-    fn commit_browser_session(
-        &self,
-        provider: crate::catalog::ProviderId,
-        cookie_header: &str,
-    ) -> Result<ProviderBrowserSessionView, IpcError> {
-        let validated = self.validate_browser_session(provider, cookie_header)?;
         self.inner
             .state
-            .set_provider_browser_session(
-                provider.as_str(),
-                &crate::state::ProviderBrowserSession {
-                    cookie_header: validated.cookie_header,
-                    account_fingerprint: validated.account_fingerprint.clone(),
-                    account_label: validated.account_label.clone(),
-                },
-            )
+            .set_browser_scan_enabled(provider.as_str(), payload.enabled)
             .map_err(state_error)?;
-        // A stored session is proof the store was readable, so any refusal on record is stale.
-        let _ = self
-            .inner
-            .state
-            .clear_browser_access_denial(provider.as_str());
+        if !payload.enabled {
+            let _ = self
+                .inner
+                .state
+                .clear_browser_access_denial(provider.as_str());
+        }
         self.emit(vec![ComponentName::Providers]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
-        Ok(ProviderBrowserSessionView {
+        Ok(ProviderBrowserScanSetting {
             provider: provider.as_str().to_owned(),
-            configured: true,
-            account_fingerprint: Some(validated.account_fingerprint),
-            account_label: validated.account_label,
+            enabled: payload.enabled,
         })
     }
 
-    fn record_browser_access_denial(
+    fn replace_provider_browser_sessions(
         &self,
-        provider: crate::catalog::ProviderId,
-        denial: crate::protocol::ProviderBrowserAccessDenial,
-    ) -> Result<ProviderBrowserSessionView, IpcError> {
-        let browser = bounded_browser_name(&denial.browser)?;
-        self.inner
-            .state
-            .set_browser_access_denial(
-                provider.as_str(),
-                &crate::state::BrowserAccessDenial {
-                    browser,
-                    reason: denial.reason,
-                    denied_at: crate::state::now_rfc3339(),
-                },
-            )
-            .map_err(state_error)?;
-        self.emit(vec![ComponentName::Providers]);
-        let stored = self
+        request: &IpcRequest,
+    ) -> Result<EmptyResult, IpcError> {
+        let payload: ReplaceProviderBrowserSessionsPayload = request.decode_payload()?;
+        let provider = browser_session_provider(&payload.provider)?;
+        let mut stored = Vec::new();
+        let mut seen = HashSet::new();
+        let mut last_error = None;
+        for header in &payload.cookie_headers {
+            match self.validate_browser_session(provider, header) {
+                Ok(validated) => {
+                    if !seen.insert(validated.account_fingerprint.clone()) {
+                        continue;
+                    }
+                    stored.push(crate::state::ProviderBrowserSession {
+                        cookie_header: validated.cookie_header,
+                        account_fingerprint: validated.account_fingerprint,
+                        account_label: validated.account_label,
+                    });
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if !payload.cookie_headers.is_empty() && stored.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None)
+            }));
+        }
+        let existing_denial = self
             .inner
             .state
-            .provider_browser_session(provider.as_str())
+            .browser_access_denials()
+            .unwrap_or_default()
+            .get(provider.as_str())
+            .cloned();
+        let before = self.inner.state.current_revision().map_err(state_error)?;
+        let after = self
+            .inner
+            .state
+            .replace_provider_browser_sessions(provider.as_str(), &stored)
             .map_err(state_error)?;
-        Ok(ProviderBrowserSessionView {
-            provider: provider.as_str().to_owned(),
-            configured: stored.is_some(),
-            account_fingerprint: stored.as_ref().map(|s| s.account_fingerprint.clone()),
-            account_label: stored.and_then(|s| s.account_label),
-        })
+        let sessions_changed = after != before;
+        let denial_changed = if let Some(denial) = payload.access_denials.first() {
+            let browser = bounded_browser_name(&denial.browser)?;
+            let same = existing_denial.as_ref().is_some_and(|current| {
+                current.browser == browser && current.reason == denial.reason
+            });
+            if same {
+                false
+            } else {
+                let _ = self.inner.state.set_browser_access_denial(
+                    provider.as_str(),
+                    &crate::state::BrowserAccessDenial {
+                        browser,
+                        reason: denial.reason,
+                        denied_at: crate::state::now_rfc3339(),
+                    },
+                );
+                true
+            }
+        } else if existing_denial.is_some() {
+            let _ = self
+                .inner
+                .state
+                .clear_browser_access_denial(provider.as_str());
+            true
+        } else {
+            false
+        };
+        if sessions_changed || denial_changed {
+            self.emit(vec![ComponentName::Providers]);
+            let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
+        }
+        Ok(EmptyResult {})
     }
 
     fn validated_provider_browser_session(
@@ -1124,31 +1246,6 @@ impl LocalService {
             .backend
             .validate_provider_browser_session(provider, &cookie_header)
             .map_err(|error| error.error)
-    }
-
-    fn remove_provider_browser_session(
-        &self,
-        request: &IpcRequest,
-    ) -> Result<ProviderBrowserSessionView, IpcError> {
-        let payload: ProviderPayload = request.decode_payload()?;
-        let provider = browser_session_provider(&payload.provider)?;
-        self.inner
-            .state
-            .remove_provider_browser_session(provider.as_str())
-            .map_err(state_error)?;
-        // Nothing is being read here any more, so a refusal recorded against it says nothing.
-        let _ = self
-            .inner
-            .state
-            .clear_browser_access_denial(provider.as_str());
-        self.emit(vec![ComponentName::Providers]);
-        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
-        Ok(ProviderBrowserSessionView {
-            provider: provider.as_str().to_owned(),
-            configured: false,
-            account_fingerprint: None,
-            account_label: None,
-        })
     }
 
     fn shutdown_response(&self, request: &IpcRequest) -> Result<EmptyResult, IpcError> {
@@ -2423,10 +2520,21 @@ mod tests {
 
     struct BrowserSessionBackend {
         reject: bool,
+        refresh_calls: AtomicUsize,
+    }
+
+    impl BrowserSessionBackend {
+        fn new(reject: bool) -> Self {
+            Self {
+                reject,
+                refresh_calls: AtomicUsize::new(0),
+            }
+        }
     }
 
     impl LocalBackend for BrowserSessionBackend {
         fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
+            self.refresh_calls.fetch_add(1, Ordering::SeqCst);
             let unavailable = || Err(BackendError::unavailable());
             RefreshOutcome {
                 quota: unavailable(),
@@ -2530,19 +2638,25 @@ mod tests {
         operation: &str,
         cookie_header: &str,
     ) -> IpcRequest {
+        let payload = if operation == "replace_provider_browser_sessions" {
+            serde_json::json!({
+                "provider": provider,
+                "cookie_headers": [cookie_header],
+                "access_denials": []
+            })
+        } else {
+            serde_json::json!({"provider": provider, "cookie_header": cookie_header})
+        };
         serde_json::from_value(serde_json::json!({
             "type": "request",
             "request_id": operation,
             "operation": operation,
-            "payload": {"provider": provider, "cookie_header": cookie_header}
+            "payload": payload
         }))
         .expect("browser-session request")
     }
 
-    /// Every provider the catalog declares a session for can have one added and taken away.
-    ///
-    /// A commit stores the accepted header with the fingerprint and masked label validation
-    /// produced, and nothing else; disconnecting removes the row rather than emptying it.
+    /// Every provider the catalog declares a session for can have one stored and cleared.
     #[test]
     fn every_catalog_browser_session_provider_commits_and_disconnects() {
         let root = std::env::temp_dir().join(format!("quota-service-sessions-{}", Uuid::new_v4()));
@@ -2551,7 +2665,7 @@ mod tests {
         let service = LocalService::new(
             state.clone(),
             Arc::new(RecordingSink::default()),
-            Arc::new(BrowserSessionBackend { reject: false }),
+            Arc::new(BrowserSessionBackend::new(false)),
         );
         let declared = crate::catalog::ProviderId::ALL
             .iter()
@@ -2574,10 +2688,10 @@ mod tests {
         for (provider, header) in headers {
             let committed = service.handle(provider_browser_session_request(
                 provider,
-                "commit_provider_browser_session",
+                "replace_provider_browser_sessions",
                 header,
             ));
-            assert!(committed.error.is_none(), "{provider} commit");
+            assert!(committed.error.is_none(), "{provider} replace");
             let stored = state
                 .provider_browser_session(provider)
                 .expect("read")
@@ -2589,7 +2703,7 @@ mod tests {
             // A cookie name from another provider's list is not this provider's session.
             let foreign = service.handle(provider_browser_session_request(
                 provider,
-                "commit_provider_browser_session",
+                "replace_provider_browser_sessions",
                 "someone-elses-session=secret",
             ));
             assert!(
@@ -2600,13 +2714,13 @@ mod tests {
             let removed = service.handle(
                 serde_json::from_value(serde_json::json!({
                     "type": "request",
-                    "request_id": "remove_provider_browser_session",
-                    "operation": "remove_provider_browser_session",
-                    "payload": {"provider": provider}
+                    "request_id": "set_provider_browser_scan",
+                    "operation": "set_provider_browser_scan",
+                    "payload": {"provider": provider, "enabled": false}
                 }))
-                .expect("disconnect request"),
+                .expect("disable scan"),
             );
-            assert!(removed.error.is_none(), "{provider} disconnect");
+            assert!(removed.error.is_none(), "{provider} disable scan");
             assert!(
                 state
                     .provider_browser_session(provider)
@@ -2639,7 +2753,7 @@ mod tests {
         let service = LocalService::new(
             state.clone(),
             Arc::new(RecordingSink::default()),
-            Arc::new(BrowserSessionBackend { reject: false }),
+            Arc::new(BrowserSessionBackend::new(false)),
         );
 
         let validated = service.handle(browser_session_request(
@@ -2668,7 +2782,7 @@ mod tests {
             )
             .expect("denial");
         let committed = service.handle(browser_session_request(
-            "commit_provider_browser_session",
+            "replace_provider_browser_sessions",
             "wos-session=new-secret",
         ));
         assert!(committed.error.is_none());
@@ -2682,33 +2796,15 @@ mod tests {
         );
         assert!(state.browser_access_denials().expect("denials").is_empty());
 
-        // Naming both a session and a refusal is not an attempt this service can answer.
-        let ambiguous = service.handle(
-            serde_json::from_value(serde_json::json!({
-                "type": "request",
-                "request_id": "ambiguous",
-                "operation": "commit_provider_browser_session",
-                "payload": {
-                    "provider": "cursor",
-                    "cookie_header": "wos-session=new-secret",
-                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
-                }
-            }))
-            .expect("ambiguous request"),
-        );
-        assert_eq!(
-            ambiguous.error.map(|error| error.code),
-            Some(ErrorCode::InvalidRequest)
-        );
         service.shutdown();
 
         let rejected = LocalService::new(
             state.clone(),
             Arc::new(RecordingSink::default()),
-            Arc::new(BrowserSessionBackend { reject: true }),
+            Arc::new(BrowserSessionBackend::new(true)),
         );
         let response = rejected.handle(browser_session_request(
-            "commit_provider_browser_session",
+            "replace_provider_browser_sessions",
             "wos-session=rejected-secret",
         ));
         assert_eq!(
@@ -2725,6 +2821,56 @@ mod tests {
         );
         rejected.shutdown();
         drop(rejected);
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn replacing_identical_browser_sessions_does_not_refresh() {
+        let root =
+            std::env::temp_dir().join(format!("quota-service-browser-noop-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let backend = Arc::new(BrowserSessionBackend::new(false));
+        let service = LocalService::new(state.clone(), sink.clone(), backend.clone());
+
+        let first = service.handle(browser_session_request(
+            "replace_provider_browser_sessions",
+            "wos-session=same-secret",
+        ));
+        assert!(first.error.is_none());
+        wait_lanes_idle(&service);
+        let revision = state.current_revision().expect("revision");
+        let providers = sink
+            .0
+            .lock()
+            .expect("events")
+            .iter()
+            .filter(|event| event.changed_components.contains(&ComponentName::Providers))
+            .count();
+        let refreshes = backend.refresh_calls.load(Ordering::SeqCst);
+
+        let second = service.handle(browser_session_request(
+            "replace_provider_browser_sessions",
+            "wos-session=same-secret",
+        ));
+        assert!(second.error.is_none());
+        wait_lanes_idle(&service);
+        assert_eq!(state.current_revision().expect("revision"), revision);
+        assert_eq!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .filter(|event| event.changed_components.contains(&ComponentName::Providers))
+                .count(),
+            providers
+        );
+        assert_eq!(backend.refresh_calls.load(Ordering::SeqCst), refreshes);
+
+        service.shutdown();
         drop(service);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
@@ -3172,6 +3318,287 @@ mod tests {
         );
         service.shutdown();
         drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn seed_codex_overview(state: &StateStore, now: chrono::DateTime<Utc>) -> Value {
+        let local_at = (now - chrono::Duration::minutes(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let remote_at =
+            (now - chrono::Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let local = serde_json::json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": local_at
+        });
+        let remote = serde_json::json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 20.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": remote_at
+        });
+        let quota = serde_json::json!({
+            "results": [{"provider": "codex", "outcome": "success", "snapshots": [local]}]
+        });
+        let account = serde_json::json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [{"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}],
+                "subscriptions": [{
+                    "key": "codex|fp|global|",
+                    "provider": "codex",
+                    "snapshot": remote.clone(),
+                    "sources": [{
+                        "device_id": "device_remote",
+                        "observed_at": remote_at,
+                        "snapshot": remote
+                    }]
+                }]
+            }
+        });
+        state
+            .set_component(
+                ComponentName::Quota,
+                ComponentStatus::Ready,
+                Some(quota.clone()),
+                Some(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                None,
+                false,
+            )
+            .expect("quota");
+        state
+            .set_component(
+                ComponentName::Account,
+                ComponentStatus::Ready,
+                Some(account.clone()),
+                Some(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                None,
+                false,
+            )
+            .expect("account");
+        let items = backend::overview_items_with_pins(
+            &quota,
+            Some(&account),
+            &[],
+            &std::collections::HashMap::new(),
+            now,
+        );
+        state.set_overview(&items).expect("overview");
+        quota
+    }
+
+    #[test]
+    fn setting_an_overview_source_pin_is_validated_and_emits_quota_state() {
+        let root = std::env::temp_dir().join(format!("quota-overview-pin-ipc-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
+        let now = Utc::now();
+        seed_codex_overview(&state, now);
+
+        let pinned: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "pin",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "fp",
+                "scope": "global",
+                "pin": "local"
+            }
+        }))
+        .expect("request");
+        let response = service.handle(pinned);
+        assert!(response.error.is_none(), "{response:?}");
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("pin"))
+                .and_then(Value::as_str),
+            Some("local")
+        );
+        let overview = state.overview().expect("overview");
+        assert_eq!(overview[0].selected_source_id, "local");
+        assert_eq!(overview[0].automatic_source_id, "device:device_remote");
+        assert_eq!(overview[0].source_pin.as_deref(), Some("local"));
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Quota])
+        );
+
+        // A source Relay named without its reading is listed but cannot be pinned.
+        let mut without_reading = state.overview().expect("overview");
+        without_reading[0].sources.push(QuotaOverviewSource {
+            source_id: "device:device_laptop".into(),
+            kind: "device".into(),
+            device_id: Some("device_laptop".into()),
+            display_name: "Laptop".into(),
+            observed_at: "2026-08-24T08:00:00Z".into(),
+            is_stale: true,
+            snapshot: None,
+        });
+        state.set_overview(&without_reading).expect("overview");
+        let unreadable_source: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "unreadable-source",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "fp",
+                "scope": "global",
+                "pin": "device:device_laptop"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(unreadable_source)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let unknown_source: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "missing-source",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "fp",
+                "scope": "global",
+                "pin": "device:nobody"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(unknown_source)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let global_with_source: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "bad-scope",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "fp",
+                "scope": "global",
+                "identity_source_id": "local",
+                "pin": "local"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(global_with_source)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let missing_subscription: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "missing-item",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "other",
+                "scope": "global",
+                "pin": "local"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(missing_subscription)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let unknown_provider: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "bad-provider",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "not-a-provider",
+                "fingerprint": "fp",
+                "scope": "global",
+                "pin": "local"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(unknown_provider)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_pin_whose_source_has_gone_is_dropped_from_identity() {
+        let root =
+            std::env::temp_dir().join(format!("quota-overview-pin-prune-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let quota = seed_codex_overview(&state, now);
+        state
+            .set_overview_source_pin("codex|fp|global|", Some("local"))
+            .expect("pin");
+        let account = serde_json::json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [{"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}],
+                "subscriptions": [{
+                    "key": "codex|fp|global|",
+                    "provider": "codex",
+                    "snapshot": quota["results"][0]["snapshots"][0].clone(),
+                    "sources": [{
+                        "device_id": "device_remote",
+                        "observed_at": quota["results"][0]["snapshots"][0]["observed_at"].clone(),
+                        "snapshot": quota["results"][0]["snapshots"][0].clone()
+                    }]
+                }]
+            }
+        });
+        let empty_local = serde_json::json!({"results": []});
+        let (items, kept) = backend::overview_items_and_pins(
+            &empty_local,
+            Some(&account),
+            &[],
+            &state.overview_source_pins().expect("pins"),
+            now,
+        );
+        assert!(kept.get("codex|fp|global|").is_none());
+        assert_eq!(items[0].selected_source_id, "device:device_remote");
+        assert!(items[0].source_pin.is_none());
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -26,14 +26,22 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   before its pending requests fail.
 - The macOS browser-session exception is acquisition only, covers the five providers whose catalog
   entry declares `browser_session` — Codex, Claude, Grok, Kimi, and Cursor — and never starts without
-  the consent popup in [ADR 0010](decisions/0010-provider-browser-session-auth.md). Cursor is the
+  the consent popup in [ADR 0010](decisions/0010-provider-browser-session-auth.md). Full Disk Access
+  is probed only after that consent, and only as a directory-readable check, never by parsing
+  cookies. Cursor is the
   only one marked `exclusive`, because a stored session is the only credential it has.
   SweetCookieKit's logger is disabled; profile paths, store IDs, the error behind a refused store,
   and unrelated Cookies never cross private stdin or enter logs, diagnostics, UserDefaults, or
-  Relay, and Swift holds candidates only in memory. Rust revalidates the account on commit and
-  persists only the accepted header plus an irreversible fingerprint and masked label; failed
-  validation keeps the old session and disconnect removes it transactionally.
+  Relay, and Swift holds candidates only in memory. Rust revalidates each account and persists
+  the accepted headers plus irreversible fingerprints and masked labels. Turning Browser Sign-in
+  off deletes those rows transactionally.
 - Quota Web and Quota iOS receive normalized account data only, never local credentials or logs.
+
+- The local service's HTTP client follows no redirects and caps bodies at 1 MiB. On macOS it
+  speaks TLS through Secure Transport (`reqwest` `native-tls`) rather than rustls: cursor.com's
+  edge (Vercel) fingerprints the handshake and answers rustls with a 403 HTML page whatever the
+  cookie says, which this service would otherwise report as `auth_required`. Linux builds keep
+  rustls. Certificate validation is the platform's in both cases.
 
 ## Local credentials and identity
 

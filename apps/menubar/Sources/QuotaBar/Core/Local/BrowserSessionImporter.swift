@@ -3,15 +3,6 @@ import CryptoKit
 import Foundation
 import SweetCookieKit
 
-struct BrowserApplicationChoice: Identifiable, Equatable, Sendable {
-  let browser: Browser
-  let applicationURL: URL
-  let title: String
-
-  var id: String { browser.rawValue }
-  var family: BrowserSessionFamily { BrowserSessionImporter.family(of: browser) }
-}
-
 struct BrowserSessionCookieCandidate: Equatable, Sendable {
   let cookieHeader: String
   let headerFingerprint: String
@@ -332,47 +323,19 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
   }
 }
 
-@MainActor
-protocol BrowserApplicationRouting {
-  func defaultApplication(for url: URL) -> URL?
-  func applications(for url: URL) -> [URL]
-  func open(_ url: URL, with applicationURL: URL) async -> Bool
-}
-
-@MainActor
-struct WorkspaceBrowserApplicationRouter: BrowserApplicationRouting {
-  func defaultApplication(for url: URL) -> URL? {
-    NSWorkspace.shared.urlForApplication(toOpen: url)
+enum BrowserApplicationCatalog {
+  static func bundleIdentifiers(for browser: Browser) -> [String] {
+    byBundleIdentifier.compactMap { $0.value == browser ? $0.key : nil }
   }
 
-  func applications(for url: URL) -> [URL] {
-    NSWorkspace.shared.urlsForApplications(toOpen: url)
-  }
-
-  func open(_ url: URL, with applicationURL: URL) async -> Bool {
-    let configuration = NSWorkspace.OpenConfiguration()
-    return await withCheckedContinuation { continuation in
-      NSWorkspace.shared.open(
-        [url], withApplicationAt: applicationURL, configuration: configuration
-      ) { _, error in
-        continuation.resume(returning: error == nil)
+  /// Where the installed copy of this browser lives, or nil when it is not installed.
+  static func applicationURL(for browser: Browser) -> URL? {
+    for identifier in bundleIdentifiers(for: browser) {
+      if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
+        return url
       }
     }
-  }
-}
-
-enum BrowserApplicationCatalog {
-  static func choice(for applicationURL: URL, allowed: [Browser]) -> BrowserApplicationChoice? {
-    guard
-      let bundleIdentifier = Bundle(url: applicationURL)?.bundleIdentifier?.lowercased(),
-      let browser = byBundleIdentifier[bundleIdentifier],
-      allowed.contains(browser)
-    else { return nil }
-    return BrowserApplicationChoice(
-      browser: browser,
-      applicationURL: applicationURL,
-      title: browser.displayName
-    )
+    return nil
   }
 
   private static let byBundleIdentifier: [String: Browser] = [

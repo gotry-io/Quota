@@ -109,6 +109,7 @@ pub struct QuotaSnapshot {
 pub struct ProviderSession {
     pub provider: ProviderId,
     pub credential_source: String,
+    pub cookie_header: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,7 +148,7 @@ pub struct CollectionContext {
     pub home_directory: PathBuf,
     pub environment: HashMap<String, String>,
     pub config_path: Option<PathBuf>,
-    pub browser_sessions: HashMap<ProviderId, String>,
+    pub browser_sessions: HashMap<ProviderId, Vec<String>>,
     pub client_name: String,
     pub client_version: String,
     pub now: Option<String>,
@@ -271,8 +272,24 @@ impl CollectionContext {
             .unwrap_or(false)
     }
 
+    pub fn browser_sessions_for(&self, provider: ProviderId) -> &[String] {
+        self.browser_sessions
+            .get(&provider)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     pub fn browser_session(&self, provider: ProviderId) -> Option<&str> {
-        self.browser_sessions.get(&provider).map(String::as_str)
+        self.browser_sessions_for(provider)
+            .first()
+            .map(String::as_str)
+    }
+
+    pub fn cookie_for_session<'a>(&'a self, session: &'a ProviderSession) -> Option<&'a str> {
+        session
+            .cookie_header
+            .as_deref()
+            .or_else(|| self.browser_session(session.provider))
     }
 
     /// The macOS Keychain secret this refresh may read, fetched at most once however
@@ -315,12 +332,13 @@ pub fn discover_official_or_browser(
         return vec![session];
     }
     context
-        .browser_session(provider)
-        .map(|_| ProviderSession {
+        .browser_sessions_for(provider)
+        .iter()
+        .map(|cookie_header| ProviderSession {
             provider,
             credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+            cookie_header: Some(cookie_header.clone()),
         })
-        .into_iter()
         .collect()
 }
 
@@ -432,10 +450,11 @@ mod tests {
         let mut context = CollectionContext::default();
         context
             .browser_sessions
-            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+            .insert(ProviderId::Claude, vec!["sessionKey=sk-ant-x".to_owned()]);
         let session = ProviderSession {
             provider: ProviderId::Claude,
             credential_source: "local".to_owned(),
+            cookie_header: None,
         };
         let web = || {
             Err::<QuotaSnapshot, _>(ProviderError::new(ErrorCategory::Unsupported, "web_source"))
@@ -506,13 +525,14 @@ mod tests {
         assert!(discover_official_or_browser(ProviderId::Claude, None, &context).is_empty());
         context
             .browser_sessions
-            .insert(ProviderId::Claude, "sessionKey=sk-ant-x".to_owned());
+            .insert(ProviderId::Claude, vec!["sessionKey=sk-ant-x".to_owned()]);
         let stored = discover_official_or_browser(ProviderId::Claude, None, &context);
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].credential_source, BROWSER_SESSION_SOURCE);
         let official = ProviderSession {
             provider: ProviderId::Claude,
             credential_source: "keychain".to_owned(),
+            cookie_header: None,
         };
         let discovered = discover_official_or_browser(ProviderId::Claude, Some(official), &context);
         assert_eq!(discovered.len(), 1);
@@ -524,6 +544,7 @@ mod tests {
         let session = ProviderSession {
             provider: ProviderId::Claude,
             credential_source: BROWSER_SESSION_SOURCE.to_owned(),
+            cookie_header: None,
         };
         let context = CollectionContext {
             cancel: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(

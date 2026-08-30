@@ -1092,6 +1092,7 @@ const QuotaSubscriptionSourceSchema = z
   .object({
     device_id: OpaqueIdSchema,
     observed_at: Rfc3339InstantSchema,
+    snapshot: QuotaSnapshotSchema.optional(),
   })
   .strict();
 export type QuotaSubscriptionSource = z.infer<typeof QuotaSubscriptionSourceSchema>;

@@ -245,22 +245,25 @@ enum VisualFixture: String, CaseIterable, Sendable {
       windows: [QuotaWindow],
       observedAt: Date
     ) -> QuotaSubscription {
-      QuotaSubscription(
+      let snapshot = QuotaSnapshot(
+        provider: provider,
+        account: QuotaAccount(
+          fingerprint: fingerprint,
+          label: label,
+          plan: plan,
+          fingerprintScope: .global
+        ),
+        windows: windows,
+        status: .available,
+        observedAt: observedAt
+      )
+      return QuotaSubscription(
         key: "\(provider.rawValue)|\(fingerprint)|global|",
         provider: provider,
-        snapshot: QuotaSnapshot(
-          provider: provider,
-          account: QuotaAccount(
-            fingerprint: fingerprint,
-            label: label,
-            plan: plan,
-            fingerprintScope: .global
-          ),
-          windows: windows,
-          status: .available,
-          observedAt: observedAt
-        ),
-        sources: [QuotaSubscriptionSource(deviceID: deviceID, observedAt: observedAt)]
+        snapshot: snapshot,
+        sources: [
+          QuotaSubscriptionSource(deviceID: deviceID, observedAt: observedAt, snapshot: snapshot)
+        ]
       )
     }
 

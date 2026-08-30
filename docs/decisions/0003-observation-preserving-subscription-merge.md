@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-03
-- Updated: 2026-08-26
+- Updated: 2026-08-29
 
 ## Decision
 
@@ -26,7 +26,15 @@ Provider-specific global identity candidates remain defined in
 When a subscription has multiple observations, a reader selects one snapshot rather than averaging
 or accumulating quota values. It prefers an available, unexpired snapshot, then the newest
 `observed_at`, then local, and finally a deterministic source ID. The presentation retains every
-unique source attached to the subscription.
+unique source attached to the subscription, including that source's snapshot so a client can show
+the reading that was not selected. A source Relay names without its snapshot — an older Relay, or a
+reading it no longer holds — is still listed with its own freshness and no invented quota; it can be
+seen but not pinned.
+
+QuotaBar may pin one named source for a subscription on this Mac. Automatic keeps the rule above.
+A pin whose source is missing falls back to Automatic and is dropped from this Mac's store, so that
+source coming back later does not re-pin itself. The pin is a local presentation preference and does
+not change Relay's resolution or any other Device.
 
 `updated_at` takes no part in that order. It records when Relay last wrote the row, which a device
 re-uploading a reading it already knows moves without making that reading newer, so ranking by it

@@ -45,6 +45,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
         load_credentials(context).map(|credentials| ProviderSession {
             provider: ProviderId::Grok,
             credential_source: credentials.source,
+            cookie_header: None,
         }),
         context,
     )
@@ -69,7 +70,12 @@ pub fn collect(
         ProviderId::Grok,
         SOURCE,
         || collect_local(context),
-        || billing_rpc::collect(context),
+        || {
+            let cookie = context
+                .cookie_for_session(session)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+            billing_rpc::collect(context, cookie)
+        },
     )
 }
 
@@ -391,7 +397,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context
             .browser_sessions
-            .insert(ProviderId::Grok, "sso=session-value".to_owned());
+            .insert(ProviderId::Grok, vec!["sso=session-value".to_owned()]);
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(
@@ -422,6 +428,7 @@ mod tests {
         let official = ProviderSession {
             provider: ProviderId::Grok,
             credential_source: "auth.json".to_owned(),
+            cookie_header: None,
         };
         assert_eq!(
             collect(&official, &context)
@@ -433,7 +440,7 @@ mod tests {
         // what this asserts.
         context
             .browser_sessions
-            .insert(ProviderId::Grok, "sessionKey=sk-ant-ok".to_owned());
+            .insert(ProviderId::Grok, vec!["sessionKey=sk-ant-ok".to_owned()]);
         assert_eq!(
             collect(&official, &context)
                 .expect_err("stored session")

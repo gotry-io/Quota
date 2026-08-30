@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 3;
+const CURRENT_SCHEMA: i64 = 4;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -32,6 +32,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             1 => migration_v1(&tx)?,
             2 => migration_v2(&tx)?,
             3 => migration_v3(&tx)?,
+            4 => migration_v4(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -110,6 +111,31 @@ fn migration_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     tx.execute_batch(
         "INSERT OR IGNORE INTO preferences(key, value)
          VALUES ('quota_refresh_interval_seconds', '300');",
+    )?;
+    Ok(())
+}
+
+/// Browser scan is a preference: one provider may keep several validated sessions, and a
+/// stored session from before this shape means scanning is already on.
+fn migration_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE provider_browser_sessions_v4 (
+            provider TEXT NOT NULL,
+            account_fingerprint TEXT NOT NULL,
+            cookie_header TEXT NOT NULL,
+            account_label TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (provider, account_fingerprint)
+         );
+         INSERT INTO provider_browser_sessions_v4(
+            provider, account_fingerprint, cookie_header, account_label, updated_at
+         )
+         SELECT provider, account_fingerprint, cookie_header, account_label, updated_at
+         FROM provider_browser_sessions;
+         INSERT OR IGNORE INTO preferences(key, value)
+         SELECT 'browser_scan:' || provider, '1' FROM provider_browser_sessions;
+         DROP TABLE provider_browser_sessions;
+         ALTER TABLE provider_browser_sessions_v4 RENAME TO provider_browser_sessions;",
     )?;
     Ok(())
 }
