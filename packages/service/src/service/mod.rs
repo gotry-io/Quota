@@ -1035,8 +1035,13 @@ impl LocalService {
                 RecoveryAction::None,
             ));
         };
+        // A source without its reading can be seen but not shown: pinning it would put the
+        // automatic reading under that source's name.
         if let Some(pin) = payload.pin.as_deref()
-            && !item.sources.iter().any(|source| source.source_id == pin)
+            && !item
+                .sources
+                .iter()
+                .any(|source| source.source_id == pin && source.snapshot.is_some())
         {
             return Err(IpcError::new(
                 ErrorCode::InvalidRequest,
@@ -3429,6 +3434,39 @@ mod tests {
                 .expect("events")
                 .iter()
                 .any(|event| event.changed_components == [ComponentName::Quota])
+        );
+
+        // A source Relay named without its reading is listed but cannot be pinned.
+        let mut without_reading = state.overview().expect("overview");
+        without_reading[0].sources.push(QuotaOverviewSource {
+            source_id: "device:device_laptop".into(),
+            kind: "device".into(),
+            device_id: Some("device_laptop".into()),
+            display_name: "Laptop".into(),
+            observed_at: "2026-08-24T08:00:00Z".into(),
+            is_stale: true,
+            snapshot: None,
+        });
+        state.set_overview(&without_reading).expect("overview");
+        let unreadable_source: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "unreadable-source",
+            "operation": "set_overview_source_pin",
+            "payload": {
+                "provider": "codex",
+                "fingerprint": "fp",
+                "scope": "global",
+                "pin": "device:device_laptop"
+            }
+        }))
+        .expect("request");
+        assert_eq!(
+            service
+                .handle(unreadable_source)
+                .error
+                .as_ref()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
         );
 
         let unknown_source: IpcRequest = serde_json::from_value(serde_json::json!({
