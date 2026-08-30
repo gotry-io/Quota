@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crate::protocol::*;
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
+    session_is_usable,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -759,20 +760,18 @@ impl LocalService {
     fn login(&self, request: &IpcRequest) -> Result<LoginResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
         if let Some((session, epoch)) = self.inner.state.session_snapshot().map_err(state_error)? {
-            match session.get("status").and_then(Value::as_str) {
-                Some("active") | Some("logout_pending") => {
-                    return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
-                }
-                _ => {
-                    if !self
-                        .inner
-                        .state
-                        .clear_session_if_epoch(epoch)
-                        .map_err(state_error)?
-                    {
-                        return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
-                    }
-                }
+            // A live or signing-out session owns the device; anything else, including an
+            // `active` row without its tokens, is cleared so signing in again can replace it.
+            if session_is_usable(&session) {
+                return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
+            }
+            if !self
+                .inner
+                .state
+                .clear_session_if_epoch(epoch)
+                .map_err(state_error)?
+            {
+                return Err(IpcError::new(ErrorCode::Busy, RecoveryAction::Retry));
             }
         }
         let mut login = self
@@ -4198,6 +4197,40 @@ mod tests {
         wait_login_idle(&service);
         drop(service);
         drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The row an upgrade can leave behind: `active`, but without the tokens this build reads
+    /// with. Busy would mean nobody can ever sign in again on this device.
+    #[test]
+    fn an_active_session_without_tokens_does_not_refuse_login() {
+        let root = std::env::temp_dir().join(format!("quota-login-tokenless-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let mut session = named_session();
+        session["session"] = serde_json::json!({ "expires_at": "2099-01-01T00:00:00Z" });
+        state.write_session_json(&session).expect("session");
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+
+        let response = service.handle(login_request());
+        assert!(response.error.is_none(), "{response:?}");
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("authorize_url")),
+            Some(&serde_json::json!("http://127.0.0.1/quota-login"))
+        );
+        assert!(state.session_json().expect("session").is_none());
+        wait_login_idle(&service);
+
+        service.shutdown();
+        wait_login_idle(&service);
+        drop(service);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
