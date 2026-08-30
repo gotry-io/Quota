@@ -5,24 +5,34 @@ import QuotaWire
 /// Owns the menu-bar status items and the one panel they share.
 @MainActor
 final class MenuBarStatusItemController: NSObject {
+  /// One physical status item. `index` is the autosave identity, set at creation and never
+  /// changed: rewriting `autosaveName` would move the item on the bar.
+  private struct Slot {
+    let item: NSStatusItem
+    let index: Int
+    var id: MenuBarStatusItemID
+  }
+
   private let model: MenuBarViewModel
-  private let panel: MenuBarPanelController
+  private let defaults: UserDefaults
+  let panel: MenuBarPanelController
   private let statusBar = NSStatusBar.system
-  private var items: [MenuBarStatusItemID: NSStatusItem] = [:]
+  private var slots: [Slot] = []
   private var lastSpecs: [MenuBarStatusItemSpec] = []
   private var defaultsObserver: (any NSObjectProtocol)?
   private var tracking = false
 
-  init(model: MenuBarViewModel) {
+  init(model: MenuBarViewModel, defaults: UserDefaults = .standard) {
     self.model = model
+    self.defaults = defaults
     self.panel = MenuBarPanelController(model: model)
     super.init()
     panel.statusItemWindows = { [weak self] in
-      Set(self?.items.values.compactMap(\.button?.window) ?? [])
+      Set(self?.slots.compactMap(\.item.button?.window) ?? [])
     }
     defaultsObserver = NotificationCenter.default.addObserver(
       forName: UserDefaults.didChangeNotification,
-      object: nil,
+      object: defaults,
       queue: .main
     ) { [weak self] _ in
       Task { @MainActor in
@@ -39,11 +49,19 @@ final class MenuBarStatusItemController: NSObject {
     }
     tracking = false
     panel.invalidate()
-    for item in items.values {
-      statusBar.removeStatusItem(item)
+    for slot in slots {
+      statusBar.removeStatusItem(slot.item)
     }
-    items.removeAll()
+    slots.removeAll()
     lastSpecs = []
+  }
+
+  var statusItemIDs: [MenuBarStatusItemID] {
+    slots.map(\.id)
+  }
+
+  func button(for id: MenuBarStatusItemID) -> NSStatusBarButton? {
+    slots.first { $0.id == id }?.item.button
   }
 
   private func startTracking() {
@@ -59,78 +77,93 @@ final class MenuBarStatusItemController: NSObject {
     }
   }
 
-  private func reconcile() {
-    let prefs = MenuBarItemPreferences.load()
-    let layout = prefs.layout(visibleProviders: ProviderDisplayOrder.enabledProviders())
+  func reconcile() {
+    let prefs = MenuBarItemPreferences.load(from: defaults)
+    let layout = prefs.layout(
+      visibleProviders: ProviderDisplayOrder.enabledProviders(defaults: defaults)
+    )
     let specs = model.menuBarSpecs(style: prefs.style, layout: layout, now: model.menuBarClock)
     guard specs != lastSpecs else { return }
-
-    let previousIDs = lastSpecs.map(\.id)
-    let ids = specs.map(\.id)
-    let identityChanged = ids != previousIDs
     lastSpecs = specs
 
-    if identityChanged {
-      let desired = Set(ids)
-      for id in items.keys where !desired.contains(id) {
-        if panel.anchorID == id {
-          panel.close()
-        }
-        if let item = items.removeValue(forKey: id) {
-          statusBar.removeStatusItem(item)
-        }
+    // A reading still on the bar keeps its item; the item under an open panel gets first pick
+    // of the rest; the rest keep bar order. Whatever stays in `available` is not needed.
+    var available = slots
+    var assigned = [Slot?](repeating: nil, count: specs.count)
+    for (index, spec) in specs.enumerated() {
+      if let match = available.firstIndex(where: { $0.id == spec.id }) {
+        assigned[index] = available.remove(at: match)
       }
     }
-
-    for spec in specs {
-      let item = items[spec.id] ?? makeItem(id: spec.id)
-      items[spec.id] = item
-      apply(spec, to: item)
+    if panel.isOpen, let anchor = available.firstIndex(where: { $0.id == panel.anchorID }) {
+      available.insert(available.remove(at: anchor), at: 0)
+    }
+    for index in assigned.indices where assigned[index] == nil && !available.isEmpty {
+      assigned[index] = available.removeFirst()
     }
 
-    if identityChanged {
-      reanchorPanelIfNeeded(specs: specs)
-    } else {
-      panel.repositionIfOpen()
+    var usedIndexes = Set(slots.map(\.index))
+    var next: [Slot] = []
+    for (spec, slot) in zip(specs, assigned) {
+      var slot = slot ?? makeSlot(id: spec.id, used: &usedIndexes)
+      slot.id = spec.id
+      next.append(slot)
+    }
+    slots = next
+
+    // Images change after the panel has followed, because a new image resizes the item's
+    // window in place before the bar moves it, and the panel must not read that frame. Unused
+    // items go last, after `open` has un-highlighted the one the panel is leaving.
+    followOpenPanel()
+    for (spec, slot) in zip(specs, slots) {
+      apply(spec, to: slot.item)
+    }
+    for slot in available {
+      statusBar.removeStatusItem(slot.item)
     }
   }
 
-  private func reanchorPanelIfNeeded(specs: [MenuBarStatusItemSpec]) {
+  /// The open panel stays with the item it was under, whatever that item now shows; if that
+  /// item is gone, it moves to the first one.
+  private func followOpenPanel() {
     guard panel.isOpen else { return }
-    if let anchorID = panel.anchorID, let item = items[anchorID], let button = item.button {
-      panel.open(relativeTo: button, id: anchorID)
-    } else if let first = specs.first, let item = items[first.id], let button = item.button {
+    if let button = panel.anchorButton,
+      let slot = slots.first(where: { $0.item.button === button })
+    {
+      panel.open(relativeTo: button, id: slot.id)
+    } else if let first = slots.first, let button = first.item.button {
       panel.open(relativeTo: button, id: first.id)
-    } else {
-      panel.close()
     }
   }
 
-  private func makeItem(id: MenuBarStatusItemID) -> NSStatusItem {
+  private func makeSlot(id: MenuBarStatusItemID, used: inout Set<Int>) -> Slot {
+    var index = 0
+    while used.contains(index) {
+      index += 1
+    }
+    used.insert(index)
     let item = statusBar.statusItem(withLength: NSStatusItem.variableLength)
-    item.autosaveName = id.autosaveName
+    item.autosaveName = "quotabar-item-\(index)"
     if let button = item.button {
       button.imageScaling = .scaleNone
       button.target = self
       button.action = #selector(clicked(_:))
       button.sendAction(on: [.leftMouseUp])
-      button.setAccessibilityIdentifier(id.accessibilityIdentifier)
       button.setAccessibilityTitle("QuotaBar")
-      button.identifier = NSUserInterfaceItemIdentifier(id.autosaveName)
     }
-    return item
+    return Slot(item: item, index: index, id: id)
   }
 
   private func apply(_ spec: MenuBarStatusItemSpec, to item: NSStatusItem) {
-    let image = MenuBarItemImage.make(spec.label)
-    item.button?.image = image
+    item.button?.image = MenuBarItemImage.make(spec.label)
     item.button?.imagePosition = .imageOnly
+    item.button?.setAccessibilityIdentifier(spec.id.accessibilityIdentifier)
     item.button?.setAccessibilityLabel(spec.label.accessibilityLabel)
     item.isVisible = true
   }
 
   @objc private func clicked(_ sender: NSStatusBarButton) {
-    guard let id = items.first(where: { $0.value.button === sender })?.key else { return }
+    guard let id = slots.first(where: { $0.item.button === sender })?.id else { return }
     panel.toggle(relativeTo: sender, id: id, focusProvider: id.focusProvider)
   }
 }
