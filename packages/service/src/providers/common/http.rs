@@ -19,10 +19,16 @@ impl HttpClient {
         Self::with_timeout(HTTP_TIMEOUT)
     }
 
+    /// On macOS the client speaks TLS through Secure Transport rather than rustls. Some
+    /// providers sit behind edge firewalls that fingerprint the TLS handshake — cursor.com
+    /// (Vercel) answers a rustls handshake with a 403 HTML page whatever the cookie or
+    /// User-Agent says, and answers the platform stack with the JSON it gives a browser. Linux
+    /// builds keep rustls, which needs no system library.
     pub fn with_timeout(timeout: Duration) -> Result<Self, ProviderError> {
-        Client::builder()
-            .timeout(timeout)
-            .redirect(Policy::none())
+        let builder = Client::builder().timeout(timeout).redirect(Policy::none());
+        #[cfg(target_os = "macos")]
+        let builder = builder.use_native_tls();
+        builder
             .build()
             .map(|client| Self { client })
             .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, "http"))

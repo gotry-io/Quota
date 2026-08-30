@@ -246,7 +246,7 @@ mod tests {
         let mut context = isolated_context(home.clone());
         context
             .browser_sessions
-            .insert(ProviderId::Cursor, "wos-session=browser".to_owned());
+            .insert(ProviderId::Cursor, vec!["wos-session=browser".to_owned()]);
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].credential_source, SOURCE);
@@ -264,7 +264,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context
             .browser_sessions
-            .insert(ProviderId::Cursor, "wos-session=browser".to_owned());
+            .insert(ProviderId::Cursor, vec!["wos-session=browser".to_owned()]);
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].credential_source, "browser_session");
@@ -302,6 +302,7 @@ mod tests {
         let session = ProviderSession {
             provider: ProviderId::Cursor,
             credential_source: SOURCE.to_owned(),
+            cookie_header: None,
         };
         let error = crate::providers::cursor::collect(&session, &context).expect_err("auth");
         assert_eq!(error.category, ErrorCategory::AuthRequired);

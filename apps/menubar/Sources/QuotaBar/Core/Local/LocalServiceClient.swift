@@ -68,6 +68,13 @@ protocol LocalServiceServing: Sendable {
   func logout() async throws -> LocalServiceLogoutResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting
+  func setOverviewSourcePin(
+    provider: ProviderID,
+    fingerprint: String,
+    scope: String,
+    identitySourceID: String?,
+    pin: String?
+  ) async throws -> LocalServiceOverviewSourcePinSetting
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,
@@ -77,17 +84,13 @@ protocol LocalServiceServing: Sendable {
   func validateProviderBrowserSession(
     _ provider: ProviderID, cookieHeader: String
   ) async throws -> LocalServiceProviderBrowserSessionCandidate
-  func commitProviderBrowserSession(
-    _ provider: ProviderID, cookieHeader: String
-  ) async throws -> LocalServiceProviderBrowserSession
-  /// The other answer a sign-in attempt can end with: macOS refused the cookie store, so there
-  /// is no session to commit and the service records why.
-  func reportProviderBrowserAccessDenied(
-    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
-  ) async throws -> LocalServiceProviderBrowserSession
-  func removeProviderBrowserSession(
-    _ provider: ProviderID
-  ) async throws -> LocalServiceProviderBrowserSession
+  func setProviderBrowserScan(_ provider: ProviderID, enabled: Bool) async throws
+    -> LocalServiceProviderBrowserScanSetting
+  func replaceProviderBrowserSessions(
+    _ provider: ProviderID,
+    cookieHeaders: [String],
+    accessDenials: [BrowserAccessDenial]
+  ) async throws
   func shutdown() async
 }
 
@@ -220,6 +223,25 @@ actor LocalServiceClient: LocalServiceServing {
     )
   }
 
+  func setOverviewSourcePin(
+    provider: ProviderID,
+    fingerprint: String,
+    scope: String,
+    identitySourceID: String?,
+    pin: String?
+  ) async throws -> LocalServiceOverviewSourcePinSetting {
+    try await request(
+      operation: "set_overview_source_pin",
+      payload: SetOverviewSourcePinPayload(
+        provider: provider.rawValue,
+        fingerprint: fingerprint,
+        scope: scope,
+        identitySourceID: identitySourceID,
+        pin: pin
+      )
+    )
+  }
+
   func setProviderConfig(
     _ provider: ProviderID,
     apiKey: String,
@@ -253,44 +275,34 @@ actor LocalServiceClient: LocalServiceServing {
     return candidate
   }
 
-  func commitProviderBrowserSession(
-    _ provider: ProviderID, cookieHeader: String
-  ) async throws -> LocalServiceProviderBrowserSession {
-    let session: LocalServiceProviderBrowserSession = try await request(
-      operation: "commit_provider_browser_session",
-      payload: CommitProviderBrowserSessionPayload(
-        provider: provider.rawValue, cookieHeader: cookieHeader, accessDenied: nil)
+  func setProviderBrowserScan(_ provider: ProviderID, enabled: Bool) async throws
+    -> LocalServiceProviderBrowserScanSetting
+  {
+    let setting: LocalServiceProviderBrowserScanSetting = try await request(
+      operation: "set_provider_browser_scan",
+      payload: SetProviderBrowserScanPayload(provider: provider.rawValue, enabled: enabled)
     )
-    guard session.isValid, session.configured else { throw LocalServiceClientError.invalidMessage }
-    return session
+    guard setting.provider == provider, setting.enabled == enabled else {
+      throw LocalServiceClientError.invalidMessage
+    }
+    return setting
   }
 
-  func reportProviderBrowserAccessDenied(
-    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
-  ) async throws -> LocalServiceProviderBrowserSession {
-    let session: LocalServiceProviderBrowserSession = try await request(
-      operation: "commit_provider_browser_session",
-      payload: CommitProviderBrowserSessionPayload(
+  func replaceProviderBrowserSessions(
+    _ provider: ProviderID,
+    cookieHeaders: [String],
+    accessDenials: [BrowserAccessDenial]
+  ) async throws {
+    let _: EmptyResult = try await request(
+      operation: "replace_provider_browser_sessions",
+      payload: ReplaceProviderBrowserSessionsPayload(
         provider: provider.rawValue,
-        cookieHeader: nil,
-        // The browser's display name is all that travels: the store's path stays on this side.
-        accessDenied: BrowserAccessDeniedPayload(
-          browser: browserName, reason: reason.rawValue)
+        cookieHeaders: cookieHeaders,
+        accessDenials: accessDenials.map {
+          BrowserAccessDeniedPayload(browser: $0.browserName, reason: $0.reason.rawValue)
+        }
       )
     )
-    guard session.isValid else { throw LocalServiceClientError.invalidMessage }
-    return session
-  }
-
-  func removeProviderBrowserSession(
-    _ provider: ProviderID
-  ) async throws -> LocalServiceProviderBrowserSession {
-    let session: LocalServiceProviderBrowserSession = try await request(
-      operation: "remove_provider_browser_session",
-      payload: ProviderPayload(provider: provider.rawValue)
-    )
-    guard session.isValid, !session.configured else { throw LocalServiceClientError.invalidMessage }
-    return session
   }
 
   func shutdown() async {
@@ -809,6 +821,13 @@ private struct EmptyResult: Decodable {
 private struct ProviderPayload: Encodable { let provider: String }
 private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
 private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
+private struct SetOverviewSourcePinPayload: Encodable {
+  let provider: String
+  let fingerprint: String
+  let scope: String
+  let identitySourceID: String?
+  let pin: String?
+}
 private struct SetProviderConfigPayload: Encodable {
   let provider: String
   let apiKey: String
@@ -819,16 +838,23 @@ private struct ProviderBrowserSessionPayload: Encodable {
   let cookieHeader: String
 }
 
-/// One sign-in attempt's answer: the session a browser released, or the reason it released
-/// nothing. Exactly one of the two is present, and the service refuses a payload that names
-/// both or neither.
-private struct CommitProviderBrowserSessionPayload: Encodable {
+private struct SetProviderBrowserScanPayload: Encodable {
   let provider: String
-  let cookieHeader: String?
-  let accessDenied: BrowserAccessDeniedPayload?
+  let enabled: Bool
+}
+
+private struct ReplaceProviderBrowserSessionsPayload: Encodable {
+  let provider: String
+  let cookieHeaders: [String]
+  let accessDenials: [BrowserAccessDeniedPayload]
 }
 
 private struct BrowserAccessDeniedPayload: Encodable {
   let browser: String
   let reason: String
+}
+
+struct LocalServiceProviderBrowserScanSetting: Decodable, Equatable, Sendable {
+  let provider: ProviderID
+  let enabled: Bool
 }

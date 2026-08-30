@@ -1463,8 +1463,16 @@ impl NativeBackend {
             .provider_browser_sessions()
             .map_err(|_| BackendError::unavailable())?
             .into_iter()
-            .map(|(provider, session)| (provider, session.cookie_header))
-            .collect();
+            .fold(
+                std::collections::HashMap::<ProviderId, Vec<String>>::new(),
+                |mut sessions, (provider, session)| {
+                    sessions
+                        .entry(provider)
+                        .or_default()
+                        .push(session.cookie_header);
+                    sessions
+                },
+            );
         Ok(CollectionContext {
             home_directory: self.home.clone(),
             environment: self.environment.clone(),
@@ -2193,18 +2201,45 @@ impl NativeBackend {
     /// goes to the local reading.
     fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
         let previous = self.state.overview().unwrap_or_default();
-        overview_items(quota, account, &previous, Utc::now())
+        let pins = self.state.overview_source_pins().unwrap_or_default();
+        let (items, kept) = overview_items_and_pins(quota, account, &previous, &pins, Utc::now());
+        if kept != pins {
+            let _ = self.state.replace_overview_source_pins(&kept);
+        }
+        items
     }
 }
 
 /// See [`NativeBackend::build_overview`]; the instant is an argument so the rule can be tested
 /// against the shared cases at the instant they name.
+#[cfg(test)]
 fn overview_items(
     quota: &Value,
     account: Option<&Value>,
     previous: &[QuotaOverviewItem],
     now: DateTime<Utc>,
 ) -> Vec<QuotaOverviewItem> {
+    overview_items_with_pins(quota, account, previous, &HashMap::new(), now)
+}
+
+#[cfg(test)]
+pub(crate) fn overview_items_with_pins(
+    quota: &Value,
+    account: Option<&Value>,
+    previous: &[QuotaOverviewItem],
+    pins: &HashMap<String, String>,
+    now: DateTime<Utc>,
+) -> Vec<QuotaOverviewItem> {
+    overview_items_and_pins(quota, account, previous, pins, now).0
+}
+
+pub(crate) fn overview_items_and_pins(
+    quota: &Value,
+    account: Option<&Value>,
+    previous: &[QuotaOverviewItem],
+    pins: &HashMap<String, String>,
+    now: DateTime<Utc>,
+) -> (Vec<QuotaOverviewItem>, HashMap<String, String>) {
     let mut items = Vec::new();
     if let Some(results) = quota.get("results").and_then(Value::as_array) {
         for result in results {
@@ -2220,84 +2255,152 @@ fn overview_items(
                 .into_iter()
                 .flatten()
             {
-                if let Some(item) = overview_item(snapshot, "local", "Local", None, now) {
+                if let Some(item) =
+                    overview_item(snapshot, "local", LOCAL_SOURCE_DISPLAY_NAME, None, now)
+                {
                     merge_overview_item(&mut items, item);
                 }
             }
         }
     }
-    if let Some(summary) = account
-        .and_then(|value| value.get("account_summary"))
-        .and_then(Value::as_object)
-    {
-        let display_names = summary
-            .get("devices")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|device| {
-                Some((
-                    device.get("id")?.as_str()?.to_owned(),
-                    device.get("display_name")?.as_str()?.to_owned(),
-                ))
-            })
-            .collect::<HashMap<_, _>>();
-        for subscription in summary
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(snapshot) = subscription.get("snapshot") else {
-                continue;
-            };
-            if !snapshot
-                .get("provider")
-                .and_then(Value::as_str)
-                .and_then(ProviderId::parse)
-                .is_some_and(ProviderId::syncs_to_account)
-            {
-                continue;
-            }
-            // The device whose reading Relay chose is the one to name, and the account
-            // says when each of its sources last read. Nothing else about the other
-            // devices is shown.
-            let device_id = subscription
-                .get("sources")
+    if let Some(account) = account {
+        let this_device_id = account.get("device_id").and_then(Value::as_str);
+        if let Some(summary) = account.get("account_summary").and_then(Value::as_object) {
+            let display_names = summary
+                .get("devices")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|source| {
+                .filter_map(|device| {
                     Some((
-                        source.get("device_id")?.as_str()?,
-                        source.get("observed_at")?.as_str()?,
+                        device.get("id")?.as_str()?.to_owned(),
+                        device.get("display_name")?.as_str()?.to_owned(),
                     ))
                 })
-                .filter(|(_, observed_at)| {
-                    Some(*observed_at) == snapshot.get("observed_at").and_then(Value::as_str)
-                })
-                .map(|(device_id, _)| device_id)
-                .min();
-            let Some(device_id) = device_id else {
-                continue;
-            };
-            let display_name = display_names
-                .get(device_id)
-                .map(String::as_str)
-                .unwrap_or("Other device");
-            if let Some(item) = overview_item(
-                snapshot,
-                &format!("device:{device_id}"),
-                display_name,
-                Some(device_id),
-                now,
-            ) {
+                .collect::<HashMap<_, _>>();
+            for subscription in summary
+                .get("subscriptions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(snapshot) = subscription.get("snapshot") else {
+                    continue;
+                };
+                if !snapshot
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .and_then(ProviderId::parse)
+                    .is_some_and(ProviderId::syncs_to_account)
+                {
+                    continue;
+                }
+                let winner_observed = snapshot.get("observed_at").and_then(Value::as_str);
+                let mut handled = false;
+                for source in subscription
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let Some(device_id) = source.get("device_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let observed = source.get("observed_at").and_then(Value::as_str);
+                    let (source_snapshot, has_reading) = match source.get("snapshot").cloned() {
+                        Some(reading) => (reading, true),
+                        None if observed == winner_observed => (snapshot.clone(), true),
+                        None => {
+                            // Relay named the device and when it read, but not what it read —
+                            // an older Relay, or a reading it no longer holds. The row still
+                            // stands so the device is not lost: its freshness is its own
+                            // instant against the subscription's windows, and no quota is
+                            // invented for it.
+                            let Some(observed) = observed else { continue };
+                            let mut approximate = snapshot.clone();
+                            approximate["observed_at"] = Value::String(observed.to_owned());
+                            (approximate, false)
+                        }
+                    };
+                    let display_name = display_names
+                        .get(device_id)
+                        .map(String::as_str)
+                        .unwrap_or("Other device");
+                    let Some(mut item) = overview_item(
+                        &source_snapshot,
+                        &format!("device:{device_id}"),
+                        display_name,
+                        Some(device_id),
+                        now,
+                    ) else {
+                        continue;
+                    };
+                    if !has_reading {
+                        for entry in &mut item.sources {
+                            entry.snapshot = None;
+                        }
+                    }
+                    if local_already_covers_this_device(&items, &item, this_device_id, device_id) {
+                        handled = true;
+                        continue;
+                    }
+                    merge_overview_item(&mut items, item);
+                    handled = true;
+                }
+                if handled {
+                    continue;
+                }
+                let device_id = subscription
+                    .get("sources")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|source| {
+                        Some((
+                            source.get("device_id")?.as_str()?,
+                            source.get("observed_at")?.as_str()?,
+                        ))
+                    })
+                    .filter(|(_, observed_at)| Some(*observed_at) == winner_observed)
+                    .map(|(device_id, _)| device_id)
+                    .min();
+                let Some(device_id) = device_id else {
+                    continue;
+                };
+                let display_name = display_names
+                    .get(device_id)
+                    .map(String::as_str)
+                    .unwrap_or("Other device");
+                let Some(item) = overview_item(
+                    snapshot,
+                    &format!("device:{device_id}"),
+                    display_name,
+                    Some(device_id),
+                    now,
+                ) else {
+                    continue;
+                };
+                if local_already_covers_this_device(&items, &item, this_device_id, device_id) {
+                    continue;
+                }
                 merge_overview_item(&mut items, item);
             }
         }
     }
+    let mut kept = pins.clone();
+    prune_overview_pins(&items, &mut kept);
+    apply_overview_pins(&mut items, &kept);
     sort_overview_items(&mut items);
-    items
+    (items, kept)
+}
+
+fn prune_overview_pins(items: &[QuotaOverviewItem], pins: &mut HashMap<String, String>) {
+    pins.retain(|key, pin| {
+        items.iter().any(|item| {
+            overview_identity_key(&item.identity) == *key
+                && item.sources.iter().any(|source| source.source_id == *pin)
+        })
+    });
 }
 
 fn collect_discovered_jobs(
@@ -2477,7 +2580,13 @@ fn retain_previous_local_overview(
         if item.selected_source_id != local.source_id {
             continue;
         }
-        if let Some(kept) = overview_item(&item.snapshot, "local", "Local", None, now) {
+        if let Some(kept) = overview_item(
+            &item.snapshot,
+            "local",
+            LOCAL_SOURCE_DISPLAY_NAME,
+            None,
+            now,
+        ) {
             merge_overview_item(items, kept);
         }
     }
@@ -2555,11 +2664,14 @@ fn collect_discovered_provider(
             "sources": []
         });
     }
+    let browser_already = sessions
+        .iter()
+        .any(|session| session.credential_source == providers::BROWSER_SESSION_SOURCE);
     let mut snapshots = Vec::new();
     let mut sources = Vec::new();
     let mut failure: Option<ProviderError> = None;
-    for session in sessions {
-        match providers::collect(provider, &session, context) {
+    for session in &sessions {
+        match providers::collect(provider, session, context) {
             // Expiry is derived from the reading itself by whoever reads it, so this
             // uploads the observation and nothing about how long it stays current.
             Ok(snapshot) => {
@@ -2580,6 +2692,41 @@ fn collect_discovered_provider(
                     "category": error.category.name()
                 }));
                 failure = Some(error);
+            }
+        }
+    }
+    if snapshots.is_empty()
+        && !browser_already
+        && failure
+            .as_ref()
+            .is_some_and(|error| error.category == ErrorCategory::AuthRequired)
+    {
+        // The ladder already spent browser_sessions_for(provider)[0] when the
+        // official rung answered auth_required; sending it again would
+        // double-request the same account.
+        for cookie in context.browser_sessions_for(provider).iter().skip(1) {
+            let session = ProviderSession {
+                provider,
+                credential_source: providers::BROWSER_SESSION_SOURCE.to_owned(),
+                cookie_header: Some(cookie.clone()),
+            };
+            match providers::collect(provider, &session, context) {
+                Ok(snapshot) => {
+                    sources.push(json!({
+                        "source_id": providers::session_source_id(provider, &session),
+                        "outcome": "success",
+                        "category": "success"
+                    }));
+                    snapshots.push(serde_json::to_value(&snapshot).unwrap_or(Value::Null));
+                }
+                Err(error) => {
+                    sources.push(json!({
+                        "source_id": error.source_id,
+                        "outcome": error.category.as_str(),
+                        "category": error.category.name()
+                    }));
+                    failure = Some(error);
+                }
             }
         }
     }
@@ -3667,6 +3814,8 @@ fn floor_utc_hour(value: &DateTime<Utc>) -> String {
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+const LOCAL_SOURCE_DISPLAY_NAME: &str = "This Mac";
+
 fn overview_item(
     snapshot: &Value,
     source_id: &str,
@@ -3700,11 +3849,59 @@ fn overview_item(
             display_name: display_name.to_owned(),
             observed_at,
             is_stale: stale,
+            snapshot: Some(snapshot.clone()),
         }],
         selected_source_id: source_id.to_owned(),
         selected_source_display_name: display_name.to_owned(),
+        automatic_source_id: source_id.to_owned(),
+        automatic_source_display_name: display_name.to_owned(),
         is_stale: stale,
+        source_pin: None,
     })
+}
+
+pub(crate) fn overview_identity_key(identity: &QuotaOverviewIdentity) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        identity.provider,
+        identity.fingerprint,
+        identity.scope,
+        identity.source_id.as_deref().unwrap_or("")
+    )
+}
+
+fn local_already_covers_this_device(
+    items: &[QuotaOverviewItem],
+    incoming: &QuotaOverviewItem,
+    this_device_id: Option<&str>,
+    source_device_id: &str,
+) -> bool {
+    this_device_id == Some(source_device_id)
+        && items.iter().any(|item| {
+            item.identity.provider == incoming.identity.provider
+                && item.identity.fingerprint == incoming.identity.fingerprint
+                && item.sources.iter().any(|source| source.kind == "local")
+        })
+}
+
+fn apply_overview_pins(items: &mut [QuotaOverviewItem], pins: &HashMap<String, String>) {
+    for item in items {
+        item.source_pin = None;
+        let Some(pin) = pins.get(&overview_identity_key(&item.identity)) else {
+            continue;
+        };
+        let Some(source) = item.sources.iter().find(|source| source.source_id == *pin) else {
+            continue;
+        };
+        let Some(snapshot) = source.snapshot.clone() else {
+            continue;
+        };
+        item.snapshot = snapshot;
+        item.selected_source_id = source.source_id.clone();
+        item.selected_source_display_name = source.display_name.clone();
+        item.is_stale = source.is_stale;
+        item.source_pin = Some(pin.clone());
+    }
 }
 
 fn sort_overview_items(items: &mut [QuotaOverviewItem]) {
@@ -3731,8 +3928,10 @@ fn merge_overview_item(items: &mut Vec<QuotaOverviewItem>, mut incoming: QuotaOv
         .sort_by(|left, right| left.source_id.cmp(&right.source_id));
     if incoming_better {
         existing.snapshot = incoming.snapshot;
-        existing.selected_source_id = incoming.selected_source_id;
-        existing.selected_source_display_name = incoming.selected_source_display_name;
+        existing.selected_source_id = incoming.selected_source_id.clone();
+        existing.selected_source_display_name = incoming.selected_source_display_name.clone();
+        existing.automatic_source_id = incoming.automatic_source_id;
+        existing.automatic_source_display_name = incoming.automatic_source_display_name;
         existing.is_stale = incoming.is_stale;
     }
 }
@@ -4758,6 +4957,7 @@ mod tests {
                 vec![ProviderSession {
                     provider: ProviderId::Claude,
                     credential_source: "fixture".to_owned(),
+                    cookie_header: None,
                 }],
             )];
 
@@ -4929,6 +5129,7 @@ mod tests {
                     vec![ProviderSession {
                         provider,
                         credential_source: "fixture".to_owned(),
+                        cookie_header: None,
                     }],
                 )
             };
@@ -5311,10 +5512,11 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "type": "request",
                 "request_id": "denied",
-                "operation": "commit_provider_browser_session",
+                "operation": "replace_provider_browser_sessions",
                 "payload": {
                     "provider": "cursor",
-                    "access_denied": {"browser": "Safari", "reason": "full_disk_access"}
+                    "cookie_headers": [],
+                    "access_denials": [{"browser": "Safari", "reason": "full_disk_access"}]
                 }
             }))
             .expect("denial request"),
@@ -5624,7 +5826,7 @@ mod tests {
             overview_item(
                 &snapshot(12.0, "2026-08-28T07:45:00Z"),
                 "local",
-                "Local",
+                LOCAL_SOURCE_DISPLAY_NAME,
                 None,
                 now,
             )
@@ -5827,6 +6029,7 @@ mod tests {
             vec![ProviderSession {
                 provider: ProviderId::Claude,
                 credential_source: "fixture".to_owned(),
+                cookie_header: None,
             }],
             &context,
         );
@@ -5931,6 +6134,98 @@ mod tests {
         }
     }
 
+    /// Extra stored accounts are a last-rung retry after `auth_required`, never after a
+    /// network or access failure, and the ladder already spent cookie[0].
+    #[test]
+    fn extra_browser_accounts_run_only_after_auth_required_and_skip_the_first_cookie() {
+        let source_ids = |result: &Value| -> Vec<String> {
+            result
+                .get("sources")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|source| source.get("source_id")?.as_str().map(str::to_owned))
+                .collect()
+        };
+        let cookies = vec!["cookie-one".to_owned(), "cookie-two".to_owned()];
+
+        // A closed port is Unavailable, not a sign-in problem: the stored cookies stay unread.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("port")
+            .local_addr()
+            .expect("address")
+            .port();
+        let unavailable_context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-extra-browser-unavailable-home"),
+            environment: HashMap::from([
+                ("LITELLM_API_KEY".to_owned(), "sk-litellm-test".to_owned()),
+                (
+                    "LITELLM_BASE_URL".to_owned(),
+                    format!("http://127.0.0.1:{port}"),
+                ),
+            ]),
+            config_path: Some(PathBuf::from(
+                "/tmp/quota-extra-browser-unavailable-home/none.json",
+            )),
+            browser_sessions: HashMap::from([(ProviderId::LiteLlm, cookies.clone())]),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-15T08:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        };
+        let sessions = providers::discover(ProviderId::LiteLlm, &unavailable_context);
+        assert_eq!(sessions.len(), 1);
+        let unavailable =
+            collect_discovered_provider(ProviderId::LiteLlm, sessions, &unavailable_context);
+        assert_eq!(
+            unavailable.get("outcome").and_then(Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            source_ids(&unavailable),
+            vec![crate::providers::litellm::SOURCE]
+        );
+
+        // OpenRouter's official collect answers AuthRequired with no key and no request, so
+        // extra cookies are attempted. cookie[0] is the ladder's, cookie[1] is this block's.
+        let auth_context = CollectionContext {
+            home_directory: PathBuf::from("/tmp/quota-extra-browser-auth-home"),
+            environment: HashMap::new(),
+            config_path: Some(PathBuf::from(
+                "/tmp/quota-extra-browser-auth-home/none.json",
+            )),
+            browser_sessions: HashMap::from([(ProviderId::OpenRouter, cookies)]),
+            client_name: "QuotaTest".to_owned(),
+            client_version: "test".to_owned(),
+            now: Some("2026-08-15T08:00:00Z".to_owned()),
+            cancel: None,
+            keychain: Default::default(),
+            cli_versions: Default::default(),
+            proven_credentials: Default::default(),
+        };
+        let official = vec![ProviderSession {
+            provider: ProviderId::OpenRouter,
+            credential_source: "fixture".to_owned(),
+            cookie_header: None,
+        }];
+        let auth_required =
+            collect_discovered_provider(ProviderId::OpenRouter, official, &auth_context);
+        assert_eq!(
+            auth_required.get("outcome").and_then(Value::as_str),
+            Some("auth_required")
+        );
+        assert_eq!(
+            source_ids(&auth_required),
+            vec![
+                crate::providers::openrouter::SOURCE,
+                crate::providers::openrouter::SOURCE
+            ]
+        );
+    }
+
     /// Every reader resolves one subscription the same way, so the rule is stated once as
     /// a fixture and each implementation answers it. Remote source ids carry a `device:`
     /// prefix that keeps them apart from local collection, which the fixture does not
@@ -5990,6 +6285,14 @@ mod tests {
                     );
                     assert_eq!(source.observed_at, expected["observed_at"], "{name}");
                     assert_eq!(source.is_stale, expected["is_stale"], "{name}");
+                    assert_eq!(
+                        source
+                            .snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.get("observed_at")),
+                        expected.get("observed_at"),
+                        "{name}"
+                    );
                 }
             }
         }
@@ -6048,6 +6351,358 @@ mod tests {
                 assert_eq!(item.is_stale, expected["is_stale"], "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_source_pin_selects_that_reading_even_when_automatic_would_not() {
+        let now = DateTime::parse_from_rfc3339("2026-08-24T10:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let local = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+        });
+        let remote = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 20.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+        });
+        let quota =
+            json!({"results": [{"provider": "codex", "outcome": "success", "snapshots": [local]}]});
+        let account = json!({
+            "account_summary": {
+                "devices": [{"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}],
+                "subscriptions": [{
+                    "key": "codex|fp|global|",
+                    "provider": "codex",
+                    "snapshot": remote.clone(),
+                    "sources": [{
+                        "device_id": "device_remote",
+                        "observed_at": "2026-08-24T09:30:00Z",
+                        "snapshot": remote
+                    }]
+                }]
+            }
+        });
+        let automatic = overview_items(&quota, Some(&account), &[], now);
+        assert_eq!(automatic[0].selected_source_id, "device:device_remote");
+        assert_eq!(automatic[0].sources.len(), 2);
+        assert!(
+            automatic[0]
+                .sources
+                .iter()
+                .all(|source| source.snapshot.is_some())
+        );
+
+        let mut pins = HashMap::new();
+        pins.insert("codex|fp|global|".into(), "local".into());
+        let pinned = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        assert_eq!(pinned[0].selected_source_id, "local");
+        assert_eq!(pinned[0].source_pin.as_deref(), Some("local"));
+        assert_eq!(pinned[0].automatic_source_id, "device:device_remote");
+        assert_eq!(pinned[0].automatic_source_display_name, "Studio");
+        assert_eq!(pinned[0].snapshot["windows"][0]["used_percent"], 10.0);
+
+        pins.insert("codex|fp|global|".into(), "missing".into());
+        let missing = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        assert_eq!(missing[0].selected_source_id, "device:device_remote");
+        assert_eq!(missing[0].automatic_source_id, "device:device_remote");
+        assert!(missing[0].source_pin.is_none());
+    }
+
+    /// An older Relay names every device that read a subscription but sends only the winning
+    /// reading. Once this Mac's own reading wins, the other device must not vanish from the
+    /// list: it is still a source, with its own freshness and no invented quota.
+    #[test]
+    fn an_older_device_source_without_a_snapshot_is_still_listed() {
+        let now = DateTime::parse_from_rfc3339("2026-08-30T08:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let local = json!({
+            "provider": "cursor",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "monthly", "title": "Monthly", "used_percent": 10.0, "duration_seconds": 2592000}],
+            "status": "available",
+            "observed_at": "2026-08-30T07:47:38Z"
+        });
+        let quota = json!({"results": [{"provider": "cursor", "outcome": "success", "snapshots": [local.clone()]}]});
+        let account = json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [
+                    {"id": "this-device", "display_name": "Kyle's Mac mini"},
+                    {"id": "device_laptop", "display_name": "Hao's Macbook Pro"}
+                ],
+                "subscriptions": [{
+                    "key": "cursor|fp|global|",
+                    "provider": "cursor",
+                    "snapshot": local,
+                    "sources": [
+                        {"device_id": "this-device", "observed_at": "2026-08-30T07:47:38Z"},
+                        {"device_id": "device_laptop", "observed_at": "2026-08-28T21:29:24Z"}
+                    ]
+                }]
+            }
+        });
+        let items = overview_items(&quota, Some(&account), &[], now);
+        assert_eq!(items.len(), 1);
+        let sources: Vec<_> = items[0]
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.as_str(),
+                    source.display_name.as_str(),
+                    source.snapshot.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                ("device:device_laptop", "Hao's Macbook Pro", false),
+                ("local", "This Mac", true)
+            ]
+        );
+        assert_eq!(items[0].selected_source_id, "local");
+        let laptop = &items[0].sources[0];
+        assert_eq!(laptop.observed_at, "2026-08-28T21:29:24Z");
+        assert!(laptop.is_stale);
+    }
+
+    #[test]
+    fn this_macs_uploaded_source_is_not_listed_beside_local() {
+        let now = DateTime::parse_from_rfc3339("2026-08-24T10:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let local = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+        });
+        let remote = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 20.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+        });
+        let quota = json!({"results": [{"provider": "codex", "outcome": "success", "snapshots": [local.clone()]}]});
+        let account = json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [
+                    {"id": "this-device", "display_name": "Kitchen Mac", "platform": "macos", "last_seen_at": null, "last_observed_at": null},
+                    {"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}
+                ],
+                "subscriptions": [{
+                    "key": "codex|fp|global|",
+                    "provider": "codex",
+                    "snapshot": remote.clone(),
+                    "sources": [
+                        {"device_id": "this-device", "observed_at": "2026-08-24T09:00:00Z", "snapshot": local},
+                        {"device_id": "device_remote", "observed_at": "2026-08-24T09:30:00Z", "snapshot": remote}
+                    ]
+                }]
+            }
+        });
+        let items = overview_items(&quota, Some(&account), &[], now);
+        assert_eq!(items.len(), 1);
+        let source_ids: Vec<_> = items[0]
+            .sources
+            .iter()
+            .map(|source| source.source_id.as_str())
+            .collect();
+        assert_eq!(source_ids, vec!["device:device_remote", "local"]);
+        assert_eq!(items[0].selected_source_id, "device:device_remote");
+        assert_eq!(
+            items[0]
+                .sources
+                .iter()
+                .find(|source| source.source_id == "local")
+                .map(|source| source.display_name.as_str()),
+            Some(LOCAL_SOURCE_DISPLAY_NAME)
+        );
+    }
+
+    #[test]
+    fn this_macs_uploaded_source_scoped_row_is_not_a_second_subscription() {
+        let now = DateTime::parse_from_rfc3339("2026-08-24T10:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let local = json!({
+            "provider": "grok",
+            "account": {"fingerprint": "fp-source", "fingerprint_scope": "source"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+        });
+        let remote = json!({
+            "provider": "grok",
+            "account": {"fingerprint": "fp-source", "fingerprint_scope": "source"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 90.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+        });
+        let quota = json!({"results": [{"provider": "grok", "outcome": "success", "snapshots": [local.clone()]}]});
+        let account = json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [
+                    {"id": "this-device", "display_name": "Kitchen Mac"},
+                    {"id": "device_remote", "display_name": "Studio"}
+                ],
+                "subscriptions": [
+                    {
+                        "key": "grok|fp-source|source|device:this-device",
+                        "provider": "grok",
+                        "snapshot": local.clone(),
+                        "sources": [{
+                            "device_id": "this-device",
+                            "observed_at": "2026-08-24T09:00:00Z",
+                            "snapshot": local
+                        }]
+                    },
+                    {
+                        "key": "grok|fp-source|source|device:device_remote",
+                        "provider": "grok",
+                        "snapshot": remote.clone(),
+                        "sources": [{
+                            "device_id": "device_remote",
+                            "observed_at": "2026-08-24T09:30:00Z",
+                            "snapshot": remote
+                        }]
+                    }
+                ]
+            }
+        });
+        let items = overview_items(&quota, Some(&account), &[], now);
+        let identities: Vec<_> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.identity.source_id.as_deref(),
+                    item.selected_source_id.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            identities,
+            vec![
+                (Some("device:device_remote"), "device:device_remote"),
+                (Some("local"), "local"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_source_pin_survives_cache_reset() {
+        let root =
+            std::env::temp_dir().join(format!("quota-overview-pin-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = StateStore::open(&root).expect("state");
+        state
+            .set_overview_source_pin("codex|fp|global|", Some("local"))
+            .expect("pin");
+        state.reset_cache();
+        let pins = state.overview_source_pins().expect("pins");
+        assert_eq!(
+            pins.get("codex|fp|global|").map(String::as_str),
+            Some("local")
+        );
+
+        let now = DateTime::parse_from_rfc3339("2026-08-24T10:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let local = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:00:00Z"
+        });
+        let remote = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 20.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": "2026-08-24T09:30:00Z"
+        });
+        let quota =
+            json!({"results": [{"provider": "codex", "outcome": "success", "snapshots": [local]}]});
+        let account = json!({
+            "account_summary": {
+                "devices": [{"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}],
+                "subscriptions": [{
+                    "key": "codex|fp|global|",
+                    "provider": "codex",
+                    "snapshot": remote.clone(),
+                    "sources": [{
+                        "device_id": "device_remote",
+                        "observed_at": "2026-08-24T09:30:00Z",
+                        "snapshot": remote
+                    }]
+                }]
+            }
+        });
+        let items = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        assert_eq!(items[0].selected_source_id, "local");
+        assert_eq!(items[0].source_pin.as_deref(), Some("local"));
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_source_pin_is_dropped_from_the_store_on_refresh() {
+        let root = std::env::temp_dir().join(format!(
+            "quota-overview-pin-refresh-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_overview_source_pin("codex|fp|global|", Some("device:device_remote"))
+            .expect("pin");
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let local = json!({
+            "provider": "codex",
+            "account": {"fingerprint": "fp", "fingerprint_scope": "global"},
+            "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10.0, "duration_seconds": 604800}],
+            "status": "available",
+            "observed_at": observed_at
+        });
+        let quota =
+            json!({"results": [{"provider": "codex", "outcome": "success", "snapshots": [local]}]});
+        let account = json!({
+            "auth_status": "signed_in",
+            "device_id": "this-device",
+            "account_summary": {
+                "devices": [],
+                "subscriptions": []
+            }
+        });
+        let _items = backend.build_overview(&quota, Some(&account));
+        let pins = state.overview_source_pins().expect("pins");
+        assert!(pins.get("codex|fp|global|").is_none());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -6279,10 +6934,14 @@ mod tests {
                     display_name: "Other device".into(),
                     observed_at: "2026-08-15T08:00:00Z".into(),
                     is_stale: false,
+                    snapshot: None,
                 }],
                 selected_source_id: "redacted-in-report".into(),
                 selected_source_display_name: "Other device".into(),
+                automatic_source_id: "redacted-in-report".into(),
+                automatic_source_display_name: "Other device".into(),
                 is_stale: false,
+                source_pin: None,
             }])
             .expect("overview");
         let backend = NativeBackend::new(
@@ -6356,10 +7015,14 @@ mod tests {
                     display_name: "Other device".into(),
                     observed_at: "2026-08-15T08:00:00Z".into(),
                     is_stale: false,
+                    snapshot: None,
                 }],
                 selected_source_id: "private-device".into(),
                 selected_source_display_name: "Other device".into(),
+                automatic_source_id: "private-device".into(),
+                automatic_source_display_name: "Other device".into(),
                 is_stale: false,
+                source_pin: None,
             }])
             .expect("overview");
         let backend = NativeBackend::new(

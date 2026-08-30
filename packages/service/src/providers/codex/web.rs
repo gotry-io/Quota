@@ -54,10 +54,10 @@ fn validate_at(
     })
 }
 
-pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let cookie_header = context
-        .browser_session(ProviderId::Codex)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+pub fn collect(
+    context: &CollectionContext,
+    cookie_header: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     let session = fetch_web_session(cookie_header, context, ORIGIN, HTTP_TIMEOUT)?;
     // The session document often carries a bearer the WHAM endpoint accepts. Spending that is
     // the same request the OAuth rung makes, so it reports the same windows.

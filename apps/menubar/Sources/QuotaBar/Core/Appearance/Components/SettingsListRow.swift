@@ -66,11 +66,14 @@ extension SettingsListRow where Leading == SettingsListLeadingIcon {
 
 struct SettingsListLeadingIcon: View {
   let systemImage: String
+  var foreground = QuotaPalette.body
+  var filled = false
 
   var body: some View {
     Image(systemName: systemImage)
+      .symbolVariant(filled ? .fill : .none)
       .quotaFont(.secondary)
-      .foregroundStyle(QuotaPalette.body)
+      .foregroundStyle(foreground)
       .frame(
         width: QuotaDesign.Layout.settingsIconColumnWidth,
         height: QuotaDesign.Layout.settingsIconColumnWidth

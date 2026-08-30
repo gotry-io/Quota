@@ -17,6 +17,12 @@ let package = Package(
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.5"),
   ],
   targets: [
+    .target(
+      name: "QuotaBarKeychainShim",
+      linkerSettings: [
+        .linkedFramework("Security"),
+        .linkedFramework("CoreFoundation"),
+      ]),
     .executableTarget(
       name: "QuotaBar",
       dependencies: [
@@ -24,6 +30,7 @@ let package = Package(
         .product(name: "QuotaPresentation", package: "apple-shared"),
         .product(name: "SweetCookieKit", package: "SweetCookieKit"),
         .product(name: "Sparkle", package: "Sparkle"),
+        "QuotaBarKeychainShim",
       ],
       resources: [.process("Resources")]),
     .testTarget(

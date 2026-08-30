@@ -122,49 +122,16 @@ struct MenuBarContentView: View {
   @ViewBuilder
   private func providerBrowserSessionPopup(_ popup: ProviderBrowserSessionPopup) -> some View {
     switch popup {
-    case .browser(let provider, let choices):
-      QuotaSelectionPopup(
-        title: "Choose Browser",
-        message: "Choose the browser you are signed in to \(provider.displayName) with. QuotaBar asks before it reads anything.",
-        choices: choices.map {
-          QuotaSelectionChoice(id: $0.id, title: $0.title, subtitle: nil)
-        },
-        onCancel: model.cancelProviderBrowserSessionFlow,
-        onSelect: { model.selectBrowserApplication($0, provider: provider) }
-      )
-    case .consent(let provider, let choice):
+    case .consent(let provider):
       if let spec = provider.browserSession {
         QuotaConfirmationPopup(
           title: BrowserSessionCopy.consentTitle(provider: provider),
-          message: BrowserSessionCopy.consentMessage(
-            provider: provider,
-            browserName: choice.title,
-            family: choice.family,
-            spec: spec
-          ),
+          message: BrowserSessionCopy.scanConsentMessage(provider: provider, spec: spec),
           confirmTitle: BrowserSessionCopy.consentConfirmTitle,
           onCancel: model.cancelProviderBrowserSessionFlow,
           onConfirm: model.confirmProviderBrowserSessionConsent
         )
       }
-    case .account(let provider, let choices):
-      QuotaSelectionPopup(
-        title: "Choose \(provider.displayName) Account",
-        message: "Choose the browser account to connect on this Mac.",
-        choices: choices.map {
-          QuotaSelectionChoice(id: $0.id, title: $0.title, subtitle: $0.subtitle)
-        },
-        onCancel: model.cancelProviderBrowserSessionFlow,
-        onSelect: model.selectBrowserSessionAccount
-      )
-    case .confirmDisconnect(let provider):
-      QuotaConfirmationPopup(
-        title: "Disconnect \(provider.displayName)?",
-        message: "Remove this browser session from QuotaBar on this Mac.",
-        confirmTitle: "Disconnect",
-        onCancel: model.cancelProviderBrowserSessionFlow,
-        onConfirm: model.confirmProviderBrowserSessionDisconnect
-      )
     }
   }
 
@@ -222,7 +189,8 @@ struct MenuBarContentView: View {
         now: now,
         revealGeneration: revealGeneration,
         revealProvider: revealProvider,
-        onOpenSettings: openSettings
+        onOpenSettings: openSettings,
+        onOpenProvider: openProviderSettings
       )
     case .settings:
       SettingsHomeView(
@@ -243,14 +211,34 @@ struct MenuBarContentView: View {
       )
     case .agents:
       AgentsSettingsView(
-        accountReportedProviders: model.accountReportingProviders(),
+        statusLine: { provider in model.agentStatusLine(for: provider) },
         onOpenProvider: { provider in navigate(to: .provider(provider)) }
       )
     case .provider(let provider):
       ProviderSettingsView(
         model: model,
         provider: provider,
-        reportingSources: model.reportingSources(for: provider, now: now),
+        now: now,
+        onOpenSource: { item, source in
+          navigate(
+            to: .providerSource(
+              provider,
+              identityKey: item.pinIdentityKey,
+              sourceID: source.sourceID,
+              displayName: source.displayName)
+          )
+        },
+        onOpenAPIKey: { navigate(to: .providerAPIKey(provider)) }
+      )
+    case .providerAPIKey(let provider):
+      ProviderAPIKeyView(model: model, provider: provider)
+    case .providerSource(let provider, let identityKey, let sourceID, let displayName):
+      ProviderSourceDetailView(
+        model: model,
+        provider: provider,
+        identityKey: identityKey,
+        sourceID: sourceID,
+        displayName: displayName,
         now: now
       )
     case .devices:
@@ -292,15 +280,24 @@ struct MenuBarContentView: View {
     navigate(to: .settings)
   }
 
+  private func openProviderSettings(_ provider: ProviderID) {
+    navigate(to: [.settings, .agents, .provider(provider)])
+  }
+
   private func runDiagnosticsCheck() async {
     await diagnostics.runCheck { try await model.diagnose() }
   }
 
   private func navigate(to route: MenuBarRoute) {
+    navigate(to: [route])
+  }
+
+  private func navigate(to routes: [MenuBarRoute]) {
+    guard !routes.isEmpty else { return }
     navigationDirection = .forward
     var next = navigation
-    next.open(route)
-    if route == .diagnostics {
+    next.open(routes)
+    if routes.contains(.diagnostics) {
       diagnostics.prepareForEntry()
     }
     applyNavigation(next)
@@ -362,6 +359,9 @@ enum MenuBarRoute: Hashable {
   case quotaRefreshInterval
   case support
   case diagnostics
+  case providerSource(
+    ProviderID, identityKey: String, sourceID: String, displayName: String)
+  case providerAPIKey(ProviderID)
 
   var title: String {
     switch self {
@@ -369,6 +369,8 @@ enum MenuBarRoute: Hashable {
     case .account: "Account"
     case .agents: "Agents"
     case .provider(let provider): provider.displayName
+    case .providerSource(_, _, _, let displayName): displayName
+    case .providerAPIKey: "API Key"
     case .devices: "Devices"
     case .usage: "Usage"
     // The section header says Menu Bar; a page carries its own context.
@@ -396,6 +398,12 @@ struct MenuBarNavigationState: Equatable {
   mutating func open(_ route: MenuBarRoute) {
     guard path.last != route else { return }
     path.append(route)
+  }
+
+  mutating func open(_ routes: [MenuBarRoute]) {
+    for route in routes {
+      open(route)
+    }
   }
 
   mutating func navigateBack() {

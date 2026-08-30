@@ -39,19 +39,21 @@ two seconds and no more; closing stdin says the same thing either way.
 
 QuotaBar reads a browser session for the five providers whose catalog row declares one — Cursor,
 Codex, Claude, Grok, and Kimi — and always as the last rung, after every official credential that
-provider has. Before the first cookie read, a confirmation popup names the browser
-about to be read, the permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe
-Storage" Keychain item for a Chrome-family browser), the exact hosts and cookie names, the local
-service database the accepted session is kept in until disconnected, and that nothing is uploaded.
-Declining reads nothing. On confirmation, QuotaBar pins login and Cookie discovery to that one
-browser application; SweetCookieKit 0.5.2 enumerates its profiles with logging disabled and returns
-only exact-host/name allowlist candidates in memory. Swift sends one minimal Cookie header at a
-time to Rust for validation/commit; it never calls provider APIs or persists the header. A store
-macOS refuses ends the attempt and is shown as its own state — with the grant to change, not "no
-session found" — and reaches the Diagnostics page as the `browser_access_denied` source. Cursor prefers
-a signed-in Cursor.app session and uses the browser session as its fallback; Codex, Claude, Grok,
-and Kimi reach theirs only when their own credential is missing or has been rejected. Browser
-cookies stay local.
+provider has. **Browser Sign-in** is the control. Turning it on asks for a short consent that names
+the cookie names and hosts, that accepted sessions stay in the local service database until the
+scan is turned off, and that nothing is uploaded. Declining reads nothing. On confirmation QuotaBar stores the preference,
+preflights installed browsers, and reads every granted store when this Mac has no usable official
+credential. What is still missing opens the floating Browser Access window: one row per
+installed browser with its gatekeeper and one action — Open Settings… for Safari Full Disk
+Access (with a QuotaBar icon to drag into that list, and a Relaunch row afterwards, since that grant lands on the next launch), Allow… for a Chrome-family
+Keychain item, Ready for everything else. The Agent page shows one summary row that opens it. SweetCookieKit 0.5.2 enumerates profiles with
+logging disabled and returns only exact-host/name allowlist candidates in memory. Swift sends
+Cookie headers to Rust for validation; it never calls provider APIs or persists the header. A
+store macOS refuses ends that browser's attempt and is shown as its own state — with the grant to
+change, not "no session found" — and reaches the Diagnostics page as the `browser_access_denied`
+source. Cursor prefers a signed-in Cursor.app session and uses the browser session as its
+fallback; Codex, Claude, Grok, and Kimi reach theirs only when their own credential is missing or
+has been rejected. Browser cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
@@ -101,7 +103,11 @@ open dist/menubar/QuotaBar.app
 
 `swift run` does not assemble an app bundle and therefore does not provide the private service at its
 production path. Use the packaging script for live integration. It builds arm64 Rust and Swift
-binaries, copies resources, installs the service, and applies local ad-hoc signatures. The release
+binaries, copies resources, installs the service, and applies local ad-hoc signatures. An ad-hoc
+signature's designated requirement is the build's cdhash, so macOS treats every rebuild as a new
+app and asks again for Full Disk Access, Removable Volumes, and the Chrome Safe Storage Keychain
+item; set `QUOTABAR_CODESIGN_IDENTITY` to a self-signed code-signing certificate (Keychain Access ›
+Certificate Assistant) to keep those grants across local builds. The release
 workflow replaces them with Developer ID signatures before notarization.
 `pnpm test:menubar:helper` runs the packaged helper through the Swift IPC tests with an isolated
 `HOME`, `XDG_CONFIG_HOME`, and provider data roots; it does not read the invoking user's local state.
@@ -113,7 +119,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|devices|usage|menu-bar-style|menu-bar-provider|support|diagnostics
+--route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|provider-codex-source|provider-litellm-key|devices|usage|menu-bar-style|menu-bar-provider|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

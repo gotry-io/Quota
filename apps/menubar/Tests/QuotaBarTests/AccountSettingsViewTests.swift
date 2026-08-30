@@ -20,6 +20,32 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func aProviderSourceIsOneLevelBelowTheAgentPage() {
+    var navigation = MenuBarNavigationState()
+    navigation.open([
+      .settings, .agents, .provider(.codex),
+      .providerSource(
+        .codex, identityKey: "codex|fp|global|", sourceID: "local", displayName: "This Mac"),
+    ])
+    #expect(navigation.title == "This Mac")
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings, .agents, .provider(.codex)])
+  }
+
+  @Test
+  func overviewOpensAProviderThroughSettingsAndAgentsInOneStep() {
+    var navigation = MenuBarNavigationState()
+    navigation.open([.settings, .agents, .provider(.codex)])
+
+    #expect(navigation.path == [.settings, .agents, .provider(.codex)])
+    #expect(navigation.title == "Codex")
+
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings, .agents])
+    #expect(navigation.title == "Agents")
+  }
+
+  @Test
   func accountIsOneLevelBelowSettingsAndDevicesOneLevelBelowThat() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)

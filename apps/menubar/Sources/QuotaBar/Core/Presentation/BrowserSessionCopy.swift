@@ -17,8 +17,8 @@ enum BrowserSessionFamily: Equatable, Sendable {
 ///
 /// Reading another program's cookie jar is the one thing this app does that a person has to
 /// agree to, so what it is about to do is written out before it happens rather than summarised
-/// afterwards: which browser, which permission macOS will ask for, which cookies, where the
-/// accepted session is kept, and that none of it is uploaded.
+/// afterwards: which cookies on which hosts, where the accepted session is kept, and that none
+/// of it is uploaded — and, per installed browser, which permission macOS puts in the way.
 enum BrowserSessionCopy {
   static let consentConfirmTitle = "Read Cookies"
 
@@ -26,48 +26,77 @@ enum BrowserSessionCopy {
     "Read \(provider.displayName) Cookies?"
   }
 
-  /// The sheet shown before the first cookie is read.
-  ///
-  /// The permission sentence names only the gatekeeper the chosen browser actually has, because
-  /// a Safari reader has no Keychain item to release and a Chrome reader needs no Full Disk
-  /// Access. `hosts` and `names` come from the catalog, so the sheet cannot promise a narrower
-  /// read than the one that happens.
-  static func consentMessage(
-    provider: ProviderID,
-    browserName: String,
-    family: BrowserSessionFamily,
-    spec: BrowserSessionSpec
-  ) -> String {
+  /// The sheet shown before the first cookie is read: which cookies, on which hosts, where they
+  /// stay, and that they never leave. `hosts` and `names` come from the catalog, so the sheet
+  /// cannot promise a narrower read than the one that happens. Which macOS permission each
+  /// browser needs is the Browser Access window's job, told per browser once it is known.
+  static func scanConsentMessage(provider: ProviderID, spec: BrowserSessionSpec) -> String {
     let hosts = list(spec.cookieHosts)
     let names = list(spec.cookieNames)
+    let cookies = spec.cookieNames.count == 1 ? "cookie" : "cookies"
     return """
-      QuotaBar will read \(browserName)'s cookies for \(hosts), and only the \
-      \(names) \(spec.cookieNames.count == 1 ? "cookie" : "cookies") stored there. \
-      \(permissionSentence(browserName: browserName, family: family))
-      The session you accept is stored in QuotaBar's local service database on this Mac until \
-      you disconnect it. Nothing about it is uploaded to your Quota account or anywhere else.
+      QuotaBar will read the \(provider.displayName) sign-in \(cookies) — \(names) — that \
+      browsers on this Mac hold for \(hosts). Sessions stay in QuotaBar's local service database \
+      until you turn this off and are never uploaded.
       """
   }
 
-  /// What macOS will ask for, in the words of the browser being read.
-  static func permissionSentence(
-    browserName: String,
-    family: BrowserSessionFamily
-  ) -> String {
-    switch family {
-    case .safari:
-      """
-      \(browserName) keeps its cookies behind Full Disk Access, so QuotaBar needs that grant in \
-      System Settings › Privacy & Security to read them.
-      """
-    case .gecko:
-      "\(browserName) stores its cookies in a profile QuotaBar reads directly."
-    case .chromium:
-      """
-      \(browserName) encrypts its cookies with the "Chrome Safe Storage" Keychain item, so \
-      macOS will ask you to allow QuotaBar to use it.
-      """
+  // MARK: Browser Access window
+
+  static let grantWindowTitle = "Browser Access"
+  static let grantWindowMessage = "Some browsers keep their cookies behind a macOS permission."
+  static let grantOpenSettingsTitle = "Open Settings…"
+  static let grantAllowTitle = "Allow…"
+  static let grantReadyTitle = "Ready"
+  static let grantUnavailableTitle = "Not set up yet"
+  static let grantDoneTitle = "Done"
+  static let dragHintTitle = "Turn on QuotaBar in the Full Disk Access list"
+  static let dragHintSubtitle =
+    "Not listed yet? Drag this icon into the list, or press + and choose QuotaBar."
+  static let relaunchTitle = "Relaunch QuotaBar"
+  static let relaunchSubtitle =
+    """
+    Once QuotaBar is in the list, relaunch to finish. macOS may offer to quit and reopen it \
+    for you.
+    """
+  static let relaunchActionTitle = "Relaunch"
+
+  /// What stands in front of this browser's cookies, or that nothing does.
+  static func grantSubtitle(for status: BrowserAccessStatus) -> String {
+    switch status.state {
+    case .readable:
+      switch status.family {
+      case .safari: "Full Disk Access granted"
+      case .chromium: "Keychain item allowed"
+      case .gecko: "No permission needed"
+      }
+    case .needsFullDiskAccess:
+      "Needs Full Disk Access"
+    case .needsKeychain:
+      "Needs the \"Chrome Safe Storage\" Keychain item. Choose Always Allow when asked."
+    case .unavailable:
+      "Has not saved a Keychain item yet. Open it once, then come back."
     }
+  }
+
+  // MARK: Agent page row
+
+  static let accessRowTitle = "Browser Access"
+
+  /// One line under the Scan browsers switch, or nil when nothing is outstanding.
+  static func accessSummary(needs: [BrowserAccessNeed], awaitingRelaunch: Bool) -> String? {
+    if awaitingRelaunch {
+      return "Relaunch QuotaBar to finish granting Full Disk Access"
+    }
+    let names = needs.map(\.browser.displayName)
+    guard !names.isEmpty else { return nil }
+    if names.count == 1, let need = needs.first {
+      return switch need.kind {
+      case .fullDiskAccess: "\(names[0]) needs Full Disk Access"
+      case .keychain: "\(names[0]) needs a Keychain grant"
+      }
+    }
+    return "\(list(names)) need permission"
   }
 
   /// What a refusal means, and what fixes it.

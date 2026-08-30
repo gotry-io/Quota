@@ -66,6 +66,8 @@
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
     case providerCursor = "provider-cursor"
+    case providerCodexSource = "provider-codex-source"
+    case providerLiteLLMKey = "provider-litellm-key"
     case devices
     case usage
     case menuBarStyle = "menu-bar-style"
@@ -82,6 +84,18 @@
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
       case .providerCursor: [.settings, .agents, .provider(.cursor)]
+      case .providerCodexSource: [
+        .settings, .agents, .provider(.codex),
+        .providerSource(
+          .codex,
+          identityKey: "codex|visual_personal|global|",
+          sourceID: "local",
+          displayName: "This Mac"
+        ),
+      ]
+      case .providerLiteLLMKey: [
+        .settings, .agents, .provider(.litellm), .providerAPIKey(.litellm),
+      ]
       case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
       case .menuBarStyle: [.settings, .menuBarStyle]
@@ -242,7 +256,7 @@
       localUsage: localUsageReport(at: date, partial: accountSummary.usage.today.partial),
       accountSummary: accountSummary,
       authStatus: .signedIn,
-      overview: overviewItems(summary: accountSummary, now: date)
+      overview: overviewItems(summary: accountSummary, report: report, now: date)
     )
   }
 
@@ -340,6 +354,7 @@
   /// those rows rather than one per upload.
   private func overviewItems(
     summary: AccountSummary,
+    report: QuotaCollectionReport,
     now: Date
   ) -> [LocalServiceOverviewItem] {
     func displayName(_ deviceID: String) -> String {
@@ -347,32 +362,62 @@
     }
     return summary.subscriptions.map { subscription in
       let isStale = subscription.snapshot.isStale(now: now)
-      let sources = subscription.sources.map { source in
+      var sources = subscription.sources.map { source in
         LocalServiceOverviewSource(
           sourceID: "device:\(source.deviceID)",
           kind: .device,
           deviceID: source.deviceID,
           displayName: displayName(source.deviceID),
           observedAt: source.observedAt,
-          isStale: source.observedAt != subscription.snapshot.observedAt || isStale
+          isStale: source.observedAt != subscription.snapshot.observedAt || isStale,
+          snapshot: source.snapshot ?? subscription.snapshot
         )
       }
       let selectedDeviceID = subscription.sources
         .first { $0.observedAt == subscription.snapshot.observedAt }?
         .deviceID ?? subscription.sources.first?.deviceID ?? "unknown"
+      var selectedSourceID = "device:\(selectedDeviceID)"
+      var selectedSourceDisplayName = displayName(selectedDeviceID)
+      var sourcePin: String?
+      if subscription.snapshot.provider == .codex,
+        let localSnapshot = report.results.first(where: { $0.provider == .codex })?
+          .snapshots.first
+      {
+        let local = LocalServiceOverviewSource(
+          sourceID: "local",
+          kind: .local,
+          deviceID: nil,
+          displayName: "This Mac",
+          observedAt: localSnapshot.observedAt,
+          isStale: localSnapshot.isStale(now: now),
+          snapshot: localSnapshot
+        )
+        sources.append(local)
+        sources.sort { $0.sourceID < $1.sourceID }
+        sourcePin = local.sourceID
+        selectedSourceID = local.sourceID
+        selectedSourceDisplayName = local.displayName
+      }
       return LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
           provider: subscription.snapshot.provider,
           fingerprint: subscription.snapshot.account.fingerprint,
           scope: subscription.snapshot.account.fingerprintScope == .source ? .source : .global,
           sourceID: subscription.snapshot.account.fingerprintScope == .source
-            ? "device:\(selectedDeviceID)" : nil
+            ? selectedSourceID : nil
         ),
-        snapshot: subscription.snapshot,
+        snapshot: sourcePin == nil
+          ? subscription.snapshot
+          : sources.first { $0.sourceID == selectedSourceID }?.snapshot ?? subscription.snapshot,
         sources: sources,
-        selectedSourceID: "device:\(selectedDeviceID)",
-        selectedSourceDisplayName: displayName(selectedDeviceID),
-        isStale: isStale
+        selectedSourceID: selectedSourceID,
+        selectedSourceDisplayName: selectedSourceDisplayName,
+        automaticSourceID: "device:\(selectedDeviceID)",
+        automaticSourceDisplayName: displayName(selectedDeviceID),
+        isStale: sourcePin == nil
+          ? isStale
+          : sources.first { $0.sourceID == selectedSourceID }?.isStale ?? isStale,
+        sourcePin: sourcePin
       )
     }
   }
@@ -490,12 +535,28 @@
     let subscriptions = snapshots.enumerated().map { index, snapshot in
       let deviceID = index == 2 ? travelID : studioID
       let scope = snapshot.account.fingerprintScope == .source ? "source" : "global"
+      let sourceSnapshot: QuotaSnapshot
+      if snapshot.provider == .codex {
+        sourceSnapshot = QuotaSnapshot(
+          provider: snapshot.provider,
+          account: snapshot.account,
+          windows: snapshot.windows,
+          status: snapshot.status,
+          observedAt: date.addingTimeInterval(-45)
+        )
+      } else {
+        sourceSnapshot = snapshot
+      }
       return QuotaSubscription(
         key: "\(snapshot.provider.rawValue)|\(snapshot.account.fingerprint)|\(scope)|",
         provider: snapshot.provider,
-        snapshot: snapshot,
+        snapshot: sourceSnapshot,
         sources: [
-          QuotaSubscriptionSource(deviceID: deviceID, observedAt: snapshot.observedAt)
+          QuotaSubscriptionSource(
+            deviceID: deviceID,
+            observedAt: sourceSnapshot.observedAt,
+            snapshot: sourceSnapshot
+          )
         ]
       )
     }
@@ -625,11 +686,18 @@
       snapshots: snapshots,
       source: nil,
       message: nil,
+      // A Mac signed in through the provider's own program, which is the ordinary case.
       sources: [
-        QuotaCollectionSource(sourceID: "browser_session", outcome: .success, category: .success)
+        QuotaCollectionSource(
+          sourceID: officialSourceID(for: provider), outcome: .success, category: .success)
       ],
       accessDenied: nil
     )
+  }
+
+  private func officialSourceID(for provider: ProviderID) -> String {
+    SignInRungCatalog.officialRungs(for: provider).first?.sourceIDs.sorted().first
+      ?? "browser_session"
   }
 
   private func failureResult(

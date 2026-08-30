@@ -86,6 +86,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
       )
     ],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [
       LocalServiceOverviewItem(
         identity: LocalServiceOverviewIdentity(
@@ -98,6 +99,8 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         sources: [source],
         selectedSourceID: source.sourceID,
         selectedSourceDisplayName: source.displayName,
+        automaticSourceID: source.sourceID,
+        automaticSourceDisplayName: source.displayName,
         isStale: false
       )
     ],
@@ -125,6 +128,65 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(
     model.accountErrorMessage == "This device was removed. Sign in again to reconnect it."
   )
+}
+
+@Test @MainActor
+func sourceDetailLooksUpTheSourceScopedRowNotTheFirstSharedFingerprint() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let remote = sourceScopedOverviewItem(
+    sourceID: "device:other",
+    kind: .device,
+    deviceID: "other",
+    displayName: "Studio",
+    usedPercent: 90,
+    now: now
+  )
+  let local = sourceScopedOverviewItem(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    usedPercent: 10,
+    now: now
+  )
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: overviewOnlyState(overview: [remote, local]))
+  )
+  await model.refreshIfNeeded()
+
+  #expect(
+    model.overviewItems(for: .grok).first { $0.identity.fingerprint == "fp-source" }?
+      .identity.sourceID == "device:other")
+  #expect(
+    model.overviewItem(provider: .grok, identityKey: local.pinIdentityKey)?
+      .identity.sourceID == "local")
+  #expect(
+    model.overviewItem(provider: .grok, identityKey: remote.pinIdentityKey)?
+      .identity.sourceID == "device:other")
+}
+
+@Test @MainActor
+func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let item = sourceScopedOverviewItem(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    usedPercent: 10,
+    now: now
+  )
+  let record = PinCallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(
+      state: overviewOnlyState(overview: [item]), pinRecord: record)
+  )
+  await model.refreshIfNeeded()
+  await model.setOverviewSourcePin(item: item, pin: "local")
+
+  #expect(await record.identitySourceID == "local")
+  #expect(await record.identityKey == "grok|fp-source|source|local")
+  #expect(await record.pin == "local")
 }
 
 @Test @MainActor
@@ -160,6 +222,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [],
     cache: .settled
   )
@@ -189,6 +252,7 @@ func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
     pricing: base.pricing,
     providers: base.providers,
     providerBrowserSessions: base.providerBrowserSessions,
+    browserScanEnabled: base.browserScanEnabled,
     overview: base.overview,
     cache: LocalServiceCacheState(
       rebuilding: true,
@@ -366,6 +430,7 @@ private func justSignedInState(label: String?) -> LocalServiceState {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [],
     cache: .settled
   )
@@ -451,6 +516,7 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
       pricing: emptyComponent(),
       providers: [],
       providerBrowserSessions: [],
+    browserScanEnabled: [],
       overview: [
         LocalServiceOverviewItem(
           identity: LocalServiceOverviewIdentity(
@@ -463,6 +529,8 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
           sources: reading,
           selectedSourceID: selected.sourceID,
           selectedSourceDisplayName: selected.displayName,
+          automaticSourceID: selected.sourceID,
+          automaticSourceDisplayName: selected.displayName,
           isStale: selected.isStale
         )
       ],
@@ -530,6 +598,7 @@ func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async thr
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [],
     cache: .settled
   )
@@ -648,6 +717,7 @@ private func signedOutWithSessionEndedState() -> LocalServiceState {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [],
     cache: .settled
   )
@@ -679,7 +749,73 @@ private func loggingInState() -> LocalServiceState {
     pricing: emptyComponent(),
     providers: [],
     providerBrowserSessions: [],
+    browserScanEnabled: [],
     overview: [],
+    cache: .settled
+  )
+}
+
+private func sourceScopedOverviewItem(
+  sourceID: String,
+  kind: LocalServiceOverviewSourceKind,
+  deviceID: String?,
+  displayName: String,
+  usedPercent: Double,
+  now: Date
+) -> LocalServiceOverviewItem {
+  let snapshot = QuotaSnapshot(
+    provider: .grok,
+    account: QuotaAccount(
+      fingerprint: "fp-source",
+      fingerprintScope: .source
+    ),
+    windows: [QuotaWindow(id: "weekly", title: "Weekly", usedPercent: usedPercent)],
+    status: .available,
+    observedAt: now
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: sourceID,
+    kind: kind,
+    deviceID: deviceID,
+    displayName: displayName,
+    observedAt: now,
+    isStale: false,
+    snapshot: snapshot
+  )
+  return LocalServiceOverviewItem(
+    identity: LocalServiceOverviewIdentity(
+      provider: .grok,
+      fingerprint: "fp-source",
+      scope: .source,
+      sourceID: sourceID
+    ),
+    snapshot: snapshot,
+    sources: [source],
+    selectedSourceID: source.sourceID,
+    selectedSourceDisplayName: source.displayName,
+    automaticSourceID: source.sourceID,
+    automaticSourceDisplayName: source.displayName,
+    isStale: false
+  )
+}
+
+private func overviewOnlyState(
+  overview: [LocalServiceOverviewItem]
+) -> LocalServiceState {
+  LocalServiceState(
+    ipcVersion: 1,
+    revision: 1,
+    usageUploadEnabled: true,
+    quotaRefreshIntervalSeconds: 300,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: emptyComponent(),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    browserScanEnabled: [],
+    overview: overview,
     cache: .settled
   )
 }
@@ -727,6 +863,18 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
+private actor PinCallRecord {
+  private(set) var identitySourceID: String?
+  private(set) var identityKey: String?
+  private(set) var pin: String?
+
+  func record(identitySourceID: String?, identityKey: String, pin: String?) {
+    self.identitySourceID = identitySourceID
+    self.identityKey = identityKey
+    self.pin = pin
+  }
+}
+
 /// Counts the calls a stub was asked for, which is all a fire-and-forget operation leaves behind
 /// once the service it spoke to is gone.
 private actor CallRecord {
@@ -768,6 +916,7 @@ private struct StubLocalService: LocalServiceServing {
   let shutdownAnswerDelayNanoseconds: UInt64
   let loginError: LocalServiceClientError?
   let authorizeURL: String?
+  let pinRecord: PinCallRecord?
 
   init(
     state: LocalServiceState,
@@ -778,7 +927,8 @@ private struct StubLocalService: LocalServiceServing {
     shutdownRecord: CallRecord? = nil,
     shutdownAnswerDelayNanoseconds: UInt64 = 0,
     loginError: LocalServiceClientError? = nil,
-    authorizeURL: String? = nil
+    authorizeURL: String? = nil,
+    pinRecord: PinCallRecord? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -790,6 +940,7 @@ private struct StubLocalService: LocalServiceServing {
     self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
     self.loginError = loginError
     self.authorizeURL = authorizeURL
+    self.pinRecord = pinRecord
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -853,6 +1004,17 @@ private struct StubLocalService: LocalServiceServing {
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
     LocalServiceQuotaRefreshIntervalSetting(intervalSeconds: seconds)
   }
+  func setOverviewSourcePin(
+    provider: ProviderID,
+    fingerprint: String,
+    scope: String,
+    identitySourceID: String?,
+    pin: String?
+  ) async throws -> LocalServiceOverviewSourcePinSetting {
+    let identityKey = "\(provider.rawValue)|\(fingerprint)|\(scope)|\(identitySourceID ?? "")"
+    await pinRecord?.record(identitySourceID: identitySourceID, identityKey: identityKey, pin: pin)
+    return LocalServiceOverviewSourcePinSetting(identityKey: identityKey, pin: pin)
+  }
 
   func setProviderConfig(
     _ provider: ProviderID,
@@ -881,23 +1043,17 @@ private struct StubLocalService: LocalServiceServing {
     throw LocalServiceClientError.serviceMissing
   }
 
-  func commitProviderBrowserSession(
-    _ provider: ProviderID, cookieHeader: String
-  ) async throws -> LocalServiceProviderBrowserSession {
-    throw LocalServiceClientError.serviceMissing
+  func setProviderBrowserScan(_ provider: ProviderID, enabled: Bool) async throws
+    -> LocalServiceProviderBrowserScanSetting
+  {
+    LocalServiceProviderBrowserScanSetting(provider: provider, enabled: enabled)
   }
 
-  func reportProviderBrowserAccessDenied(
-    _ provider: ProviderID, browserName: String, reason: BrowserAccessDenialReason
-  ) async throws -> LocalServiceProviderBrowserSession {
-    throw LocalServiceClientError.serviceMissing
-  }
-
-  func removeProviderBrowserSession(
-    _ provider: ProviderID
-  ) async throws -> LocalServiceProviderBrowserSession {
-    throw LocalServiceClientError.serviceMissing
-  }
+  func replaceProviderBrowserSessions(
+    _ provider: ProviderID,
+    cookieHeaders: [String],
+    accessDenials: [BrowserAccessDenial]
+  ) async throws {}
   func shutdown() async {
     if shutdownAnswerDelayNanoseconds > 0 {
       try? await Task.sleep(nanoseconds: shutdownAnswerDelayNanoseconds)

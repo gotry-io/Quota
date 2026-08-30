@@ -41,6 +41,8 @@
       ("provider-codex", "Codex", 3),
       ("provider-openrouter", "OpenRouter", 3),
       ("provider-cursor", "Cursor", 3),
+      ("provider-codex-source", "This Mac", 4),
+      ("provider-litellm-key", "API Key", 4),
       ("devices", "Devices", 3),
       ("usage", "Usage", 2),
       ("menu-bar-style", "Menu Bar Style", 2),
@@ -89,7 +91,9 @@
     )
     #expect(model.accountReportingProviders() == [.codex, .claude, .grok])
     #expect(
-      model.reportingSources(for: .grok, now: referenceDate).first?.kind == .device
+      model.overviewItems(for: .grok).contains { item in
+        item.sources.contains { $0.kind == .device }
+      }
     )
 
     guard
@@ -109,10 +113,22 @@
       providers.flatMap(\.accounts).map {
         $0.accessibilityLabel(accountIndex: 0, now: referenceDate)
       } == [
-        "Account: pe***@example.com. Studio Mac. Updated 1m ago",
+        "Account: pe***@example.com. This Mac. Updated 1m ago",
         "Account: Team workspace. Studio Mac. Updated 2m ago",
         "Account 1. Travel Mac. Updated 3m ago",
       ]
+    )
+
+    let codex = try #require(model.overviewItems(for: .codex).first)
+    #expect(codex.sources.count == 2)
+    #expect(Set(codex.sources.map(\.sourceID)) == ["local", "device:device_visual_studio_mac_01"])
+    #expect(codex.sources.allSatisfy { $0.snapshot != nil })
+    #expect(codex.sourcePin == "local")
+    #expect(codex.selectedSourceID == "local")
+    #expect(codex.automaticSourceID == "device:device_visual_studio_mac_01")
+    #expect(codex.automaticSourceDisplayName == "Studio Mac")
+    #expect(
+      Set(codex.sources.map(\.observedAt)).count == 2
     )
 
     let encoded = try QuotaWireCodec.makeEncoder().encode(model.accountSummary)

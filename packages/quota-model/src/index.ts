@@ -104,6 +104,7 @@ export interface QuotaObservationSource {
   device_id: string;
   observed_at: string;
   is_stale: boolean;
+  snapshot?: QuotaSnapshotRead;
 }
 
 export interface QuotaObservationInput {
@@ -196,6 +197,7 @@ function subscriptionCandidate(
         device_id: observation.device_id,
         observed_at: snapshot.observed_at,
         is_stale: isStale,
+        snapshot,
       },
     ],
     selected_device_id: observation.device_id,

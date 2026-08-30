@@ -857,6 +857,9 @@ fn validate_quota_subscription(value: &Value) -> Result<(), RelayError> {
         {
             return Err(RelayError::InvalidResponse);
         }
+        if let Some(snapshot) = source.get("snapshot") {
+            validate_quota_snapshot(snapshot, Wire::Received)?;
+        }
     }
     validate_quota_snapshot(
         object.get("snapshot").ok_or(RelayError::InvalidResponse)?,
@@ -2805,6 +2808,12 @@ mod tests {
             "last_observed_at": "2026-08-10T00:00:00Z"
         }]);
         assert!(validate_account_summary(&resolved).is_ok());
+        resolved["subscriptions"][0]["sources"][0]["snapshot"] = valid_snapshot();
+        assert!(validate_account_summary(&resolved).is_ok());
+        resolved["subscriptions"][0]["sources"][0]["snapshot"] =
+            serde_json::json!({"provider": "codex"});
+        assert!(validate_account_summary(&resolved).is_err());
+        resolved["subscriptions"][0]["sources"][0]["snapshot"] = valid_snapshot();
         resolved["subscriptions"][0]["sources"][0]["observed_at"] = serde_json::json!("tomorrow");
         assert!(validate_account_summary(&resolved).is_err());
 

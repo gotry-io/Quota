@@ -29,7 +29,12 @@ type ConformanceFixture = {
       identity: { provider: string; fingerprint: string; scope: string; source_id: string | null };
       selected_device_id: string;
       is_stale: boolean;
-      sources: Array<{ device_id: string; observed_at: string; is_stale: boolean }>;
+      sources: Array<{
+        device_id: string;
+        observed_at: string;
+        is_stale: boolean;
+        snapshot?: QuotaSnapshot;
+      }>;
     }>;
   }>;
 };
@@ -67,7 +72,19 @@ describe("subscription merge conformance", () => {
         is_stale: item.is_stale,
         sources: item.sources,
       }));
-      expect(actual, testCase.name).toEqual(testCase.expected);
+      const expected = testCase.expected.map((item) => ({
+        ...item,
+        sources: item.sources.map((source) => {
+          const observation = testCase.observations.find(
+            (candidate) =>
+              candidate.device_id === source.device_id &&
+              candidate.snapshot.account.fingerprint === item.identity.fingerprint &&
+              candidate.snapshot.observed_at === source.observed_at,
+          );
+          return { ...source, snapshot: observation?.snapshot };
+        }),
+      }));
+      expect(actual, testCase.name).toEqual(expected);
     }
   });
 

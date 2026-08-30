@@ -267,6 +267,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       },
       "providers": [],
       "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
       "overview": [],
       "cache": {
         "rebuilding": false,
@@ -302,6 +303,64 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: nestedExtra)
   }
+}
+
+@Test
+func decodesOverviewItemSourcePinAndPerSourceSnapshot() throws {
+  let data = Data(
+    #"""
+    {
+      "identity": {
+        "provider": "codex",
+        "fingerprint": "account_test",
+        "scope": "global",
+        "source_id": null
+      },
+      "snapshot": {
+        "provider": "codex",
+        "account": {
+          "fingerprint": "account_test",
+          "fingerprint_scope": "global"
+        },
+        "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10}],
+        "status": "available",
+        "observed_at": "2026-08-24T09:00:00Z"
+      },
+      "sources": [{
+        "source_id": "local",
+        "kind": "local",
+        "device_id": null,
+        "display_name": "This Mac",
+        "observed_at": "2026-08-24T09:00:00Z",
+        "is_stale": false,
+        "snapshot": {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "account_test",
+            "fingerprint_scope": "global"
+          },
+          "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10}],
+          "status": "available",
+          "observed_at": "2026-08-24T09:00:00Z"
+        }
+      }],
+      "selected_source_id": "local",
+      "selected_source_display_name": "This Mac",
+      "automatic_source_id": "local",
+      "automatic_source_display_name": "This Mac",
+      "is_stale": false,
+      "source_pin": "local"
+    }
+    """#.utf8
+  )
+
+  let item = try QuotaWireCodec.makeDecoder().decode(LocalServiceOverviewItem.self, from: data)
+  #expect(item.sourcePin == "local")
+  #expect(item.selectedSourceDisplayName == "This Mac")
+  #expect(item.automaticSourceID == "local")
+  #expect(item.automaticSourceDisplayName == "This Mac")
+  #expect(item.sources.first?.snapshot?.windows.first?.id == "weekly")
+  #expect(item.pinIdentityKey == "codex|account_test|global|")
 }
 
 @Test

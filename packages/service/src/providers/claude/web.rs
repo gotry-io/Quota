@@ -67,10 +67,10 @@ fn validate_at(
     })
 }
 
-pub fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let cookie_header = context
-        .browser_session(ProviderId::Claude)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, SOURCE))?;
+pub fn collect(
+    context: &CollectionContext,
+    cookie_header: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     collect_at(cookie_header, context, ORIGIN)
 }
 
