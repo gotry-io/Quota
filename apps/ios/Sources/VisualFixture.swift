@@ -84,7 +84,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           windows: [
             window(
               id: "five_hour",
-              title: "5 hour",
+              title: "5 Hours",
               usedPercent: 32,
               resetsAt: date.addingTimeInterval(2_700)
             ),
@@ -105,8 +105,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           plan: "Max",
           windows: [
             window(
-              id: "session",
-              title: "Session",
+              id: "five_hour",
+              title: "5 Hours",
               usedPercent: 47,
               resetsAt: date.addingTimeInterval(7_200)
             )

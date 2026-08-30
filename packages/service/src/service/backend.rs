@@ -4452,7 +4452,7 @@ mod tests {
                 "snapshots": [{
                     "provider": "codex",
                     "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
-                    "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                    "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": 40.0}],
                     "status": "available",
                     "observed_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
                 }],
@@ -6722,7 +6722,7 @@ mod tests {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": 40.0}],
                 "status": "available",
                 "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Secs, true)
             })
@@ -6785,7 +6785,7 @@ mod tests {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": used}],
+                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": used}],
                 "status": "available",
                 "observed_at": observed_at
             })
@@ -6846,7 +6846,7 @@ mod tests {
             json!({
                 "provider": "codex",
                 "account": {"fingerprint": fingerprint, "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 hour", "used_percent": 40.0}],
+                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": 40.0}],
                 "status": "available",
                 "observed_at": observed_at
             })

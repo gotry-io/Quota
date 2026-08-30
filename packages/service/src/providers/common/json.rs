@@ -79,6 +79,38 @@ pub fn slug(value: &str, separator: char) -> String {
     output
 }
 
+/// Title-case a quota window name, keeping GPT, API, OAuth, USD, and CLI.
+/// Hyphens and underscores are word breaks (`gpt-reserve` → `GPT Reserve`).
+pub fn display_window_title(raw: &str) -> String {
+    raw.split(|character: char| character.is_whitespace() || character == '-' || character == '_')
+        .filter(|part| !part.is_empty())
+        .map(display_window_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn display_window_word(part: &str) -> String {
+    match part.to_ascii_lowercase().as_str() {
+        "gpt" => "GPT".to_owned(),
+        "api" => "API".to_owned(),
+        "oauth" => "OAuth".to_owned(),
+        "usd" => "USD".to_owned(),
+        "cli" => "CLI".to_owned(),
+        _ => title_case_word(part),
+    }
+}
+
+fn title_case_word(part: &str) -> String {
+    let mut characters = part.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    let mut output = String::new();
+    output.extend(first.to_uppercase());
+    output.extend(characters.flat_map(char::to_lowercase));
+    output
+}
+
 /// The claim set of a JWT, without verifying its signature. Callers use it only
 /// for locally issued provider tokens whose bearer already proves possession.
 pub fn decode_jwt_payload(token: &str) -> Option<Value> {
@@ -204,4 +236,24 @@ pub fn obj_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
 
 pub fn obj_get_any<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|key| obj_get(value, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_window_title;
+
+    #[test]
+    fn extra_limit_names_keep_standard_acronyms() {
+        assert_eq!(display_window_title("gpt-reserve"), "GPT Reserve");
+        assert_eq!(display_window_title("GPT_Reserve"), "GPT Reserve");
+        assert_eq!(display_window_title("api key daily"), "API Key Daily");
+        assert_eq!(
+            display_window_title("oauth apps weekly"),
+            "OAuth Apps Weekly"
+        );
+        assert_eq!(
+            display_window_title("Codex extra limit"),
+            "Codex Extra Limit"
+        );
+    }
 }

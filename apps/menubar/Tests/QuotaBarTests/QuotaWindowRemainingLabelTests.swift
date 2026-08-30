@@ -33,7 +33,7 @@ struct QuotaWindowRemainingLabelTests {
   func budgetShowsPercentThenRemainingAmount() {
     let window = QuotaWindow(
       id: "on_demand",
-      title: "On-demand",
+      title: "On-Demand",
       usedPercent: 29.204,
       remainingValue: 3.75,
       limitValue: 5,

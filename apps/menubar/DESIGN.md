@@ -41,6 +41,10 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
   the only place a provider is named for a person. No surface keeps a second table and none derives
   a name from an identifier.
+- **Quota window titles are Title Case.** Cadence names are **5 Hours**, **Weekly**, and
+  **Monthly**. Acronyms keep their standard forms: **GPT**, **API**, **OAuth**, **USD**. Extra Codex
+  limit names follow that rule (`gpt-reserve` reads **GPT Reserve**). Collectors write these titles;
+  surfaces print them as received.
 - **A device row states one verdict and the one age it came from**: **Active** under thirty minutes,
   **Idle** up to a day, **Not reporting** beyond that, and `last reading 5m ago` from the instant
   that decided it. Never a list of report, refresh, and sync timestamps.

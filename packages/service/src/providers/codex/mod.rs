@@ -7,8 +7,8 @@ use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
     ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
     account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
-    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
-    read_bounded_file, sha256_hex, slug, string,
+    discover_official_or_browser, display_window_title, mask_email, number, obj_get, obj_get_any,
+    parse_date, read_bounded_file, sha256_hex, slug, string,
 };
 
 pub mod refresh;
@@ -515,7 +515,7 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let rate_limit = obj_get_any(value, &["rate_limit", "rateLimit"]);
     let primary = rate_limit
         .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-        .and_then(|v| map_window(v, "five_hour", "5 hour"));
+        .and_then(|v| map_window(v, "five_hour", "5 Hours"));
     let secondary = rate_limit
         .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
         .and_then(|v| map_window(v, "weekly", "Weekly"));
@@ -539,7 +539,7 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let malformed_primary = primary_present
         && !rate_limit
             .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-            .and_then(|v| map_window(v, "five_hour", "5 hour"))
+            .and_then(|v| map_window(v, "five_hour", "5 Hours"))
             .is_some();
     let malformed_secondary = secondary_present
         && !rate_limit
@@ -581,7 +581,7 @@ impl WindowKind {
 
     fn labels(self) -> (&'static str, &'static str) {
         match self {
-            Self::FiveHour => ("five_hour", "5 hour"),
+            Self::FiveHour => ("five_hour", "5 Hours"),
             Self::Weekly => ("weekly", "Weekly"),
             Self::Monthly => ("monthly", "Monthly"),
         }
@@ -676,7 +676,7 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
                 primary,
                 secondary,
                 "codex-spark",
-                "Codex Spark 5-hour",
+                "Codex Spark 5 Hours",
                 "codex-spark-weekly",
                 "Codex Spark Weekly",
                 &mut used,
@@ -694,10 +694,12 @@ fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
             map_window(
                 v,
                 &id,
-                limit_name
-                    .as_deref()
-                    .or(metered.as_deref())
-                    .unwrap_or("Codex extra limit"),
+                &display_window_title(
+                    limit_name
+                        .as_deref()
+                        .or(metered.as_deref())
+                        .unwrap_or("Codex extra limit"),
+                ),
             )
         }) {
             used.insert(id.clone());
@@ -716,7 +718,7 @@ fn map_code_review(value: Option<&Value>) -> Vec<QuotaWindow> {
         obj_get_any(value, &["primary_window", "primaryWindow"]),
         obj_get_any(value, &["secondary_window", "secondaryWindow"]),
         "codex-code-review",
-        "Code Review 5-hour",
+        "Code Review 5 Hours",
         "codex-code-review-weekly",
         "Code Review Weekly",
         &mut used,
@@ -969,7 +971,7 @@ mod tests {
                     window.used_percent
                 ))
                 .collect::<Vec<_>>(),
-            [("five_hour", "5 hour", 12.0), ("weekly", "Weekly", 33.0)]
+            [("five_hour", "5 Hours", 12.0), ("weekly", "Weekly", 33.0)]
         );
     }
 
@@ -1081,7 +1083,7 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             [
-                ("five_hour", "5 hour", 12.0),
+                ("five_hour", "5 Hours", 12.0),
                 ("weekly", "Weekly", 33.0),
                 ("codex-code-review-weekly", "Code Review Weekly", 8.0),
             ]
@@ -1105,9 +1107,42 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["codex-code-review", "codex-code-review-weekly"]
         );
-        assert_eq!(usage.windows[0].title, "Code Review 5-hour");
+        assert_eq!(usage.windows[0].title, "Code Review 5 Hours");
         assert_eq!(usage.windows[1].title, "Code Review Weekly");
         assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn additional_rate_limits_title_case_extra_names() {
+        let usage = map_usage(&serde_json::json!({
+            "additional_rate_limits": [
+                {
+                    "limit_name": "gpt-reserve",
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 8, "limit_window_seconds": 18000}
+                    }
+                },
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 4, "limit_window_seconds": 18000},
+                        "secondary_window": {"used_percent": 11, "limit_window_seconds": 604800}
+                    }
+                }
+            ]
+        }));
+        assert_eq!(
+            usage
+                .windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.title.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("codex-gpt-reserve", "GPT Reserve"),
+                ("codex-spark", "Codex Spark 5 Hours"),
+                ("codex-spark-weekly", "Codex Spark Weekly"),
+            ]
+        );
     }
 
     #[test]

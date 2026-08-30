@@ -389,7 +389,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
         field: "five_hour",
         id: "five_hour",
-        title: "5 hour",
+        title: "5 Hours",
         duration_seconds: 18_000,
         weekly_group: false,
     },
@@ -403,21 +403,21 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
         field: "seven_day_sonnet",
         id: "seven_day_sonnet",
-        title: "Sonnet weekly",
+        title: "Sonnet Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
     },
     ClaudeWindow {
         field: "seven_day_opus",
         id: "seven_day_opus",
-        title: "Opus weekly",
+        title: "Opus Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
     },
     ClaudeWindow {
         field: "seven_day_oauth_apps",
         id: "seven_day_oauth_apps",
-        title: "OAuth apps weekly",
+        title: "OAuth Apps Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
     },
@@ -431,7 +431,7 @@ const SCOPED_WEEKLY_PREFIX: &str = "claude-weekly-scoped-";
 fn scoped_weekly_window(name: &str) -> (String, String) {
     (
         format!("{SCOPED_WEEKLY_PREFIX}{}", slug(name, '-')),
-        format!("{name} only"),
+        format!("{name} Only"),
     )
 }
 
@@ -579,7 +579,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             weekly_group.push(id.clone());
             windows.push(QuotaWindow {
                 id,
-                title: format!("{model_name} only"),
+                title: format!("{model_name} Only"),
                 used_percent: clamp_percent(percent),
                 resets_at: obj_get_any(entry, &["resets_at", "resetsAt"])
                     .and_then(|v| parse_date(Some(v)))
@@ -610,7 +610,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     if let Some(utilization) = extra.and_then(|v| number(obj_get(v, "utilization"))) {
         windows.push(QuotaWindow {
             id: "extra_usage".to_owned(),
-            title: "Extra usage".to_owned(),
+            title: "Extra Usage".to_owned(),
             used_percent: clamp_percent(utilization),
             resets_at: None,
             duration_seconds: None,
@@ -933,7 +933,11 @@ mod tests {
             "extra_usage": {"utilization": 12.5}
         }));
         assert!(windows.iter().any(|window| window.id == "seven_day"));
-        assert!(windows.iter().any(|window| window.id == "extra_usage"));
+        assert!(
+            windows
+                .iter()
+                .any(|window| window.id == "extra_usage" && window.title == "Extra Usage")
+        );
         let aliased = map_usage(&serde_json::json!({
             "five_hour": {"utilization_pct": 10, "reset_at": "2026-08-09T12:00:00Z"}
         }));
@@ -1064,7 +1068,7 @@ mod tests {
             .iter()
             .find(|window| window.id == "claude-weekly-scoped-claude-fable-5")
             .expect("scoped window");
-        assert_eq!(scoped.title, "Fable only");
+        assert_eq!(scoped.title, "Fable Only");
         assert_eq!(scoped.resets_at.as_deref(), Some("2026-08-23T04:00:00Z"));
         // Routines spans seven days but is not a weekly-group limit, so it keeps its own.
         let routines = map_usage(&serde_json::json!({

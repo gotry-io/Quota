@@ -21,9 +21,9 @@ import {
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenResponseSchema,
-  PricingCatalogSchema,
   PROTOCOL_VERSION,
   PROVIDER_IDS,
+  PricingCatalogSchema,
   ProviderIdSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
@@ -766,7 +766,7 @@ function snapshot(provider: "codex" | "claude" | "cursor") {
   return {
     provider,
     account: { fingerprint: `${provider}-fixture`, fingerprint_scope: "source" as const },
-    windows: [{ id: "five_hour", title: "5 hour", used_percent: 10 }],
+    windows: [{ id: "five_hour", title: "5 Hours", used_percent: 10 }],
     status: "available" as const,
     observed_at: "2026-08-02T12:00:00Z",
   };

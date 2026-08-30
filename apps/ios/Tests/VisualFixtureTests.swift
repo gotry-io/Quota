@@ -85,7 +85,7 @@ struct VisualFixtureParserTests {
       #expect(weekly?.resetsAt == now.addingTimeInterval(4 * 86_400))
 
       let claude = model.summary?.subscriptions.first { $0.snapshot.provider == .claude }
-      let session = claude?.snapshot.windows.first { $0.id == "session" }
+      let session = claude?.snapshot.windows.first { $0.id == "five_hour" }
       #expect(session?.resetsAt == now.addingTimeInterval(7_200))
 
       let grok = model.summary?.subscriptions.first { $0.snapshot.provider == .grok }

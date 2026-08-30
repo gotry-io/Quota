@@ -19,7 +19,7 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 ## Shared product vocabulary
 
-Freshness copy, the one no-reset phrase, provider display names, and Devices copy follow
+Freshness copy, the one no-reset phrase, provider display names, quota window titles, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
 and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
 `src/lib/format.ts` answers in its tests. The site does not restate those rules and does not keep a

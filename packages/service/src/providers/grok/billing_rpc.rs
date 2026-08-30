@@ -184,7 +184,7 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
     let title = match delta {
         Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => "Monthly",
         Some(_) => "Weekly",
-        None => "Billing cycle",
+        None => "Billing Cycle",
     };
     QuotaWindow {
         id: "billing_cycle".to_owned(),
