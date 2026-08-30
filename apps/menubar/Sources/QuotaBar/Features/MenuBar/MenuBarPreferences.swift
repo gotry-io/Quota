@@ -216,14 +216,6 @@ enum MenuBarStatusItemID: Hashable, Sendable {
   case combined
   case provider(ProviderID)
 
-  var autosaveName: String {
-    switch self {
-    case .automatic: "quotabar-automatic"
-    case .combined: "quotabar-combined"
-    case .provider(let provider): "quotabar-\(provider.rawValue)"
-    }
-  }
-
   var accessibilityIdentifier: String {
     switch self {
     case .automatic: "QuotaBar.StatusItem"

@@ -24,10 +24,13 @@ final class MenuBarPanelController: NSObject {
   private let panel: MenuBarPanel
   private var localMonitor: Any?
   private var globalMonitor: Any?
-  private weak var anchorButton: NSStatusBarButton?
+  private var windowObserver: (any NSObjectProtocol)?
+  private(set) weak var anchorButton: NSStatusBarButton?
 
   private(set) var isOpen = false
   private(set) var anchorID: MenuBarStatusItemID?
+  /// Where the panel currently sits on screen.
+  var panelFrame: NSRect { panel.frame }
   /// Windows belonging to QuotaBar's own status items, so a click on one is a toggle, not a dismiss.
   var statusItemWindows: () -> Set<NSWindow> = { [] }
 
@@ -85,8 +88,16 @@ final class MenuBarPanelController: NSObject {
   }
 
   func open(relativeTo button: NSStatusBarButton, id: MenuBarStatusItemID) {
+    if isOpen, anchorButton === button {
+      anchorID = id
+      return
+    }
     if anchorButton !== button {
       anchorButton?.highlight(false)
+      stopWindowObserver()
+      if let window = button.window {
+        startWindowObserver(window)
+      }
     }
     anchorButton = button
     anchorID = id
@@ -107,6 +118,7 @@ final class MenuBarPanelController: NSObject {
     guard isOpen else { return }
     isOpen = false
     stopMonitors()
+    stopWindowObserver()
     anchorButton?.highlight(false)
     anchorButton = nil
     anchorID = nil
@@ -117,8 +129,7 @@ final class MenuBarPanelController: NSObject {
     close()
   }
 
-  /// Keep the open panel under its item when the item's width changed, without re-highlighting.
-  func repositionIfOpen() {
+  private func repositionIfOpen() {
     guard isOpen, let anchorButton else { return }
     position(relativeTo: anchorButton)
   }
@@ -139,6 +150,26 @@ final class MenuBarPanelController: NSObject {
       }
     }
     panel.setFrameOrigin(origin)
+  }
+
+  /// The panel is aligned to its item's trailing edge, which the bar keeps fixed: a new image
+  /// resizes the item's window in place first and the bar moves it into its slot a moment later.
+  /// A resize alone is therefore nothing to follow; a move is.
+  private func startWindowObserver(_ window: NSWindow) {
+    windowObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didMoveNotification, object: window, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.repositionIfOpen()
+      }
+    }
+  }
+
+  private func stopWindowObserver() {
+    if let windowObserver {
+      NotificationCenter.default.removeObserver(windowObserver)
+      self.windowObserver = nil
+    }
   }
 
   private func startMonitors() {

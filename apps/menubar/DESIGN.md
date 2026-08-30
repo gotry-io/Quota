@@ -128,8 +128,13 @@ The mark and the number are composed into **one template image per status item**
 the menu bar is given. A status item is one image to AppKit, and AppKit places it exactly as it
 places every other one; a stack of views asks two layout systems to agree about where a baseline
 is, and they do not. QuotaBar owns the items through `NSStatusItem` so several can share one
-panel; each item has a stable autosave name so macOS can keep a `⌘`-dragged position, and unused
-items are removed without recreating the ones that remain.
+panel. An item is a slot: its autosave name is a slot index rather than a reading, so macOS keeps
+a `⌘`-dragged position; when the set of readings changes, an existing slot is re-bound to the new
+reading rather than destroyed, so the icon does not flash or move and an open panel stays open
+under the same item. Only a change in the *number* of readings adds or removes an item. The panel
+is aligned to its item's trailing edge, which the bar keeps fixed: a new image resizes the item's
+window in place first and the bar moves it into its slot a moment later, so the panel follows the
+item's moves and never its resizes.
 
 The image is the standard status-item height — the bar's own thickness less the padding every item
 leaves, which is 18pt in the 22pt bar macOS ships — drawn at 2× and marked template. The mark is the
