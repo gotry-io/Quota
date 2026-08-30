@@ -382,8 +382,33 @@ impl StateStore {
             last_attempt_prune: AtomicU64::new(unix_seconds()),
         };
         store.recover_interrupted_work()?;
+        store.drop_unusable_session()?;
         let _ = store.current_revision();
         Ok(store)
+    }
+
+    /// Removes a session row this build cannot act on. Left in place, an `active` row without
+    /// its tokens fails every Account read and refuses sign-in for being active, and nothing in
+    /// the app can undo that. Signed out is the state a person can recover from.
+    fn drop_unusable_session(&self) -> Result<(), StateError> {
+        let raw: Option<(String, i64)> = self.with_identity(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT payload_json, epoch FROM session WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?)
+        })?;
+        let Some((payload, epoch)) = raw else {
+            return Ok(());
+        };
+        if serde_json::from_str::<Value>(&payload).is_ok_and(|value| session_is_usable(&value)) {
+            return Ok(());
+        }
+        let epoch = u64::try_from(epoch).map_err(|_| StateError::InvalidState)?;
+        self.clear_session_if_epoch(epoch)?;
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -3495,6 +3520,47 @@ fn open_identity(root: &Path) -> Result<Connection, StateError> {
     Ok(opened)
 }
 
+/// Whether a stored session is one this build can act on: a status it knows, the Account and
+/// Device it answers for, and the token pair that lets it read or sign out.
+pub(crate) fn session_is_usable(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let Some(status) = object.get("status").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(status, "active" | "logout_pending") {
+        return false;
+    }
+    let Some(account_id) = object.get("account_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(device_id) = object.get("device_id").and_then(Value::as_str) else {
+        return false;
+    };
+    if account_id.is_empty() || device_id.is_empty() {
+        return false;
+    }
+    let generation = object.get("device_generation").and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok()))
+    });
+    if generation.is_none() {
+        return false;
+    }
+    let Some(session) = object.get("session").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(access) = session.get("access_token").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(refresh) = session.get("refresh_token").and_then(Value::as_str) else {
+        return false;
+    };
+    !access.is_empty() && !refresh.is_empty()
+}
+
 /// Folds the identity log back into the image. Every write transaction ends this way, including
 /// the ones that build the schema, so a crash never leaves a log this device has to replay.
 fn checkpoint(conn: &Connection) {
@@ -4031,6 +4097,35 @@ mod tests {
         let value = now_rfc3339();
         assert!(value.ends_with('Z'));
         assert_eq!(value.len(), 20);
+    }
+
+    /// An `active` row without its tokens is the one shape a person cannot recover from in the
+    /// app: every Account read fails and sign-in is refused for being active. Opening the store
+    /// drops it; a complete session is left alone.
+    #[test]
+    fn an_active_session_without_tokens_is_dropped_when_the_store_opens() {
+        let root = temp_root("session-sweep");
+        let complete = active_session();
+        let mut without_tokens = complete.clone();
+        without_tokens["session"] = serde_json::json!({ "expires_at": "2099-01-01T00:00:00Z" });
+
+        let store = StateStore::open(&root).expect("state");
+        store.write_session_json(&without_tokens).expect("session");
+        drop(store);
+        let reopened = StateStore::open(&root).expect("reopen");
+        assert!(reopened.session_snapshot().expect("session").is_none());
+
+        reopened.write_session_json(&complete).expect("session");
+        drop(reopened);
+        let kept = StateStore::open(&root).expect("reopen");
+        assert_eq!(
+            kept.session_snapshot()
+                .expect("session")
+                .map(|(value, _)| value),
+            Some(complete)
+        );
+        drop(kept);
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -5230,11 +5325,20 @@ mod tests {
         fs::canonicalize(&root).expect("canonical root")
     }
 
+    /// A signed-in device as a login leaves it: the store keeps this shape and drops anything less.
     fn active_session() -> Value {
         serde_json::json!({
+            "schema_version": 1,
             "status": "active",
             "account_id": "account",
-            "device_id": "device"
+            "device_id": "device",
+            "device_generation": 1,
+            "session": {
+                "access_token": "qb_access_token_synthetic",
+                "access_expires_at": "2099-01-01T00:00:00Z",
+                "refresh_token": "qbr_refresh_token_synthetic",
+                "refresh_expires_at": "2099-01-01T00:00:00Z"
+            }
         })
     }
 
