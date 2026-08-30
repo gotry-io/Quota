@@ -172,51 +172,8 @@ fn copy_identity(live: &Path, identity: &mut Connection) -> Result<(), StateErro
 /// A released session this build can actually use. Anything else is dropped rather than copied
 /// into a row `login` would then refuse forever.
 fn session_payload_is_usable(payload: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
-        return false;
-    };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let Some(status) = object.get("status").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
-    if !matches!(status, "active" | "logout_pending") {
-        return false;
-    }
-    let Some(account_id) = object.get("account_id").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
-    let Some(device_id) = object.get("device_id").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
-    if account_id.is_empty() || device_id.is_empty() {
-        return false;
-    }
-    let generation = object.get("device_generation").and_then(|value| {
-        value
-            .as_u64()
-            .or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok()))
-    });
-    if generation.is_none() {
-        return false;
-    }
-    let Some(session) = object.get("session").and_then(serde_json::Value::as_object) else {
-        return false;
-    };
-    let Some(access) = session
-        .get("access_token")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return false;
-    };
-    let Some(refresh) = session
-        .get("refresh_token")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return false;
-    };
-    !access.is_empty() && !refresh.is_empty()
+    serde_json::from_str::<serde_json::Value>(payload)
+        .is_ok_and(|value| super::session_is_usable(&value))
 }
 
 type RowMap<T> = fn(&rusqlite::Row<'_>) -> Result<T, rusqlite::Error>;
