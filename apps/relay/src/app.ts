@@ -982,6 +982,7 @@ function resolvedSubscriptions(stored: readonly StoredQuotaSnapshot[], checkedAt
     sources: subscription.sources.map((source) => ({
       device_id: source.device_id,
       observed_at: source.observed_at,
+      ...(source.snapshot === undefined ? {} : { snapshot: source.snapshot }),
     })),
   }));
 }

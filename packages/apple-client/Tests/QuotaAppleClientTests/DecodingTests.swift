@@ -44,6 +44,32 @@ struct DecodingTests {
     #expect(summary.subscriptions.first?.snapshot.provider == .codex)
     #expect(summary.subscriptions.first?.snapshot.windows.first?.usedPercent == 29)
     #expect(summary.subscriptions.first?.sources.first?.deviceID == "device_01")
+    #expect(summary.subscriptions.first?.sources.first?.snapshot == nil)
+
+    var withSnapshot = Fixtures.quotaSubscription()
+    var sources = withSnapshot["sources"] as! [[String: Any]]
+    sources[0]["snapshot"] = withSnapshot["snapshot"]
+    withSnapshot["sources"] = sources
+    let decodedSnapshot = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON(subscriptions: [withSnapshot])
+    )
+    #expect(decodedSnapshot.subscriptions.first?.sources.first?.snapshot?.provider == .codex)
+    #expect(
+      decodedSnapshot.subscriptions.first?.sources.first?.snapshot?.account.fingerprint
+        == "fp_codex_01"
+    )
+
+    var malformed = Fixtures.quotaSubscription()
+    var malformedSources = malformed["sources"] as! [[String: Any]]
+    malformedSources[0]["snapshot"] = ["provider": "codex"]
+    malformed["sources"] = malformedSources
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountSummary.self,
+        from: try Fixtures.accountSummaryJSON(subscriptions: [malformed])
+      )
+    }
     #expect(summary.usage.today.cost.amountMicrousd == "3138")
     #expect(summary.devices.isEmpty)
   }

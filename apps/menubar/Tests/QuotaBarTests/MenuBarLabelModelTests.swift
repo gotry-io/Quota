@@ -499,6 +499,8 @@ struct MenuBarLabelModelTests {
       sources: [source],
       selectedSourceID: source.sourceID,
       selectedSourceDisplayName: source.displayName,
+      automaticSourceID: source.sourceID,
+      automaticSourceDisplayName: source.displayName,
       isStale: isStale
     )
   }

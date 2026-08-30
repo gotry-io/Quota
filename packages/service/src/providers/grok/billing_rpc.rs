@@ -94,10 +94,10 @@ fn validate_at(
     })
 }
 
-pub(super) fn collect(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let cookie_header = context
-        .browser_session(ProviderId::Grok)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+pub(super) fn collect(
+    context: &CollectionContext,
+    cookie_header: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     collect_at(cookie_header, context, BILLING_RPC_URL)
 }
 

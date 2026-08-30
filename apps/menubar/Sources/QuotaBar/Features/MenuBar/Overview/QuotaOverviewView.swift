@@ -8,6 +8,7 @@ struct QuotaOverviewView: View {
   var revealGeneration: UInt = 0
   var revealProvider: ProviderID? = nil
   let onOpenSettings: () -> Void
+  let onOpenProvider: (ProviderID) -> Void
 
   var body: some View {
     QuotaNavigationStableContent(
@@ -80,8 +81,12 @@ struct QuotaOverviewView: View {
       }
 
       ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-        ProviderQuotaView(presentation: provider, now: now)
-          .id(provider.id)
+        ProviderQuotaView(
+          presentation: provider,
+          now: now,
+          onOpenProvider: { onOpenProvider(provider.provider) }
+        )
+        .id(provider.id)
 
         if index < providers.count - 1 {
           Divider()

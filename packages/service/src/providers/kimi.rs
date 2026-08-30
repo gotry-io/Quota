@@ -36,6 +36,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
             .map(|credential_source| ProviderSession {
                 provider: ProviderId::Kimi,
                 credential_source,
+                cookie_header: None,
             }),
         context,
     )
@@ -87,7 +88,12 @@ pub fn collect(
         ProviderId::Kimi,
         SOURCE,
         || collect_local(context),
-        || collect_web(context),
+        || {
+            let cookie = context
+                .cookie_for_session(session)
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+            collect_web(context, cookie)
+        },
     )
 }
 
@@ -202,13 +208,21 @@ fn resolve(context: &CollectionContext) -> Result<ApiKeyCredentials, ProviderErr
     resolve_api_key(context, ProviderId::Kimi, SOURCE)
 }
 
+/// Whether a discovered session came from the Kimi Code CLI's credential file rather than
+/// a configured or environment API key.
+pub fn is_cli_credential_source(credential_source: &str) -> bool {
+    credential_source.ends_with(CLI_CREDENTIAL_FILE)
+}
+
+const CLI_CREDENTIAL_FILE: &str = "kimi-code.json";
+
 fn load_cli_credentials(context: &CollectionContext) -> Option<CliCredentials> {
     let home = context
         .env("KIMI_CODE_HOME")
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| context.home_directory.join(".kimi-code"));
-    let path = home.join("credentials/kimi-code.json");
+    let path = home.join("credentials").join(CLI_CREDENTIAL_FILE);
     read_cli_credentials(&path, context)
 }
 
@@ -238,10 +252,10 @@ fn parse_cli_credentials(value: &Value, source: &str, now: i64) -> Option<CliCre
     })
 }
 
-fn collect_web(context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    let cookie_header = context
-        .browser_session(ProviderId::Kimi)
-        .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+fn collect_web(
+    context: &CollectionContext,
+    cookie_header: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
     collect_web_at(
         cookie_header,
         context,
@@ -488,7 +502,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context.browser_sessions.insert(
             ProviderId::Kimi,
-            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok".to_owned(),
+            vec!["kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok".to_owned()],
         );
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
@@ -589,6 +603,7 @@ mod tests {
         let official = ProviderSession {
             provider: ProviderId::Kimi,
             credential_source: "providers.json".to_owned(),
+            cookie_header: None,
         };
         // Nothing on disk and nothing stored: the credential path's verdict is the answer,
         // named by its last rung — the Kimi Code token, not the key that was never set.
@@ -602,7 +617,7 @@ mod tests {
         // names itself. The header is one this rung rejects without a request.
         context
             .browser_sessions
-            .insert(ProviderId::Kimi, "sessionKey=sk-ant-ok".to_owned());
+            .insert(ProviderId::Kimi, vec!["sessionKey=sk-ant-ok".to_owned()]);
         assert_eq!(
             collect(&official, &context)
                 .expect_err("stored session")

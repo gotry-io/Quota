@@ -601,6 +601,7 @@ private struct TemporaryService {
               "pricing": component("unavailable"),
               "providers": [],
               "provider_browser_sessions": [],
+              "browser_scan_enabled": [],
               "overview": [],
               "cache": settled_cache(),
           }

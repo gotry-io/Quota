@@ -30,11 +30,12 @@ pub enum Operation {
     Logout,
     SetUsageUpload,
     SetQuotaRefreshInterval,
+    SetOverviewSourcePin,
     SetProviderConfig,
     RemoveProviderConfig,
     ValidateProviderBrowserSession,
-    CommitProviderBrowserSession,
-    RemoveProviderBrowserSession,
+    SetProviderBrowserScan,
+    ReplaceProviderBrowserSessions,
     Shutdown,
 }
 
@@ -316,20 +317,24 @@ pub struct ProviderBrowserAccessDenial {
     pub reason: BrowserAccessDenialReason,
 }
 
-/// What one browser sign-in attempt produced.
-///
-/// A commit either stores the session a browser released, or records that the browser released
-/// nothing because macOS refused the store. Both are answers to the same question, and only
-/// the second is one the reader has to act on, so the two must not arrive as the same silence.
-/// Exactly one of the two fields is present.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CommitProviderBrowserSessionPayload {
+pub struct SetProviderBrowserScanPayload {
+    pub provider: String,
+    pub enabled: bool,
+}
+
+/// Replaces every stored browser session for one provider with the cookies this scan produced.
+///
+/// Access denials are recorded beside them: a refused store is not an absent session.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceProviderBrowserSessionsPayload {
     pub provider: String,
     #[serde(default)]
-    pub cookie_header: Option<String>,
+    pub cookie_headers: Vec<String>,
     #[serde(default)]
-    pub access_denied: Option<ProviderBrowserAccessDenial>,
+    pub access_denials: Vec<ProviderBrowserAccessDenial>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -342,6 +347,27 @@ pub struct SetUsageUploadPayload {
 #[serde(deny_unknown_fields)]
 pub struct SetQuotaRefreshIntervalPayload {
     pub interval_seconds: u64,
+}
+
+/// Pin Overview to one reporting source for a subscription, or clear the pin (Automatic).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetOverviewSourcePinPayload {
+    pub provider: String,
+    pub fingerprint: String,
+    pub scope: String,
+    #[serde(default)]
+    pub identity_source_id: Option<String>,
+    /// `None` restores Automatic. A named id must already be a source on the current overview item.
+    #[serde(default)]
+    pub pin: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OverviewSourcePinSetting {
+    pub identity_key: String,
+    pub pin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -413,6 +439,13 @@ pub struct ProviderBrowserSessionView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProviderBrowserScanSetting {
+    pub provider: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderBrowserSessionCandidate {
     pub provider: String,
     pub account_fingerprint: String,
@@ -475,6 +508,8 @@ pub struct QuotaOverviewSource {
     pub display_name: String,
     pub observed_at: String,
     pub is_stale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -485,7 +520,12 @@ pub struct QuotaOverviewItem {
     pub sources: Vec<QuotaOverviewSource>,
     pub selected_source_id: String,
     pub selected_source_display_name: String,
+    pub automatic_source_id: String,
+    pub automatic_source_display_name: String,
     pub is_stale: bool,
+    /// Set when this Mac pinned a source; absent means Automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -502,6 +542,7 @@ pub struct StateSnapshot {
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
     pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
+    pub browser_scan_enabled: Vec<String>,
     pub overview: Vec<QuotaOverviewItem>,
     pub cache: CacheState,
 }

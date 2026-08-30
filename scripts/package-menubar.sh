@@ -65,12 +65,17 @@ plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_PATH/Content
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_PATH/Contents/Info.plist"
 chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"
 
-# Keep local packages launchable. A release workflow replaces these ad-hoc signatures with Developer ID.
+# Keep local packages launchable. A release workflow replaces these signatures with Developer ID.
+# An ad-hoc signature's designated requirement is the build's cdhash, so macOS treats every
+# rebuild as a new app: Full Disk Access, Removable Volumes, and the Chrome Safe Storage
+# Keychain ACL are asked for again. Set QUOTABAR_CODESIGN_IDENTITY to a self-signed
+# code-signing certificate from Keychain Access to keep those grants across local builds.
+CODESIGN_IDENTITY="${QUOTABAR_CODESIGN_IDENTITY:--}"
 chmod +x "${ROOT_DIR}/scripts/sign-sparkle-framework.sh"
-"${ROOT_DIR}/scripts/sign-sparkle-framework.sh" "$APP_PATH" "-"
-codesign --force --sign - "$APP_PATH/Contents/Helpers/quota-service"
+"${ROOT_DIR}/scripts/sign-sparkle-framework.sh" "$APP_PATH" "$CODESIGN_IDENTITY"
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH/Contents/Helpers/quota-service"
 codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota-service"
-codesign --force --sign - "$APP_PATH"
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 printf '%s\n' "$APP_PATH"

@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Settings → Agents: catalog providers with drill-in to visibility and configuration.
 struct AgentsSettingsView: View {
-  let accountReportedProviders: Set<ProviderID>
+  /// One line under each provider: signed in, reported elsewhere, or what it still needs.
+  let statusLine: (ProviderID) -> String
   let onOpenProvider: (ProviderID) -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -50,29 +51,25 @@ struct AgentsSettingsView: View {
 
   @ViewBuilder
   private func providerRow(_ provider: ProviderID, isEnabled: Bool) -> some View {
-    let isAccountReported = accountReportedProviders.contains(provider)
+    let status = statusLine(provider)
     let row = Button {
       onOpenProvider(provider)
     } label: {
       SettingsListRow(
         title: provider.displayName,
+        subtitle: status,
+        height: QuotaDesign.Layout.settingsListRowHeight,
         leading: {
           ProviderBrandIcon(provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
         },
         trailing: {
           HStack(spacing: QuotaDesign.Spacing.inline) {
-            if isAccountReported {
-              Image(systemName: "desktopcomputer")
-                .quotaAffordanceStyle()
-                .help("Reported by an account device")
-                .accessibilityHidden(true)
-            }
             if isEnabled {
               Image(systemName: "line.3.horizontal")
                 .quotaAffordanceStyle()
                 .frame(
                   width: QuotaDesign.Layout.minimumInteractiveDimension,
-                  height: QuotaDesign.Layout.settingsRowHeight
+                  height: QuotaDesign.Layout.settingsListRowHeight
                 )
                 .contentShape(Rectangle())
                 .highPriorityGesture(reorderGesture(for: provider))
@@ -87,7 +84,7 @@ struct AgentsSettingsView: View {
     }
     .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(provider.displayName)
-    .accessibilityValue(isAccountReported ? "Reported by an account device" : "")
+    .accessibilityValue(status)
     .accessibilityHint(
       "\(isEnabled ? "Shown in Overview" : "Hidden from Overview"). Opens \(provider.displayName) settings"
     )

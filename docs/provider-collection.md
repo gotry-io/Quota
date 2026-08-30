@@ -131,18 +131,27 @@ reason to spend a second request on the same account — and a credential this M
 withheld from this device says nothing about the account. Cursor is the same ladder with a
 different first rung: a signed-in Cursor.app session from local desktop state.
 
-Acquisition happens once, in QuotaBar, and never during a refresh:
+Acquisition happens in QuotaBar, never during a refresh:
 
-1. QuotaBar resolves one explicit supported browser — the default HTTPS handler, or a choice the
-   user makes when that handler is unsupported.
-2. It then asks for consent before opening any cookie store. The popup names that browser, the
-   permission macOS will ask for (Full Disk Access for Safari, the "Chrome Safe Storage" Keychain
-   item for a Chrome-family browser, neither for Firefox), the exact hosts and Cookie names quoted
-   from the catalog, that the accepted session stays in the local service database until
-   disconnected, and that nothing is uploaded. Declining reads nothing.
-3. On confirmation QuotaBar opens the catalog's login URL in that browser and polls only that
-   browser's profiles. SweetCookieKit queries the catalog's exact hosts and exact Cookie names;
-   expired and unrelated records are discarded and logging is disabled.
+1. Turning **Browser Sign-in** on asks for consent before any cookie store is opened. The popup names
+   the cookie names and hosts from the catalog, that accepted sessions stay in the local service
+   database until the scan is turned off, and that nothing is uploaded; the macOS permission each
+   browser needs is stated per browser in the Browser Access window instead. Declining leaves the
+   preference off and reads nothing.
+2. On confirmation the preference is stored immediately. QuotaBar then preflights installed
+   browsers: Safari Full Disk Access, Chromium Safe Storage, Firefox none. Missing grants open the
+   floating Browser Access window, one row per installed browser. Safari **Open Settings…** jumps
+   to System Settings › Full Disk Access, with a QuotaBar icon in the window that is a plain file
+   drag of the app for that list, followed by a **Relaunch** row because the grant lands on the next launch;
+   a Chrome-family **Allow…** is the system Keychain prompt. Dismissing the window leaves the
+   scan on and only reads granted stores; the Agent page keeps one summary row that reopens it.
+3. When the preference is on and this Mac's official credential is missing or answered
+   `auth_required`, QuotaBar reads every allowed installed browser that is already granted.
+   SweetCookieKit queries the catalog's exact hosts and exact Cookie names; expired and unrelated
+   records are discarded and logging is disabled. A store macOS refuses is recorded and the scan
+   continues. An official credential that still answers skips the jars. Background reads never
+   prompt; they skip Safari without Full Disk Access and any Chromium jar whose Keychain ACL is
+   not already allowed.
 4. Most allowlisted names are a whole sign-in and stay separate candidates, so Cursor's
    `wos-session` and `WorkosCursorSessionToken` are never combined. Two are not: a NextAuth token a
    browser split into numbered chunks (`…session-token.0`, `.1`, `.2`), and Grok's `sso` / `sso-rw`,
@@ -158,9 +167,9 @@ Acquisition happens once, in QuotaBar, and never during a refresh:
    signed-in account over that provider's fixed HTTPS endpoint before anything is stored — the
    per-provider check is named in each section below. Where the provider's official rung already
    has a `global` account identity, the browser rung builds the same fingerprint from the same
-   field, so falling through does not rename the subscription. Validate does not persist; commit
-   repeats validation before an atomic SQLite replacement, so a failure keeps the old session.
-   Disconnect removes the row and the refusal recorded against it.
+   field, so falling through does not rename the subscription. Validate does not persist; replace
+   repeats validation before an atomic SQLite replacement, so a failure keeps the old sessions.
+   Turning Browser Sign-in off deletes those rows and the refusals recorded against them.
 
 ## Codex
 

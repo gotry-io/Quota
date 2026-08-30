@@ -210,8 +210,10 @@ struct SettingsHomeView: View {
 
   private var agentsSummary: String {
     let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
-    let total = ProviderID.allCases.count
-    return visible == total ? "\(total)" : "\(visible)/\(total)"
+    let needing = model.agentsNeedingSignIn().filter { ProviderVisibility.isVisible($0) }.count
+    let shown = "\(visible) shown"
+    guard needing > 0 else { return shown }
+    return "\(shown) · \(needing) need\(needing == 1 ? "s" : "") sign-in"
   }
 
   private func settingsToggleRow(

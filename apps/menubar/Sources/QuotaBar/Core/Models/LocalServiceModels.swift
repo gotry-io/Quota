@@ -336,6 +336,25 @@ struct LocalServiceOverviewSource: Decodable, Sendable {
   let displayName: String
   let observedAt: Date
   let isStale: Bool
+  let snapshot: QuotaSnapshot?
+
+  init(
+    sourceID: String,
+    kind: LocalServiceOverviewSourceKind,
+    deviceID: String?,
+    displayName: String,
+    observedAt: Date,
+    isStale: Bool,
+    snapshot: QuotaSnapshot? = nil
+  ) {
+    self.sourceID = sourceID
+    self.kind = kind
+    self.deviceID = deviceID
+    self.displayName = displayName
+    self.observedAt = observedAt
+    self.isStale = isStale
+    self.snapshot = snapshot
+  }
 
   private enum CodingKeys: String, CodingKey {
     case sourceID = "sourceId"
@@ -344,6 +363,7 @@ struct LocalServiceOverviewSource: Decodable, Sendable {
     case displayName
     case observedAt
     case isStale
+    case snapshot
   }
 
   var observationSource: QuotaObservationSource? {
@@ -354,12 +374,14 @@ struct LocalServiceOverviewSource: Decodable, Sendable {
       deviceID.map(QuotaObservationSource.device)
     }
   }
+
+  var symbolName: String { kind == .local ? "laptopcomputer" : "desktopcomputer" }
 }
 
 extension LocalServiceOverviewSource {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "sourceId", "kind", "deviceId", "displayName", "observedAt", "isStale",
+      "sourceId", "kind", "deviceId", "displayName", "observedAt", "isStale", "snapshot",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     sourceID = try container.decode(String.self, forKey: .sourceID)
@@ -368,6 +390,7 @@ extension LocalServiceOverviewSource {
     displayName = try container.decode(String.self, forKey: .displayName)
     observedAt = try container.decode(Date.self, forKey: .observedAt)
     isStale = try container.decode(Bool.self, forKey: .isStale)
+    snapshot = try container.decodeIfPresent(QuotaSnapshot.self, forKey: .snapshot)
   }
 }
 
@@ -377,7 +400,36 @@ struct LocalServiceOverviewItem: Decodable, Sendable {
   let sources: [LocalServiceOverviewSource]
   let selectedSourceID: String
   let selectedSourceDisplayName: String
+  let automaticSourceID: String
+  let automaticSourceDisplayName: String
   let isStale: Bool
+  let sourcePin: String?
+
+  var pinIdentityKey: String {
+    "\(identity.provider.rawValue)|\(identity.fingerprint)|\(identity.scope.rawValue)|\(identity.sourceID ?? "")"
+  }
+
+  init(
+    identity: LocalServiceOverviewIdentity,
+    snapshot: QuotaSnapshot,
+    sources: [LocalServiceOverviewSource],
+    selectedSourceID: String,
+    selectedSourceDisplayName: String,
+    automaticSourceID: String,
+    automaticSourceDisplayName: String,
+    isStale: Bool,
+    sourcePin: String? = nil
+  ) {
+    self.identity = identity
+    self.snapshot = snapshot
+    self.sources = sources
+    self.selectedSourceID = selectedSourceID
+    self.selectedSourceDisplayName = selectedSourceDisplayName
+    self.automaticSourceID = automaticSourceID
+    self.automaticSourceDisplayName = automaticSourceDisplayName
+    self.isStale = isStale
+    self.sourcePin = sourcePin
+  }
 
   private enum CodingKeys: String, CodingKey {
     case identity
@@ -385,7 +437,10 @@ struct LocalServiceOverviewItem: Decodable, Sendable {
     case sources
     case selectedSourceID = "selectedSourceId"
     case selectedSourceDisplayName
+    case automaticSourceID = "automaticSourceId"
+    case automaticSourceDisplayName
     case isStale
+    case sourcePin
   }
 
 }
@@ -393,7 +448,8 @@ struct LocalServiceOverviewItem: Decodable, Sendable {
 extension LocalServiceOverviewItem {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "identity", "snapshot", "sources", "selectedSourceId", "selectedSourceDisplayName", "isStale",
+      "identity", "snapshot", "sources", "selectedSourceId", "selectedSourceDisplayName",
+      "automaticSourceId", "automaticSourceDisplayName", "isStale", "sourcePin",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     identity = try container.decode(LocalServiceOverviewIdentity.self, forKey: .identity)
@@ -402,7 +458,11 @@ extension LocalServiceOverviewItem {
     selectedSourceID = try container.decode(String.self, forKey: .selectedSourceID)
     selectedSourceDisplayName = try container.decode(
       String.self, forKey: .selectedSourceDisplayName)
+    automaticSourceID = try container.decode(String.self, forKey: .automaticSourceID)
+    automaticSourceDisplayName = try container.decode(
+      String.self, forKey: .automaticSourceDisplayName)
     isStale = try container.decode(Bool.self, forKey: .isStale)
+    sourcePin = try container.decodeIfPresent(String.self, forKey: .sourcePin)
   }
 }
 
@@ -422,6 +482,7 @@ struct LocalServiceState: Decodable, Sendable {
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
   let providerBrowserSessions: [LocalServiceProviderBrowserSession]
+  let browserScanEnabled: [ProviderID]
   let overview: [LocalServiceOverviewItem]
   let cache: LocalServiceCacheState
 
@@ -437,6 +498,7 @@ struct LocalServiceState: Decodable, Sendable {
     case pricing
     case providers
     case providerBrowserSessions
+    case browserScanEnabled
     case overview
     case cache
   }
@@ -454,9 +516,11 @@ struct LocalServiceState: Decodable, Sendable {
         config.provider.isConfigurable
           && (!config.configured || config.maskedAPIKey?.isEmpty == false)
       }),
-      providerBrowserSessions.count <= ProviderID.allCases.count,
-      Set(providerBrowserSessions.map(\.provider)).count == providerBrowserSessions.count,
+      providerBrowserSessions.count <= 256,
       providerBrowserSessions.allSatisfy(\.isValid),
+      browserScanEnabled.count <= ProviderID.allCases.count,
+      Set(browserScanEnabled).count == browserScanEnabled.count,
+      browserScanEnabled.allSatisfy({ $0.browserSession != nil }),
       overview.count <= 2_048,
       Set(overviewIDs).count == overviewIDs.count
     else { return false }
@@ -464,6 +528,7 @@ struct LocalServiceState: Decodable, Sendable {
     return overview.allSatisfy { item in
       let sourceIDs = item.sources.map(\.sourceID)
       let selectedSource = item.sources.first { $0.sourceID == item.selectedSourceID }
+      let automaticSource = item.sources.first { $0.sourceID == item.automaticSourceID }
       return item.identity.provider == item.snapshot.provider
         && item.identity.fingerprint == item.snapshot.account.fingerprint
         && !item.identity.fingerprint.isEmpty
@@ -471,7 +536,12 @@ struct LocalServiceState: Decodable, Sendable {
         && item.sources.count <= 256
         && Set(sourceIDs).count == sourceIDs.count
         && sourceIDs.contains(item.selectedSourceID)
+        && sourceIDs.contains(item.automaticSourceID)
         && selectedSource?.displayName == item.selectedSourceDisplayName
+        && automaticSource?.displayName == item.automaticSourceDisplayName
+        && (item.sourcePin == nil
+          ? item.selectedSourceID == item.automaticSourceID
+          : item.sourcePin == item.selectedSourceID && sourceIDs.contains(item.sourcePin ?? ""))
         && (item.identity.scope == .global
           ? item.identity.sourceID == nil
           : item.identity.sourceID.map(sourceIDs.contains) == true)
@@ -488,7 +558,8 @@ extension LocalServiceState {
     try decoder.rejectUnknownWireKeys([
       "ipcVersion", "revision", "usageUploadEnabled", "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "providerBrowserSessions", "overview", "cache",
+      "account", "pricing", "providers", "providerBrowserSessions", "browserScanEnabled",
+      "overview", "cache",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
@@ -504,6 +575,7 @@ extension LocalServiceState {
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
     providerBrowserSessions = try container.decode(
       [LocalServiceProviderBrowserSession].self, forKey: .providerBrowserSessions)
+    browserScanEnabled = try container.decode([ProviderID].self, forKey: .browserScanEnabled)
     overview = try container.decode([LocalServiceOverviewItem].self, forKey: .overview)
     cache = try container.decode(LocalServiceCacheState.self, forKey: .cache)
   }
@@ -585,6 +657,28 @@ struct LocalServiceQuotaRefreshIntervalSetting: Decodable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case intervalSeconds
+  }
+}
+
+struct LocalServiceOverviewSourcePinSetting: Decodable, Sendable {
+  let identityKey: String
+  let pin: String?
+
+  init(identityKey: String, pin: String?) {
+    self.identityKey = identityKey
+    self.pin = pin
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case identityKey
+    case pin
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["identityKey", "pin"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    identityKey = try container.decode(String.self, forKey: .identityKey)
+    pin = try container.decodeIfPresent(String.self, forKey: .pin)
   }
 }
 

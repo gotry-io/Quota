@@ -350,7 +350,10 @@ describe("managed data v6 end to end", () => {
         key: string;
         provider: string;
         snapshot: { observed_at: string };
-        sources: Array<{ device_id: string }>;
+        sources: Array<{
+          device_id: string;
+          snapshot?: { observed_at: string; provider: string };
+        }>;
       }>;
       devices: Array<{ id: string; last_observed_at: string | null }>;
     };
@@ -364,6 +367,13 @@ describe("managed data v6 end to end", () => {
       "device_beta",
       "device_gamma",
     ]);
+    expect(summary.subscriptions[0]?.sources.map((source) => source.snapshot?.observed_at)).toEqual(
+      [
+        now.toISOString(),
+        new Date(now.getTime() - 60_000).toISOString(),
+        new Date(now.getTime() - 120_000).toISOString(),
+      ],
+    );
     expect(summary.devices.every((device) => device.last_observed_at !== null)).toBe(true);
   });
 

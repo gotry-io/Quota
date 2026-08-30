@@ -1426,7 +1426,26 @@
               "sources": [
                 {
                   "device_id": "device_1",
-                  "observed_at": "2026-08-12T09:30:00Z"
+                  "observed_at": "2026-08-12T09:30:00Z",
+                  "snapshot": {
+                    "provider": "codex",
+                    "account": {
+                      "fingerprint": "codex_account_1",
+                      "fingerprint_scope": "global",
+                      "plan": "Plus"
+                    },
+                    "windows": [
+                      {
+                        "id": "weekly",
+                        "title": "Weekly",
+                        "used_percent": 42,
+                        "resets_at": "2026-08-17T00:00:00Z",
+                        "duration_seconds": 604800
+                      }
+                    ],
+                    "status": "available",
+                    "observed_at": "2026-08-12T09:30:00Z"
+                  }
                 }
               ]
             }
@@ -1676,6 +1695,306 @@
           "pricing_revision": "2026-08-01",
           "model_catalog_revision": "2026-08-01",
           "a_field_from_a_newer_relay": true
+        }
+      },
+      {
+        "name": "a source snapshot that is not a quota reading is refused",
+        "accepted": false,
+        "reason": "source snapshot",
+        "payload": {
+          "protocol_version": 6,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "Quota Tester",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "devices": [
+            {
+              "id": "device_1",
+              "display_name": "Studio",
+              "platform": "macos",
+              "last_seen_at": "2026-08-12T09:31:00Z",
+              "last_observed_at": "2026-08-12T09:30:00Z"
+            }
+          ],
+          "subscriptions": [
+            {
+              "key": "codex|codex_account_1|global|",
+              "provider": "codex",
+              "snapshot": {
+                "provider": "codex",
+                "account": {
+                  "fingerprint": "codex_account_1",
+                  "fingerprint_scope": "global",
+                  "plan": "Plus"
+                },
+                "windows": [
+                  {
+                    "id": "weekly",
+                    "title": "Weekly",
+                    "used_percent": 42,
+                    "resets_at": "2026-08-17T00:00:00Z",
+                    "duration_seconds": 604800
+                  }
+                ],
+                "status": "available",
+                "observed_at": "2026-08-12T09:30:00Z"
+              },
+              "sources": [
+                {
+                  "device_id": "device_1",
+                  "observed_at": "2026-08-12T09:30:00Z",
+                  "snapshot": {
+                    "provider": "codex"
+                  }
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "today": {
+              "totals": {
+                "total_tokens": 1550,
+                "input_tokens": 1200,
+                "output_tokens": 350,
+                "cache_read_input_tokens": 400,
+                "cache_write_input_tokens": 100,
+                "reasoning_tokens": 120,
+                "messages": 4
+              },
+              "cost": {
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": "18450",
+                "catalog_revision": "2026-08-01",
+                "calculated_rows": 1,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+              },
+              "partial": false,
+              "agents": [
+                {
+                  "agent": "codex",
+                  "providers": [
+                    {
+                      "provider": "openai",
+                      "models": [
+                        {
+                          "model": "gpt-5.6-sol",
+                          "totals": {
+                            "total_tokens": 1550,
+                            "input_tokens": 1200,
+                            "output_tokens": 350,
+                            "cache_read_input_tokens": 400,
+                            "cache_write_input_tokens": 100,
+                            "reasoning_tokens": 120,
+                            "messages": 4
+                          },
+                          "cost": {
+                            "mode": "auto",
+                            "basis": "calculated",
+                            "status": "complete",
+                            "amount_microusd": "18450",
+                            "catalog_revision": "2026-08-01",
+                            "calculated_rows": 1,
+                            "reported_rows": 0,
+                            "unpriced_rows": 0,
+                            "assumptions": ["wildcard_speed"],
+                            "unpriced": []
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "last_7_days": {
+              "totals": {
+                "total_tokens": 1550,
+                "input_tokens": 1200,
+                "output_tokens": 350,
+                "cache_read_input_tokens": 400,
+                "cache_write_input_tokens": 100,
+                "reasoning_tokens": 120,
+                "messages": 4
+              },
+              "cost": {
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": "18450",
+                "catalog_revision": "2026-08-01",
+                "calculated_rows": 1,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+              },
+              "partial": false,
+              "agents": [
+                {
+                  "agent": "codex",
+                  "providers": [
+                    {
+                      "provider": "openai",
+                      "models": [
+                        {
+                          "model": "gpt-5.6-sol",
+                          "totals": {
+                            "total_tokens": 1550,
+                            "input_tokens": 1200,
+                            "output_tokens": 350,
+                            "cache_read_input_tokens": 400,
+                            "cache_write_input_tokens": 100,
+                            "reasoning_tokens": 120,
+                            "messages": 4
+                          },
+                          "cost": {
+                            "mode": "auto",
+                            "basis": "calculated",
+                            "status": "complete",
+                            "amount_microusd": "18450",
+                            "catalog_revision": "2026-08-01",
+                            "calculated_rows": 1,
+                            "reported_rows": 0,
+                            "unpriced_rows": 0,
+                            "assumptions": ["wildcard_speed"],
+                            "unpriced": []
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "last_30_days": {
+              "totals": {
+                "total_tokens": 1550,
+                "input_tokens": 1200,
+                "output_tokens": 350,
+                "cache_read_input_tokens": 400,
+                "cache_write_input_tokens": 100,
+                "reasoning_tokens": 120,
+                "messages": 4
+              },
+              "cost": {
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": "18450",
+                "catalog_revision": "2026-08-01",
+                "calculated_rows": 1,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+              },
+              "partial": false,
+              "agents": [
+                {
+                  "agent": "codex",
+                  "providers": [
+                    {
+                      "provider": "openai",
+                      "models": [
+                        {
+                          "model": "gpt-5.6-sol",
+                          "totals": {
+                            "total_tokens": 1550,
+                            "input_tokens": 1200,
+                            "output_tokens": 350,
+                            "cache_read_input_tokens": 400,
+                            "cache_write_input_tokens": 100,
+                            "reasoning_tokens": 120,
+                            "messages": 4
+                          },
+                          "cost": {
+                            "mode": "auto",
+                            "basis": "calculated",
+                            "status": "complete",
+                            "amount_microusd": "18450",
+                            "catalog_revision": "2026-08-01",
+                            "calculated_rows": 1,
+                            "reported_rows": 0,
+                            "unpriced_rows": 0,
+                            "assumptions": ["wildcard_speed"],
+                            "unpriced": []
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "all": {
+              "totals": {
+                "total_tokens": 1550,
+                "input_tokens": 1200,
+                "output_tokens": 350,
+                "cache_read_input_tokens": 400,
+                "cache_write_input_tokens": 100,
+                "reasoning_tokens": 120,
+                "messages": 4
+              },
+              "cost": {
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": "18450",
+                "catalog_revision": "2026-08-01",
+                "calculated_rows": 1,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+              },
+              "partial": false,
+              "agents": [
+                {
+                  "agent": "codex",
+                  "providers": [
+                    {
+                      "provider": "openai",
+                      "models": [
+                        {
+                          "model": "gpt-5.6-sol",
+                          "totals": {
+                            "total_tokens": 1550,
+                            "input_tokens": 1200,
+                            "output_tokens": 350,
+                            "cache_read_input_tokens": 400,
+                            "cache_write_input_tokens": 100,
+                            "reasoning_tokens": 120,
+                            "messages": 4
+                          },
+                          "cost": {
+                            "mode": "auto",
+                            "basis": "calculated",
+                            "status": "complete",
+                            "amount_microusd": "18450",
+                            "catalog_revision": "2026-08-01",
+                            "calculated_rows": 1,
+                            "reported_rows": 0,
+                            "unpriced_rows": 0,
+                            "assumptions": ["wildcard_speed"],
+                            "unpriced": []
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "pricing_revision": "2026-08-01",
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {

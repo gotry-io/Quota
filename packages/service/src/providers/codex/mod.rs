@@ -78,6 +78,7 @@ pub fn discover(context: &CollectionContext) -> Vec<ProviderSession> {
         load_auth(context).map(|auth| ProviderSession {
             provider: ProviderId::Codex,
             credential_source: auth.source,
+            cookie_header: None,
         }),
         context,
     )
@@ -101,7 +102,14 @@ pub fn collect(
         ProviderId::Codex,
         SOURCE,
         || collect_local(context),
-        || web::collect(context),
+        || {
+            let cookie = session
+                .cookie_header
+                .as_deref()
+                .or_else(|| context.browser_session(ProviderId::Codex))
+                .ok_or_else(|| ProviderError::new(ErrorCategory::AuthRequired, WEB_SOURCE))?;
+            web::collect(context, cookie)
+        },
     )
 }
 
@@ -875,7 +883,7 @@ mod tests {
         assert!(discover(&context).is_empty());
         context.browser_sessions.insert(
             ProviderId::Codex,
-            "__Secure-next-auth.session-token=abc".to_owned(),
+            vec!["__Secure-next-auth.session-token=abc".to_owned()],
         );
         let sessions = discover(&context);
         assert_eq!(sessions.len(), 1);
@@ -895,6 +903,7 @@ mod tests {
         let official = ProviderSession {
             provider: ProviderId::Codex,
             credential_source: "auth.json".to_owned(),
+            cookie_header: None,
         };
         // Nothing on disk and nothing stored: the credential path's verdict is the answer.
         assert_eq!(
@@ -907,7 +916,7 @@ mod tests {
         // names itself. The header is one this rung rejects without a request.
         context
             .browser_sessions
-            .insert(ProviderId::Codex, "_account=acct".to_owned());
+            .insert(ProviderId::Codex, vec!["_account=acct".to_owned()]);
         assert_eq!(
             collect(&official, &context)
                 .expect_err("stored session")

@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import QuotaPresentation
 import QuotaWire
+import SweetCookieKit
 
 enum QuotaOverviewState: Equatable {
   case loading
@@ -55,50 +56,21 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   }
 }
 
-struct ProviderReportingSourcePresentation: Equatable, Identifiable {
-  enum Kind: String, Equatable {
-    case local = "Local"
-    case device = "Device"
-  }
-
-  let id: String
-  let displayName: String
-  let kind: Kind
-  let observedAt: Date
-  let isStale: Bool
-
-  var symbolName: String { kind == .local ? "laptopcomputer" : "desktopcomputer" }
-
-  func detailLabel(now: Date) -> String {
-    let freshness = FreshnessCopy.observation(
-      state: isStale ? .stale : .available,
-      observedAt: observedAt,
-      now: now
-    )
-    return "\(kind.rawValue) · \(freshness)"
-  }
+private struct QuotaCollectionScanKey: Equatable {
+  var updatedAt: Date?
 }
 
-struct BrowserSessionAccountChoice: Identifiable, Equatable, Sendable {
-  let provider: ProviderID
-  let accountFingerprint: String
-  let accountLabel: String?
-  let browserName: String
-  let profileName: String
-  let headerFingerprint: String
-  let cookieHeader: String
-
-  var id: String { headerFingerprint }
-  var title: String { PlanDisplay.accountLabel(accountLabel) ?? "Account" }
-  var subtitle: String { "\(browserName) · \(profileName)" }
+/// Which browsers one scan opened and which it left shut, by display name.
+struct BrowserScanCoverage: Equatable, Sendable {
+  var read: [String] = []
+  var skipped: [String] = []
+  /// Sign-ins the scan found and sent to the service, whether or not it accepted them.
+  var candidates = 0
 }
 
 enum ProviderBrowserSessionPopup: Equatable, Sendable {
-  case browser(provider: ProviderID, choices: [BrowserApplicationChoice])
-  /// Asked before the first cookie is read, once the browser to be read is known.
-  case consent(provider: ProviderID, choice: BrowserApplicationChoice)
-  case account(provider: ProviderID, choices: [BrowserSessionAccountChoice])
-  case confirmDisconnect(provider: ProviderID)
+  /// Asked before the first cookie is read after Scan browsers is turned on.
+  case consent(provider: ProviderID)
 }
 
 enum AccountViewState: Equatable {
@@ -126,7 +98,7 @@ enum AccountDisconnectReason: Equatable {
 
 @MainActor
 @Observable
-final class MenuBarViewModel {
+final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
@@ -147,15 +119,40 @@ final class MenuBarViewModel {
   private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
-  private(set) var providerBrowserSessions: [ProviderID: LocalServiceProviderBrowserSession] = [:]
+  private(set) var providerBrowserSessions: [ProviderID: [LocalServiceProviderBrowserSession]] = [:]
+  private(set) var browserScanEnabled: Set<ProviderID> = []
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
   private(set) var browserSessionErrorMessages: [ProviderID: String] = [:]
   /// A read macOS refused, which is a different state from finding no session: it stands until
   /// the reader changes a permission, and the Diagnostics page carries it too.
   private(set) var browserSessionAccessDenials: [ProviderID: BrowserAccessDenial] = [:]
   private(set) var browserSessionWaitingProvider: ProviderID?
-  private(set) var canCancelBrowserSessionLogin = false
   private(set) var browserSessionActivityText: String?
+  /// Every installed browser and the macOS grant it still needs, probed after Scan browsers is
+  /// turned on. The Agent page summarises it in one row; the Browser Access window lists it.
+  private(set) var browserAccessSnapshot = BrowserAccessSnapshot(
+    statuses: [], awaitingRelaunch: false)
+  /// The Chrome-family browser whose Keychain prompt is on screen right now.
+  private(set) var keychainPromptBrowser: Browser?
+  var browserAccessNeeds: [BrowserAccessNeed] { browserAccessSnapshot.needs }
+  var browserAccessAwaitingRelaunch: Bool { browserAccessSnapshot.awaitingRelaunch }
+  /// One line for the Agent page row, or nil when every installed browser is readable.
+  var browserAccessSummary: String? {
+    BrowserSessionCopy.accessSummary(
+      needs: browserAccessNeeds, awaitingRelaunch: browserAccessAwaitingRelaunch)
+  }
+  /// Bumps after a browser-session replace finishes, so tests can wait on MainActor state.
+  private(set) var browserSessionScanGeneration = 0
+  /// What the last scan for each provider opened and skipped, so the Agent page can say
+  /// where it looked.
+  private(set) var browserScanCoverage: [ProviderID: BrowserScanCoverage] = [:]
+  private var lastBrowserScanKey: [ProviderID: QuotaCollectionScanKey] = [:]
+  private var lastBrowserScanFinishedAt: [ProviderID: Date] = [:]
+  private var lastBrowserScanEnabled: Set<ProviderID> = []
+  private var scanningProviders: Set<ProviderID> = []
+  /// Set when this session sent the person to the Full Disk Access pane. The grant lands on
+  /// the next launch, so from then on the window offers a relaunch.
+  private var fullDiskAccessSettingsOpened = false
 
   private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
@@ -220,9 +217,6 @@ final class MenuBarViewModel {
   private var cancelLoginTask: Task<Void, Never>?
 
   @ObservationIgnored
-  private var browserSessionTask: Task<Void, Never>?
-
-  @ObservationIgnored
   private var menuBarClockTask: Task<Void, Never>?
 
   /// Which readings were current the last time the clock was published.
@@ -233,10 +227,19 @@ final class MenuBarViewModel {
   private let browserSessionImporter: any BrowserSessionImporting
 
   @ObservationIgnored
-  private let browserApplicationRouter: any BrowserApplicationRouting
+  private let loginURLOpener: any LoginURLOpening
 
   @ObservationIgnored
-  private let loginURLOpener: any LoginURLOpening
+  private let accessProbe: any BrowserAccessProbing
+
+  @ObservationIgnored
+  private var grantPresenter: (any BrowserAccessGrantPresenting)?
+
+  @ObservationIgnored
+  private let relauncher: any QuotaBarRelaunching
+
+  @ObservationIgnored
+  private var fullDiskAccessPollTask: Task<Void, Never>?
 
   private(set) var accountActionErrorMessage: String?
   private(set) var loginAuthorizeURL: URL?
@@ -258,17 +261,26 @@ final class MenuBarViewModel {
   init(
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
-    browserApplicationRouter: any BrowserApplicationRouting = WorkspaceBrowserApplicationRouter(),
     loginURLOpener: any LoginURLOpening = WorkspaceLoginURLOpener(),
+    accessProbe: (any BrowserAccessProbing)? = nil,
+    grantPresenter: (any BrowserAccessGrantPresenting)? = nil,
+    relauncher: (any QuotaBarRelaunching)? = nil,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
+    let injectedClient = client != nil
     self.browserSessionImporter = browserSessionImporter
-    self.browserApplicationRouter = browserApplicationRouter
     self.loginURLOpener = loginURLOpener
+    self.accessProbe = accessProbe ?? (injectedClient
+      ? UnrestrictedBrowserAccessProbe()
+      : SystemBrowserAccessProbe())
+    self.relauncher = relauncher ?? (injectedClient
+      ? NoOpQuotaBarRelauncher()
+      : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
     if let client {
       self.client = client
       initializationError = nil
+      self.grantPresenter = grantPresenter
     } else {
       do {
         self.client = try LocalServiceClient()
@@ -276,6 +288,12 @@ final class MenuBarViewModel {
       } catch {
         self.client = nil
         initializationError = Self.message(for: error)
+      }
+      if let grantPresenter {
+        self.grantPresenter = grantPresenter
+      } else {
+        let panel = BrowserAccessWindowController()
+        self.grantPresenter = panel
       }
     }
   }
@@ -287,8 +305,9 @@ final class MenuBarViewModel {
       lastCheckedAt: Date?
     ) {
       browserSessionImporter = BrowserSessionImporter()
-      browserApplicationRouter = WorkspaceBrowserApplicationRouter()
       loginURLOpener = WorkspaceLoginURLOpener()
+      accessProbe = UnrestrictedBrowserAccessProbe()
+      relauncher = NoOpQuotaBarRelauncher()
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
       initializationError = nil
@@ -351,11 +370,12 @@ final class MenuBarViewModel {
     eventTask?.cancel()
     loginTask?.cancel()
     cancelLoginTask?.cancel()
-    browserSessionTask?.cancel()
     menuBarClockTask?.cancel()
+    fullDiskAccessPollTask?.cancel()
   }
 
   func start() {
+    grantPresenter?.handler = self
     guard eventTask == nil, let client else {
       if self.client == nil { errorMessage = initializationError }
       return
@@ -406,6 +426,9 @@ final class MenuBarViewModel {
   func shutdown() async {
     eventTask?.cancel()
     eventTask = nil
+    fullDiskAccessPollTask?.cancel()
+    fullDiskAccessPollTask = nil
+    grantPresenter?.dismiss()
     guard let client else { return }
     // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
     // and a goodbye that lands first cancels it so a healthy quit is not slowed to two seconds.
@@ -628,6 +651,32 @@ final class MenuBarViewModel {
     }
   }
 
+  func overviewItems(for provider: ProviderID) -> [LocalServiceOverviewItem] {
+    overview.filter { $0.identity.provider == provider }
+  }
+
+  func overviewItem(provider: ProviderID, identityKey: String) -> LocalServiceOverviewItem? {
+    overviewItems(for: provider).first { $0.pinIdentityKey == identityKey }
+  }
+
+  func setOverviewSourcePin(item: LocalServiceOverviewItem, pin: String?) async {
+    guard let client else { return }
+    do {
+      _ = try await client.setOverviewSourcePin(
+        provider: item.identity.provider,
+        fingerprint: item.identity.fingerprint,
+        scope: item.identity.scope.rawValue,
+        identitySourceID: item.identity.sourceID,
+        pin: pin
+      )
+      await reloadState()
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
+  }
+
   func setQuotaRefreshInterval(_ interval: QuotaRefreshInterval) async {
     guard !isUpdatingQuotaRefreshInterval, interval.rawValue != quotaRefreshIntervalSeconds,
       let client
@@ -667,247 +716,356 @@ final class MenuBarViewModel {
     await reloadState()
   }
 
-  /// Nothing is read until the browser is known and the reader has agreed to that browser
-  /// being read. The consent popup is the gate: declining it leaves every cookie store shut.
-  func startProviderBrowserSessionLogin(_ provider: ProviderID) {
-    guard
-      browserSessionTask == nil,
-      let spec = provider.browserSession,
-      let loginURL = URL(string: spec.loginURL)
-    else { return }
+  /// Turning Scan browsers on is the consent gate. Declining leaves every cookie store shut.
+  func requestEnableBrowserScan(_ provider: ProviderID) {
+    guard provider.browserSession != nil else { return }
     browserSessionErrorMessages[provider] = nil
     browserSessionAccessDenials[provider] = nil
-    let browsers = BrowserSessionImporter.orderedBrowsers(for: spec)
-    if let applicationURL = browserApplicationRouter.defaultApplication(for: loginURL),
-      let choice = BrowserApplicationCatalog.choice(
-        for: applicationURL, allowed: browsers)
-    {
-      browserSessionPopup = .consent(provider: provider, choice: choice)
-      return
-    }
-    var seen = Set<String>()
-    let choices = browserApplicationRouter.applications(for: loginURL)
-      .compactMap { BrowserApplicationCatalog.choice(for: $0, allowed: browsers) }
-      .filter { seen.insert($0.browser.rawValue).inserted }
-      .sorted {
-        guard
-          let left = browsers.firstIndex(of: $0.browser),
-          let right = browsers.firstIndex(of: $1.browser)
-        else { return $0.title < $1.title }
-        return left < right
-      }
-    guard !choices.isEmpty else {
-      browserSessionErrorMessages[provider] = "No supported browser is available."
-      return
-    }
-    browserSessionPopup = .browser(provider: provider, choices: choices)
+    browserSessionPopup = .consent(provider: provider)
   }
 
-  func selectBrowserApplication(_ id: String, provider: ProviderID) {
-    guard
-      case .browser(let popupProvider, let choices) = browserSessionPopup,
-      popupProvider == provider,
-      let choice = choices.first(where: { $0.id == id })
-    else { return }
-    browserSessionPopup = .consent(provider: provider, choice: choice)
-  }
-
-  /// The only path to a cookie read. Cancelling the consent popup takes the other one.
   func confirmProviderBrowserSessionConsent() {
-    guard case .consent(let provider, let choice) = browserSessionPopup else { return }
+    guard case .consent(let provider) = browserSessionPopup else { return }
     browserSessionPopup = nil
-    beginBrowserSessionPolling(provider, choice: choice)
+    Task { await setBrowserScan(provider, enabled: true, scanImmediately: true) }
   }
 
-  func selectBrowserSessionAccount(_ id: String) {
-    guard
-      case .account(_, let choices) = browserSessionPopup,
-      let choice = choices.first(where: { $0.id == id })
-    else { return }
-    browserSessionPopup = nil
-    startBrowserSessionCommit(choice)
-  }
-
-  func requestProviderBrowserSessionDisconnect(_ provider: ProviderID) {
-    browserSessionPopup = .confirmDisconnect(provider: provider)
-  }
-
-  func confirmProviderBrowserSessionDisconnect() {
-    guard
-      case .confirmDisconnect(let provider) = browserSessionPopup,
-      let client,
-      browserSessionTask == nil
-    else { return }
-    browserSessionPopup = nil
-    browserSessionWaitingProvider = provider
-    canCancelBrowserSessionLogin = false
-    browserSessionActivityText = "Disconnecting…"
-    browserSessionTask = Task { @MainActor [weak self] in
-      defer {
-        self?.browserSessionTask = nil
-        self?.browserSessionWaitingProvider = nil
-        self?.browserSessionActivityText = nil
-      }
-      do {
-        _ = try await client.removeProviderBrowserSession(provider)
-        await self?.reloadState()
-      } catch {
-        self?.browserSessionErrorMessages[provider] = Self.message(for: error)
-      }
+  func setBrowserScanEnabled(_ provider: ProviderID, enabled: Bool) {
+    if enabled {
+      requestEnableBrowserScan(provider)
+      return
     }
+    Task { await setBrowserScan(provider, enabled: false, scanImmediately: false) }
   }
 
   func cancelProviderBrowserSessionFlow() {
-    if canCancelBrowserSessionLogin {
-      browserSessionTask?.cancel()
-      canCancelBrowserSessionLogin = false
-      browserSessionActivityText = "Cancelling…"
-    }
     browserSessionPopup = nil
   }
 
-  private func beginBrowserSessionPolling(
-    _ provider: ProviderID,
-    choice: BrowserApplicationChoice
-  ) {
-    guard let client, let spec = provider.browserSession,
-      let loginURL = URL(string: spec.loginURL)
-    else {
-      browserSessionErrorMessages[provider] = "Could not open the browser."
-      return
-    }
-    browserSessionWaitingProvider = provider
-    canCancelBrowserSessionLogin = true
-    browserSessionActivityText = "Waiting for browser sign-in…"
-    let currentFingerprint = providerBrowserSessions[provider]?.accountFingerprint
-    browserSessionTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      defer {
-        browserSessionTask = nil
-        browserSessionWaitingProvider = nil
-        canCancelBrowserSessionLogin = false
-        browserSessionActivityText = nil
+  /// The Agent page row: re-probe, then bring the Browser Access window forward.
+  func showBrowserAccessGrants() {
+    refreshAccessSnapshot()
+    presentBrowserAccessGrants()
+  }
+
+  func browserAccessGrantDidRequestFullDiskAccess() {
+    fullDiskAccessSettingsOpened = true
+    grantPresenter?.openFullDiskAccessSettings()
+    refreshAccessSnapshot()
+    startFullDiskAccessPolling()
+  }
+
+  func browserAccessGrantDidRequestKeychain(_ browser: Browser) {
+    Task { await allowKeychain(browser) }
+  }
+
+  func browserAccessGrantDidRequestRelaunch() {
+    relauncher.relaunch()
+  }
+
+  /// The icon landed in the Full Disk Access list. macOS applies that grant on the next
+  /// launch, so this is the same place as having opened the pane: offer the relaunch and keep
+  /// probing in case it lands sooner.
+  func browserAccessGrantDidDropIntoFullDiskAccess() {
+    fullDiskAccessSettingsOpened = true
+    refreshAccessSnapshot()
+    startFullDiskAccessPolling()
+  }
+
+  /// Closing the window changes nothing: Scan browsers stays on and the Agent page keeps the
+  /// row until the grants arrive.
+  func browserAccessGrantDidDismiss() {}
+
+  func coversAccessDenial(_ denial: BrowserAccessDenial) -> Bool {
+    switch denial.reason {
+    case .fullDiskAccess:
+      browserAccessNeeds.contains { $0.kind == .fullDiskAccess }
+    case .keychainRefused:
+      browserAccessNeeds.contains {
+        $0.kind == .keychain && $0.browser.displayName == denial.browserName
       }
-      guard await browserApplicationRouter.open(loginURL, with: choice.applicationURL) else {
-        if !Task.isCancelled {
-          browserSessionErrorMessages[provider] = "Could not open the browser."
-        }
-        return
-      }
-      guard !Task.isCancelled else { return }
-      let deadline = Date().addingTimeInterval(120)
-      var seenHeaders = Set<String>()
-      while !Task.isCancelled, Date() < deadline {
-        let outcome = await browserSessionImporter.read(
-          spec: spec, browser: choice.browser, now: Date(), deadline: deadline)
-        // A refusal is not "keep waiting": it stands until the reader changes a permission,
-        // and polling for another two minutes only delays saying so.
-        if case .accessDenied(let denial) = outcome {
-          guard !Task.isCancelled else { return }
-          await recordBrowserAccessDenial(provider, denial: denial)
-          return
-        }
-        let candidates: [BrowserSessionCookieCandidate] =
-          if case .found(let found) = outcome { found } else { [] }
-        var accounts: [String: BrowserSessionAccountChoice] = [:]
-        for candidate in candidates where !Task.isCancelled && Date() < deadline {
-          guard seenHeaders.insert(candidate.headerFingerprint).inserted else { continue }
-          do {
-            let validated = try await client.validateProviderBrowserSession(
-              provider, cookieHeader: candidate.cookieHeader)
-            guard !Task.isCancelled, Date() < deadline else { return }
-            guard validated.accountFingerprint != currentFingerprint else { continue }
-            accounts[candidate.headerFingerprint] = BrowserSessionAccountChoice(
-              provider: provider,
-              accountFingerprint: validated.accountFingerprint,
-              accountLabel: validated.accountLabel,
-              browserName: candidate.browserName,
-              profileName: candidate.profileName,
-              headerFingerprint: candidate.headerFingerprint,
-              cookieHeader: candidate.cookieHeader
-            )
-          } catch is CancellationError {
-            return
-          } catch {
-            continue
-          }
-        }
-        let choices = accounts.values.sorted {
-          ($0.accountLabel ?? $0.accountFingerprint)
-            .localizedStandardCompare($1.accountLabel ?? $1.accountFingerprint)
-            == .orderedAscending
-        }
-        if choices.count == 1, let candidate = choices.first {
-          canCancelBrowserSessionLogin = false
-          await commitBrowserSession(candidate)
-          return
-        }
-        if choices.count > 1 {
-          browserSessionPopup = .account(provider: provider, choices: choices)
-          return
-        }
-        do {
-          try await Task.sleep(for: .seconds(2))
-        } catch { return }
-      }
-      if !Task.isCancelled {
-        browserSessionErrorMessages[provider] =
-          "No signed-in browser session was found before the request timed out."
-      }
+    case .storeUnreadable:
+      false
     }
   }
 
-  /// Shows the refusal here, and tells the service so the Diagnostics page carries it too. A
-  /// permission this Mac was refused is a local fact, and the report is where a person looks
-  /// for local facts.
-  private func recordBrowserAccessDenial(
+  private func setBrowserScan(
     _ provider: ProviderID,
-    denial: BrowserAccessDenial
+    enabled: Bool,
+    scanImmediately: Bool
   ) async {
-    browserSessionAccessDenials[provider] = denial
-    browserSessionErrorMessages[provider] = denial.message
     guard let client else { return }
-    _ = try? await client.reportProviderBrowserAccessDenied(
-      provider,
-      browserName: denial.browserName,
-      reason: denial.reason
-    )
-  }
-
-  private func startBrowserSessionCommit(_ choice: BrowserSessionAccountChoice) {
-    guard browserSessionTask == nil else { return }
-    canCancelBrowserSessionLogin = false
-    browserSessionTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      defer {
-        browserSessionTask = nil
+    browserSessionWaitingProvider = provider
+    browserSessionActivityText = enabled ? "Checking access…" : "Turning off…"
+    defer {
+      if browserSessionWaitingProvider == provider {
+        browserSessionWaitingProvider = nil
         browserSessionActivityText = nil
       }
-      await commitBrowserSession(choice)
-    }
-  }
-
-  private func commitBrowserSession(_ choice: BrowserSessionAccountChoice) async {
-    guard let client else { return }
-    browserSessionWaitingProvider = choice.provider
-    browserSessionActivityText = "Connecting…"
-    defer {
-      browserSessionWaitingProvider = nil
-      browserSessionActivityText = nil
     }
     do {
-      guard !Task.isCancelled else { return }
-      _ = try await client.commitProviderBrowserSession(
-        choice.provider, cookieHeader: choice.cookieHeader)
-      guard !Task.isCancelled else { return }
-      // A committed session is proof the store was readable, so any refusal on record is stale.
-      browserSessionAccessDenials[choice.provider] = nil
-      browserSessionErrorMessages[choice.provider] = nil
+      _ = try await client.setProviderBrowserScan(provider, enabled: enabled)
+      if enabled {
+        browserScanEnabled.insert(provider)
+        refreshAccessSnapshot()
+        presentBrowserAccessGrants()
+        if scanImmediately, !officialCredentialUsable(for: provider) {
+          browserSessionActivityText = "Scanning browsers…"
+          await scanAndReplaceBrowserSessions(provider)
+        }
+      } else {
+        browserScanEnabled.remove(provider)
+        providerBrowserSessions[provider] = []
+        browserSessionAccessDenials[provider] = nil
+        browserSessionErrorMessages[provider] = nil
+        if browserScanEnabled.isEmpty {
+          fullDiskAccessSettingsOpened = false
+          fullDiskAccessPollTask?.cancel()
+          fullDiskAccessPollTask = nil
+          browserAccessSnapshot = BrowserAccessSnapshot(statuses: [], awaitingRelaunch: false)
+          grantPresenter?.dismiss()
+        } else {
+          refreshAccessSnapshot()
+        }
+      }
       await reloadState()
     } catch is CancellationError {
       return
     } catch {
-      browserSessionErrorMessages[choice.provider] = Self.message(for: error)
+      browserSessionErrorMessages[provider] = Self.message(for: error)
+    }
+  }
+
+  /// Reads every installed browser the current access snapshot allows and hands the service
+  /// the whole result. A browser the snapshot says is closed is recorded as a refusal, not
+  /// opened: a scheduled scan must never be the thing that shows a permission prompt.
+  private func scanAndReplaceBrowserSessions(_ provider: ProviderID) async {
+    guard let client, let spec = provider.browserSession else { return }
+    guard scanningProviders.insert(provider).inserted else { return }
+    defer {
+      scanningProviders.remove(provider)
+      lastBrowserScanFinishedAt[provider] = Date()
+    }
+    browserSessionWaitingProvider = provider
+    browserSessionActivityText = "Scanning browsers…"
+    defer {
+      if browserSessionWaitingProvider == provider {
+        browserSessionWaitingProvider = nil
+        browserSessionActivityText = nil
+      }
+    }
+    let access = browserAccessSnapshot
+    var headers: [String] = []
+    var seen = Set<String>()
+    var denials: [BrowserAccessDenial] = []
+    var coverage = BrowserScanCoverage()
+    let deadline = Date().addingTimeInterval(30)
+    for browser in BrowserSessionImporter.orderedBrowsers(for: spec) {
+      guard !Task.isCancelled, Date() < deadline else { break }
+      guard let status = access.status(for: browser) else { continue }
+      switch status.state {
+      case .readable:
+        break
+      case .needsFullDiskAccess, .needsKeychain:
+        let denial = BrowserAccessDenial(
+          browserName: browser.displayName,
+          reason: status.state == .needsFullDiskAccess ? .fullDiskAccess : .keychainRefused
+        )
+        if !denials.contains(where: { $0.browserName == denial.browserName }) {
+          denials.append(denial)
+          browserSessionAccessDenials[provider] = denial
+        }
+        coverage.skipped.append(browser.displayName)
+        continue
+      case .unavailable:
+        continue
+      }
+      let outcome = await browserSessionImporter.read(
+        spec: spec, browser: browser, now: Date(), deadline: deadline)
+      switch outcome {
+      case .found(let candidates):
+        coverage.read.append(browser.displayName)
+        for candidate in candidates where seen.insert(candidate.headerFingerprint).inserted {
+          headers.append(candidate.cookieHeader)
+        }
+      case .accessDenied(let denial):
+        coverage.skipped.append(browser.displayName)
+        if !denials.contains(where: { $0.browserName == denial.browserName }) {
+          denials.append(denial)
+        }
+        browserSessionAccessDenials[provider] = denial
+      case .noSession:
+        coverage.read.append(browser.displayName)
+      }
+    }
+    coverage.candidates = headers.count
+    browserScanCoverage[provider] = coverage
+    do {
+      try await client.replaceProviderBrowserSessions(
+        provider, cookieHeaders: headers, accessDenials: denials)
+      browserSessionScanGeneration += 1
+      if denials.isEmpty {
+        browserSessionAccessDenials[provider] = nil
+        browserSessionErrorMessages[provider] = nil
+      } else if let denial = denials.first, !coversAccessDenial(denial) {
+        browserSessionErrorMessages[provider] = denial.message
+      } else {
+        browserSessionErrorMessages[provider] = nil
+      }
+    } catch is CancellationError {
+      return
+    } catch {
+      browserSessionErrorMessages[provider] = Self.message(for: error)
+    }
+  }
+
+  private func officialCredentialUsable(for provider: ProviderID) -> Bool {
+    guard let result = result(for: provider) else { return false }
+    return result.sources.contains { source in
+      source.outcome == .success && !Self.isBrowserSessionSource(source.sourceID)
+    }
+  }
+
+  private static func isBrowserSessionSource(_ sourceID: String) -> Bool {
+    SignInRungCatalog.isBrowserSource(sourceID)
+  }
+
+  /// A successful collection never re-reads a jar; auth-required is the only failure that does.
+  private func shouldAutomaticallyScanBrowsers(for provider: ProviderID) -> Bool {
+    let sessions = providerBrowserSessions[provider] ?? []
+    guard let result = result(for: provider) else { return sessions.isEmpty }
+    if result.outcome == .success { return false }
+    return result.outcome == .authRequired
+      || result.sources.contains { $0.category == .authRequired }
+  }
+
+  private func scheduleBrowserScans(quotaUpdatedAt: Date?, quotaRefreshing: Bool) {
+    let enabledChanged = lastBrowserScanEnabled != browserScanEnabled
+    lastBrowserScanEnabled = browserScanEnabled
+
+    var providersToScan: [ProviderID] = []
+    if !quotaRefreshing {
+      let interval = TimeInterval(max(60, quotaRefreshIntervalSeconds))
+      let now = Date()
+      for provider in browserScanEnabled {
+        guard shouldAutomaticallyScanBrowsers(for: provider) else { continue }
+        if lastBrowserScanKey[provider] == QuotaCollectionScanKey(updatedAt: quotaUpdatedAt) {
+          continue
+        }
+        if let finished = lastBrowserScanFinishedAt[provider],
+          now.timeIntervalSince(finished) < interval
+        {
+          continue
+        }
+        providersToScan.append(provider)
+      }
+    }
+
+    if (enabledChanged && !browserScanEnabled.isEmpty) || !providersToScan.isEmpty {
+      refreshAccessSnapshot()
+    }
+
+    for provider in providersToScan {
+      lastBrowserScanKey[provider] = QuotaCollectionScanKey(updatedAt: quotaUpdatedAt)
+      Task { await scanAndReplaceBrowserSessions(provider) }
+    }
+  }
+
+  private var grantSnapshot: BrowserAccessGrantSnapshot {
+    BrowserAccessGrantSnapshot(
+      statuses: browserAccessSnapshot.statuses,
+      awaitingRelaunch: browserAccessSnapshot.awaitingRelaunch,
+      keychainPromptBrowser: keychainPromptBrowser
+    )
+  }
+
+  /// Probes every installed browser once and redraws the window if it is open. Closing it is
+  /// the window's own decision, made when nothing is outstanding any more.
+  private func refreshAccessSnapshot() {
+    browserAccessSnapshot = accessProbe.snapshot(
+      browsers: Browser.defaultImportOrder,
+      fullDiskAccessSettingsOpened: fullDiskAccessSettingsOpened
+    )
+    grantPresenter?.update(grantSnapshot)
+  }
+
+  private func presentBrowserAccessGrants() {
+    guard browserAccessSnapshot.hasOutstandingGrants else { return }
+    grantPresenter?.present(grantSnapshot)
+  }
+
+  /// The one read that may show the Keychain prompt, because the person pressed Allow.
+  private func allowKeychain(_ browser: Browser) async {
+    guard keychainPromptBrowser == nil else { return }
+    keychainPromptBrowser = browser
+    grantPresenter?.update(grantSnapshot)
+    let access = await accessProbe.requestKeychainAccess(for: browser)
+    keychainPromptBrowser = nil
+    refreshAccessSnapshot()
+    if access == .allowed {
+      await scanEnabledProvidersMissingOfficialCredentials()
+    }
+  }
+
+  private func scanEnabledProvidersMissingOfficialCredentials() async {
+    for provider in browserScanEnabled where !officialCredentialUsable(for: provider) {
+      await scanAndReplaceBrowserSessions(provider)
+    }
+  }
+
+  /// Full Disk Access usually lands on the next launch, but a cheap directory listing is worth
+  /// asking for a few minutes in case it lands sooner; nothing here shows UI.
+  private func startFullDiskAccessPolling() {
+    fullDiskAccessPollTask?.cancel()
+    fullDiskAccessPollTask = Task { @MainActor [weak self] in
+      for _ in 0..<150 {
+        try? await Task.sleep(for: .seconds(2))
+        guard let self, !Task.isCancelled else { return }
+        if self.accessProbe.hasFullDiskAccess() {
+          self.fullDiskAccessSettingsOpened = false
+          self.refreshAccessSnapshot()
+          await self.scanEnabledProvidersMissingOfficialCredentials()
+          return
+        }
+      }
+    }
+  }
+
+  /// The Sign-in rows for one provider: every rung this Mac has, with its last verdict.
+  func signInRungs(for provider: ProviderID) -> [SignInRung] {
+    let browser: SignInRungPresentation.BrowserState? =
+      provider.browserSession == nil
+      ? nil
+      : SignInRungPresentation.BrowserState(
+        isEnabled: browserScanEnabled.contains(provider),
+        isScanning: scanningProviders.contains(provider),
+        accountLabels: (providerBrowserSessions[provider] ?? []).compactMap(\.accountLabel),
+        readBrowsers: browserScanCoverage[provider]?.read ?? [],
+        skippedBrowsers: browserScanCoverage[provider]?.skipped ?? [],
+        candidatesFound: browserScanCoverage[provider]?.candidates ?? 0
+      )
+    return SignInRungPresentation.rungs(
+      for: provider,
+      result: result(for: provider),
+      configuration: providerConfigurations[provider],
+      browser: browser
+    )
+  }
+
+  /// One line under a provider's name in the Agents list.
+  func agentStatusLine(for provider: ProviderID) -> String {
+    SignInRungPresentation.statusLine(
+      rungs: signInRungs(for: provider),
+      accountCount: overviewItems(for: provider).count,
+      reportedByDevices: accountReportingProviders().contains(provider)
+    )
+  }
+
+  /// Providers with no working credential on this Mac and no account device reporting them.
+  func agentsNeedingSignIn() -> [ProviderID] {
+    ProviderID.allCases.filter { provider in
+      SignInRungPresentation.needsSignIn(rungs: signInRungs(for: provider))
+        && !accountReportingProviders().contains(provider)
     }
   }
 
@@ -919,30 +1077,6 @@ final class MenuBarViewModel {
     overview
       .filter { $0.identity.provider == provider }
       .compactMap(Self.presentation)
-  }
-
-  func reportingSources(
-    for provider: ProviderID,
-    now: Date
-  ) -> [ProviderReportingSourcePresentation] {
-    var sources: [String: ProviderReportingSourcePresentation] = [:]
-    for item in overview where item.identity.provider == provider {
-      for source in item.sources {
-        let presentation = ProviderReportingSourcePresentation(
-          id: source.sourceID,
-          displayName: source.displayName,
-          kind: source.kind == .local ? .local : .device,
-          observedAt: source.observedAt,
-          isStale: source.isStale
-        )
-        if sources[source.sourceID].map({ $0.observedAt < source.observedAt }) != false {
-          sources[source.sourceID] = presentation
-        }
-      }
-    }
-    return sources.values.sorted {
-      $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
-    }
   }
 
   func accountReportingProviders() -> Set<ProviderID> {
@@ -1002,7 +1136,7 @@ final class MenuBarViewModel {
     }
   }
 
-  private func apply(_ state: LocalServiceState) {
+  func apply(_ state: LocalServiceState) {
     revision = state.revision
     cache = state.cache
     usageUploadEnabled = state.usageUploadEnabled
@@ -1043,9 +1177,10 @@ final class MenuBarViewModel {
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
     )
-    providerBrowserSessions = Dictionary(
-      uniqueKeysWithValues: state.providerBrowserSessions.map { ($0.provider, $0) }
-    )
+    providerBrowserSessions = Dictionary(grouping: state.providerBrowserSessions, by: \.provider)
+    browserScanEnabled = Set(state.browserScanEnabled)
+    scheduleBrowserScans(
+      quotaUpdatedAt: state.quota.updatedAt, quotaRefreshing: state.quota.refreshing)
     usageRefreshing = state.usage.refreshing
     accountRefreshing = state.account.refreshing
     isRefreshing = state.quota.refreshing || usageRefreshing || accountRefreshing

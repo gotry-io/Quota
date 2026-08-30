@@ -66,6 +66,11 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
         ProviderId::Grok => grok::SOURCE,
         ProviderId::OpenRouter => openrouter::SOURCE,
         ProviderId::DeepSeek => deepseek::SOURCE,
+        // Kimi has two official rungs that answer the same endpoint; the Settings page shows
+        // them as two rows, so a success names the one the session was discovered from.
+        ProviderId::Kimi if kimi::is_cli_credential_source(&session.credential_source) => {
+            kimi::CLI_SOURCE
+        }
         ProviderId::Kimi => kimi::SOURCE,
         ProviderId::LiteLlm => litellm::SOURCE,
         ProviderId::Cursor => cursor::APP_SOURCE,
@@ -111,6 +116,36 @@ pub fn validate_browser_session(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kimi_session_names_the_rung_it_was_discovered_from() {
+        let session = |credential_source: &str| ProviderSession {
+            provider: ProviderId::Kimi,
+            credential_source: credential_source.to_owned(),
+            cookie_header: None,
+        };
+        assert_eq!(
+            session_source_id(ProviderId::Kimi, &session("providers.json")),
+            kimi::SOURCE
+        );
+        assert_eq!(
+            session_source_id(ProviderId::Kimi, &session("KIMI_API_KEY")),
+            kimi::SOURCE
+        );
+        assert_eq!(
+            session_source_id(
+                ProviderId::Kimi,
+                &session("/Users/me/.kimi-code/credentials/kimi-code.json")
+            ),
+            kimi::CLI_SOURCE
+        );
+        assert_eq!(
+            session_source_id(ProviderId::Kimi, &session(BROWSER_SESSION_SOURCE)),
+            BROWSER_SESSION_SOURCE
+        );
+    }
+
     use std::collections::BTreeMap;
     use std::path::Path;
 
