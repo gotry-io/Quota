@@ -24,6 +24,17 @@ public enum FreshnessCopy: Sendable {
     showsPercentMeter && remainingPercent < 100
   }
 
+  /// Same rule, with both scalars derived from the window.
+  public static func showsNoResetTime(_ window: some RemainingQuotaWindow) -> Bool {
+    showsNoResetTime(
+      remainingPercent: RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent),
+      showsPercentMeter: RemainingQuotaFormat.showsPercentMeter(
+        remainingValue: window.remainingValue,
+        hasLimit: window.limitValue != nil
+      )
+    )
+  }
+
   /// The bare relative phrase: `just now`, `3m ago`, `2d ago`.
   ///
   /// Anything under a minute is an instant rather than a ticking second count, because a number
@@ -59,4 +70,13 @@ public enum FreshnessCopy: Sendable {
     guard let date else { return noReadings }
     return "last reading \(age(since: date, now: now))"
   }
+}
+
+/// Remaining and limit as a window carries them. ``FreshnessCopy/showsNoResetTime(_:)``
+/// derives the percent and meter scalars from these rather than asking the caller to
+/// precompute them.
+public protocol RemainingQuotaWindow {
+  var usedPercent: Double { get }
+  var remainingValue: Double? { get }
+  var limitValue: Double? { get }
 }

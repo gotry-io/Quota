@@ -241,7 +241,7 @@ extension QuotaValueUnit {
   }
 }
 
-extension QuotaWindow {
+extension QuotaWindow: RemainingQuotaWindow {
   public var remainingPercent: Double {
     RemainingQuotaFormat.remainingPercent(usedPercent: usedPercent)
   }

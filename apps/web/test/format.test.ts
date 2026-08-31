@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { isBalanceOnly, showsPercentMeter } from "@gotry-io/quota-model";
 import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
@@ -87,4 +88,17 @@ test("missing reset display matches the shared fixture", () => {
       testCase.name,
     );
   }
+});
+
+test("classifies wallet windows as balance-only and metered windows as percent meters", () => {
+  const wallet = { remaining_value: 12.5, used_percent: 0 };
+  const metered = { remaining_value: 14.55, limit_value: 400, used_percent: 63.102 };
+
+  assert.equal(isBalanceOnly(wallet), true);
+  assert.equal(showsPercentMeter(wallet), false);
+  assert.equal(isBalanceOnly(metered), false);
+  assert.equal(showsPercentMeter(metered), true);
+
+  assert.equal(showsNoResetTime(wallet), false);
+  assert.equal(showsNoResetTime(metered), true);
 });

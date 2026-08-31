@@ -59,6 +59,24 @@ struct FreshnessCopyConformanceTests {
     }
   }
 
+  @Test func missingResetDisplayDerivesBothScalarsFromAWindow() {
+    struct Window: RemainingQuotaWindow {
+      var usedPercent: Double
+      var remainingValue: Double?
+      var limitValue: Double?
+    }
+    #expect(
+      FreshnessCopy.showsNoResetTime(
+        Window(usedPercent: 63.102, remainingValue: 14.55, limitValue: 400)
+      )
+    )
+    #expect(
+      !FreshnessCopy.showsNoResetTime(
+        Window(usedPercent: 0, remainingValue: 12.5, limitValue: nil)
+      )
+    )
+  }
+
   private func instant(_ ageSeconds: Int) -> Date {
     now.addingTimeInterval(-TimeInterval(ageSeconds))
   }
