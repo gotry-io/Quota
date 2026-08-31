@@ -185,6 +185,70 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
     }
 }
 
+/// Whether the Account holds a distinctly older reading from this device than the device
+/// itself does.
+///
+/// This is ADR 0028's consequence check: the journal records how each upload said it went,
+/// and this comparison catches the way nobody predicted. It only speaks from a summary read
+/// recently — a leftover proves nothing about the present — and it leaves a device the
+/// Account has never observed to the journal, because a first upload has no instant to lag
+/// behind. A refresh uploads every five minutes and the summary is re-read within one, so
+/// half an hour of lag is six missed deliveries, not jitter; sleep pauses collection and the
+/// summary read together, so the gap does not grow on an idle Mac.
+fn account_observation_behind(
+    account: Option<&crate::state::ComponentRecord>,
+    quota: Option<&crate::state::ComponentRecord>,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(account) = account else {
+        return false;
+    };
+    let summary_is_recent = account
+        .updated_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|read_at| now - read_at.with_timezone(&Utc) < Duration::minutes(10));
+    if !summary_is_recent {
+        return false;
+    }
+    let Some(value) = account.value.as_ref() else {
+        return false;
+    };
+    let Some(device_id) = value.get("device_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(account_observed) = value
+        .get("account_summary")
+        .and_then(|summary| summary.get("devices"))
+        .and_then(Value::as_array)
+        .and_then(|devices| {
+            devices
+                .iter()
+                .find(|device| device.get("id").and_then(Value::as_str) == Some(device_id))
+        })
+        .and_then(|device| device.get("last_observed_at"))
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return false;
+    };
+    let Some(local_newest) = quota
+        .and_then(|record| record.value.as_ref())
+        .and_then(|value| value.get("results"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.get("snapshots")?.as_array())
+        .flatten()
+        .filter_map(|snapshot| snapshot.get("observed_at")?.as_str())
+        .filter_map(|value| DateTime::parse_from_rfc3339(value).ok())
+        .max()
+    else {
+        return false;
+    };
+    local_newest.with_timezone(&Utc) - account_observed.with_timezone(&Utc) > Duration::minutes(30)
+}
+
 thread_local! {
     static LANE_ATTEMPT_TRIGGER: Cell<Option<DiagnosticAttemptTrigger>> =
         const { Cell::new(None) };
@@ -913,34 +977,57 @@ impl NativeBackend {
         let quota_upload_failed = account_active && quota_upload_problem.is_some();
         let quota_upload_blocked = quota_upload_failed
             && quota_upload_problem == Some(DiagnosticAttemptCode::InvalidState);
+        // ADR 0028's consequence check, beside the journal's cause records: the Account's
+        // summary already answers what this device's newest stored reading is, so a fresh
+        // local reading the Account has not held for half an hour means uploads are not
+        // landing — however new the way they found to fail.
+        let quota_upload_behind = account_active
+            && !quota_upload_failed
+            && account_observation_behind(account.as_ref(), quota.as_ref(), Utc::now());
         if account_active {
             sources.push(DiagnosticSourceState {
                 subject: "quota_upload".into(),
                 source_id: None,
-                status: match (quota_upload_blocked, quota_upload_failed) {
-                    (true, _) => DiagnosticStatus::Blocked,
-                    (false, true) => DiagnosticStatus::Degraded,
+                status: match (
+                    quota_upload_blocked,
+                    quota_upload_failed,
+                    quota_upload_behind,
+                ) {
+                    (true, _, _) => DiagnosticStatus::Blocked,
+                    (false, true, _) | (false, false, true) => DiagnosticStatus::Degraded,
                     _ => DiagnosticStatus::Ok,
                 },
                 last_attempt_at: quota_upload_facts.last_attempt_at.clone(),
                 last_success_at: quota_upload_facts.last_success_at.clone(),
                 code: quota_upload_problem
                     .map(|code| diagnostic_attempt_code_wire(code).to_owned()),
-                message: match (quota_upload_blocked, quota_upload_failed) {
-                    (true, _) => {
+                message: match (
+                    quota_upload_blocked,
+                    quota_upload_failed,
+                    quota_upload_behind,
+                ) {
+                    (true, _, _) => {
                         "Quota sync cannot continue with the local state as it is. Reset local \
                          data from Support, then recheck."
                     }
-                    (false, true) => {
+                    (false, true, _) => {
                         "The last quota upload did not go through. QuotaBar will try again at the \
                          next refresh."
+                    }
+                    (false, false, true) => {
+                        "This Mac's readings are not reaching the account. QuotaBar will try \
+                         again at the next refresh."
                     }
                     _ => "Readings from this Mac are part of your account.",
                 }
                 .into(),
-                recovery: match (quota_upload_blocked, quota_upload_failed) {
-                    (true, _) => DiagnosticRecovery::Reinstall,
-                    (false, true) => DiagnosticRecovery::Retry,
+                recovery: match (
+                    quota_upload_blocked,
+                    quota_upload_failed,
+                    quota_upload_behind,
+                ) {
+                    (true, _, _) => DiagnosticRecovery::Reinstall,
+                    (false, true, _) | (false, false, true) => DiagnosticRecovery::Retry,
                     _ => DiagnosticRecovery::None,
                 },
             });
@@ -4777,6 +4864,144 @@ mod tests {
             .expect("facts");
         assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Failed));
         drop(relay_server.finish());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn observation_component(
+        value: Value,
+        read_at: DateTime<Utc>,
+    ) -> crate::state::ComponentRecord {
+        crate::state::ComponentRecord {
+            status: crate::protocol::ComponentStatus::Ready,
+            value: Some(value),
+            updated_at: Some(read_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            last_error: None,
+            refreshing: false,
+        }
+    }
+
+    fn account_with_device_observed(observed_at: Option<&str>) -> Value {
+        json!({
+            "auth_status": "signed_in",
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "device_id": "device_1",
+            "device_generation": 1,
+            "account_summary": {
+                "devices": [{
+                    "id": "device_1",
+                    "display_name": "QuotaTest",
+                    "platform": "macos",
+                    "last_seen_at": "2026-08-31T13:04:21Z",
+                    "last_observed_at": observed_at
+                }]
+            }
+        })
+    }
+
+    fn quota_observed_at(observed_at: &str) -> Value {
+        json!({
+            "captured_at": observed_at,
+            "results": [{
+                "outcome": "success",
+                "provider": "codex",
+                "snapshots": [{
+                    "provider": "codex",
+                    "account": {"fingerprint": "codex_account_1", "fingerprint_scope": "global"},
+                    "windows": [],
+                    "status": "available",
+                    "observed_at": observed_at
+                }]
+            }]
+        })
+    }
+
+    /// The consequence check speaks only from a recent summary, only about a device the
+    /// Account has observed before, and only past half an hour of lag.
+    #[test]
+    fn account_observation_behind_needs_a_recent_summary_and_a_real_lag() {
+        let now = Utc::now();
+        let instant = |ago: Duration| (now - ago).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let quota = observation_component(quota_observed_at(&instant(Duration::minutes(1))), now);
+        let behind = observation_component(
+            account_with_device_observed(Some(&instant(Duration::hours(4)))),
+            now,
+        );
+        assert!(account_observation_behind(Some(&behind), Some(&quota), now));
+        // A reading the Account already holds, within the cadence.
+        let current = observation_component(
+            account_with_device_observed(Some(&instant(Duration::minutes(2)))),
+            now,
+        );
+        assert!(!account_observation_behind(
+            Some(&current),
+            Some(&quota),
+            now
+        ));
+        // A leftover summary proves nothing about the present.
+        let stale_read = observation_component(
+            account_with_device_observed(Some(&instant(Duration::hours(4)))),
+            now - Duration::hours(1),
+        );
+        assert!(!account_observation_behind(
+            Some(&stale_read),
+            Some(&quota),
+            now
+        ));
+        // A device never observed has no instant to lag behind; the journal owns that case.
+        let never = observation_component(account_with_device_observed(None), now);
+        assert!(!account_observation_behind(Some(&never), Some(&quota), now));
+        // No local reading, nothing owed.
+        assert!(!account_observation_behind(Some(&behind), None, now));
+    }
+
+    /// The 2026-08-31 outage shape: every attempt journals success, yet the Account's own
+    /// answer for this device stays hours old. The consequence check names it (ADR 0028).
+    #[test]
+    fn an_account_lagging_local_observations_degrades_quota_sync() {
+        let root = std::env::temp_dir().join(format!("quota-lag-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, "http://127.0.0.1:1");
+        let now = Utc::now();
+        let local = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(quota_observed_at(&local)),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("quota component");
+        let account_observed =
+            (now - Duration::hours(4)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(account_with_device_observed(Some(&account_observed))),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.subject == "quota_upload")
+            .expect("quota_upload source");
+        assert_eq!(source.status, DiagnosticStatus::Degraded);
+        assert_eq!(
+            source.message,
+            "This Mac's readings are not reaching the account. QuotaBar will try again at the \
+             next refresh."
+        );
+        assert_eq!(source.recovery, DiagnosticRecovery::Retry);
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");

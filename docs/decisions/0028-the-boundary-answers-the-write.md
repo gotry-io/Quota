@@ -50,7 +50,11 @@ keep the queue.
 Usage drain does: `success` when Relay answered, `partial` with `malformed_data` when something was
 dropped or quarantined, `failed` with the mapped code when the send did not land, `no_work` when
 there was nothing to send. The diagnose report carries a quota-upload source beside the Usage one.
-Nothing on the write path discards an error into `(false, false, None)` again.
+Nothing on the write path discards an error into `(false, false, None)` again. And because the
+class must die, not the instance, the report also checks the consequence: the Account summary
+already answers what this device's newest stored reading is, and a fresh local reading the
+Account has not held for half an hour degrades the quota-upload source — however new the way an
+upload finds to fail.
 
 **Drift dies in the pull request, not in production.** The exported-schema test uploads what the
 producer types maximally state — every optional field set, serialized by the same path production
