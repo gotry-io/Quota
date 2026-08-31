@@ -4,7 +4,7 @@ import Testing
 struct PrimaryCadenceKindTests {
   @Test
   func compactTagsAreTheStackedAbbreviations() {
-    #expect(PrimaryCadenceKind.fiveHour.compactTag == "5H")
+    #expect(PrimaryCadenceKind.fiveHour.compactTag == "H")
     #expect(PrimaryCadenceKind.weekly.compactTag == "W")
     #expect(PrimaryCadenceKind.monthly.compactTag == "M")
   }

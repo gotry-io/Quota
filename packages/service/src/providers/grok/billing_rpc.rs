@@ -11,9 +11,9 @@ use std::time::Duration;
 use crate::catalog::ProviderId;
 
 use super::super::common::{
-    CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError, QuotaAccount,
-    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
-    clamp_percent, cookie_named_value, jwt_subject,
+    Cadence, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession,
+    account_identity, clamp_percent, cookie_named_value, jwt_subject,
 };
 
 pub const RPC_SOURCE: &str = "grok_billing_rpc";
@@ -179,12 +179,21 @@ struct Billing {
 /// The RPC exposes only the reset instant, not the cadence. A reset 20–45 days out
 /// reads as monthly; anything nearer is the weekly credit pool, even late in the
 /// week (CodexBar's untyped-window rule), and no reset at all stays generic.
+///
+/// That heuristic names the window for a person to read. It does not name the headline meter:
+/// `primary_cadence` is the field a client trusts *instead of* reading a title, so only a reset
+/// that actually lands inside a cadence earns one. A reset the bands do not cover keeps its
+/// guessed title and stays unnamed, the way an untyped period does in `map_billing`.
 fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
     let delta = billing.resets_at.and_then(|end| end.checked_sub(now));
-    let title = match delta {
-        Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => "Monthly",
-        Some(_) => "Weekly",
-        None => "Billing Cycle",
+    let (title, primary_cadence) = match delta {
+        Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => {
+            (Cadence::Monthly.title(), Some(Cadence::Monthly))
+        }
+        Some(seconds) if seconds <= 10 * 86_400 => (Cadence::Weekly.title(), Some(Cadence::Weekly)),
+        // Still titled by the guess, deliberately unnamed: a title is a word, a cadence is a claim.
+        Some(_) => (Cadence::Weekly.title(), None),
+        None => ("Billing Cycle", None),
     };
     QuotaWindow {
         id: "billing_cycle".to_owned(),
@@ -194,7 +203,7 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
             .resets_at
             .map(super::super::common::unix_seconds_to_iso),
         duration_seconds: None,
-        primary_cadence: None,
+        primary_cadence,
         remaining_value: None,
         limit_value: None,
         value_unit: None,
@@ -618,6 +627,38 @@ mod tests {
             .expect_err("no sso");
         assert_eq!(error.category, ErrorCategory::Error);
         assert_eq!(error.source_id, WEB_SOURCE);
+    }
+
+    /// The title heuristic is display copy and may guess; `primary_cadence` is the field a
+    /// client reads instead of a title, so it is only set where the reset actually lands in a
+    /// cadence.
+    #[test]
+    fn only_a_reset_inside_a_cadence_names_the_headline_meter() {
+        let now = 1_756_000_000;
+        let at = |days: i64| {
+            billing_window(
+                &Billing {
+                    used_percent: 10.0,
+                    resets_at: Some(now + days * 86_400),
+                },
+                now,
+            )
+        };
+        assert_eq!(at(3).primary_cadence, Some(Cadence::Weekly));
+        assert_eq!(at(30).primary_cadence, Some(Cadence::Monthly));
+        // Between the bands, and far past them: still titled, deliberately unnamed.
+        assert_eq!(at(15).title, "Weekly");
+        assert_eq!(at(15).primary_cadence, None);
+        assert_eq!(at(200).primary_cadence, None);
+        let undated = billing_window(
+            &Billing {
+                used_percent: 10.0,
+                resets_at: None,
+            },
+            now,
+        );
+        assert_eq!(undated.title, "Billing Cycle");
+        assert_eq!(undated.primary_cadence, None);
     }
 
     /// A reading over the cookie is one window from the same RPC the token rung reads.

@@ -121,21 +121,25 @@ The item is the product's first sentence: remaining quota is legible without ope
 Each status item is a template mark plus the remaining percent of one current subscription — or,
 when **Combined**, up to three such readings packed into **one** template image. By default the
 bar shows **Automatic**: the most constrained current subscription — the smallest remaining
-percent across every window of every Overview reading that still describes live quota. A lone
-item that answers for one subscription then shows that subscription's **primary cadence pair**
-when it has one: two remaining percents stacked in the same 18pt image, short cadence above long,
-the way a network extra stacks up and down. The wire names the headline meter for each cadence
+percent across every window of every Overview reading that still describes live quota. A lone item
+that answers for one subscription then shows that subscription's **primary cadence pair** when it
+has one: two remaining percents stacked in the same 18pt image, short cadence above long, the way
+a network extra stacks up and down. The wire names the headline meter for each cadence
 (`five_hour`, `weekly`, `monthly`), so the item does not parse titles to decide the pair. Compact
-tags are **5H**, **W**, and **M**. Model-scoped, top-up, and feature-scoped windows carry no
-cadence and stay off the item; they never occupy a stacked line. Combined still packs one tightest
-percent per provider into one row, because two stacked pairs in one item are not scannable.
-Separate items may each stack. A subscription with only one headline meter, or none, stays a
-single remaining percent. A reading the source reported as failed, or one the shared freshness
-rule has aged out, answers for nothing. Balance-only windows have no budget to be a percent of
-and never set it. Ageing out is a fact about the clock rather than about anything the service
-says, so each item re-asks the question once a minute — the freshness rule's smallest unit — and
-a Mac that stopped collecting loses its number without waiting for an event that is never coming.
-An item is only rebuilt when that answer changed.
+tags are one letter — **H**, **W**, **M** — because a tag is read against the tag beside it, and
+an item pays for every point of width it takes. Model-scoped, top-up, and feature-scoped windows
+carry no cadence and stay off the item; they never occupy a stacked line. **Every arrangement
+stacks**, Combined included: three pairs cost about 27pt more than three lone percents, which is
+not a reason to show a person half of what the reading says. A subscription with only one headline
+meter, or none, stays a single remaining percent — one number has no neighbour to be told apart
+from, so it wears no tag. **One item is one reading surface**: when any cell in it stacks, every
+cell drops to the stacked size, so a lone percent sits at the same weight as the pair beside it
+rather than looming over it at the menu bar's own size. A reading the source reported as failed,
+or one the shared freshness rule has aged out, answers for nothing. Balance-only windows have no
+budget to be a percent of and never set it. Ageing out is a fact about the clock rather than about
+anything the service says, so each item re-asks the question once a minute — the freshness rule's
+smallest unit — and a Mac that stopped collecting loses its number without waiting for an event
+that is never coming. An item is only rebuilt when that answer changed.
 
 The mark and the number are composed into **one template image per status item**, which is what
 the menu bar is given. A status item is one image to AppKit, and AppKit places it exactly as it
@@ -159,16 +163,19 @@ a provider, and a lone item with no current number to attribute. A Combined cell
 no current reading keeps that provider's mark so the strip does not jump, and never borrows another
 provider's number.
 
-A single remaining percent follows 4pt after the mark, set in the **menu-bar font** with monospaced
-digits so the item does not twitch as it moves, and its baseline is placed so the digits' cap-height
-middle is the image's middle. A line box would center the room it reserves for descenders no digit
-uses, which is how a number ends up riding high next to a mark. A stacked pair uses the same family
-at 9pt so two cap-heights and a 2pt gap fit the item; cadence tags share a left column, percents
-share a right-aligned column as wide as the wider number, 3pt apart. Packed cells sit 8pt apart. The
-status bar renders a template image, so remaining quota is not said in color.
-`MenuBarLabelLayoutTests` renders the image and measures the drawn pixels: the mark's ink and the
-digits' ink share a center within a quarter point, every mark lands at the same size, and a stacked
-pair stays the standard item height.
+A single remaining percent follows 4pt after the mark, set in the **menu-bar font** with
+monospaced digits so the item does not twitch as it moves, and its baseline is placed so the
+digits' cap-height middle is the image's middle. A line box would center the room it reserves for
+descenders no digit uses, which is how a number ends up riding high next to a mark. A stacked pair
+uses the same family at 9pt. Two cap-heights and a 2pt gap have to fit the 18pt item, which puts
+the ceiling at 11pt; 9pt is a choice inside that, not the limit, and it leaves about 3pt spare.
+Cadence tags share a left column, percents share a right-aligned column as wide as the wider
+number, 2pt apart. A cell drawn as one row has no second row to line up with, so it pays for its
+own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
+template image, so remaining quota is not said in color. `MenuBarLabelLayoutTests` renders the
+image and measures the drawn pixels: the mark's ink and the digits' ink share a center within a
+quarter point, every mark lands at the same size, and a stacked pair stays the standard item
+height.
 
 Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default).
 → **Provider** chooses **Automatic** — the tightest current subscription — or any set of providers

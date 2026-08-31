@@ -6,8 +6,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::common::{
-    CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    Cadence, CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret,
+    LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
     discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
     read_bounded_file, run_bounded_command, slug, string,
@@ -383,25 +383,25 @@ struct ClaudeWindow {
     /// Weekly-group limits meter one seven-day cycle and therefore share its reset.
     /// Claude's other seven-day-long limits, such as Routines, are not in that group.
     weekly_group: bool,
-    primary_cadence: Option<&'static str>,
+    primary_cadence: Option<Cadence>,
 }
 
 const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
         field: "five_hour",
         id: "five_hour",
-        title: "5 Hours",
+        title: Cadence::FiveHour.title(),
         duration_seconds: 18_000,
         weekly_group: false,
-        primary_cadence: Some("five_hour"),
+        primary_cadence: Some(Cadence::FiveHour),
     },
     ClaudeWindow {
         field: "seven_day",
         id: "seven_day",
-        title: "Weekly",
+        title: Cadence::Weekly.title(),
         duration_seconds: 604_800,
         weekly_group: true,
-        primary_cadence: Some("weekly"),
+        primary_cadence: Some(Cadence::Weekly),
     },
     ClaudeWindow {
         field: "seven_day_sonnet",
@@ -642,7 +642,7 @@ fn usage_window(
     id: &str,
     title: &str,
     duration: u64,
-    primary_cadence: Option<&'static str>,
+    primary_cadence: Option<Cadence>,
 ) -> Option<QuotaWindow> {
     let value = value?;
     let utilization = number(obj_get_any(
@@ -972,8 +972,8 @@ mod tests {
                 .find(|window| window.id == id)
                 .and_then(|window| window.primary_cadence)
         };
-        assert_eq!(cadence("five_hour"), Some("five_hour"));
-        assert_eq!(cadence("seven_day"), Some("weekly"));
+        assert_eq!(cadence("five_hour"), Some(Cadence::FiveHour));
+        assert_eq!(cadence("seven_day"), Some(Cadence::Weekly));
         assert_eq!(cadence("seven_day_sonnet"), None);
         assert_eq!(cadence("extra_usage"), None);
         assert_eq!(cadence("claude-routines"), None);

@@ -41,6 +41,11 @@ Read the relevant source before changing that area:
 
 Do not create a second description of a canonical rule. Update its source and link to it.
 
+A canonical document states decisions, not evidence. Where one gives an empirical reason and that
+reason is what would refuse a change, measure it before citing it; if the measurement contradicts
+the document, correct the document in the same change and say what was measured. Where the
+corrected reason is itself empirical, pin it with a test rather than a sentence.
+
 ## Repository boundaries
 
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.

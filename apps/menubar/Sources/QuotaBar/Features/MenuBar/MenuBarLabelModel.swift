@@ -15,48 +15,93 @@ enum MenuBarLabelIcon: Equatable, Hashable, Sendable {
   case provider(ProviderID)
 }
 
-/// One remaining percent in a cell: a lone number, or one row of a cadence pair.
+/// One remaining percent in a cell, with the cadence it meters when the cell names one.
 struct MenuBarLabelLine: Equatable, Hashable, Sendable {
-  /// Compact cadence tag (`5H`, `W`, `M`) when this row is part of a stacked pair.
+  /// Compact cadence tag (`H`, `W`, `M`).
   let compactCadence: String?
   let percent: String
+  /// What VoiceOver calls this row's cadence. The tag is one letter because the eye reads it
+  /// next to its neighbour; a listener has no neighbour to compare it with.
+  let spokenCadence: String?
 
-  init(percent: String, compactCadence: String? = nil) {
+  init(percent: String, compactCadence: String? = nil, spokenCadence: String? = nil) {
     self.percent = percent
     self.compactCadence = compactCadence
+    self.spokenCadence = spokenCadence
   }
 
-  var isStacked: Bool { compactCadence != nil }
+  /// What VoiceOver says for this row. The one place a reading becomes a sentence.
+  var spoken: String {
+    let reading = "\(percent) remaining"
+    return spokenCadence.map { "\($0) \(reading)" } ?? reading
+  }
+}
+
+/// What a cell draws.
+///
+/// The two cases are different shapes, not one shape with a flag: a lone reading has nothing to
+/// line up against, while rows share a tag column and a percent column. Keeping them apart is
+/// what lets a row wear a tag without the cell claiming to be a pair — inferring "is this a
+/// pair" from "does this row have a tag" only worked while those happened to coincide.
+enum MenuBarLabelContent: Equatable, Hashable, Sendable {
+  /// A mark with no number to attribute — a stale provider in a packed item, or the Icon style.
+  case absent
+  case lone(String)
+  case rows([MenuBarLabelLine])
 }
 
 /// One reading in the menu bar: a mark, a remaining percent, or a stacked cadence pair.
 struct MenuBarLabelCell: Equatable, Hashable, Sendable {
   let icon: MenuBarLabelIcon?
-  let lines: [MenuBarLabelLine]
+  let content: MenuBarLabelContent
 
   /// The lone remaining percent when this cell is a single unlabelled reading.
   var text: String? {
-    guard lines.count == 1, !lines[0].isStacked else { return nil }
-    return lines[0].percent
+    guard case .lone(let percent) = content else { return nil }
+    return percent
+  }
+
+  /// Whether this cell is drawn as stacked rows, which is what puts the whole item at the
+  /// stacked size. One tagged row counts: it is the tag column that sets the type, not the
+  /// number of rows.
+  var isStacked: Bool {
+    if case .rows = content { return true }
+    return false
+  }
+
+  /// What VoiceOver says for this cell's rows, in the order they are drawn. One assembly, so a
+  /// lone item and a packed one cannot end up phrasing the same reading differently.
+  var spokenReading: String {
+    switch content {
+    case .absent: ""
+    case .lone(let percent): MenuBarLabelLine(percent: percent).spoken
+    case .rows(let rows): rows.map(\.spoken).joined(separator: ", ")
+    }
+  }
+
+  init(icon: MenuBarLabelIcon?, content: MenuBarLabelContent) {
+    self.icon = icon
+    self.content = content
   }
 
   init(icon: MenuBarLabelIcon?, text: String?) {
     self.icon = icon
-    self.lines = text.map { [MenuBarLabelLine(percent: $0)] } ?? []
+    self.content = text.map(MenuBarLabelContent.lone) ?? .absent
   }
 
   init(icon: MenuBarLabelIcon?, lines: [MenuBarLabelLine]) {
     self.icon = icon
-    self.lines = lines
+    self.content = .rows(lines)
   }
 }
 
 /// The menu-bar item's content: one or more readings composed into a template image.
 ///
 /// The point of an item is that remaining quota is readable without opening anything, so
-/// each cell names a single subscription rather than an average or a count. A lone item may
-/// stack that subscription's primary cadence pair; a packed item still carries one tightest
-/// percent per provider. A reading that no longer describes live quota answers for nothing:
+/// each cell names a single subscription rather than an average or a count. Every cell may stack
+/// that subscription's primary cadence pair, a packed item's included, and an item with any
+/// stacked cell draws all of them at the stacked size. A reading that no longer describes live
+/// quota answers for nothing:
 /// a lone item falls back to Quota's mark, and a packed item keeps that provider's mark so
 /// the strip does not jump.
 struct MenuBarLabelModel: Equatable, Hashable, Sendable {
@@ -65,6 +110,19 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
 
   var icon: MenuBarLabelIcon? { cells.count == 1 ? cells.first?.icon : nil }
   var text: String? { cells.count == 1 ? cells.first?.text : nil }
+
+  /// Whether this item is one reading surface at the stacked size. An item that stacks anywhere
+  /// stacks everywhere, so a lone percent sits at the same weight as the pair beside it rather
+  /// than looming over it. The renderer owns the point sizes; the rule belongs here, next to the
+  /// vocabulary it constrains.
+  var isCompact: Bool { cells.contains(where: \.isStacked) }
+
+  /// This label's reading, named for the provider it belongs to, for a packed item that has to
+  /// say whose number it is. Falls back to the bare name when there is no reading to report.
+  fileprivate func spokenReading(of provider: ProviderID) -> String {
+    guard let cell = cells.first, cell.content != .absent else { return provider.displayName }
+    return "\(provider.displayName) \(cell.spokenReading)"
+  }
 
   init(icon: MenuBarLabelIcon?, text: String?, accessibilityLabel: String) {
     self.init(
@@ -140,7 +198,6 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
             overview: overview,
             style: style,
             allowed: nil,
-            stackCadences: true,
             now: now
           )
         )
@@ -160,7 +217,6 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
             overview: overview,
             style: style,
             allowed: id,
-            stackCadences: true,
             now: now
           )
         )
@@ -182,15 +238,12 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         style: style,
         allowed: id,
         absentIcon: .provider(id),
-        stackCadences: false,
         now: now
       )
       cells.append(contentsOf: part.cells)
-      if let text = part.text {
-        spoken.append("\(id.displayName) \(text) remaining")
-      } else {
-        spoken.append(id.displayName)
-      }
+      // Each part already phrased its own reading; the packed item says whose it is and keeps
+      // the rest, so a stacked pair is spoken as a pair here too.
+      spoken.append(part.spokenReading(of: id))
     }
     return MenuBarLabelModel(cells: cells, accessibilityLabel: spoken.joined(separator: ", "))
   }
@@ -200,7 +253,6 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     style: MenuBarStylePreference,
     allowed: ProviderID?,
     absentIcon: MenuBarLabelIcon = .quota,
-    stackCadences: Bool,
     now: Date
   ) -> MenuBarLabelModel {
     if !style.showsPercent {
@@ -216,19 +268,16 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       return MenuBarLabelModel(icon: absentIcon, text: nil, accessibilityLabel: "QuotaBar")
     }
     let icon: MenuBarLabelIcon? = style.showsIcon ? .provider(tightest.provider) : nil
-    if stackCadences {
-      return cadenceLabel(item: tightest.item, icon: icon, fallbackPercent: tightest.remainingPercent)
-    }
-    let percent = RemainingQuotaFormat.percent(tightest.remainingPercent)
-    return MenuBarLabelModel(
+    return cadenceLabel(
+      item: tightest.item,
       icon: icon,
-      text: percent,
-      accessibilityLabel: "QuotaBar, \(tightest.provider.displayName) \(percent) remaining"
+      fallbackPercent: tightest.remainingPercent
     )
   }
 
-  /// A lone item's reading: the primary cadence pair when that subscription has one, otherwise
-  /// the one primary cadence, otherwise the tightest remaining percent.
+  /// One cell's reading: the primary cadence pair when that subscription has one, otherwise the
+  /// one primary cadence, otherwise the tightest remaining percent. A subscription with one
+  /// headline meter wears no tag — a number with no neighbour has nothing to be told apart from.
   private static func cadenceLabel(
     item: LocalServiceOverviewItem,
     icon: MenuBarLabelIcon?,
@@ -246,20 +295,19 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         accessibilityLabel: "QuotaBar, \(name) \(percent) remaining"
       )
     }
-    // One pass, so the row a reader sees and the phrase VoiceOver speaks cannot disagree
-    // about a percent.
-    var lines: [MenuBarLabelLine] = []
-    var spoken: [String] = []
-    for window in cadences.prefix(2) {
-      let percent = RemainingQuotaFormat.percent(window.remainingPercent)
-      lines.append(
-        MenuBarLabelLine(percent: percent, compactCadence: window.primaryCadenceKind?.compactTag)
-      )
-      spoken.append("\(window.title) \(percent) remaining")
-    }
+    let cell = MenuBarLabelCell(
+      icon: icon,
+      lines: cadences.prefix(2).map { window in
+        MenuBarLabelLine(
+          percent: RemainingQuotaFormat.percent(window.remainingPercent),
+          compactCadence: window.primaryCadenceKind?.compactTag,
+          spokenCadence: window.title
+        )
+      }
+    )
     return MenuBarLabelModel(
-      cells: [MenuBarLabelCell(icon: icon, lines: lines)],
-      accessibilityLabel: "QuotaBar, \(name), \(spoken.joined(separator: ", "))"
+      cells: [cell],
+      accessibilityLabel: "QuotaBar, \(name), \(cell.spokenReading)"
     )
   }
 

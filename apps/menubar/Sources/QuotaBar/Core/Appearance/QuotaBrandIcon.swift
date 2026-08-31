@@ -28,14 +28,17 @@ enum MenuBarItemImage {
   /// cells read as neighbors rather than one mark with two numbers.
   nonisolated static let cellSpacing: CGFloat = 8
 
-  /// Size of a stacked cadence pair. Two cap-heights plus ``stackedLineGap`` fit the 18pt item.
+  /// Size of a stacked cadence pair. The ceiling is what two cap-heights plus ``stackedLineGap``
+  /// leave room for; 9pt is a choice inside it, and `MenuBarLabelLayoutTests` holds the margin.
+  /// See `apps/menubar/DESIGN.md`.
   nonisolated static let stackedTextSize: CGFloat = 9
 
   /// Gap between the two stacked cadence rows.
   nonisolated static let stackedLineGap: CGFloat = 2
 
-  /// Gap between a cadence tag (`5H`) and its remaining percent.
-  nonisolated static let stackedCadenceSpacing: CGFloat = 3
+  /// Gap between a cadence tag (`H`) and its remaining percent. They are one reading, so they
+  /// sit closer than the gap that separates whole cells.
+  nonisolated static let stackedCadenceSpacing: CGFloat = 2
 
   /// Menu-bar items are drawn at the backing scale; two covers every shipping Mac.
   nonisolated static let scale: CGFloat = 2
@@ -46,8 +49,7 @@ enum MenuBarItemImage {
     monospacedDigitFont(NSFont.menuBarFont(ofSize: 0))
   }
 
-  /// The same family at 9pt, so two cadence rows fit the item the way a network extra stacks
-  /// up and down.
+  /// The same family at ``stackedTextSize``, the way a network extra stacks up and down.
   static var stackedTextFont: NSFont {
     monospacedDigitFont(NSFont.menuBarFont(ofSize: stackedTextSize))
   }
@@ -121,7 +123,7 @@ enum MenuBarItemImage {
 
   private struct StackedText {
     struct Row {
-      var cadence: CTLine
+      var cadence: CTLine?
       var percent: CTLine
       var percentWidth: CGFloat
     }
@@ -129,8 +131,12 @@ enum MenuBarItemImage {
     var rows: [Row]
     var cadenceColumn: CGFloat
     var percentColumn: CGFloat
-    var width: CGFloat
     var capHeight: CGFloat
+
+    /// A cell with no tags at all — a lone percent riding along beside a stacked neighbour —
+    /// owes nothing for the tag column or the gap after it.
+    var cadenceGap: CGFloat { cadenceColumn > 0 ? stackedCadenceSpacing : 0 }
+    var width: CGFloat { cadenceColumn + cadenceGap + percentColumn }
   }
 
   private static func draw(
@@ -138,10 +144,11 @@ enum MenuBarItemImage {
     height: CGFloat,
     scale: CGFloat
   ) -> NSImage {
+    let compact = label.isCompact
     let prepared = label.cells.map {
       PreparedCell(
         mark: $0.icon.flatMap { placedMark($0, height: height) },
-        text: preparedText($0)
+        text: preparedText($0, compact: compact)
       )
     }
     var totalWidth = prepared.map(\.width).reduce(0, +)
@@ -238,26 +245,38 @@ enum MenuBarItemImage {
     }
   }
 
-  private static func preparedText(_ cell: MenuBarLabelCell) -> PreparedText? {
-    if let text = cell.text {
+  /// `compact` is the item's decision, not the cell's: a lone reading is drawn at the menu bar's
+  /// own size on its own, and at the stacked size when it shares an item with a pair.
+  private static func preparedText(_ cell: MenuBarLabelCell, compact: Bool) -> PreparedText? {
+    switch cell.content {
+    case .absent:
+      return nil
+    case .lone(let percent) where !compact:
       let font = textFont
-      let drawn = line(for: text, font: font)
+      let drawn = line(for: percent, font: font)
       return .single(line: drawn.line, width: drawn.width, capHeight: font.capHeight)
+    case .lone(let percent):
+      return stacked([MenuBarLabelLine(percent: percent)])
+    case .rows(let rows):
+      return stacked(rows)
     }
-    if cell.lines.isEmpty { return nil }
+  }
+
+  private static func stacked(_ lines: [MenuBarLabelLine]) -> PreparedText {
     let font = stackedTextFont
     var rows: [StackedText.Row] = []
     var cadenceColumn: CGFloat = 0
-    // The percent column is at least as wide as a full reading, so a pair does not shuffle
-    // sideways when a number loses a digit.
-    var percentColumn = line(for: "100%", font: font).width
-    for row in cell.lines {
-      let cadence = line(for: row.compactCadence ?? "", font: font)
+    // Rows share a percent column at least as wide as a full reading, so a pair does not shuffle
+    // sideways when a number loses a digit. A single row has nothing to line up with, so it pays
+    // for its own ink and no more.
+    var percentColumn = lines.count > 1 ? line(for: "100%", font: font).width : 0
+    for row in lines {
+      let cadence = row.compactCadence.map { line(for: $0, font: font) }
       let percent = line(for: row.percent, font: font)
-      cadenceColumn = max(cadenceColumn, cadence.width)
+      cadenceColumn = max(cadenceColumn, cadence?.width ?? 0)
       percentColumn = max(percentColumn, percent.width)
       rows.append(
-        StackedText.Row(cadence: cadence.line, percent: percent.line, percentWidth: percent.width)
+        StackedText.Row(cadence: cadence?.line, percent: percent.line, percentWidth: percent.width)
       )
     }
     return .stacked(
@@ -265,7 +284,6 @@ enum MenuBarItemImage {
         rows: rows,
         cadenceColumn: cadenceColumn,
         percentColumn: percentColumn,
-        width: cadenceColumn + stackedCadenceSpacing + percentColumn,
         capHeight: font.capHeight
       )
     )
@@ -290,10 +308,12 @@ enum MenuBarItemImage {
       let block = cap * CGFloat(stacked.rows.count) + stackedLineGap * extra
       var baseline = (height - block) / 2 + (cap + stackedLineGap) * extra
       for row in stacked.rows {
-        cgContext.textPosition = CGPoint(x: textX, y: baseline)
-        CTLineDraw(row.cadence, cgContext)
+        if let cadence = row.cadence {
+          cgContext.textPosition = CGPoint(x: textX, y: baseline)
+          CTLineDraw(cadence, cgContext)
+        }
         let percentX =
-          textX + stacked.cadenceColumn + stackedCadenceSpacing
+          textX + stacked.cadenceColumn + stacked.cadenceGap
           + (stacked.percentColumn - row.percentWidth)
         cgContext.textPosition = CGPoint(x: percentX, y: baseline)
         CTLineDraw(row.percent, cgContext)
