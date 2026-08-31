@@ -163,18 +163,19 @@ a provider, and a lone item with no current number to attribute. A Combined cell
 no current reading keeps that provider's mark so the strip does not jump, and never borrows another
 provider's number.
 
-A single remaining percent follows 4pt after the mark, set in the **menu-bar font** with monospaced
-digits so the item does not twitch as it moves, and its baseline is placed so the digits' cap-height
-middle is the image's middle. A line box would center the room it reserves for descenders no digit
-uses, which is how a number ends up riding high next to a mark. A stacked pair uses the same family
-at 9pt so two cap-heights and a 2pt gap fit the item; cadence tags share a left column, percents
-share a right-aligned column as wide as the wider number, 2pt apart. A cell drawn as one row has
-no second row to line up with, so it pays for its own ink and reserves neither column nor gap.
-Packed cells sit 8pt apart. The
-status bar renders a template image, so remaining quota is not said in color.
-`MenuBarLabelLayoutTests` renders the image and measures the drawn pixels: the mark's ink and the
-digits' ink share a center within a quarter point, every mark lands at the same size, and a stacked
-pair stays the standard item height.
+A single remaining percent follows 4pt after the mark, set in the **menu-bar font** with
+monospaced digits so the item does not twitch as it moves, and its baseline is placed so the
+digits' cap-height middle is the image's middle. A line box would center the room it reserves for
+descenders no digit uses, which is how a number ends up riding high next to a mark. A stacked pair
+uses the same family at 9pt. Two cap-heights and a 2pt gap have to fit the 18pt item, which puts
+the ceiling at 11pt; 9pt is a choice inside that, not the limit, and it leaves about 3pt spare.
+Cadence tags share a left column, percents share a right-aligned column as wide as the wider
+number, 2pt apart. A cell drawn as one row has no second row to line up with, so it pays for its
+own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
+template image, so remaining quota is not said in color. `MenuBarLabelLayoutTests` renders the
+image and measures the drawn pixels: the mark's ink and the digits' ink share a center within a
+quarter point, every mark lands at the same size, and a stacked pair stays the standard item
+height.
 
 Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default).
 → **Provider** chooses **Automatic** — the tightest current subscription — or any set of providers
