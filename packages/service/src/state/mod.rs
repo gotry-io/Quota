@@ -3933,6 +3933,7 @@ fn diagnostic_attempt_kind_key(value: DiagnosticAttemptKind) -> &'static str {
         DiagnosticAttemptKind::QuotaCollection => "quota_collection",
         DiagnosticAttemptKind::UsageScan => "usage_scan",
         DiagnosticAttemptKind::UsageUpload => "usage_upload",
+        DiagnosticAttemptKind::QuotaUpload => "quota_upload",
         DiagnosticAttemptKind::AccountSync => "account_sync",
         DiagnosticAttemptKind::PricingRefresh => "pricing_refresh",
     }
@@ -3944,6 +3945,7 @@ fn parse_diagnostic_attempt_kind(value: &str) -> Result<DiagnosticAttemptKind, r
         "quota_collection" => Ok(DiagnosticAttemptKind::QuotaCollection),
         "usage_scan" => Ok(DiagnosticAttemptKind::UsageScan),
         "usage_upload" => Ok(DiagnosticAttemptKind::UsageUpload),
+        "quota_upload" => Ok(DiagnosticAttemptKind::QuotaUpload),
         "account_sync" => Ok(DiagnosticAttemptKind::AccountSync),
         "pricing_refresh" => Ok(DiagnosticAttemptKind::PricingRefresh),
         _ => Err(invalid_diagnostic_column(0, value)),

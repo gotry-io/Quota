@@ -58,6 +58,7 @@ enum LocalServiceDiagnosticAttemptKind: String, Codable, Equatable, Sendable {
   case quotaCollection = "quota_collection"
   case usageScan = "usage_scan"
   case usageUpload = "usage_upload"
+  case quotaUpload = "quota_upload"
   case accountSync = "account_sync"
   case pricingRefresh = "pricing_refresh"
 }

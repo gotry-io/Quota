@@ -49,6 +49,20 @@ pub enum RelayError {
     RedirectRefused,
 }
 
+impl RelayError {
+    /// Relay refused this payload with HTTP 400 `invalid_request`. Network, auth, 5xx,
+    /// rate limits, and unparsable responses are not this.
+    pub(crate) fn is_payload_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::Rejected {
+                status: 400,
+                code
+            } if code == "invalid_request"
+        )
+    }
+}
+
 pub struct RelayClient {
     origin: String,
     client: Client,
@@ -433,10 +447,6 @@ fn validate_bounded_json(value: &Value) -> Result<(), RelayError> {
 fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
     validate_bounded_json(value)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let keys = ["protocol_version", "generation", "snapshots"];
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
-        return Err(RelayError::InvalidResponse);
-    }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
         || object
             .get("generation")
@@ -449,27 +459,17 @@ fn validate_snapshot_envelope(value: &Value) -> Result<(), RelayError> {
     {
         return Err(RelayError::InvalidResponse);
     }
-    for snapshot in object
-        .get("snapshots")
-        .and_then(Value::as_array)
-        .ok_or(RelayError::InvalidResponse)?
-    {
-        validate_quota_snapshot(snapshot, Wire::Sent)?;
-    }
     Ok(())
 }
 
-/// One agent's rescanned hours, as Relay accepts them.
+/// One agent's rescanned hours, as the outbox packer sizes them.
 ///
-/// A payload Relay refuses blocks the outbox behind it, so the bound is checked here as well
-/// as at Relay rather than left for the rejection to teach us.
+/// What remains is what a type cannot say: byte and item caps, `protocol_version`, hour
+/// boundaries, uniqueness, and numeric safety. Shape is the producer types' statement; a
+/// payload Relay refuses is answered at the boundary (ADR 0028).
 pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError> {
     validate_bounded_json(value)?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let keys = ["protocol_version", "generation", "agent", "hours"];
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
-        return Err(RelayError::InvalidResponse);
-    }
     if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL)
         || object
             .get("generation")
@@ -481,7 +481,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
     let agent = object
         .get("agent")
         .and_then(Value::as_str)
-        .filter(|value| valid_billing_agent(Some(value)))
         .ok_or(RelayError::InvalidResponse)?;
     let hours = object
         .get("hours")
@@ -501,10 +500,6 @@ pub(crate) fn validate_usage_submission(value: &Value) -> Result<(), RelayError>
 /// One hour and every row the scan behind it found, returning the hour it names.
 fn validate_usage_hour(value: &Value, agent: &str) -> Result<String, RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
-    let keys = ["bucket_start_utc", "scan_version", "partial", "rows"];
-    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
-        return Err(RelayError::InvalidResponse);
-    }
     if object.get("scan_version").and_then(safe_u64).is_none()
         || !object.get("partial").is_some_and(Value::is_boolean)
     {
@@ -519,39 +514,12 @@ fn validate_usage_hour(value: &Value, agent: &str) -> Result<String, RelayError>
         .and_then(Value::as_array)
         .filter(|rows| rows.len() <= crate::usage::MAX_USAGE_ROWS_PER_HOUR)
         .ok_or(RelayError::InvalidResponse)?;
-    let row_keys = [
-        "agent",
-        "billing_channel",
-        "channel_source",
-        "model",
-        "context_bucket",
-        "service_tier",
-        "speed",
-        "inference_geo",
-        "input_tokens",
-        "cache_read_tokens",
-        "cache_write_5m_tokens",
-        "cache_write_1h_tokens",
-        "cache_write_inferred_tokens",
-        "output_tokens",
-        "reasoning_tokens",
-        "requests",
-        "web_search_requests",
-        "web_fetch_requests",
-        "source_cost_covered_requests",
-    ];
     let mut identities = std::collections::BTreeSet::new();
     for row in rows {
         let row_object = row.as_object().ok_or(RelayError::InvalidResponse)?;
-        // The one key beyond the contract's own is the optional source cost, and nothing else.
-        let extra = row_object.len().saturating_sub(row_keys.len());
-        if row_object.len() < row_keys.len()
-            || extra > 1
-            || (extra == 1 && !row_object.contains_key("source_cost_microusd"))
-            || row_keys.iter().any(|key| !row_object.contains_key(*key))
-            || row_object
-                .get("source_cost_microusd")
-                .is_some_and(|value| !value.is_string())
+        if row_object
+            .get("source_cost_microusd")
+            .is_some_and(|value| !value.is_string())
         {
             return Err(RelayError::InvalidResponse);
         }
@@ -649,19 +617,6 @@ fn validate_upload_response(value: &Value, named: &[String]) -> Result<(), Relay
     Ok(())
 }
 
-/// Which side of the wire a payload is on.
-///
-/// What this device sends is checked against exactly the contract, because a payload Relay
-/// refuses blocks the outbox behind it. What it receives is checked for what this build reads:
-/// the Relay answering can be newer than the build asking, so a key this build cannot name, or
-/// an enum member it has never heard of, travels instead of discarding the read. See
-/// [ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Wire {
-    Sent,
-    Received,
-}
-
 /// A response object carries every field this build reads. It may carry more.
 fn require_response_fields(value: &Value, keys: &[&str]) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -674,14 +629,6 @@ fn require_response_fields(value: &Value, keys: &[&str]) -> Result<(), RelayErro
 /// A closed enum in a payload this build receives: bounded text, membership unchecked.
 fn valid_read_enum(value: Option<&str>) -> bool {
     value.is_some_and(|value| valid_dimension(value, 64))
-}
-
-/// A closed enum in a payload that travels in either direction, checked as its direction allows.
-fn valid_wire_enum(value: Option<&str>, wire: Wire, members: &[&str]) -> bool {
-    match wire {
-        Wire::Sent => value.is_some_and(|value| members.contains(&value)),
-        Wire::Received => valid_read_enum(value),
-    }
 }
 
 fn validate_control_response(value: &Value) -> Result<(), RelayError> {
@@ -858,45 +805,22 @@ fn validate_quota_subscription(value: &Value) -> Result<(), RelayError> {
             return Err(RelayError::InvalidResponse);
         }
         if let Some(snapshot) = source.get("snapshot") {
-            validate_quota_snapshot(snapshot, Wire::Received)?;
+            validate_quota_snapshot(snapshot)?;
         }
     }
-    validate_quota_snapshot(
-        object.get("snapshot").ok_or(RelayError::InvalidResponse)?,
-        Wire::Received,
-    )
+    validate_quota_snapshot(object.get("snapshot").ok_or(RelayError::InvalidResponse)?)
 }
 
-fn validate_quota_snapshot(value: &Value, wire: Wire) -> Result<(), RelayError> {
+fn validate_quota_snapshot(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["provider", "account", "windows", "status", "observed_at"];
-    if required.iter().any(|key| !object.contains_key(*key))
-        || (wire == Wire::Sent && object.len() != required.len())
-    {
+    if required.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
-    let provider = object.get("provider").and_then(Value::as_str);
-    // This device only uploads a provider the Account accepts; a reading it is handed for a
-    // provider this build has never heard of still belongs to the account it came from.
-    let named_provider = match wire {
-        Wire::Sent => provider
-            .and_then(crate::catalog::ProviderId::parse)
-            .is_some_and(crate::catalog::ProviderId::syncs_to_account),
-        Wire::Received => valid_read_enum(provider),
-    };
-    if !named_provider
-        || !valid_wire_enum(
-            object.get("status").and_then(Value::as_str),
-            wire,
-            &[
-                "available",
-                "stale",
-                "auth_required",
-                "unavailable",
-                "unsupported",
-                "error",
-            ],
-        )
+    // A reading this build is handed for a provider it has never heard of still belongs to
+    // the account it came from.
+    if !valid_read_enum(object.get("provider").and_then(Value::as_str))
+        || !valid_read_enum(object.get("status").and_then(Value::as_str))
         || !object
             .get("observed_at")
             .and_then(Value::as_str)
@@ -904,41 +828,29 @@ fn validate_quota_snapshot(value: &Value, wire: Wire) -> Result<(), RelayError> 
     {
         return Err(RelayError::InvalidResponse);
     }
-    validate_quota_account(
-        object.get("account").ok_or(RelayError::InvalidResponse)?,
-        wire,
-    )?;
+    validate_quota_account(object.get("account").ok_or(RelayError::InvalidResponse)?)?;
     let windows = object
         .get("windows")
         .and_then(Value::as_array)
         .filter(|windows| windows.len() <= 16)
         .ok_or(RelayError::InvalidResponse)?;
     for window in windows {
-        validate_quota_window(window, wire)?;
+        validate_quota_window(window)?;
     }
     Ok(())
 }
 
-fn validate_quota_account(value: &Value, wire: Wire) -> Result<(), RelayError> {
+fn validate_quota_account(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["fingerprint", "fingerprint_scope"];
-    if required.iter().any(|key| !object.contains_key(*key))
-        || (wire == Wire::Sent
-            && object
-                .keys()
-                .any(|key| !required.contains(&key.as_str()) && key != "label" && key != "plan"))
-    {
+    if required.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
     if !object
         .get("fingerprint")
         .and_then(Value::as_str)
         .is_some_and(is_opaque)
-        || !valid_wire_enum(
-            object.get("fingerprint_scope").and_then(Value::as_str),
-            wire,
-            &["global", "source"],
-        )
+        || !valid_read_enum(object.get("fingerprint_scope").and_then(Value::as_str))
         || object.get("label").is_some_and(|value| {
             !value
                 .as_str()
@@ -953,22 +865,10 @@ fn validate_quota_account(value: &Value, wire: Wire) -> Result<(), RelayError> {
     Ok(())
 }
 
-fn validate_quota_window(value: &Value, wire: Wire) -> Result<(), RelayError> {
+fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
     let required = ["id", "title", "used_percent"];
-    let optional = [
-        "resets_at",
-        "duration_seconds",
-        "remaining_value",
-        "limit_value",
-        "value_unit",
-    ];
-    if required.iter().any(|key| !object.contains_key(*key))
-        || (wire == Wire::Sent
-            && object
-                .keys()
-                .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str())))
-    {
+    if required.iter().any(|key| !object.contains_key(*key)) {
         return Err(RelayError::InvalidResponse);
     }
     let used_percent = object.get("used_percent").and_then(Value::as_f64);
@@ -995,9 +895,9 @@ fn validate_quota_window(value: &Value, wire: Wire) -> Result<(), RelayError> {
                 .as_f64()
                 .is_some_and(|number| number.is_finite() && number >= 0.0)
         })
-        || object.get("value_unit").is_some_and(|value| {
-            !valid_wire_enum(value.as_str(), wire, &["usd", "credits", "count"])
-        })
+        || object
+            .get("value_unit")
+            .is_some_and(|value| !valid_read_enum(value.as_str()))
     {
         return Err(RelayError::InvalidResponse);
     }
@@ -1625,7 +1525,7 @@ impl AccountManager {
         &self,
         report: &Value,
         republished: &[Value],
-    ) -> Result<Value, BackendError> {
+    ) -> Result<(Option<Value>, usize), BackendError> {
         let (mut session, mut session_epoch) = self
             .state
             .session_snapshot()
@@ -1634,8 +1534,11 @@ impl AccountManager {
         if !is_active_session(&session) {
             return Err(session_changed_error());
         }
+        let (_, snapshots, dropped) = snapshot_payload_from_quota_report(report, republished)?;
+        if snapshots.is_empty() {
+            return Ok((None, dropped));
+        }
         let token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
-        let (_, snapshots) = snapshot_payload_from_quota_report(report, republished)?;
         let expected_device_id = session
             .get("device_id")
             .and_then(Value::as_str)
@@ -1658,7 +1561,7 @@ impl AccountManager {
                 crate::protocol::RecoveryAction::Retry,
             )));
         }
-        Ok(response)
+        Ok((Some(response), dropped))
     }
 
     pub fn upload_usage(&self, submission: &Value) -> Result<Value, BackendError> {
@@ -1674,7 +1577,13 @@ impl AccountManager {
         let token = self.ensure_fresh_session(&mut session, &mut epoch)?;
         self.client
             .upload_usage(&token, submission)
-            .map_err(|error| relay_backend_error(error, epoch))
+            .map_err(|error| {
+                if error.is_payload_refusal() {
+                    BackendError::payload_refused()
+                } else {
+                    relay_backend_error(error, epoch)
+                }
+            })
     }
 
     /// The access token to use now, rotating the one session first if it is about to expire.
@@ -1802,7 +1711,7 @@ fn access_token_needs_refresh(session: &Value) -> bool {
 fn snapshot_payload_from_quota_report<'a>(
     report: &'a Value,
     republished: &[Value],
-) -> Result<(&'a str, Vec<Value>), BackendError> {
+) -> Result<(&'a str, Vec<Value>, usize), BackendError> {
     let object = report.as_object().ok_or_else(BackendError::unavailable)?;
     let captured_at = object
         .get("captured_at")
@@ -1822,17 +1731,103 @@ fn snapshot_payload_from_quota_report<'a>(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut snapshots = Vec::new();
+    let mut dropped = 0usize;
     for snapshot in collected.into_iter().flatten().chain(republished) {
-        let provider = snapshot
+        let Some(provider) = snapshot
             .get("provider")
             .and_then(Value::as_str)
             .and_then(crate::catalog::ProviderId::parse)
-            .ok_or_else(BackendError::unavailable)?;
-        if provider.syncs_to_account() {
-            snapshots.push(snapshot.clone());
+        else {
+            dropped += 1;
+            continue;
+        };
+        if !provider.syncs_to_account() {
+            continue;
         }
+        if !snapshot_is_admissible(snapshot) {
+            dropped += 1;
+            continue;
+        }
+        snapshots.push(snapshot.clone());
     }
-    Ok((captured_at, snapshots))
+    Ok((captured_at, snapshots, dropped))
+}
+
+/// Value bounds a producer type cannot state. A snapshot that fails is dropped alone;
+/// refusing the envelope would discard every reading beside it (ADR 0028).
+fn snapshot_is_admissible(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if !object
+        .get("observed_at")
+        .and_then(Value::as_str)
+        .is_some_and(valid_rfc3339)
+    {
+        return false;
+    }
+    let Some(account) = object.get("account") else {
+        return false;
+    };
+    if !quota_account_is_admissible(account) {
+        return false;
+    }
+    let Some(windows) = object
+        .get("windows")
+        .and_then(Value::as_array)
+        .filter(|windows| windows.len() <= 16)
+    else {
+        return false;
+    };
+    windows.iter().all(quota_window_is_admissible)
+}
+
+fn quota_account_is_admissible(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object
+        .get("fingerprint")
+        .and_then(Value::as_str)
+        .is_some_and(is_opaque)
+        && !object.get("label").is_some_and(|value| {
+            !value
+                .as_str()
+                .is_some_and(|value| valid_display(value, 128))
+        })
+        && !object
+            .get("plan")
+            .is_some_and(|value| !value.as_str().is_some_and(|value| valid_display(value, 64)))
+}
+
+fn quota_window_is_admissible(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let used_percent = object.get("used_percent").and_then(Value::as_f64);
+    object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| valid_dimension(value, 64))
+        && object
+            .get("title")
+            .and_then(Value::as_str)
+            .is_some_and(|value| valid_display(value, 128))
+        && used_percent.is_some_and(|value| value.is_finite() && (0.0..=100.0).contains(&value))
+        && !object
+            .get("resets_at")
+            .is_some_and(|value| !value.as_str().is_some_and(valid_rfc3339))
+        && !object
+            .get("duration_seconds")
+            .is_some_and(|value| safe_u64(value).is_none())
+        && !object
+            .get("remaining_value")
+            .is_some_and(|value| !value.as_f64().is_some_and(f64::is_finite))
+        && !object.get("limit_value").is_some_and(|value| {
+            !value
+                .as_f64()
+                .is_some_and(|number| number.is_finite() && number >= 0.0)
+        })
 }
 
 /// This device's readings, in the shape Relay accepts.
@@ -2210,14 +2205,6 @@ fn valid_decimal_integer(value: &str) -> bool {
                 && value.bytes().all(|byte| byte.is_ascii_digit())))
 }
 
-fn valid_billing_agent(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        crate::usage::UsageAgent::ALL
-            .iter()
-            .any(|agent| agent.as_str() == value)
-    })
-}
-
 fn invalid_response_backend() -> BackendError {
     BackendError::new(crate::protocol::IpcError::new(
         crate::protocol::ErrorCode::InvalidResponse,
@@ -2454,6 +2441,9 @@ mod tests {
             "hours": [hour("2026-08-10T00:00:00Z")]
         });
         assert!(validate_usage_submission(&upload).is_ok());
+        upload["note"] = serde_json::json!("ignored");
+        assert!(validate_usage_submission(&upload).is_ok());
+        upload.as_object_mut().expect("upload").remove("note");
 
         upload["hours"] = serde_json::json!(
             (0..=crate::usage::MAX_USAGE_HOURS_PER_UPLOAD)
@@ -2576,7 +2566,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_envelope_has_strict_count_identity_and_integer_bounds() {
+    fn snapshot_envelope_keeps_resource_and_generation_bounds() {
         let snapshot = valid_snapshot();
         let mut envelope = serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
@@ -2587,9 +2577,10 @@ mod tests {
         envelope["generation"] = serde_json::json!(0);
         assert!(validate_snapshot_envelope(&envelope).is_err());
         envelope["generation"] = serde_json::json!(1);
-        // The device token names the device, so an envelope that names one is not the contract.
+        // Extra keys are the types' and the boundary schema's concern, not a sending-side
+        // allowlist (ADR 0028).
         envelope["device_id"] = serde_json::json!("device_1");
-        assert!(validate_snapshot_envelope(&envelope).is_err());
+        assert!(validate_snapshot_envelope(&envelope).is_ok());
         envelope
             .as_object_mut()
             .expect("envelope")
@@ -2726,14 +2717,15 @@ mod tests {
             "captured_at": "2026-08-10T00:00:00Z",
             "results": [{"snapshots": [snapshot.clone()]}]
         });
-        let (captured_at, snapshots) =
+        let (captured_at, snapshots, dropped) =
             snapshot_payload_from_quota_report(&report, &[]).expect("quota report");
         assert_eq!(captured_at, "2026-08-10T00:00:00Z");
         assert_eq!(snapshots, std::slice::from_ref(&snapshot));
+        assert_eq!(dropped, 0);
 
         let mut cursor = snapshot.clone();
         cursor["provider"] = serde_json::json!("cursor");
-        let (_, mixed) = snapshot_payload_from_quota_report(
+        let (_, mixed, mixed_dropped) = snapshot_payload_from_quota_report(
             &serde_json::json!({
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [snapshot.clone(), cursor.clone()]}]
@@ -2742,7 +2734,8 @@ mod tests {
         )
         .expect("mixed local report");
         assert_eq!(mixed, [snapshot.clone(), cursor.clone()]);
-        let (_, cursor_only) = snapshot_payload_from_quota_report(
+        assert_eq!(mixed_dropped, 0);
+        let (_, cursor_only, cursor_dropped) = snapshot_payload_from_quota_report(
             &serde_json::json!({
                 "captured_at": "2026-08-10T00:00:00Z",
                 "results": [{"snapshots": [cursor.clone()]}]
@@ -2751,19 +2744,20 @@ mod tests {
         )
         .expect("cursor report");
         assert_eq!(cursor_only, [cursor.clone()]);
+        assert_eq!(cursor_dropped, 0);
         let mut unknown = cursor.clone();
         unknown["provider"] = serde_json::json!("unknown-provider");
-        assert!(
-            snapshot_payload_from_quota_report(
-                &serde_json::json!({
-                    "captured_at": "2026-08-10T00:00:00Z",
-                    "results": [{"snapshots": [unknown]}]
-                }),
-                &[]
-            )
-            .is_err()
-        );
-        assert!(validate_quota_snapshot(&cursor, Wire::Sent).is_ok());
+        let (_, none, unknown_dropped) = snapshot_payload_from_quota_report(
+            &serde_json::json!({
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": [unknown]}]
+            }),
+            &[],
+        )
+        .expect("unknown provider is dropped, not an envelope error");
+        assert!(none.is_empty());
+        assert_eq!(unknown_dropped, 1);
+        assert!(validate_quota_snapshot(&cursor).is_ok());
 
         assert!(
             snapshot_payload_from_quota_report(
@@ -2785,6 +2779,52 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// PR #72 added `primary_cadence` to the types and the schema but not the sent-side
+    /// allowlist; the restatement then refused every current quota report. Staging keeps
+    /// value bounds and lets the producer types name the keys (ADR 0028).
+    #[test]
+    fn a_window_with_primary_cadence_is_staged_and_would_be_sent() {
+        let mut snapshot = valid_snapshot();
+        snapshot["windows"] = serde_json::json!([{
+            "id": "five_hour",
+            "title": "5 Hours",
+            "used_percent": 40.0,
+            "primary_cadence": "five_hour"
+        }]);
+        let report = serde_json::json!({
+            "captured_at": "2026-08-10T00:00:00Z",
+            "results": [{"snapshots": [snapshot.clone()]}]
+        });
+        let (_, snapshots, dropped) =
+            snapshot_payload_from_quota_report(&report, &[]).expect("staged");
+        assert_eq!(dropped, 0);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0]["windows"][0]["primary_cadence"], "five_hour");
+        let envelope = snapshot_envelope(1, snapshots);
+        assert!(validate_snapshot_envelope(&envelope).is_ok());
+    }
+
+    #[test]
+    fn a_malformed_snapshot_is_dropped_alone() {
+        let good = valid_snapshot();
+        let mut bad = valid_snapshot();
+        bad["windows"] = serde_json::json!([{
+            "id": "weekly",
+            "title": "Weekly",
+            "used_percent": 101.0
+        }]);
+        let (_, snapshots, dropped) = snapshot_payload_from_quota_report(
+            &serde_json::json!({
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": [good.clone(), bad]}]
+            }),
+            &[],
+        )
+        .expect("partial");
+        assert_eq!(dropped, 1);
+        assert_eq!(snapshots, [good]);
     }
 
     #[test]
@@ -2940,9 +2980,9 @@ mod tests {
 
     type WireValidator = fn(&Value) -> Result<(), RelayError>;
 
-    /// The zod schema is the definition; this module restates it for its own trust
-    /// boundary. Both answer the same file, so a payload one starts accepting cannot pass
-    /// unnoticed by the other.
+    /// The zod schema is the definition of write contracts. This module no longer restates
+    /// their shape: an accepted payload must still pass the remaining Sent bounds, and the
+    /// boundary schema answers refusals (ADR 0028). Read contracts still have two statements.
     #[test]
     fn wire_validation_matches_the_shared_conformance_fixture() {
         const FIXTURE: &str = include_str!("../../../protocol/fixtures/wire-conformance.json");
@@ -2966,11 +3006,17 @@ mod tests {
             for case in cases {
                 let name = case["name"].as_str().expect("name");
                 let accepted = case["accepted"].as_bool().expect("accepted");
-                assert_eq!(
-                    validate(&case["payload"]).is_ok(),
-                    accepted,
-                    "{contract}: {name}"
-                );
+                if contract == "account_summary" {
+                    assert_eq!(
+                        validate(&case["payload"]).is_ok(),
+                        accepted,
+                        "{contract}: {name}"
+                    );
+                    continue;
+                }
+                if accepted {
+                    assert!(validate(&case["payload"]).is_ok(), "{contract}: {name}");
+                }
             }
         }
     }

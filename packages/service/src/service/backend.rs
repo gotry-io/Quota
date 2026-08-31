@@ -895,6 +895,57 @@ impl NativeBackend {
             });
         }
 
+        // Quota upload.
+        let quota_upload_facts = self
+            .state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::QuotaUpload, None)
+            .map_err(|_| BackendError::unavailable())?;
+        let quota_upload_problem = match quota_upload_facts.last_outcome {
+            Some(
+                DiagnosticAttemptOutcome::Failed
+                | DiagnosticAttemptOutcome::Interrupted
+                | DiagnosticAttemptOutcome::Partial,
+            ) => quota_upload_facts
+                .unresolved_code
+                .or(Some(crate::protocol::DiagnosticAttemptCode::Unavailable)),
+            _ => None,
+        };
+        let quota_upload_failed = account_active && quota_upload_problem.is_some();
+        let quota_upload_blocked = quota_upload_failed
+            && quota_upload_problem == Some(DiagnosticAttemptCode::InvalidState);
+        if account_active {
+            sources.push(DiagnosticSourceState {
+                subject: "quota_upload".into(),
+                source_id: None,
+                status: match (quota_upload_blocked, quota_upload_failed) {
+                    (true, _) => DiagnosticStatus::Blocked,
+                    (false, true) => DiagnosticStatus::Degraded,
+                    _ => DiagnosticStatus::Ok,
+                },
+                last_attempt_at: quota_upload_facts.last_attempt_at.clone(),
+                last_success_at: quota_upload_facts.last_success_at.clone(),
+                code: quota_upload_problem
+                    .map(|code| diagnostic_attempt_code_wire(code).to_owned()),
+                message: match (quota_upload_blocked, quota_upload_failed) {
+                    (true, _) => {
+                        "Quota sync cannot continue with the local state as it is. Reset local \
+                         data from Support, then recheck."
+                    }
+                    (false, true) => {
+                        "The last quota upload did not go through. QuotaBar will try again at the \
+                         next refresh."
+                    }
+                    _ => "Readings from this Mac are part of your account.",
+                }
+                .into(),
+                recovery: match (quota_upload_blocked, quota_upload_failed) {
+                    (true, _) => DiagnosticRecovery::Reinstall,
+                    (false, true) => DiagnosticRecovery::Retry,
+                    _ => DiagnosticRecovery::None,
+                },
+            });
+        }
+
         // Pricing catalog.
         let pricing_value = pricing.as_ref().and_then(|value| value.value.as_ref());
         let pricing_valid =
@@ -1975,23 +2026,25 @@ impl NativeBackend {
     /// Sends the staged hours, at most one agent and one request's worth at a time.
     /// Sends the hours this device still owes its Account.
     ///
-    /// Answers whether Relay took an hour it did not already have. An ignored hour left the
-    /// Account exactly as it was, so it is not a reason to read the Account again.
-    fn drain_outbox(&self) -> Result<bool, BackendError> {
+    /// Answers whether Relay took an hour it did not already have, and whether a batch was
+    /// quarantined after a deterministic payload refusal. An ignored hour left the Account
+    /// exactly as it was, so it is not a reason to read the Account again.
+    fn drain_outbox(&self) -> Result<(bool, bool), BackendError> {
         let mut accepted_any = false;
+        let mut quarantined = false;
         if !self
             .state
             .usage_upload_enabled()
             .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(accepted_any);
+            return Ok((accepted_any, quarantined));
         }
         let Some((session, session_epoch)) = self
             .state
             .session_snapshot()
             .map_err(|_| BackendError::unavailable())?
         else {
-            return Ok(accepted_any);
+            return Ok((accepted_any, quarantined));
         };
         if session.get("status").and_then(Value::as_str) != Some("active")
             || !self
@@ -1999,7 +2052,7 @@ impl NativeBackend {
                 .active_session_at_epoch(session_epoch)
                 .map_err(|_| BackendError::unavailable())?
         {
-            return Ok(accepted_any);
+            return Ok((accepted_any, quarantined));
         }
         let account_id = session
             .get("account_id")
@@ -2029,7 +2082,7 @@ impl NativeBackend {
                     .usage_upload_enabled()
                     .map_err(|_| BackendError::unavailable())?
                 {
-                    return Ok(accepted_any);
+                    return Ok((accepted_any, quarantined));
                 }
                 let taken = usage_upload_batch_size(agent, generation, remaining);
                 if taken == 0 {
@@ -2044,7 +2097,25 @@ impl NativeBackend {
                 let batch = &remaining[..taken];
                 let upload =
                     usage_upload(agent, generation, batch).ok_or_else(BackendError::unavailable)?;
-                let response = self.account.upload_usage(&upload)?;
+                let batch_buckets = batch
+                    .iter()
+                    .map(|entry| entry.bucket_start_utc.clone())
+                    .collect::<Vec<_>>();
+                let response = match self.account.upload_usage(&upload) {
+                    Ok(response) => response,
+                    Err(error) if error.is_payload_refusal() => {
+                        // ADR 0028: a deterministic Relay 400 is the boundary's answer for
+                        // this payload. The batch cannot succeed as it is, so it is forgotten
+                        // the way an unrepresentable hour already is, and the drain carries on.
+                        self.state
+                            .forget_outbox_hours(agent, &batch_buckets)
+                            .map_err(|_| BackendError::unavailable())?;
+                        quarantined = true;
+                        remaining = &remaining[taken..];
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if response.get("device_id").and_then(Value::as_str) != Some(device_id)
                     || response.get("device_generation").and_then(Value::as_u64) != Some(generation)
                 {
@@ -2072,7 +2143,7 @@ impl NativeBackend {
                 remaining = &remaining[taken..];
             }
         }
-        Ok(accepted_any)
+        Ok((accepted_any, quarantined))
     }
 
     fn timezone(&self) -> String {
@@ -3031,21 +3102,11 @@ impl LocalBackend for NativeBackend {
                         // when it read one.
                         let mut uploaded = false;
                         if !quota_put && let Ok(quota_payload) = &quota_value {
-                            let restated = failure_status_snapshots(
-                                quota_payload,
-                                previous_quota.as_ref(),
-                                Utc::now(),
-                            );
-                            match self.account.upload_quota_report(quota_payload, &restated) {
-                                Ok(response) => {
-                                    uploaded |= response
-                                        .get("accepted")
-                                        .and_then(Value::as_array)
-                                        .is_some_and(|providers| !providers.is_empty());
-                                }
-                                Err(error) => {
-                                    record_account_sync_error(&mut account_sync_error, error);
-                                }
+                            let (_put, accepted, error) =
+                                self.upload_quota_recorded(quota_payload, previous_quota.as_ref());
+                            uploaded |= accepted;
+                            if let Some(error) = error {
+                                record_account_sync_error(&mut account_sync_error, error);
                             }
                         }
                         uploaded |= quota_accepted;
@@ -3395,22 +3456,62 @@ impl NativeBackend {
         let Ok(quota_payload) = quota_value else {
             return (false, false, None);
         };
-        let restated = failure_status_snapshots(quota_payload, previous_quota, Utc::now());
-        match self.account.upload_quota_report(quota_payload, &restated) {
-            Ok(response) => (
-                true,
-                response
-                    .get("accepted")
-                    .and_then(Value::as_array)
-                    .is_some_and(|providers| !providers.is_empty()),
-                None,
-            ),
-            Err(error) if error.sign_out_epoch().is_some() => {
+        let (put, accepted, error) = self.upload_quota_recorded(quota_payload, previous_quota);
+        match error {
+            Some(error) if error.sign_out_epoch().is_some() => {
                 self.clear_session_if_rejected(&error);
                 updates.account(Err(error.clone()));
                 (false, false, Some(error))
             }
-            Err(_) => (false, false, None),
+            _ => (put, accepted, None),
+        }
+    }
+
+    /// Uploads this collection's quota and records the `quota_upload` journal row it earns.
+    fn upload_quota_recorded(
+        &self,
+        quota_payload: &Value,
+        previous_quota: Option<&Value>,
+    ) -> (bool, bool, Option<BackendError>) {
+        let attempt = self.begin_attempt(DiagnosticAttemptKind::QuotaUpload, None);
+        let restated = failure_status_snapshots(quota_payload, previous_quota, Utc::now());
+        match self.account.upload_quota_report(quota_payload, &restated) {
+            Ok((None, dropped)) => {
+                let (outcome, code) = if dropped > 0 {
+                    (
+                        DiagnosticAttemptOutcome::Partial,
+                        Some(DiagnosticAttemptCode::MalformedData),
+                    )
+                } else {
+                    (
+                        DiagnosticAttemptOutcome::NoWork,
+                        Some(DiagnosticAttemptCode::NoWork),
+                    )
+                };
+                self.finish_attempt(attempt, outcome, code);
+                (true, false, None)
+            }
+            Ok((Some(response), dropped)) => {
+                let accepted = response
+                    .get("accepted")
+                    .and_then(Value::as_array)
+                    .is_some_and(|providers| !providers.is_empty());
+                if dropped == 0 {
+                    self.finish_attempt(attempt, DiagnosticAttemptOutcome::Success, None);
+                } else {
+                    self.finish_attempt(
+                        attempt,
+                        DiagnosticAttemptOutcome::Partial,
+                        Some(DiagnosticAttemptCode::MalformedData),
+                    );
+                }
+                (true, accepted, None)
+            }
+            Err(error) => {
+                let (outcome, code) = backend_attempt_error(&error.error);
+                self.finish_attempt(attempt, outcome, Some(code));
+                (false, false, Some(error))
+            }
         }
     }
 
@@ -3419,12 +3520,17 @@ impl NativeBackend {
         let before = self.state.outbox_len().unwrap_or(0);
         let upload_attempt = self.begin_attempt(DiagnosticAttemptKind::UsageUpload, None);
         match self.drain_outbox() {
-            Ok(accepted) => {
+            Ok((accepted, quarantined)) => {
                 let pending = self.state.outbox_len().unwrap_or(0);
                 let (outcome, code) = if before == 0 {
                     (
                         DiagnosticAttemptOutcome::NoWork,
                         Some(DiagnosticAttemptCode::NoWork),
+                    )
+                } else if quarantined {
+                    (
+                        DiagnosticAttemptOutcome::Partial,
+                        Some(DiagnosticAttemptCode::MalformedData),
                     )
                 } else if pending > 0 {
                     (
@@ -4143,6 +4249,15 @@ mod tests {
         )
     }
 
+    fn relay_status_json(status: u16, reason: &str, value: &Value) -> String {
+        let body = serde_json::to_vec(value).expect("json");
+        format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8(body).expect("utf8")
+        )
+    }
+
     fn account_summary(label: &str) -> Value {
         let totals = json!({
             "total_tokens": 0,
@@ -4593,6 +4708,200 @@ mod tests {
                 .any(|head| head.starts_with("PUT /api/v6/device/snapshots")),
             "{sent:?}"
         );
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_quota_upload_records_a_journal_row() {
+        let relay_server = spawn_relay(vec![snapshot_upload(json!(["codex"]), json!([]))]);
+        let root =
+            std::env::temp_dir().join(format!("quota-upload-journal-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        let updates = RecordingUpdates::default();
+        let (put, accepted, signed_out) = backend.upload_quota_after_collection(
+            &Ok(previous_quota_report()),
+            None,
+            &AtomicBool::new(false),
+            &updates,
+        );
+        assert!(put);
+        assert!(accepted);
+        assert!(signed_out.is_none());
+        let facts = state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::QuotaUpload, None)
+            .expect("facts");
+        assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Success));
+        let report = backend
+            .evaluate_diagnostic_report(true)
+            .expect("diagnostics");
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.subject == "quota_upload")
+            .expect("quota_upload source");
+        assert_eq!(source.status, DiagnosticStatus::Ok);
+        assert_eq!(
+            source.message,
+            "Readings from this Mac are part of your account."
+        );
+        drop(relay_server.finish());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_quota_upload_error_is_journaled_rather_than_discarded() {
+        let relay_server = spawn_relay(vec![relay_status_json(
+            503,
+            "Service Unavailable",
+            &json!({"error": {"code": "unavailable"}}),
+        )]);
+        let root =
+            std::env::temp_dir().join(format!("quota-upload-failed-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &relay_server.origin);
+        let updates = RecordingUpdates::default();
+        let (put, accepted, signed_out) = backend.upload_quota_after_collection(
+            &Ok(previous_quota_report()),
+            None,
+            &AtomicBool::new(false),
+            &updates,
+        );
+        assert!(!put);
+        assert!(!accepted);
+        assert!(signed_out.is_none());
+        let facts = state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::QuotaUpload, None)
+            .expect("facts");
+        assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Failed));
+        drop(relay_server.finish());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn drain_outbox_quarantines_only_a_deterministic_payload_refusal() {
+        let hour = |agent: UsageAgent, bucket: &str| UsageOutboxEntry {
+            agent,
+            bucket_start_utc: bucket.into(),
+            scan_version: 1,
+            partial: false,
+            rows: vec![usage::UsageRow {
+                agent,
+                billing_channel: usage::BillingChannel::OpenaiDirect,
+                channel_source: usage::ChannelSource::Explicit,
+                model: "gpt-5.6-sol".into(),
+                context_bucket: usage::ContextBucket::Le128k,
+                service_tier: "standard".into(),
+                speed: "standard".into(),
+                inference_geo: "global".into(),
+                input_tokens: 10,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                cache_write_inferred_tokens: 0,
+                output_tokens: 2,
+                reasoning_tokens: 0,
+                requests: 1,
+                web_search_requests: 0,
+                web_fetch_requests: 0,
+                source_cost_microusd: None,
+                source_cost_covered_requests: 0,
+            }],
+        };
+        let usage_ok = |bucket: &str| {
+            relay_json(&json!({
+                "protocol_version": MANAGED_DATA_PROTOCOL,
+                "device_id": "device_1",
+                "device_generation": 1,
+                "accepted": [bucket],
+                "ignored": []
+            }))
+        };
+
+        let refused = spawn_relay(vec![
+            relay_status_json(
+                400,
+                "Bad Request",
+                &json!({"error": {"code": "invalid_request"}}),
+            ),
+            usage_ok("2026-08-10T01:00:00Z"),
+        ]);
+        let root = std::env::temp_dir().join(format!("quota-outbox-400-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &refused.origin);
+        state
+            .stage_outbox_entries(
+                "account_1",
+                "device_1",
+                1,
+                &[
+                    hour(UsageAgent::Codex, "2026-08-10T00:00:00Z"),
+                    hour(UsageAgent::ClaudeCode, "2026-08-10T01:00:00Z"),
+                ],
+            )
+            .expect("stage");
+        let accepted = backend.drain_outbox_recorded().expect("drain");
+        assert!(accepted);
+        assert_eq!(state.outbox_len().expect("outbox"), 0);
+        let facts = state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::UsageUpload, None)
+            .expect("facts");
+        assert_eq!(facts.last_outcome, Some(DiagnosticAttemptOutcome::Partial));
+        assert_eq!(
+            facts.unresolved_code,
+            Some(DiagnosticAttemptCode::MalformedData)
+        );
+        drop(refused.finish());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+
+        let garbled = spawn_relay(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 3\r\nConnection: close\r\n\r\nnot"
+                .to_owned(),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-outbox-garbled-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &garbled.origin);
+        state
+            .stage_outbox_entries(
+                "account_1",
+                "device_1",
+                1,
+                &[hour(UsageAgent::Codex, "2026-08-10T00:00:00Z")],
+            )
+            .expect("stage");
+        let error = backend.drain_outbox_recorded().expect_err("garbled");
+        assert!(!error.is_payload_refusal());
+        assert_eq!(error.error.code, ErrorCode::InvalidResponse);
+        assert_eq!(state.outbox_len().expect("outbox"), 1);
+        drop(garbled.finish());
+        drop(backend);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+
+        let limited = spawn_relay(vec![relay_status_json(
+            429,
+            "Too Many Requests",
+            &json!({"error": {"code": "rate_limited"}}),
+        )]);
+        let root = std::env::temp_dir().join(format!("quota-outbox-429-{}", uuid::Uuid::new_v4()));
+        let (state, backend) = signed_in_backend(&root, &limited.origin);
+        state
+            .stage_outbox_entries(
+                "account_1",
+                "device_1",
+                1,
+                &[hour(UsageAgent::Codex, "2026-08-10T00:00:00Z")],
+            )
+            .expect("stage");
+        let error = backend.drain_outbox_recorded().expect_err("rate limited");
+        assert!(!error.is_payload_refusal());
+        assert_eq!(state.outbox_len().expect("outbox"), 1);
+        drop(limited.finish());
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
@@ -7464,13 +7773,10 @@ mod tests {
         assert!(serde_json::to_vec(&upload).expect("bytes").len() <= 1_048_576);
     }
 
-    /// The payloads this device sends, checked against the JSON Schema `packages/protocol`
-    /// exports rather than against a second description of the same contract.
-    ///
-    /// The schema is the shape: which keys are required, which are refused, and what each one
-    /// holds. The value bounds a shape cannot state — token subsets, source-cost coverage,
-    /// unique row identities — are the validators', and the shared fixture is what keeps those
-    /// in step across runtimes.
+    /// The producer types are the only sending-side statement of shape, and this test holds
+    /// them to the exported schema: a field added to the types without the zod schema (or the
+    /// reverse, once produced) fails here in CI. Every `Option` is set so a checkout of only
+    /// the types half of a change like PR #72 cannot pass.
     #[test]
     fn what_this_device_uploads_matches_the_exported_json_schema() {
         const USAGE_SCHEMA: &str = include_str!("../../../protocol/schema/usage.json");
@@ -7535,19 +7841,49 @@ mod tests {
         wrong["hours"][0]["scan_version"] = json!("seven");
         assert!(JsonSchema::parse(USAGE_SCHEMA).check(&wrong).is_err());
 
+        let snapshot = crate::providers::common::QuotaSnapshot {
+            provider: ProviderId::Codex,
+            account: crate::providers::common::QuotaAccount {
+                fingerprint: "codex_account_1".into(),
+                fingerprint_scope: "global",
+                label: Some("octocat".into()),
+                plan: Some("Plus".into()),
+            },
+            windows: vec![crate::providers::common::QuotaWindow {
+                id: "weekly".into(),
+                title: "Weekly".into(),
+                used_percent: 42.0,
+                resets_at: Some("2026-08-17T00:00:00Z".into()),
+                duration_seconds: Some(604_800),
+                primary_cadence: Some(crate::providers::common::Cadence::FiveHour),
+                remaining_value: Some(58.0),
+                limit_value: Some(100.0),
+                value_unit: Some("usd"),
+            }],
+            status: "available",
+            observed_at: "2026-08-12T09:30:00Z".into(),
+        };
         let envelope = crate::relay::snapshot_envelope(
             3,
-            vec![json!({
-                "provider": "codex",
-                "account": {"fingerprint": "codex_account_1", "fingerprint_scope": "global"},
-                "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 42.0}],
-                "status": "available",
-                "observed_at": "2026-08-12T09:30:00Z"
-            })],
+            vec![serde_json::to_value(&snapshot).expect("snapshot value")],
         );
         JsonSchema::parse(SNAPSHOT_SCHEMA)
             .check(&envelope)
             .expect("the snapshot envelope matches the exported schema");
+        let mut extra_snapshot = envelope.clone();
+        extra_snapshot["uploaded_at"] = json!("2026-08-12T09:31:00Z");
+        assert!(
+            JsonSchema::parse(SNAPSHOT_SCHEMA)
+                .check(&extra_snapshot)
+                .is_err()
+        );
+        let mut wrong_snapshot = envelope;
+        wrong_snapshot["generation"] = json!("three");
+        assert!(
+            JsonSchema::parse(SNAPSHOT_SCHEMA)
+                .check(&wrong_snapshot)
+                .is_err()
+        );
     }
 
     /// The part of JSON Schema an exported contract uses: what a document is made of, not what

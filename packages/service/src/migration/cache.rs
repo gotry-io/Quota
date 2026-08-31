@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 1;
+const CURRENT_SCHEMA: i64 = 2;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -34,6 +34,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
         let tx = conn.transaction()?;
         match version {
             1 => migration_v1(&tx, revision_floor)?,
+            2 => migration_v2(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -205,6 +206,60 @@ fn migration_v1(tx: &rusqlite::Transaction<'_>, revision_floor: u64) -> Result<(
     Ok(())
 }
 
+/// The quota upload earns a journal row the same way the Usage drain does (ADR 0028).
+/// SQLite cannot widen a CHECK, so the table is rebuilt; the cache is disposable.
+fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v1;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'quota_upload', 'account_sync', 'pricing_refresh'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source',
+                'device_deleted'
+            ))
+         );
+         INSERT INTO diagnostic_attempts(
+            id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+            duration_ms, outcome, code
+         )
+         SELECT id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+                duration_ms, outcome, code
+         FROM diagnostic_attempts_v1
+         ORDER BY id;
+         DROP TABLE diagnostic_attempts_v1;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +277,40 @@ mod tests {
             .expect("revision"),
             "41"
         );
+    }
+
+    #[test]
+    fn a_v1_cache_gains_the_quota_upload_kind() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');
+             INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome)
+             VALUES ('usage_upload', 'scheduled', '2026-08-31T00:00:00Z', 'success');",
+        )
+        .expect("v1 row");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome, code)
+             VALUES ('quota_upload', 'scheduled', '2026-08-31T01:00:00Z', 'partial', 'malformed_data')",
+            [],
+        )
+        .expect("quota_upload kind");
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM diagnostic_attempts ORDER BY id")
+            .expect("select")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("kinds");
+        assert_eq!(kinds, ["usage_upload", "quota_upload"]);
     }
 
     #[test]

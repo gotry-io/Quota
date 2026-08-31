@@ -27,7 +27,12 @@ pub trait EventSink: Send + Sync {
 enum BackendErrorKind {
     Ordinary,
     SessionChanged,
-    RelayRejection { observed_epoch: u64 },
+    RelayRejection {
+        observed_epoch: u64,
+    },
+    /// Relay refused this payload with HTTP 400 `invalid_request`. Distinct from a
+    /// garbled response so the Usage drain can forget the batch (ADR 0028).
+    PayloadRefused,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +83,18 @@ impl BackendError {
             BackendErrorKind::RelayRejection { observed_epoch } => Some(observed_epoch),
             _ => None,
         }
+    }
+
+    /// Relay answered HTTP 400 `invalid_request` for this payload.
+    pub(crate) const fn payload_refused() -> Self {
+        Self {
+            error: IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry),
+            kind: BackendErrorKind::PayloadRefused,
+        }
+    }
+
+    pub(crate) const fn is_payload_refusal(&self) -> bool {
+        matches!(self.kind, BackendErrorKind::PayloadRefused)
     }
 
     #[cfg(test)]
