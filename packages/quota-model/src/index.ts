@@ -30,6 +30,26 @@ export function remainingPercent(usedPercent: number): number {
   return Math.max(0, Math.min(100, 100 - usedPercent));
 }
 
+/** Remaining and limit as a window carries them. */
+type RemainingQuotaWindow = {
+  remaining_value?: number | undefined;
+  limit_value?: number | undefined;
+};
+
+/**
+ * Wallet-style window: absolute remaining only, no budget/limit ratio.
+ */
+export function isBalanceOnly(window: RemainingQuotaWindow): boolean {
+  return window.remaining_value !== undefined && window.limit_value === undefined;
+}
+
+/**
+ * Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+ */
+export function showsPercentMeter(window: RemainingQuotaWindow): boolean {
+  return !isBalanceOnly(window);
+}
+
 /**
  * How long an observation may claim to describe current quota when its own windows say
  * nothing shorter. A device that stops collecting must stop answering for a live account.

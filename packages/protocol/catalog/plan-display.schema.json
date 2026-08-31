@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quota.gotry.io/schema/plan-display.json",
+  "title": "Quota plan display table",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$comment", "plans"],
+  "properties": {
+    "$comment": { "type": "string", "minLength": 1 },
+    "plans": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9]+$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[^\\u0000-\\u001F\\u007F]*$"
+      }
+    }
+  }
+}

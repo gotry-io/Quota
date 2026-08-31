@@ -9,6 +9,8 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.displayName("prolite") == "Pro Lite")
     #expect(PlanDisplay.displayName("pro_lite") == "Pro Lite")
     #expect(PlanDisplay.displayName("max") == "Max")
+    #expect(PlanDisplay.displayName("max_5x") == "Max 5x")
+    #expect(PlanDisplay.displayName("max_20x") == "Max 20x")
     #expect(PlanDisplay.displayName("team") == "Team")
     #expect(PlanDisplay.displayName("supergrok") == "SuperGrok")
     #expect(PlanDisplay.displayName("super_grok") == "SuperGrok")
@@ -29,6 +31,14 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.displayName("foo_bar") == "Foo Bar")
     #expect(PlanDisplay.displayName("  ") == nil)
     #expect(PlanDisplay.displayName(nil) == nil)
+  }
+
+  /// The generated table is reached through the public lookup rather than read directly, so
+  /// the test states what a caller sees and the table stays an implementation detail.
+  @Test
+  func generatedTableResolvesNormalizedMax5x() {
+    #expect(PlanDisplay.displayName("max_5x") == "Max 5x")
+    #expect(PlanDisplay.displayName("Max 20X") == "Max 20x")
   }
 
   @Test

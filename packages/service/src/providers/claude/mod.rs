@@ -9,7 +9,7 @@ use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
     ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
-    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
+    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
     read_bounded_file, run_bounded_command, slug, string,
 };
 
@@ -383,6 +383,7 @@ struct ClaudeWindow {
     /// Weekly-group limits meter one seven-day cycle and therefore share its reset.
     /// Claude's other seven-day-long limits, such as Routines, are not in that group.
     weekly_group: bool,
+    primary_cadence: Option<&'static str>,
 }
 
 const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
@@ -392,6 +393,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "5 Hours",
         duration_seconds: 18_000,
         weekly_group: false,
+        primary_cadence: Some("five_hour"),
     },
     ClaudeWindow {
         field: "seven_day",
@@ -399,6 +401,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: Some("weekly"),
     },
     ClaudeWindow {
         field: "seven_day_sonnet",
@@ -406,6 +409,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Sonnet Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
     ClaudeWindow {
         field: "seven_day_opus",
@@ -413,6 +417,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Opus Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
     ClaudeWindow {
         field: "seven_day_oauth_apps",
@@ -420,6 +425,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "OAuth Apps Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
 ];
 
@@ -502,10 +508,10 @@ fn collect_at(
             Err(_) => (None, None),
         }
     };
-    let plan = credentials
-        .subscription_type
-        .clone()
-        .or_else(|| credentials.rate_limit_tier.clone());
+    let plan = claude_plan(
+        credentials.subscription_type.as_deref(),
+        credentials.rate_limit_tier.as_deref(),
+    );
     let (fingerprint, scope) =
         account_identity("claude", "organization_id", organization_id.as_deref());
     Ok(QuotaSnapshot {
@@ -539,6 +545,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             entry.id,
             entry.title,
             entry.duration_seconds,
+            entry.primary_cadence,
         ) {
             if entry.weekly_group {
                 weekly_group.push(window.id.clone());
@@ -585,6 +592,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
                     .and_then(|v| parse_date(Some(v)))
                     .map(super::common::unix_seconds_to_iso),
                 duration_seconds: Some(WEEK_SECONDS),
+                primary_cadence: None,
                 remaining_value: None,
                 limit_value: None,
                 value_unit: None,
@@ -602,8 +610,13 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     ]
     .iter()
     .find_map(|key| obj_get(value, key));
-    if let Some(window) = usage_window(routines, "claude-routines", "Daily Routines", WEEK_SECONDS)
-    {
+    if let Some(window) = usage_window(
+        routines,
+        "claude-routines",
+        "Daily Routines",
+        WEEK_SECONDS,
+        None,
+    ) {
         windows.push(window);
     }
     let extra = obj_get(value, "extra_usage").or_else(|| obj_get(value, "extraUsage"));
@@ -614,6 +627,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             used_percent: clamp_percent(utilization),
             resets_at: None,
             duration_seconds: None,
+            primary_cadence: None,
             remaining_value: None,
             limit_value: None,
             value_unit: None,
@@ -628,6 +642,7 @@ fn usage_window(
     id: &str,
     title: &str,
     duration: u64,
+    primary_cadence: Option<&'static str>,
 ) -> Option<QuotaWindow> {
     let value = value?;
     let utilization = number(obj_get_any(
@@ -642,10 +657,27 @@ fn usage_window(
             .and_then(|v| parse_date(Some(v)))
             .map(super::common::unix_seconds_to_iso),
         duration_seconds: Some(duration),
+        primary_cadence,
         remaining_value: None,
         limit_value: None,
         value_unit: None,
     })
+}
+
+pub(super) fn claude_plan(
+    subscription_type: Option<&str>,
+    rate_limit_tier: Option<&str>,
+) -> Option<String> {
+    claude_plan_slug(rate_limit_tier).or_else(|| claude_plan_slug(subscription_type))
+}
+
+/// Claude tiers arrive namespaced (`default_claude_max_5x`); the namespace is Claude's, not a
+/// plan, so it is stripped before the shared slug reaches a client's plan table.
+fn claude_plan_slug(raw: Option<&str>) -> Option<String> {
+    let slug = plan_slug(raw)?;
+    let stripped = slug.strip_prefix("default_").unwrap_or(&slug);
+    let stripped = stripped.strip_prefix("claude_").unwrap_or(stripped);
+    (!stripped.is_empty()).then(|| stripped.to_owned())
 }
 
 fn map_profile(value: &Value) -> (Option<String>, Option<String>) {
@@ -926,6 +958,28 @@ mod tests {
     }
 
     #[test]
+    fn map_usage_marks_headline_windows_and_leaves_scoped_ones_unmarked() {
+        let windows = map_usage(&serde_json::json!({
+            "five_hour": {"utilization": 10},
+            "seven_day": {"utilization": 20},
+            "seven_day_sonnet": {"utilization": 30},
+            "extra_usage": {"utilization": 12.5},
+            "routines": {"utilization": 5}
+        }));
+        let cadence = |id: &str| {
+            windows
+                .iter()
+                .find(|window| window.id == id)
+                .and_then(|window| window.primary_cadence)
+        };
+        assert_eq!(cadence("five_hour"), Some("five_hour"));
+        assert_eq!(cadence("seven_day"), Some("weekly"));
+        assert_eq!(cadence("seven_day_sonnet"), None);
+        assert_eq!(cadence("extra_usage"), None);
+        assert_eq!(cadence("claude-routines"), None);
+    }
+
+    #[test]
     fn maps_optional_usage_windows_and_extra_usage() {
         let windows = map_usage(&serde_json::json!({
             "five_hour": null,
@@ -1012,6 +1066,24 @@ mod tests {
             ),
             Some(Entry::Grant(_))
         ));
+    }
+
+    #[test]
+    fn snapshot_plan_prefers_the_rate_limit_tier() {
+        assert_eq!(
+            claude_plan(Some("max"), Some("default_claude_max_5x")).as_deref(),
+            Some("max_5x")
+        );
+        assert_eq!(
+            claude_plan(Some("max"), Some("default_claude_max_20x")).as_deref(),
+            Some("max_20x")
+        );
+        assert_eq!(claude_plan(Some("pro"), None).as_deref(), Some("pro"));
+        assert_eq!(claude_plan(Some("max"), None).as_deref(), Some("max"));
+        assert_eq!(
+            claude_plan(None, Some("default_claude_max_5x")).as_deref(),
+            Some("max_5x")
+        );
     }
 
     /// A collection failure and an account with nothing to report are different answers, and

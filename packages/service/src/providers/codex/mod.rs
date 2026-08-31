@@ -586,6 +586,14 @@ impl WindowKind {
             Self::Monthly => ("monthly", "Monthly"),
         }
     }
+
+    fn primary_cadence(self) -> &'static str {
+        match self {
+            Self::FiveHour => "five_hour",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
 }
 
 fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
@@ -600,6 +608,7 @@ fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
         used_percent: clamp_percent(used),
         resets_at: reset,
         duration_seconds: window_duration_seconds(value),
+        primary_cadence: None,
         remaining_value: None,
         limit_value: None,
         value_unit: None,
@@ -650,6 +659,7 @@ fn label_window(mut window: QuotaWindow, fallback: WindowKind) -> (WindowKind, Q
     let (id, title) = kind.labels();
     window.id = id.to_owned();
     window.title = title.to_owned();
+    window.primary_cadence = Some(kind.primary_cadence());
     (kind, window)
 }
 
@@ -935,6 +945,36 @@ mod tests {
         let error = collect(&official, &cancelled).expect_err("cancelled");
         assert_eq!(error.category, ErrorCategory::Unavailable);
         assert_eq!(error.source_id, SOURCE);
+    }
+
+    #[test]
+    fn headline_windows_carry_primary_cadence_and_spark_does_not() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 12, "limit_window_seconds": 18000},
+                "secondary_window": {"used_percent": 33, "limit_window_seconds": 604800}
+            },
+            "additional_rate_limits": [
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 4, "limit_window_seconds": 18000},
+                        "secondary_window": {"used_percent": 11, "limit_window_seconds": 604800}
+                    }
+                }
+            ]
+        }));
+        let cadence = |id: &str| {
+            usage
+                .windows
+                .iter()
+                .find(|window| window.id == id)
+                .and_then(|window| window.primary_cadence)
+        };
+        assert_eq!(cadence("five_hour"), Some("five_hour"));
+        assert_eq!(cadence("weekly"), Some("weekly"));
+        assert_eq!(cadence("codex-spark"), None);
+        assert_eq!(cadence("codex-spark-weekly"), None);
     }
 
     #[test]

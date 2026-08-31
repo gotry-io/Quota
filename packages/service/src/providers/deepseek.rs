@@ -136,6 +136,7 @@ fn map_windows(balances: &[Balance]) -> Vec<QuotaWindow> {
                 used_percent: 0.0,
                 resets_at: None,
                 duration_seconds: None,
+                primary_cadence: None,
                 remaining_value: Some(balance.total),
                 limit_value: None,
                 value_unit: usd.then_some("usd"),

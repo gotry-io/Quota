@@ -7,7 +7,8 @@ import Foundation
 /// do the subtraction before they learn the only thing they wanted to know.
 ///
 /// `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
-/// thresholds and phrases; this type and `apps/web/src/lib/format.ts` both answer it.
+/// thresholds, phrases, and when the no-reset phrase prints; this type and
+/// `apps/web/src/lib/format.ts` both answer it.
 public enum FreshnessCopy: Sendable {
   /// Stands in for an age before anything has been read at all.
   public static let notChecked = "Not checked"
@@ -17,6 +18,22 @@ public enum FreshnessCopy: Sendable {
 
   /// One phrase for a window whose provider never says when it refills.
   public static let noResetTime = "No reset time reported"
+
+  /// Whether to print ``noResetTime`` under a percent window.
+  public static func showsNoResetTime(remainingPercent: Double, showsPercentMeter: Bool) -> Bool {
+    showsPercentMeter && remainingPercent < 100
+  }
+
+  /// Same rule, with both scalars derived from the window.
+  public static func showsNoResetTime(_ window: some RemainingQuotaWindow) -> Bool {
+    showsNoResetTime(
+      remainingPercent: RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent),
+      showsPercentMeter: RemainingQuotaFormat.showsPercentMeter(
+        remainingValue: window.remainingValue,
+        hasLimit: window.limitValue != nil
+      )
+    )
+  }
 
   /// The bare relative phrase: `just now`, `3m ago`, `2d ago`.
   ///
@@ -53,4 +70,13 @@ public enum FreshnessCopy: Sendable {
     guard let date else { return noReadings }
     return "last reading \(age(since: date, now: now))"
   }
+}
+
+/// Remaining and limit as a window carries them. ``FreshnessCopy/showsNoResetTime(_:)``
+/// derives the percent and meter scalars from these rather than asking the caller to
+/// precompute them.
+public protocol RemainingQuotaWindow {
+  var usedPercent: Double { get }
+  var remainingValue: Double? { get }
+  var limitValue: Double? { get }
 }

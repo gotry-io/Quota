@@ -1,5 +1,5 @@
 {
-  "$comment": "How old a reading is, in the words every Quota client uses. One rule, one voice: the menu bar footer, a provider row, a device row, the website, and the widgets all state age relative to now rather than as a clock time or a calendar date, because an absolute instant makes the reader do the subtraction. `age` is the bare relative phrase; `observation` is the whole line under a reading, which names why a reading is not current instead of only that it is not; `device` is the age half of a device row. `packages/apple-shared` and `apps/web/src/lib/format.ts` both answer this file, so a phrase one of them changes cannot drift from the other.",
+  "$comment": "How old a reading is, in the words every Quota client uses. One rule, one voice: the menu bar footer, a provider row, a device row, the website, and the widgets all state age relative to now rather than as a clock time or a calendar date, because an absolute instant makes the reader do the subtraction. `age` is the bare relative phrase; `observation` is the whole line under a reading, which names why a reading is not current instead of only that it is not; `device` is the age half of a device row; `missing_reset` is whether a percent window with no refill instant prints the no-reset phrase. `packages/apple-shared` and `apps/web/src/lib/format.ts` both answer this file, so a phrase one of them changes cannot drift from the other.",
   "phrases": {
     "no_reset_time": "No reset time reported",
     "not_checked": "Not checked",
@@ -93,6 +93,26 @@
       "status": "error",
       "age_seconds": 60,
       "expected": "Can’t refresh — last reading 1m ago"
+    }
+  ],
+  "missing_reset": [
+    {
+      "name": "a full percent window omits the phrase",
+      "remaining_percent": 100,
+      "shows_percent_meter": true,
+      "expected": false
+    },
+    {
+      "name": "a used percent window with no refill uses the phrase",
+      "remaining_percent": 53,
+      "shows_percent_meter": true,
+      "expected": true
+    },
+    {
+      "name": "a balance-only window never uses the phrase",
+      "remaining_percent": 40,
+      "shows_percent_meter": false,
+      "expected": false
     }
   ],
   "device": [

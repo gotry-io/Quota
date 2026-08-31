@@ -47,6 +47,36 @@ struct FreshnessCopyConformanceTests {
     }
   }
 
+  @Test func missingResetDisplayMatchesTheSharedFixture() throws {
+    let cases = try FreshnessCopyFixture.missingResetCases()
+    #expect(cases.count > 1)
+    for testCase in cases {
+      let observed = FreshnessCopy.showsNoResetTime(
+        remainingPercent: testCase.remainingPercent,
+        showsPercentMeter: testCase.showsPercentMeter
+      )
+      #expect(observed == testCase.expected, "\(testCase.name)")
+    }
+  }
+
+  @Test func missingResetDisplayDerivesBothScalarsFromAWindow() {
+    struct Window: RemainingQuotaWindow {
+      var usedPercent: Double
+      var remainingValue: Double?
+      var limitValue: Double?
+    }
+    #expect(
+      FreshnessCopy.showsNoResetTime(
+        Window(usedPercent: 63.102, remainingValue: 14.55, limitValue: 400)
+      )
+    )
+    #expect(
+      !FreshnessCopy.showsNoResetTime(
+        Window(usedPercent: 0, remainingValue: 12.5, limitValue: nil)
+      )
+    )
+  }
+
   private func instant(_ ageSeconds: Int) -> Date {
     now.addingTimeInterval(-TimeInterval(ageSeconds))
   }
@@ -73,6 +103,13 @@ enum FreshnessCopyFixture {
     let expected: String
   }
 
+  struct MissingResetCase {
+    let name: String
+    let remainingPercent: Double
+    let showsPercentMeter: Bool
+    let expected: Bool
+  }
+
   static func phrases() throws -> [String: String] {
     try root()["phrases"] as! [String: String]
   }
@@ -85,6 +122,18 @@ enum FreshnessCopyFixture {
         status: $0["status"] as? String,
         ageSeconds: $0["age_seconds"] as? Int,
         expected: $0["expected"] as! String
+      )
+    }
+  }
+
+  static func missingResetCases() throws -> [MissingResetCase] {
+    let entries = try root()["missing_reset"] as! [[String: Any]]
+    return entries.map {
+      MissingResetCase(
+        name: $0["name"] as! String,
+        remainingPercent: ($0["remaining_percent"] as! NSNumber).doubleValue,
+        showsPercentMeter: $0["shows_percent_meter"] as! Bool,
+        expected: $0["expected"] as! Bool
       )
     }
   }

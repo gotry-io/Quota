@@ -73,6 +73,34 @@ struct MenuBarLabelLayoutTests {
   }
 
   @Test
+  func aCadencePairStaysTheStandardHeightAndCentersOnTheMark() throws {
+    let stacked = MenuBarLabelModel(
+      cells: [
+        MenuBarLabelCell(
+          icon: .provider(.claude),
+          lines: [
+            MenuBarLabelLine(percent: "68%", compactCadence: "5H"),
+            MenuBarLabelLine(percent: "27%", compactCadence: "W"),
+          ]
+        )
+      ],
+      accessibilityLabel: "QuotaBar, Claude Code, 5 Hours 68% remaining, Weekly 27% remaining"
+    )
+    let image = MenuBarItemImage.make(stacked)
+    #expect(image.size.height == MenuBarItemImage.height)
+    #expect(image.isTemplate)
+    #expect(image.size.width > MenuBarItemImage.make(iconAndPercent).size.width)
+
+    let ink = try #require(itemInk(of: stacked))
+    let mark = try #require(ink.mark)
+    let text = try #require(ink.text)
+    #expect(abs(mark.midY - ink.height / 2) <= tolerance)
+    #expect(abs(text.midY - mark.midY) <= 0.75)
+    let singleText = try #require(itemInk(of: iconAndPercent)?.text)
+    #expect(text.height > singleText.height)
+  }
+
+  @Test
   func packedReadingsShareOneTemplateImageTallerThanNeitherCellAlone() {
     let packed = MenuBarLabelModel(
       cells: [

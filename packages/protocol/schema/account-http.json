@@ -740,6 +740,10 @@
         "duration_seconds": {
           "$ref": "#/$defs/__schema11"
         },
+        "primary_cadence": {
+          "type": "string",
+          "enum": ["five_hour", "weekly", "monthly"]
+        },
         "remaining_value": {
           "type": "number"
         },

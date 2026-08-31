@@ -1,3 +1,5 @@
+import { KNOWN_PLANS } from "./plan-display.generated.ts";
+
 export const DASHBOARD_PATH = "/my";
 /** Relay's GitHub sign-in. Following it is the whole flow; the browser never fetches it. */
 export const SIGN_IN_PATH = "/api/auth/github/start";
@@ -8,27 +10,6 @@ export function signInHref(returnTo: string = DASHBOARD_PATH): string {
     ? SIGN_IN_PATH
     : `${SIGN_IN_PATH}?return_to=${encodeURIComponent(returnTo)}`;
 }
-
-/**
- * The same table QuotaBar's `PlanDisplay` carries, keyed with every separator dropped: plan
- * slugs arrive as `supergrok_heavy`, `super-grok`, or `pro lite`, and one entry per spelling is
- * the table drifting one spelling at a time.
- */
-const KNOWN_PLANS: Readonly<Record<string, string>> = {
-  free: "Free",
-  plus: "Plus",
-  pro: "Pro",
-  prolite: "Pro Lite",
-  max: "Max",
-  team: "Team",
-  business: "Business",
-  enterprise: "Enterprise",
-  edu: "Edu",
-  education: "Education",
-  supergrok: "SuperGrok",
-  supergrokheavy: "SuperGrok Heavy",
-  super: "Super",
-};
 
 export function planDisplayName(raw: string | undefined): string | undefined {
   const value = raw?.trim();

@@ -29,22 +29,6 @@ public enum PlanDisplay: Sendable {
     nonempty(label)
   }
 
-  private static let knownPlans: [String: String] = [
-    "free": "Free",
-    "plus": "Plus",
-    "pro": "Pro",
-    "prolite": "Pro Lite",
-    "max": "Max",
-    "team": "Team",
-    "business": "Business",
-    "enterprise": "Enterprise",
-    "edu": "Edu",
-    "education": "Education",
-    "supergrok": "SuperGrok",
-    "supergrokheavy": "SuperGrok Heavy",
-    "super": "Super",
-  ]
-
   /// Plan slugs reach us with any separator (`supergrok heavy`, `super_grok`,
   /// `pro-lite`), so the lookup key drops them all rather than the table
   /// carrying one entry per spelling.

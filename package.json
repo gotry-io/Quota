@@ -17,9 +17,11 @@
   "scripts": {
     "prepare": "./scripts/install-git-hooks.sh",
     "build": "pnpm --filter @gotry-io/quota-relay build && cargo build --locked --package quota-service --package quota-menubar-helper && swift build --package-path apps/menubar",
-    "check": "pnpm check:provider-catalog && pnpm check:schema && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
+    "check": "pnpm check:provider-catalog && pnpm check:plan-display && pnpm check:schema && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
     "check:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs --check",
     "generate:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs",
+    "generate:plan-display": "node --experimental-strip-types scripts/generate-plan-display.mjs",
+    "check:plan-display": "node --experimental-strip-types scripts/generate-plan-display.mjs --check",
     "version:bump:menubar": "node scripts/bump-version.mjs menubar",
     "format": "biome format --write . && cargo fmt --all",
     "format:check": "pnpm format:check:js && pnpm format:check:rust",

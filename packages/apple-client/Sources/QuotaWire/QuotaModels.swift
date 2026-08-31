@@ -24,6 +24,13 @@ public enum QuotaValueUnit: String, Codable, Equatable, Sendable, TolerantWireEn
   case unknown
 }
 
+public enum PrimaryCadence: String, Codable, Equatable, Sendable, TolerantWireEnum {
+  case fiveHour = "five_hour"
+  case weekly
+  case monthly
+  case unknown
+}
+
 public struct QuotaAccount: Codable, Equatable, Sendable {
   public let fingerprint: String
   public let label: String?
@@ -74,6 +81,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   public let usedPercent: Double
   public let resetsAt: Date?
   public let durationSeconds: Int?
+  public let primaryCadence: PrimaryCadence?
   public let remainingValue: Double?
   public let limitValue: Double?
   public let valueUnit: QuotaValueUnit?
@@ -86,13 +94,15 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     durationSeconds: Int? = nil,
     remainingValue: Double? = nil,
     limitValue: Double? = nil,
-    valueUnit: QuotaValueUnit? = nil
+    valueUnit: QuotaValueUnit? = nil,
+    primaryCadence: PrimaryCadence? = nil
   ) {
     self.id = id
     self.title = title
     self.usedPercent = usedPercent
     self.resetsAt = resetsAt
     self.durationSeconds = durationSeconds
+    self.primaryCadence = primaryCadence
     self.remainingValue = remainingValue
     self.limitValue = limitValue
     self.valueUnit = valueUnit
@@ -105,6 +115,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     usedPercent = try container.decode(Double.self, forKey: .usedPercent)
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
     durationSeconds = try container.decodeIfPresent(Int.self, forKey: .durationSeconds)
+    primaryCadence = try container.decodeIfPresent(PrimaryCadence.self, forKey: .primaryCadence)
     remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
     limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     valueUnit = try container.decodeIfPresent(QuotaValueUnit.self, forKey: .valueUnit)
@@ -133,6 +144,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     case usedPercent
     case resetsAt
     case durationSeconds
+    case primaryCadence
     case remainingValue
     case limitValue
     case valueUnit
@@ -229,7 +241,7 @@ extension QuotaValueUnit {
   }
 }
 
-extension QuotaWindow {
+extension QuotaWindow: RemainingQuotaWindow {
   public var remainingPercent: Double {
     RemainingQuotaFormat.remainingPercent(usedPercent: usedPercent)
   }
@@ -245,5 +257,36 @@ extension QuotaWindow {
       remainingValue: remainingValue,
       hasLimit: limitValue != nil
     )
+  }
+
+  /// The cadence this window headlines, or `nil` when it is not a headline meter this build
+  /// can name — unknown, unmarked, or a balance that has no percent to stack.
+  public var primaryCadenceKind: PrimaryCadenceKind? {
+    guard showsPercentMeter else { return nil }
+    switch primaryCadence {
+    case .fiveHour: return .fiveHour
+    case .weekly: return .weekly
+    case .monthly: return .monthly
+    case .unknown, nil: return nil
+    }
+  }
+}
+
+extension QuotaSnapshot {
+  /// Headline meters, shortest cadence first, at most one per cadence. The service writes at
+  /// most one; if two arrive, the first in wire order keeps the slot.
+  public var primaryCadenceWindows: [QuotaWindow] {
+    var selected: [QuotaWindow] = []
+    for window in windows {
+      guard let kind = window.primaryCadenceKind else { continue }
+      if selected.contains(where: { $0.primaryCadenceKind == kind }) { continue }
+      selected.append(window)
+    }
+    return selected.sorted {
+      guard let left = $0.primaryCadenceKind, let right = $1.primaryCadenceKind else {
+        return false
+      }
+      return left < right
+    }
   }
 }

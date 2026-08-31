@@ -15,18 +15,50 @@ enum MenuBarLabelIcon: Equatable, Hashable, Sendable {
   case provider(ProviderID)
 }
 
-/// One reading in the menu bar: a mark, a remaining percent, or both.
+/// One remaining percent in a cell: a lone number, or one row of a cadence pair.
+struct MenuBarLabelLine: Equatable, Hashable, Sendable {
+  /// Compact cadence tag (`5H`, `W`, `M`) when this row is part of a stacked pair.
+  let compactCadence: String?
+  let percent: String
+
+  init(percent: String, compactCadence: String? = nil) {
+    self.percent = percent
+    self.compactCadence = compactCadence
+  }
+
+  var isStacked: Bool { compactCadence != nil }
+}
+
+/// One reading in the menu bar: a mark, a remaining percent, or a stacked cadence pair.
 struct MenuBarLabelCell: Equatable, Hashable, Sendable {
   let icon: MenuBarLabelIcon?
-  let text: String?
+  let lines: [MenuBarLabelLine]
+
+  /// The lone remaining percent when this cell is a single unlabelled reading.
+  var text: String? {
+    guard lines.count == 1, !lines[0].isStacked else { return nil }
+    return lines[0].percent
+  }
+
+  init(icon: MenuBarLabelIcon?, text: String?) {
+    self.icon = icon
+    self.lines = text.map { [MenuBarLabelLine(percent: $0)] } ?? []
+  }
+
+  init(icon: MenuBarLabelIcon?, lines: [MenuBarLabelLine]) {
+    self.icon = icon
+    self.lines = lines
+  }
 }
 
 /// The menu-bar item's content: one or more readings composed into a template image.
 ///
-/// The point of an item is that a remaining percent is readable without opening anything, so
-/// each cell names a single reading rather than an average or a count. A reading that no
-/// longer describes live quota answers for nothing: a lone item falls back to Quota's mark,
-/// and a packed item keeps that provider's mark so the strip does not jump.
+/// The point of an item is that remaining quota is readable without opening anything, so
+/// each cell names a single subscription rather than an average or a count. A lone item may
+/// stack that subscription's primary cadence pair; a packed item still carries one tightest
+/// percent per provider. A reading that no longer describes live quota answers for nothing:
+/// a lone item falls back to Quota's mark, and a packed item keeps that provider's mark so
+/// the strip does not jump.
 struct MenuBarLabelModel: Equatable, Hashable, Sendable {
   let cells: [MenuBarLabelCell]
   let accessibilityLabel: String
@@ -104,7 +136,13 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       return [
         MenuBarStatusItemSpec(
           id: .automatic,
-          label: label(overview: overview, style: style, allowed: nil, now: now)
+          label: label(
+            overview: overview,
+            style: style,
+            allowed: nil,
+            stackCadences: true,
+            now: now
+          )
         )
       ]
     case .packed(let providers):
@@ -118,7 +156,13 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       return providers.map { id in
         MenuBarStatusItemSpec(
           id: .provider(id),
-          label: label(overview: overview, style: style, allowed: id, now: now)
+          label: label(
+            overview: overview,
+            style: style,
+            allowed: id,
+            stackCadences: true,
+            now: now
+          )
         )
       }
     }
@@ -138,6 +182,7 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         style: style,
         allowed: id,
         absentIcon: .provider(id),
+        stackCadences: false,
         now: now
       )
       cells.append(contentsOf: part.cells)
@@ -155,6 +200,7 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     style: MenuBarStylePreference,
     allowed: ProviderID?,
     absentIcon: MenuBarLabelIcon = .quota,
+    stackCadences: Bool,
     now: Date
   ) -> MenuBarLabelModel {
     if !style.showsPercent {
@@ -169,24 +215,67 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     else {
       return MenuBarLabelModel(icon: absentIcon, text: nil, accessibilityLabel: "QuotaBar")
     }
+    let icon: MenuBarLabelIcon? = style.showsIcon ? .provider(tightest.provider) : nil
+    if stackCadences {
+      return cadenceLabel(item: tightest.item, icon: icon, fallbackPercent: tightest.remainingPercent)
+    }
     let percent = RemainingQuotaFormat.percent(tightest.remainingPercent)
     return MenuBarLabelModel(
-      icon: style.showsIcon ? .provider(tightest.provider) : nil,
+      icon: icon,
       text: percent,
       accessibilityLabel: "QuotaBar, \(tightest.provider.displayName) \(percent) remaining"
     )
   }
 
+  /// A lone item's reading: the primary cadence pair when that subscription has one, otherwise
+  /// the one primary cadence, otherwise the tightest remaining percent.
+  private static func cadenceLabel(
+    item: LocalServiceOverviewItem,
+    icon: MenuBarLabelIcon?,
+    fallbackPercent: Double
+  ) -> MenuBarLabelModel {
+    let name = item.identity.provider.displayName
+    let cadences = item.snapshot.primaryCadenceWindows
+    guard cadences.count > 1 else {
+      let percent = RemainingQuotaFormat.percent(
+        cadences.first?.remainingPercent ?? fallbackPercent
+      )
+      return MenuBarLabelModel(
+        icon: icon,
+        text: percent,
+        accessibilityLabel: "QuotaBar, \(name) \(percent) remaining"
+      )
+    }
+    // One pass, so the row a reader sees and the phrase VoiceOver speaks cannot disagree
+    // about a percent.
+    var lines: [MenuBarLabelLine] = []
+    var spoken: [String] = []
+    for window in cadences.prefix(2) {
+      let percent = RemainingQuotaFormat.percent(window.remainingPercent)
+      lines.append(
+        MenuBarLabelLine(percent: percent, compactCadence: window.primaryCadenceKind?.compactTag)
+      )
+      spoken.append("\(window.title) \(percent) remaining")
+    }
+    return MenuBarLabelModel(
+      cells: [MenuBarLabelCell(icon: icon, lines: lines)],
+      accessibilityLabel: "QuotaBar, \(name), \(spoken.joined(separator: ", "))"
+    )
+  }
+
   private struct Reading {
-    let provider: ProviderID
+    let item: LocalServiceOverviewItem
     let remainingPercent: Double
+
+    var provider: ProviderID { item.identity.provider }
   }
 
   /// The smallest remaining percent any window of any current reading reports, among the
   /// readings `allowed` names — or every current reading when `allowed` is nil.
   ///
   /// Balance-only windows carry no budget to be a percent of, so they cannot be the
-  /// constraint; every other window can.
+  /// constraint; every other window can. The provider this returns is whose cadence pair a
+  /// lone item then shows; extras can win the choice without occupying the pair.
   private static func tightestReading(
     in overview: [LocalServiceOverviewItem],
     allowed: Set<ProviderID>?,
@@ -199,10 +288,7 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         guard tightest.map({ window.remainingPercent < $0.remainingPercent }) ?? true else {
           continue
         }
-        tightest = Reading(
-          provider: item.identity.provider,
-          remainingPercent: window.remainingPercent
-        )
+        tightest = Reading(item: item, remainingPercent: window.remainingPercent)
       }
     }
     return tightest

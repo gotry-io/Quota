@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
+  AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
@@ -148,6 +149,47 @@ describe("quota protocol", () => {
         accepted: ["2026-08-02T12:30:00Z"],
       }).success,
     ).toBe(false);
+  });
+
+  it("carries a window's headline cadence and tolerates an unknown member on read", () => {
+    const envelope = quotaEnvelope();
+    const window = {
+      id: "five_hour",
+      title: "5 Hours",
+      used_percent: 10,
+      primary_cadence: "five_hour" as const,
+    };
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse({
+        ...envelope,
+        snapshots: [{ ...envelope.snapshots[0], windows: [window] }],
+      }).success,
+    ).toBe(true);
+
+    const unknown = { ...window, primary_cadence: "yearly" };
+    expect(
+      QuotaSnapshotEnvelopeSchema.safeParse({
+        ...envelope,
+        snapshots: [{ ...envelope.snapshots[0], windows: [unknown] }],
+      }).success,
+    ).toBe(false);
+
+    const summary = accountSummary();
+    const subscription = summary.subscriptions[0];
+    if (!subscription) {
+      throw new Error("accountSummary fixture has a subscription");
+    }
+    const payload = {
+      ...summary,
+      subscriptions: [
+        {
+          ...subscription,
+          snapshot: { ...subscription.snapshot, windows: [unknown] },
+        },
+      ],
+    };
+    expect(AccountSummarySchema.safeParse(payload).success).toBe(false);
+    expect(AccountSummaryReadSchema.safeParse(payload).success).toBe(true);
   });
 
   it("keeps absolute quota balances valid when their currency is not a wire unit", () => {

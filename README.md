@@ -130,8 +130,9 @@ The marketing version lives in `apps/menubar/Support/Info.plist`.
 
 ## Current status
 
-The menu bar shows the tightest remaining percentage across the subscriptions Overview still counts
-as current, and Overview closes with a Today line for spend and tokens. Local state is two
+The menu bar shows the tightest current subscription Overview still counts as live, and stacks that
+subscription's 5 Hours and Weekly remaining percents when both exist. Overview closes with a Today
+line for spend and tokens. Local state is two
 owner-only SQLite files: an identity store holding what this Mac cannot regenerate, and a cache that
 is deleted and rebuilt rather than repaired when SQLite refuses to read it. The bundled helper
 announces `ready` when that state is open and answers `ping` while it works, so QuotaBar waits on

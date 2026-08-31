@@ -136,6 +136,15 @@ export type FingerprintScope = z.infer<typeof FingerprintScopeSchema>;
 const QuotaValueUnitSchema = z.enum(["usd", "credits", "count"]);
 export type QuotaValueUnit = z.infer<typeof QuotaValueUnitSchema>;
 
+/**
+ * Which recurring allowance a window meters, when it is the subscription's headline meter for
+ * that cadence. Model-scoped windows (Sonnet Weekly), top-ups (Extra Usage), and feature-scoped
+ * limits (Codex Spark 5 Hours) carry none: they meter the same cadence without being the meter a
+ * reader means when they ask how much is left.
+ */
+const PrimaryCadenceSchema = z.enum(["five_hour", "weekly", "monthly"]);
+export type PrimaryCadence = z.infer<typeof PrimaryCadenceSchema>;
+
 const QuotaWindowSchema = z
   .object({
     id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
@@ -144,6 +153,7 @@ const QuotaWindowSchema = z
     used_percent: z.number().finite().min(0).max(100),
     resets_at: Rfc3339InstantSchema.optional(),
     duration_seconds: SafeNonnegativeIntegerSchema.optional(),
+    primary_cadence: PrimaryCadenceSchema.optional(),
     /** Absolute remaining when known (for example, a USD balance). */
     remaining_value: z.number().finite().optional(),
     limit_value: z.number().finite().nonnegative().optional(),
@@ -1161,6 +1171,7 @@ const ReadEnumSchema = z.string().min(1).max(64).regex(WIRE_ENUM_PATTERN);
 
 const QuotaWindowReadSchema = QuotaWindowSchema.extend({
   value_unit: ReadEnumSchema.optional(),
+  primary_cadence: ReadEnumSchema.optional(),
 }).loose();
 
 const QuotaAccountReadSchema = QuotaAccountSchema.extend({

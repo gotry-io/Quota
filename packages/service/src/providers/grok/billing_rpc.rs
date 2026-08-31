@@ -194,6 +194,7 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
             .resets_at
             .map(super::super::common::unix_seconds_to_iso),
         duration_seconds: None,
+        primary_cadence: None,
         remaining_value: None,
         limit_value: None,
         value_unit: None,

@@ -3,7 +3,11 @@
  * shown a member this build has never heard of. See ADR 0023.
  */
 type CostView = { amount_microusd: string | null; status: string; basis: string };
-import { remainingPercent } from "@gotry-io/quota-model";
+import {
+  isBalanceOnly,
+  remainingPercent,
+  showsPercentMeter as windowShowsPercentMeter,
+} from "@gotry-io/quota-model";
 
 export const WEB_LOCALE = "en-US";
 
@@ -42,11 +46,34 @@ export function formatDate(value: string): string {
  * rather than as a calendar date, because an absolute instant makes the reader do the
  * subtraction before they learn the only thing they wanted to know.
  * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
- * thresholds and phrases; this file and `packages/apple-shared` both answer it.
+ * thresholds, phrases, and when the no-reset phrase prints; this file and
+ * `packages/apple-shared` both answer it.
  */
 export const NO_RESET_TIME_COPY = "No reset time reported";
 export const NOT_CHECKED_COPY = "Not checked";
 export const NO_READINGS_COPY = "no readings yet";
+
+type RemainingWindow = {
+  used_percent: number;
+  remaining_value?: number | undefined;
+  limit_value?: number | undefined;
+};
+
+/** Whether to print {@link NO_RESET_TIME_COPY} under a percent window. */
+export function showsNoResetTime(remainingPercent: number, showsPercentMeter: boolean): boolean;
+export function showsNoResetTime(window: RemainingWindow): boolean;
+export function showsNoResetTime(
+  remainingPercentOrWindow: number | RemainingWindow,
+  showsPercentMeter?: boolean,
+): boolean {
+  if (typeof remainingPercentOrWindow !== "number") {
+    return showsNoResetTime(
+      remainingPercent(remainingPercentOrWindow.used_percent),
+      windowShowsPercentMeter(remainingPercentOrWindow),
+    );
+  }
+  return Boolean(showsPercentMeter) && remainingPercentOrWindow < 100;
+}
 
 /** The bare compact duration: the largest whole unit that fits, with no words around it. */
 function compactAge(instant: string | number | Date, now: Date = new Date()): string {
@@ -109,7 +136,7 @@ export function formatQuotaRemaining(
   const percent = formatPercent(remainingPercent(window.used_percent));
   if (provider === "cursor" && window.id === "other_models") return percent;
   const absolute = formatAbsoluteRemaining(window);
-  const balanceOnly = window.remaining_value !== undefined && window.limit_value === undefined;
+  const balanceOnly = isBalanceOnly(window);
   if (absolute === undefined) return percent;
   if (balanceOnly) return absolute;
   return `${percent} · ${absolute}`;

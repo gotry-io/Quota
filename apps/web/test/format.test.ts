@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { isBalanceOnly, showsPercentMeter } from "@gotry-io/quota-model";
 import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
@@ -10,6 +11,7 @@ import {
   lastReadingCopy,
   observationFreshnessCopy,
   relativeAge,
+  showsNoResetTime,
   updatedCopy,
 } from "../src/lib/format.ts";
 
@@ -29,6 +31,12 @@ const fixture = JSON.parse(
   phrases: Record<string, string>;
   age: { name: string; age_seconds: number; expected: string }[];
   observation: { name: string; status: string; age_seconds: number; expected: string }[];
+  missing_reset: {
+    name: string;
+    remaining_percent: number;
+    shows_percent_meter: boolean;
+    expected: boolean;
+  }[];
   device: { name: string; age_seconds: number | null; expected: string }[];
 };
 
@@ -69,4 +77,28 @@ test("device lines match the shared fixture", () => {
     const value = testCase.age_seconds === null ? null : instant(testCase.age_seconds);
     assert.equal(lastReadingCopy(value, now), testCase.expected, testCase.name);
   }
+});
+
+test("missing reset display matches the shared fixture", () => {
+  assert.ok(fixture.missing_reset.length > 1);
+  for (const testCase of fixture.missing_reset) {
+    assert.equal(
+      showsNoResetTime(testCase.remaining_percent, testCase.shows_percent_meter),
+      testCase.expected,
+      testCase.name,
+    );
+  }
+});
+
+test("classifies wallet windows as balance-only and metered windows as percent meters", () => {
+  const wallet = { remaining_value: 12.5, used_percent: 0 };
+  const metered = { remaining_value: 14.55, limit_value: 400, used_percent: 63.102 };
+
+  assert.equal(isBalanceOnly(wallet), true);
+  assert.equal(showsPercentMeter(wallet), false);
+  assert.equal(isBalanceOnly(metered), false);
+  assert.equal(showsPercentMeter(metered), true);
+
+  assert.equal(showsNoResetTime(wallet), false);
+  assert.equal(showsNoResetTime(metered), true);
 });

@@ -329,6 +329,7 @@ fn included_windows(value: &Value, resets_at: Option<String>) -> Vec<QuotaWindow
             used_percent: clamp_percent(number(value.get(field))?),
             resets_at: resets_at.clone(),
             duration_seconds: None,
+            primary_cadence: None,
             remaining_value: api
                 .then_some(api_money)
                 .flatten()
@@ -366,6 +367,7 @@ fn request_window(value: &Value, resets_at: Option<String>) -> Option<QuotaWindo
         used_percent: clamp_percent(used / limit * 100.0),
         resets_at,
         duration_seconds: None,
+        primary_cadence: None,
         remaining_value: Some((limit - used).max(0.0)),
         limit_value: Some(limit),
         value_unit: Some("count"),
@@ -391,6 +393,7 @@ fn grok_bot_window(value: &Value) -> Option<QuotaWindow> {
         used_percent: clamp_percent(used),
         resets_at: end.map(unix_seconds_to_iso),
         duration_seconds: super::common::duration_seconds(start, end),
+        primary_cadence: None,
         remaining_value: None,
         limit_value: None,
         value_unit: None,
@@ -421,6 +424,7 @@ fn money_window(
         used_percent: clamp_percent(percent),
         resets_at,
         duration_seconds: None,
+        primary_cadence: None,
         remaining_value: Some(remaining / 100.0),
         limit_value: Some(limit / 100.0),
         value_unit: Some("usd"),

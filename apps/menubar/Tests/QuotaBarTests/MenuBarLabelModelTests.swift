@@ -375,6 +375,281 @@ struct MenuBarLabelModelTests {
     )
   }
 
+  @Test
+  func aWeeklyTitleWithoutPrimaryCadenceIsNotStacked() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32),
+            window(id: "weekly", title: "Weekly", usedPercent: 16),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    // Titles are display copy. Without the wire cadence this is one percent, not a pair.
+    #expect(label.text == "68%")
+    #expect(label.cells[0].lines.count == 1)
+    #expect(label.cells[0].lines[0].compactCadence == nil)
+    #expect(label.accessibilityLabel == "QuotaBar, Codex 68% remaining")
+  }
+
+  @Test
+  func aClaudeCadencePairStacksFiveHoursAndWeeklyAndIgnoresExtras() {
+    let label = MenuBarLabelModel.make(
+      overview: [claudeWithExtras],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.text == nil)
+    #expect(label.icon == .provider(.claude))
+    #expect(label.cells[0].lines == [
+      MenuBarLabelLine(percent: "60%", compactCadence: "5H"),
+      MenuBarLabelLine(percent: "27%", compactCadence: "W"),
+    ])
+    #expect(
+      label.accessibilityLabel
+        == "QuotaBar, Claude Code, 5 Hours 60% remaining, Weekly 27% remaining"
+    )
+  }
+
+  @Test
+  func automaticPicksTheProviderByTheTightestWindowThenShowsItsCadencePair() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          provider: .codex,
+          fingerprint: "codex",
+          windows: [window(id: "weekly", title: "Weekly", usedPercent: 50, primaryCadence: .weekly)]
+        ),
+        claudeWithExtras,
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    // Extra Usage at 1% remaining is the tightest window, so Automatic answers for Claude,
+    // then stacks Claude's primary pair rather than the extra that won the choice.
+    #expect(label.icon == .provider(.claude))
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.percent) == ["60%", "27%"])
+  }
+
+  @Test
+  func aThreeHoursTitleDoesNotPickTheStackedTag() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "three_hour", title: "3 Hours", usedPercent: 30, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 50, primaryCadence: .weekly),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.percent) == ["70%", "50%"])
+    #expect(
+      label.accessibilityLabel
+        == "QuotaBar, Codex, 3 Hours 70% remaining, Weekly 50% remaining"
+    )
+  }
+
+  @Test
+  func weeklyAndMonthlyStackWhenThereIsNoHoursWindow() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "weekly", title: "Weekly", usedPercent: 12, primaryCadence: .weekly),
+            window(id: "monthly", title: "Monthly", usedPercent: 41, primaryCadence: .monthly),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["W", "M"])
+    #expect(label.cells[0].lines.map(\.percent) == ["88%", "59%"])
+  }
+
+  @Test
+  func fiveHoursAndWeeklyWinOverMonthly() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 16, primaryCadence: .weekly),
+            window(id: "monthly", title: "Monthly", usedPercent: 41, primaryCadence: .monthly),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.percent) == ["68%", "84%"])
+  }
+
+  @Test
+  func hoursAndMonthlyStackWhenWeeklyIsAbsent() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "monthly", title: "Monthly", usedPercent: 41, primaryCadence: .monthly),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "M"])
+  }
+
+  @Test
+  func onlyFiveHoursStaysASinglePercent() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          provider: .claude,
+          fingerprint: "claude",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 47, primaryCadence: .fiveHour)
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.text == "53%")
+    #expect(label.cells[0].lines.count == 1)
+    #expect(label.cells[0].lines[0].compactCadence == nil)
+    #expect(label.accessibilityLabel == "QuotaBar, Claude Code 53% remaining")
+  }
+
+  @Test
+  func sparkFiveHoursDoesNotTakeTheHoursSlot() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "spark", title: "Codex Spark 5 Hours", usedPercent: 95),
+            window(id: "weekly", title: "Weekly", usedPercent: 20, primaryCadence: .weekly),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+
+    // Spark is not a headline meter, so the item is the one primary cadence, not the tighter extra.
+    #expect(label.text == "80%")
+    #expect(label.accessibilityLabel == "QuotaBar, Codex 80% remaining")
+  }
+
+  @Test
+  func combinedStillShowsOneTightestPercentPerProvider() {
+    let specs = MenuBarLabelModel.specs(
+      overview: [
+        item(
+          provider: .codex,
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 16, primaryCadence: .weekly),
+          ]
+        ),
+        claudeWithExtras,
+      ],
+      style: .iconAndPercent,
+      provider: .providers([.codex, .claude]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .claude],
+      now: now
+    )
+
+    #expect(specs[0].label.cells[0] == MenuBarLabelCell(icon: .provider(.codex), text: "68%"))
+    #expect(specs[0].label.cells[1] == MenuBarLabelCell(icon: .provider(.claude), text: "1%"))
+  }
+
+  @Test
+  func separateItemsEachStackTheirCadencePair() {
+    let specs = MenuBarLabelModel.specs(
+      overview: [
+        item(
+          provider: .codex,
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 16, primaryCadence: .weekly),
+          ]
+        ),
+        claudeWithExtras,
+      ],
+      style: .percent,
+      provider: .providers([.codex, .claude]),
+      arrangement: .separate,
+      visibleProviders: [.codex, .claude],
+      now: now
+    )
+
+    #expect(specs.map(\.id) == [.provider(.codex), .provider(.claude)])
+    #expect(specs[0].label.icon == .provider(.codex))
+    #expect(specs[0].label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(specs[1].label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(specs[1].label.cells[0].icon == .provider(.claude))
+  }
+
+  @Test
+  func percentStyleStacksWithoutAMark() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 26, primaryCadence: .weekly),
+          ]
+        )
+      ],
+      style: .percent,
+      provider: .automatic,
+      now: now
+    )
+
+    #expect(label.icon == nil)
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+  }
+
   /// The item's answer is a function of time — the shared freshness rule retires a reading —
   /// but observation only re-reads it when something it read changed, so the model carries a
   /// clock. It moves exactly when the answer can have moved with it, and not once more.
@@ -457,8 +732,35 @@ struct MenuBarLabelModelTests {
     )
   }
 
-  private func window(id: String, usedPercent: Double) -> QuotaWindow {
-    QuotaWindow(id: id, title: id, usedPercent: usedPercent, limitValue: 100)
+  /// Claude's primary pair plus the extras that must not occupy those two lines.
+  private var claudeWithExtras: LocalServiceOverviewItem {
+    item(
+      provider: .claude,
+      fingerprint: "claude",
+      windows: [
+        window(id: "five_hour", title: "5 Hours", usedPercent: 40, primaryCadence: .fiveHour),
+        window(id: "seven_day", title: "Weekly", usedPercent: 73, primaryCadence: .weekly),
+        window(id: "seven_day_sonnet", title: "Sonnet Weekly", usedPercent: 95),
+        window(id: "seven_day_opus", title: "Opus Weekly", usedPercent: 50),
+        window(id: "claude-routines", title: "Daily Routines", usedPercent: 80),
+        QuotaWindow(id: "extra_usage", title: "Extra Usage", usedPercent: 99),
+      ]
+    )
+  }
+
+  private func window(
+    id: String,
+    title: String? = nil,
+    usedPercent: Double,
+    primaryCadence: PrimaryCadence? = nil
+  ) -> QuotaWindow {
+    QuotaWindow(
+      id: id,
+      title: title ?? id,
+      usedPercent: usedPercent,
+      limitValue: 100,
+      primaryCadence: primaryCadence
+    )
   }
 
   private func item(
