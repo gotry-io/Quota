@@ -124,6 +124,7 @@ enum MenuBarItemImage {
   private struct StackedText {
     struct Row {
       var cadence: CTLine?
+      var cadenceWidth: CGFloat
       var percent: CTLine
       var percentWidth: CGFloat
     }
@@ -266,17 +267,22 @@ enum MenuBarItemImage {
     let font = stackedTextFont
     var rows: [StackedText.Row] = []
     var cadenceColumn: CGFloat = 0
-    // Rows share a percent column at least as wide as a full reading, so a pair does not shuffle
-    // sideways when a number loses a digit. A single row has nothing to line up with, so it pays
-    // for its own ink and no more.
-    var percentColumn = lines.count > 1 ? line(for: "100%", font: font).width : 0
+    // Rows share a percent column as wide as the wider number and no wider: digits are
+    // monospaced, so equal counts already line up, and a reserved third digit would sit as a
+    // permanent gap between a tag and the reading it belongs to.
+    var percentColumn: CGFloat = 0
     for row in lines {
       let cadence = row.compactCadence.map { line(for: $0, font: font) }
       let percent = line(for: row.percent, font: font)
       cadenceColumn = max(cadenceColumn, cadence?.width ?? 0)
       percentColumn = max(percentColumn, percent.width)
       rows.append(
-        StackedText.Row(cadence: cadence?.line, percent: percent.line, percentWidth: percent.width)
+        StackedText.Row(
+          cadence: cadence?.line,
+          cadenceWidth: cadence?.width ?? 0,
+          percent: percent.line,
+          percentWidth: percent.width
+        )
       )
     }
     return .stacked(
@@ -309,7 +315,10 @@ enum MenuBarItemImage {
       var baseline = (height - block) / 2 + (cap + stackedLineGap) * extra
       for row in stacked.rows {
         if let cadence = row.cadence {
-          cgContext.textPosition = CGPoint(x: textX, y: baseline)
+          // Letters are proportional where digits are not, so H left-aligned in the column W
+          // set reads adrift of its own number; each tag centers in the shared column instead.
+          let cadenceX = textX + (stacked.cadenceColumn - row.cadenceWidth) / 2
+          cgContext.textPosition = CGPoint(x: cadenceX, y: baseline)
           CTLineDraw(cadence, cgContext)
         }
         let percentX =

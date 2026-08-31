@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-08-25
 - Partially supersedes [ADR 0018](0018-single-managed-data-contract.md)
+- Partially superseded by [ADR 0028](0028-the-boundary-answers-the-write.md) on 2026-08-31: the
+  sending-side restatement of write contracts
 
 ## Context
 
@@ -18,9 +20,10 @@ account read — and each time the whole response was discarded over one value.
 ## Decision
 
 **A write is checked against exactly the contract.** Relay parses every request body with a schema
-that rejects an unnamed key, and answers 400. The Rust service checks its own snapshot and Usage
-envelopes the same way before uploading, because a payload Relay refuses blocks the outbox behind
-it. IPC request payloads stay `deny_unknown_fields`.
+that rejects an unnamed key, and answers 400. The Rust service checked its own snapshot and Usage
+envelopes the same way before uploading, until that restatement went stale and refused this
+device's own payload; [ADR 0028](0028-the-boundary-answers-the-write.md) withdrew it, keeping only
+the bounds a type cannot state. IPC request payloads stay `deny_unknown_fields`.
 
 **A read takes what it names and ignores the rest.** Every schema, validator, and decoder that
 reads a Relay response accepts fields it cannot name, at any depth. `packages/protocol` states each

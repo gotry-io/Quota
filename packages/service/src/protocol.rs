@@ -687,6 +687,7 @@ pub enum DiagnosticAttemptKind {
     QuotaCollection,
     UsageScan,
     UsageUpload,
+    QuotaUpload,
     AccountSync,
     PricingRefresh,
 }

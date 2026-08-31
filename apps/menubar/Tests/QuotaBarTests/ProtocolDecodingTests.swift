@@ -536,6 +536,33 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
 }
 
 @Test
+func decodesQuotaUploadAttemptKind() throws {
+  let data = Data(
+    #"""
+    {
+      "schema_version":3,
+      "generated_at":"2026-08-11T00:00:00Z",
+      "client":{"name":"QuotaBar","version":"0.0.7"},
+      "summary":{"operation":"healthy","attention":"none"},
+      "surfaces":[
+        {"id":"quota_overview","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"1 subscription shown.","recovery":"none"},
+        {"id":"usage_this_device","status":"ok","data":"empty","last_success_at":null,"message":"No Usage records.","recovery":"none"},
+        {"id":"usage_account","status":"ok","data":"empty","last_success_at":null,"message":"Usage from this Mac is part of your account totals.","recovery":"none"},
+        {"id":"account","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"Signed in.","recovery":"none"}
+      ],
+      "sources":[{"subject":"quota_upload","source_id":null,"status":"ok","last_attempt_at":"2026-08-11T00:00:00Z","last_success_at":"2026-08-11T00:00:00Z","code":null,"message":"Readings from this Mac are part of your account.","recovery":"none"}],
+      "recent":[{"kind":"quota_upload","subject":null,"started_at":"2026-08-11T00:00:00Z","duration_ms":12,"outcome":"success","code":null}]
+    }
+    """#.utf8
+  )
+  let report = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceDiagnosticReport.self, from: data)
+  #expect(report.recent[0].kind == .quotaUpload)
+  #expect(report.sources[0].subject == "quota_upload")
+  #expect(DiagnosticsPresentation.sourceTitle(subject: "quota_upload", sourceID: nil) == "Quota sync")
+}
+
+@Test
 func decodesLocalUsageReportShape() throws {
   let report = LocalUsageReport(
     generatedAt: Date(timeIntervalSince1970: 1_754_080_000),

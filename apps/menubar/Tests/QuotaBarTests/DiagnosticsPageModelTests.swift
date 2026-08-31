@@ -69,6 +69,7 @@ struct DiagnosticsPageModelTests {
     #expect(
       DiagnosticsPresentation.sourceTitle(subject: "agent:claude_code", sourceID: nil) == "Claude Code")
     #expect(DiagnosticsPresentation.sourceTitle(subject: "usage_upload", sourceID: nil) == "Usage sync")
+    #expect(DiagnosticsPresentation.sourceTitle(subject: "quota_upload", sourceID: nil) == "Quota sync")
     #expect(DiagnosticsPresentation.sourceTitle(subject: "local_state", sourceID: nil) == "Local data")
   }
 

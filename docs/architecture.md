@@ -110,10 +110,12 @@ observation, then newest observation time, then local source, then stable source
 Relay last wrote the row. QuotaBar merges twice rather than five ways: the resolved row against its
 own local collection, the only authority for this device. Rust returns that merged Overview and Swift
 never reimplements the policy. `quota-observation-conformance.json` states both rules as cases and
-`wire-conformance.json` does the same for the contracts themselves, so a payload one runtime starts
-accepting cannot pass unnoticed by the others
+`wire-conformance.json` does the same for the contracts themselves: read contracts bind all three
+runtimes, while a write is judged by the boundary schema that guards it — the sending side states
+only bounds, and its types are held to the exported schema by test
 ([ADR 0019](decisions/0019-one-statement-per-contract.md),
-[ADR 0023](decisions/0023-strict-writes-tolerant-reads.md)).
+[ADR 0023](decisions/0023-strict-writes-tolerant-reads.md),
+[ADR 0028](decisions/0028-the-boundary-answers-the-write.md)).
 
 ## Local collection and persistence
 

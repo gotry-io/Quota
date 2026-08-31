@@ -169,8 +169,9 @@ digits' cap-height middle is the image's middle. A line box would center the roo
 descenders no digit uses, which is how a number ends up riding high next to a mark. A stacked pair
 uses the same family at 9pt. Two cap-heights and a 2pt gap have to fit the 18pt item, which puts
 the ceiling at 11pt; 9pt is a choice inside that, not the limit, and it leaves about 3pt spare.
-Cadence tags share a left column, percents share a right-aligned column as wide as the wider
-number, 2pt apart. A cell drawn as one row has no second row to line up with, so it pays for its
+Cadence tags center in a shared left column — letters are proportional where digits are not, so a
+left-aligned **H** would sit adrift in the width **W** sets — and percents share a right-aligned
+column as wide as the wider number and no wider, 2pt apart. A cell drawn as one row has no second row to line up with, so it pays for its
 own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
 template image, so remaining quota is not said in color. `MenuBarLabelLayoutTests` renders the
 image and measures the drawn pixels: the mark's ink and the digits' ink share a center within a

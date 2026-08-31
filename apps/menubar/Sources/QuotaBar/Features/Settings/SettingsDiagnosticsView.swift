@@ -66,6 +66,7 @@ enum DiagnosticsPresentation {
     switch subject {
     case "account": "Account"
     case "usage_upload": "Usage sync"
+    case "quota_upload": "Quota sync"
     case "pricing_catalog": "Pricing"
     case "provider_configuration": "Provider setup"
     case "local_state": "Local data"
