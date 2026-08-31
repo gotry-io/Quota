@@ -319,12 +319,12 @@ jobs:
       - name: Check the app credentials are configured
         id: app
         env:
-          CLIENT_ID: ${{ vars.BUMP_APP_CLIENT_ID }}
-          PRIVATE_KEY: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+          CLIENT_ID: ${{ vars.APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${CLIENT_ID:-}" ] || [ -z "${PRIVATE_KEY:-}" ]; then
-            echo "::warning title=No bump app::BUMP_APP_CLIENT_ID / BUMP_APP_PRIVATE_KEY are unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
+            echo "::warning title=No bump app::APP_CLIENT_ID / APP_PRIVATE_KEY are unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
@@ -334,12 +334,20 @@ jobs:
       # triggered by GITHUB_TOKEN, so the bump's required checks would never report and it
       # would wait for a review that auto-merge is there to avoid. The token lasts an hour and
       # the action revokes it when the job ends.
+      #
+      # The app is the repository's one automation identity, so the token is narrowed here to
+      # what moving a version needs. Granting the app something else for another job does not
+      # widen this one.
       - uses: actions/create-github-app-token@v3
         id: token
         if: steps.app.outputs.ready == 'true'
         with:
-          client-id: ${{ vars.BUMP_APP_CLIENT_ID }}
-          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - uses: actions/checkout@v6
         if: steps.app.outputs.ready == 'true'
