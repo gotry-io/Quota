@@ -79,7 +79,7 @@ struct MenuBarLabelLayoutTests {
         MenuBarLabelCell(
           icon: .provider(.claude),
           lines: [
-            MenuBarLabelLine(percent: "68%", compactCadence: "5H"),
+            MenuBarLabelLine(percent: "68%", compactCadence: "H"),
             MenuBarLabelLine(percent: "27%", compactCadence: "W"),
           ]
         )

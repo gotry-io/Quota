@@ -411,8 +411,8 @@ struct MenuBarLabelModelTests {
     #expect(label.text == nil)
     #expect(label.icon == .provider(.claude))
     #expect(label.cells[0].lines == [
-      MenuBarLabelLine(percent: "60%", compactCadence: "5H"),
-      MenuBarLabelLine(percent: "27%", compactCadence: "W"),
+      MenuBarLabelLine(percent: "60%", compactCadence: "H", spokenCadence: "5 Hours"),
+      MenuBarLabelLine(percent: "27%", compactCadence: "W", spokenCadence: "Weekly"),
     ])
     #expect(
       label.accessibilityLabel
@@ -439,7 +439,7 @@ struct MenuBarLabelModelTests {
     // Extra Usage at 1% remaining is the tightest window, so Automatic answers for Claude,
     // then stacks Claude's primary pair rather than the extra that won the choice.
     #expect(label.icon == .provider(.claude))
-    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
     #expect(label.cells[0].lines.map(\.percent) == ["60%", "27%"])
   }
 
@@ -460,7 +460,7 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
     #expect(label.cells[0].lines.map(\.percent) == ["70%", "50%"])
     #expect(
       label.accessibilityLabel
@@ -507,7 +507,7 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
     #expect(label.cells[0].lines.map(\.percent) == ["68%", "84%"])
   }
 
@@ -528,7 +528,7 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "M"])
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["H", "M"])
   }
 
   @Test
@@ -597,8 +597,61 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    #expect(specs[0].label.cells[0] == MenuBarLabelCell(icon: .provider(.codex), text: "68%"))
-    #expect(specs[0].label.cells[1] == MenuBarLabelCell(icon: .provider(.claude), text: "1%"))
+    // One item, one cell per provider — and each cell now carries that subscription's pair
+    // rather than a lone tightest percent.
+    #expect(specs.count == 1)
+    #expect(specs[0].label.cells.count == 2)
+    #expect(specs[0].label.cells[0].icon == .provider(.codex))
+    #expect(specs[0].label.cells[0].lines.map(\.percent) == ["68%", "84%"])
+    #expect(specs[0].label.cells[1].icon == .provider(.claude))
+    #expect(specs[0].label.cells[1].lines.map(\.percent) == ["60%", "27%"])
+    #expect(
+      specs[0].label.accessibilityLabel
+        == "QuotaBar, Codex 5 Hours 68% remaining, Weekly 84% remaining, "
+          + "Claude Code 5 Hours 60% remaining, Weekly 27% remaining"
+    )
+  }
+
+  /// A provider with only one headline meter rides along as a single row, and the item stays one
+  /// reading surface: the renderer drops every cell to the stacked size so that lone percent does
+  /// not loom over its neighbours.
+  @Test
+  func aCombinedItemMixesAPairWithASingleHeadlineMeter() {
+    let specs = MenuBarLabelModel.specs(
+      overview: [
+        item(
+          provider: .codex,
+          fingerprint: "codex",
+          windows: [
+            window(id: "five_hour", title: "5 Hours", usedPercent: 32, primaryCadence: .fiveHour),
+            window(id: "weekly", title: "Weekly", usedPercent: 16, primaryCadence: .weekly),
+          ]
+        ),
+        item(
+          provider: .grok,
+          fingerprint: "grok",
+          windows: [
+            window(id: "billing_cycle", title: "Weekly", usedPercent: 49, primaryCadence: .weekly)
+          ]
+        ),
+      ],
+      style: .iconAndPercent,
+      provider: .providers([.codex, .grok]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .grok],
+      now: now
+    )
+
+    #expect(specs[0].label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
+    // One headline meter has no neighbour to be told apart from, so it stays an unlabelled
+    // percent. The renderer still drops it to the stacked size beside the pair.
+    #expect(specs[0].label.cells[1].lines.map(\.compactCadence) == [nil])
+    #expect(specs[0].label.cells[1].text == "51%")
+    #expect(
+      specs[0].label.accessibilityLabel
+        == "QuotaBar, Codex 5 Hours 68% remaining, Weekly 84% remaining, "
+          + "Grok 51% remaining"
+    )
   }
 
   @Test
@@ -624,8 +677,8 @@ struct MenuBarLabelModelTests {
 
     #expect(specs.map(\.id) == [.provider(.codex), .provider(.claude)])
     #expect(specs[0].label.icon == .provider(.codex))
-    #expect(specs[0].label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
-    #expect(specs[1].label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(specs[0].label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
+    #expect(specs[1].label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
     #expect(specs[1].label.cells[0].icon == .provider(.claude))
   }
 
@@ -647,7 +700,7 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(label.icon == nil)
-    #expect(label.cells[0].lines.map(\.compactCadence) == ["5H", "W"])
+    #expect(label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
   }
 
   /// The item's answer is a function of time — the shared freshness rule retires a reading —

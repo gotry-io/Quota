@@ -126,11 +126,15 @@ item that answers for one subscription then shows that subscription's **primary 
 when it has one: two remaining percents stacked in the same 18pt image, short cadence above long,
 the way a network extra stacks up and down. The wire names the headline meter for each cadence
 (`five_hour`, `weekly`, `monthly`), so the item does not parse titles to decide the pair. Compact
-tags are **5H**, **W**, and **M**. Model-scoped, top-up, and feature-scoped windows carry no
-cadence and stay off the item; they never occupy a stacked line. Combined still packs one tightest
-percent per provider into one row, because two stacked pairs in one item are not scannable.
-Separate items may each stack. A subscription with only one headline meter, or none, stays a
-single remaining percent. A reading the source reported as failed, or one the shared freshness
+tags are one letter — **H**, **W**, **M** — because a tag is read against the tag beside it, and
+an item pays for every point of width it takes. Model-scoped, top-up, and feature-scoped windows
+carry no cadence and stay off the item; they never occupy a stacked line. **Every arrangement
+stacks**, Combined included: three pairs cost about 27pt more than three lone percents, which is
+not a reason to show a person half of what the reading says. A subscription with only one headline
+meter, or none, stays a single remaining percent — one number has no neighbour to be told apart
+from, so it wears no tag. **One item is one reading surface**: when any cell in it stacks, every
+cell drops to the stacked size, so a lone percent sits at the same weight as the pair beside it
+rather than looming over it at the menu bar's own size. A reading the source reported as failed, or one the shared freshness
 rule has aged out, answers for nothing. Balance-only windows have no budget to be a percent of
 and never set it. Ageing out is a fact about the clock rather than about anything the service
 says, so each item re-asks the question once a minute — the freshness rule's smallest unit — and

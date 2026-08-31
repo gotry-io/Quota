@@ -34,8 +34,9 @@ enum MenuBarItemImage {
   /// Gap between the two stacked cadence rows.
   nonisolated static let stackedLineGap: CGFloat = 2
 
-  /// Gap between a cadence tag (`5H`) and its remaining percent.
-  nonisolated static let stackedCadenceSpacing: CGFloat = 3
+  /// Gap between a cadence tag (`H`) and its remaining percent. They are one reading, so they
+  /// sit closer than the gap that separates whole cells.
+  nonisolated static let stackedCadenceSpacing: CGFloat = 2
 
   /// Menu-bar items are drawn at the backing scale; two covers every shipping Mac.
   nonisolated static let scale: CGFloat = 2
@@ -128,6 +129,7 @@ enum MenuBarItemImage {
 
     var rows: [Row]
     var cadenceColumn: CGFloat
+    var cadenceGap: CGFloat
     var percentColumn: CGFloat
     var width: CGFloat
     var capHeight: CGFloat
@@ -138,10 +140,14 @@ enum MenuBarItemImage {
     height: CGFloat,
     scale: CGFloat
   ) -> NSImage {
+    // One item is one reading surface: if any cell stacks a cadence pair, every cell drops to
+    // the stacked size, so a lone percent beside a pair is the same weight rather than looming
+    // over it at the menu bar's own size.
+    let compact = label.cells.contains { cell in cell.lines.contains(where: \.isStacked) }
     let prepared = label.cells.map {
       PreparedCell(
         mark: $0.icon.flatMap { placedMark($0, height: height) },
-        text: preparedText($0)
+        text: preparedText($0, compact: compact)
       )
     }
     var totalWidth = prepared.map(\.width).reduce(0, +)
@@ -238,8 +244,8 @@ enum MenuBarItemImage {
     }
   }
 
-  private static func preparedText(_ cell: MenuBarLabelCell) -> PreparedText? {
-    if let text = cell.text {
+  private static func preparedText(_ cell: MenuBarLabelCell, compact: Bool) -> PreparedText? {
+    if !compact, let text = cell.text {
       let font = textFont
       let drawn = line(for: text, font: font)
       return .single(line: drawn.line, width: drawn.width, capHeight: font.capHeight)
@@ -260,12 +266,16 @@ enum MenuBarItemImage {
         StackedText.Row(cadence: cadence.line, percent: percent.line, percentWidth: percent.width)
       )
     }
+    // A cell with no tags at all (a lone percent riding along beside a stacked neighbour) owes
+    // nothing for the tag column or its gap.
+    let cadenceGap = cadenceColumn > 0 ? stackedCadenceSpacing : 0
     return .stacked(
       StackedText(
         rows: rows,
         cadenceColumn: cadenceColumn,
+        cadenceGap: cadenceGap,
         percentColumn: percentColumn,
-        width: cadenceColumn + stackedCadenceSpacing + percentColumn,
+        width: cadenceColumn + cadenceGap + percentColumn,
         capHeight: font.capHeight
       )
     )
@@ -293,7 +303,7 @@ enum MenuBarItemImage {
         cgContext.textPosition = CGPoint(x: textX, y: baseline)
         CTLineDraw(row.cadence, cgContext)
         let percentX =
-          textX + stacked.cadenceColumn + stackedCadenceSpacing
+          textX + stacked.cadenceColumn + stacked.cadenceGap
           + (stacked.percentColumn - row.percentWidth)
         cgContext.textPosition = CGPoint(x: percentX, y: baseline)
         CTLineDraw(row.percent, cgContext)

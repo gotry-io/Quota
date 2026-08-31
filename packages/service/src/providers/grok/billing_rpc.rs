@@ -181,10 +181,12 @@ struct Billing {
 /// week (CodexBar's untyped-window rule), and no reset at all stays generic.
 fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
     let delta = billing.resets_at.and_then(|end| end.checked_sub(now));
-    let title = match delta {
-        Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => "Monthly",
-        Some(_) => "Weekly",
-        None => "Billing Cycle",
+    let (title, primary_cadence) = match delta {
+        Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => {
+            ("Monthly", Some("monthly"))
+        }
+        Some(_) => ("Weekly", Some("weekly")),
+        None => ("Billing Cycle", None),
     };
     QuotaWindow {
         id: "billing_cycle".to_owned(),
@@ -194,7 +196,7 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
             .resets_at
             .map(super::super::common::unix_seconds_to_iso),
         duration_seconds: None,
-        primary_cadence: None,
+        primary_cadence,
         remaining_value: None,
         limit_value: None,
         value_unit: None,

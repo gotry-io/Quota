@@ -17,13 +17,17 @@ enum MenuBarLabelIcon: Equatable, Hashable, Sendable {
 
 /// One remaining percent in a cell: a lone number, or one row of a cadence pair.
 struct MenuBarLabelLine: Equatable, Hashable, Sendable {
-  /// Compact cadence tag (`5H`, `W`, `M`) when this row is part of a stacked pair.
+  /// Compact cadence tag (`H`, `W`, `M`) when this row is part of a stacked pair.
   let compactCadence: String?
   let percent: String
+  /// What VoiceOver calls this row's cadence. The tag is one letter because the eye reads it
+  /// next to its neighbour; a listener has no neighbour to compare it with.
+  let spokenCadence: String?
 
-  init(percent: String, compactCadence: String? = nil) {
+  init(percent: String, compactCadence: String? = nil, spokenCadence: String? = nil) {
     self.percent = percent
     self.compactCadence = compactCadence
+    self.spokenCadence = spokenCadence
   }
 
   var isStacked: Bool { compactCadence != nil }
@@ -65,6 +69,17 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
 
   var icon: MenuBarLabelIcon? { cells.count == 1 ? cells.first?.icon : nil }
   var text: String? { cells.count == 1 ? cells.first?.text : nil }
+
+  /// This label's reading, named for the provider it belongs to, for a packed item that has to
+  /// say whose number it is. Falls back to the bare name when there is no reading to report.
+  fileprivate func spokenReading(of provider: ProviderID) -> String {
+    if let text { return "\(provider.displayName) \(text) remaining" }
+    guard let lines = cells.first?.lines, !lines.isEmpty else { return provider.displayName }
+    let parts = lines.map { line in
+      [line.spokenCadence, line.percent, "remaining"].compactMap { $0 }.joined(separator: " ")
+    }
+    return "\(provider.displayName) \(parts.joined(separator: ", "))"
+  }
 
   init(icon: MenuBarLabelIcon?, text: String?, accessibilityLabel: String) {
     self.init(
@@ -182,15 +197,13 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         style: style,
         allowed: id,
         absentIcon: .provider(id),
-        stackCadences: false,
+        stackCadences: true,
         now: now
       )
       cells.append(contentsOf: part.cells)
-      if let text = part.text {
-        spoken.append("\(id.displayName) \(text) remaining")
-      } else {
-        spoken.append(id.displayName)
-      }
+      // Each part already phrased its own reading; the packed item says whose it is and keeps
+      // the rest, so a stacked pair is spoken as a pair here too.
+      spoken.append(part.spokenReading(of: id))
     }
     return MenuBarLabelModel(cells: cells, accessibilityLabel: spoken.joined(separator: ", "))
   }
@@ -253,7 +266,11 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     for window in cadences.prefix(2) {
       let percent = RemainingQuotaFormat.percent(window.remainingPercent)
       lines.append(
-        MenuBarLabelLine(percent: percent, compactCadence: window.primaryCadenceKind?.compactTag)
+        MenuBarLabelLine(
+          percent: percent,
+          compactCadence: window.primaryCadenceKind?.compactTag,
+          spokenCadence: window.title
+        )
       )
       spoken.append("\(window.title) \(percent) remaining")
     }
