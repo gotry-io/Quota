@@ -29,6 +29,12 @@ struct MenuBarLabelLine: Equatable, Hashable, Sendable {
     self.compactCadence = compactCadence
     self.spokenCadence = spokenCadence
   }
+
+  /// What VoiceOver says for this row. The one place a reading becomes a sentence.
+  var spoken: String {
+    let reading = "\(percent) remaining"
+    return spokenCadence.map { "\($0) \(reading)" } ?? reading
+  }
 }
 
 /// What a cell draws.
@@ -38,6 +44,8 @@ struct MenuBarLabelLine: Equatable, Hashable, Sendable {
 /// what lets a row wear a tag without the cell claiming to be a pair — inferring "is this a
 /// pair" from "does this row have a tag" only worked while those happened to coincide.
 enum MenuBarLabelContent: Equatable, Hashable, Sendable {
+  /// A mark with no number to attribute — a stale provider in a packed item, or the Icon style.
+  case absent
   case lone(String)
   case rows([MenuBarLabelLine])
 }
@@ -53,32 +61,21 @@ struct MenuBarLabelCell: Equatable, Hashable, Sendable {
     return percent
   }
 
-  /// The rows this cell draws, empty when it is a lone reading.
-  var lines: [MenuBarLabelLine] {
-    guard case .rows(let rows) = content else { return [] }
-    return rows
-  }
-
-  /// Whether this cell shares a tag and percent column across rows, which is what makes an item
-  /// compact.
+  /// Whether this cell is drawn as stacked rows, which is what puts the whole item at the
+  /// stacked size. One tagged row counts: it is the tag column that sets the type, not the
+  /// number of rows.
   var isStacked: Bool {
-    guard case .rows(let rows) = content else { return false }
-    return !rows.isEmpty
+    if case .rows = content { return true }
+    return false
   }
 
   /// What VoiceOver says for this cell's rows, in the order they are drawn. One assembly, so a
   /// lone item and a packed one cannot end up phrasing the same reading differently.
   var spokenReading: String {
     switch content {
-    case .lone(let percent):
-      return "\(percent) remaining"
-    case .rows(let rows):
-      return rows
-        .map { line in
-          let reading = "\(line.percent) remaining"
-          return line.spokenCadence.map { "\($0) \(reading)" } ?? reading
-        }
-        .joined(separator: ", ")
+    case .absent: ""
+    case .lone(let percent): MenuBarLabelLine(percent: percent).spoken
+    case .rows(let rows): rows.map(\.spoken).joined(separator: ", ")
     }
   }
 
@@ -89,7 +86,7 @@ struct MenuBarLabelCell: Equatable, Hashable, Sendable {
 
   init(icon: MenuBarLabelIcon?, text: String?) {
     self.icon = icon
-    self.content = text.map(MenuBarLabelContent.lone) ?? .rows([])
+    self.content = text.map(MenuBarLabelContent.lone) ?? .absent
   }
 
   init(icon: MenuBarLabelIcon?, lines: [MenuBarLabelLine]) {
@@ -123,7 +120,7 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
   /// This label's reading, named for the provider it belongs to, for a packed item that has to
   /// say whose number it is. Falls back to the bare name when there is no reading to report.
   fileprivate func spokenReading(of provider: ProviderID) -> String {
-    guard let cell = cells.first, !cell.spokenReading.isEmpty else { return provider.displayName }
+    guard let cell = cells.first, cell.content != .absent else { return provider.displayName }
     return "\(provider.displayName) \(cell.spokenReading)"
   }
 

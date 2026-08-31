@@ -28,7 +28,9 @@ enum MenuBarItemImage {
   /// cells read as neighbors rather than one mark with two numbers.
   nonisolated static let cellSpacing: CGFloat = 8
 
-  /// Size of a stacked cadence pair. Two cap-heights plus ``stackedLineGap`` fit the 18pt item.
+  /// Size of a stacked cadence pair. The ceiling is what two cap-heights plus ``stackedLineGap``
+  /// leave room for; 9pt is a choice inside it, and `MenuBarLabelLayoutTests` holds the margin.
+  /// See `apps/menubar/DESIGN.md`.
   nonisolated static let stackedTextSize: CGFloat = 9
 
   /// Gap between the two stacked cadence rows.
@@ -47,8 +49,7 @@ enum MenuBarItemImage {
     monospacedDigitFont(NSFont.menuBarFont(ofSize: 0))
   }
 
-  /// The same family at 9pt, so two cadence rows fit the item the way a network extra stacks
-  /// up and down.
+  /// The same family at ``stackedTextSize``, the way a network extra stacks up and down.
   static var stackedTextFont: NSFont {
     monospacedDigitFont(NSFont.menuBarFont(ofSize: stackedTextSize))
   }
@@ -248,6 +249,8 @@ enum MenuBarItemImage {
   /// own size on its own, and at the stacked size when it shares an item with a pair.
   private static func preparedText(_ cell: MenuBarLabelCell, compact: Bool) -> PreparedText? {
     switch cell.content {
+    case .absent:
+      return nil
     case .lone(let percent) where !compact:
       let font = textFont
       let drawn = line(for: percent, font: font)
@@ -255,7 +258,7 @@ enum MenuBarItemImage {
     case .lone(let percent):
       return stacked([MenuBarLabelLine(percent: percent)])
     case .rows(let rows):
-      return rows.isEmpty ? nil : stacked(rows)
+      return stacked(rows)
     }
   }
 
@@ -285,7 +288,6 @@ enum MenuBarItemImage {
       )
     )
   }
-
 
   /// Digits stand on the baseline and reach a cap height up, so putting that span's middle on
   /// the item's middle is what centering a number means. A line box would center the room it

@@ -390,7 +390,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
         field: "five_hour",
         id: "five_hour",
-        title: "5 Hours",
+        title: Cadence::FiveHour.title(),
         duration_seconds: 18_000,
         weekly_group: false,
         primary_cadence: Some(Cadence::FiveHour),
@@ -398,7 +398,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
     ClaudeWindow {
         field: "seven_day",
         id: "seven_day",
-        title: "Weekly",
+        title: Cadence::Weekly.title(),
         duration_seconds: 604_800,
         weekly_group: true,
         primary_cadence: Some(Cadence::Weekly),

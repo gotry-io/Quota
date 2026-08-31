@@ -72,6 +72,20 @@ struct MenuBarLabelLayoutTests {
     #expect(abs(text.midY - ink.height / 2) <= tolerance)
   }
 
+  /// DESIGN.md says the stacked size has a ceiling and that 9pt sits inside it with room to
+  /// spare. That is an empirical claim, so it is measured here rather than asserted in prose:
+  /// two cap-heights plus the row gap must fit the item, and must still fit one point larger.
+  @Test
+  func theStackedSizeFitsTheItemWithRoomAbove() {
+    let item = MenuBarItemImage.height
+    let block = { (size: CGFloat) in
+      NSFont.menuBarFont(ofSize: size).capHeight * 2 + MenuBarItemImage.stackedLineGap
+    }
+    #expect(block(MenuBarItemImage.stackedTextSize) < item)
+    // The documented headroom: the chosen size is not the largest that fits.
+    #expect(block(MenuBarItemImage.stackedTextSize + 1) < item)
+  }
+
   @Test
   func aCadencePairStaysTheStandardHeightAndCentersOnTheMark() throws {
     let stacked = MenuBarLabelModel(

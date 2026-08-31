@@ -515,10 +515,12 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
     let rate_limit = obj_get_any(value, &["rate_limit", "rateLimit"]);
     let primary = rate_limit
         .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-        .and_then(|v| map_window(v, "five_hour", "5 Hours"));
+        // `normalize_primary_secondary` relabels both from the duration, so these are read as
+        // "the primary slot" and "the secondary slot", not as the cadence they end up naming.
+        .and_then(|v| map_window(v, "primary", "Primary"));
     let secondary = rate_limit
         .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
-        .and_then(|v| map_window(v, "weekly", "Weekly"));
+        .and_then(|v| map_window(v, "secondary", "Secondary"));
     let mut windows = normalize_primary_secondary(primary, secondary);
     windows.extend(map_additional(obj_get_any(
         value,
@@ -536,15 +538,17 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
         .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
         .map(|v| !v.is_null())
         .unwrap_or(false);
+    // Only whether the slot parses at all is asked here, so the labels are placeholders the
+    // caller never sees.
     let malformed_primary = primary_present
         && !rate_limit
             .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
-            .and_then(|v| map_window(v, "five_hour", "5 Hours"))
+            .and_then(|v| map_window(v, "primary", "Primary"))
             .is_some();
     let malformed_secondary = secondary_present
         && !rate_limit
             .and_then(|v| obj_get_any(v, &["secondary_window", "secondaryWindow"]))
-            .and_then(|v| map_window(v, "weekly", "Weekly"))
+            .and_then(|v| map_window(v, "secondary", "Secondary"))
             .is_some();
     MappedUsage {
         plan,
@@ -559,33 +563,15 @@ const FIVE_HOUR_SECONDS: u64 = 18_000;
 const WEEKLY_SECONDS: u64 = 604_800;
 const MONTHLY_SECONDS: u64 = 2_592_000;
 
-/// Ordered as the windows are displayed: shortest cadence first.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum WindowKind {
-    FiveHour,
-    Weekly,
-    Monthly,
-}
-
-impl WindowKind {
-    /// A window whose reported duration names no known cadence keeps the
-    /// cadence of the payload slot it arrived in.
-    fn classify(duration: Option<u64>, fallback: Self) -> Self {
-        match duration {
-            Some(FIVE_HOUR_SECONDS) => Self::FiveHour,
-            Some(WEEKLY_SECONDS) => Self::Weekly,
-            Some(MONTHLY_SECONDS) => Self::Monthly,
-            _ => fallback,
-        }
-    }
-
-    /// Codex's headline windows are ided by their cadence, so the wire spelling is the id too.
-    fn cadence(self) -> Cadence {
-        match self {
-            Self::FiveHour => Cadence::FiveHour,
-            Self::Weekly => Cadence::Weekly,
-            Self::Monthly => Cadence::Monthly,
-        }
+/// A window whose reported duration names no known cadence keeps the cadence of the payload slot
+/// it arrived in. Which durations Codex reports is Codex's business; what the answer is called is
+/// not, so this returns the shared vocabulary rather than a second copy of it.
+fn classify(duration: Option<u64>, fallback: Cadence) -> Cadence {
+    match duration {
+        Some(FIVE_HOUR_SECONDS) => Cadence::FiveHour,
+        Some(WEEKLY_SECONDS) => Cadence::Weekly,
+        Some(MONTHLY_SECONDS) => Cadence::Monthly,
+        _ => fallback,
     }
 }
 
@@ -635,10 +621,10 @@ fn normalize_primary_secondary(
 ) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
     if let Some(window) = primary {
-        windows.push(label_window(window, WindowKind::FiveHour));
+        windows.push(label_window(window, Cadence::FiveHour));
     }
     if let Some(window) = secondary {
-        let labeled = label_window(window, WindowKind::Weekly);
+        let labeled = label_window(window, Cadence::Weekly);
         if !windows.iter().any(|(kind, _)| *kind == labeled.0) {
             windows.push(labeled);
         }
@@ -647,13 +633,14 @@ fn normalize_primary_secondary(
     windows.into_iter().map(|(_, window)| window).collect()
 }
 
-fn label_window(mut window: QuotaWindow, fallback: WindowKind) -> (WindowKind, QuotaWindow) {
-    let kind = WindowKind::classify(window.duration_seconds, fallback);
-    let cadence = kind.cadence();
+/// Codex's headline windows are ided by their cadence, so one value answers for the id, the
+/// title, and the member a client trusts.
+fn label_window(mut window: QuotaWindow, fallback: Cadence) -> (Cadence, QuotaWindow) {
+    let cadence = classify(window.duration_seconds, fallback);
     window.id = cadence.wire().to_owned();
     window.title = cadence.title().to_owned();
     window.primary_cadence = Some(cadence);
-    (kind, window)
+    (cadence, window)
 }
 
 fn map_additional(value: Option<&Value>) -> Vec<QuotaWindow> {
@@ -738,17 +725,13 @@ fn map_named_windows(
     used: &mut std::collections::HashSet<String>,
 ) -> Vec<QuotaWindow> {
     let mut windows = Vec::new();
-    for (candidate, fallback) in [
-        (primary, WindowKind::FiveHour),
-        (secondary, WindowKind::Weekly),
-    ] {
+    for (candidate, fallback) in [(primary, Cadence::FiveHour), (secondary, Cadence::Weekly)] {
         let Some(value) = candidate else {
             continue;
         };
-        let kind = WindowKind::classify(window_duration_seconds(value), fallback);
-        let (id, title) = match kind {
-            WindowKind::FiveHour => (five_id, five_title),
-            WindowKind::Weekly | WindowKind::Monthly => (weekly_id, weekly_title),
+        let (id, title) = match classify(window_duration_seconds(value), fallback) {
+            Cadence::FiveHour => (five_id, five_title),
+            Cadence::Weekly | Cadence::Monthly => (weekly_id, weekly_title),
         };
         if let Some(window) = map_window(value, id, title)
             && used.insert(id.to_owned())

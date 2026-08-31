@@ -2,7 +2,6 @@ use crate::catalog::ProviderId;
 use chrono_tz::Tz;
 use serde::Serialize;
 
-use super::json::Cadence;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, atomic::AtomicBool};
@@ -64,6 +63,42 @@ impl ProviderError {
         Self {
             category,
             source_id: source,
+        }
+    }
+}
+
+/// One recurring allowance a subscription meters.
+///
+/// The protocol spelling a client trusts and the title a person reads are one fact, so they are
+/// stated here once rather than paired by hand at each collector. A provider decides *whether* a
+/// window is a headline meter — that derivation is its own, and differs by provider — but not
+/// what the answer is called. Declared shortest first, which is the order a stacked item reads.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cadence {
+    FiveHour,
+    Weekly,
+    Monthly,
+}
+
+impl Cadence {
+    /// The `primary_cadence` member, for the callers that need it outside serde — a Codex window
+    /// is ided by its cadence. The derive writes the same string, and
+    /// `a_cadence_serializes_as_the_protocol_member` holds the two together.
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::FiveHour => "five_hour",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
+
+    /// The window title a person reads.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5 Hours",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
         }
     }
 }
@@ -445,6 +480,25 @@ fn is_cookie_octet(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The enum exists so a collector cannot pair the wrong title with the wrong member, but the
+    /// bytes that leave this process still have to be the ones `PrimaryCadenceSchema` accepts,
+    /// and `wire()` has to keep answering the same string the derive writes.
+    #[test]
+    fn a_cadence_serializes_as_the_protocol_member() {
+        for (cadence, wire, title) in [
+            (Cadence::FiveHour, "five_hour", "5 Hours"),
+            (Cadence::Weekly, "weekly", "Weekly"),
+            (Cadence::Monthly, "monthly", "Monthly"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&cadence).unwrap(),
+                format!("\"{wire}\"")
+            );
+            assert_eq!(cadence.wire(), wire);
+            assert_eq!(cadence.title(), title);
+        }
+    }
 
     /// The browser session is the last rung and only the last rung: a credential path that
     /// answered anything but "sign in again" is this refresh's answer, and a refusal is

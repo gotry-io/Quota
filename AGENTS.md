@@ -41,11 +41,10 @@ Read the relevant source before changing that area:
 
 Do not create a second description of a canonical rule. Update its source and link to it.
 
-A canonical document states decisions, not evidence. Where one gives an empirical reason — a size,
-a cost, a legibility claim — and that reason is what would refuse a change, measure it before
-citing it. If the measurement contradicts the document, correct the document in the same change and
-say what was measured. Do not repeat a rationale you have not verified: a stale reason reads as a
-rule, and refusing work on one is indistinguishable from the rule being right.
+A canonical document states decisions, not evidence. Where one gives an empirical reason and that
+reason is what would refuse a change, measure it before citing it; if the measurement contradicts
+the document, correct the document in the same change and say what was measured. Where the
+corrected reason is itself empirical, pin it with a test rather than a sentence.
 
 ## Repository boundaries
 
