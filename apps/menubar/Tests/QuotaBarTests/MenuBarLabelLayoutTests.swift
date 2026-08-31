@@ -114,6 +114,64 @@ struct MenuBarLabelLayoutTests {
     #expect(text.height > singleText.height)
   }
 
+  /// The percent column is as wide as the wider number and no wider (DESIGN.md): a pair of
+  /// two-digit readings reserves no third digit, so no permanent slack sits between a tag and
+  /// the reading it belongs to.
+  @Test
+  func thePercentColumnReservesNothingBeyondTheWiderNumber() {
+    let narrow = MenuBarItemImage.make(stackedPair(top: "68%", bottom: "27%"))
+    let full = MenuBarItemImage.make(stackedPair(top: "100%", bottom: "27%"))
+    #expect(full.size.width >= narrow.size.width + 3)
+  }
+
+  /// Letters are proportional where digits are not, so each tag centers in the shared column:
+  /// the narrower H starts right of the wider W below it instead of hugging the column's left
+  /// edge with all the slack piled against its own number.
+  @Test
+  func aNarrowTagCentersInTheColumnTheWideTagSets() throws {
+    let image = MenuBarItemImage.make(
+      stackedPair(top: "68%", bottom: "27%", icon: nil),
+      samplingScale: 8
+    )
+    let rep = try #require(image.representations.first as? NSBitmapImageRep)
+    let data = try #require(rep.bitmapData)
+    let bytesPerPixel = rep.bitsPerPixel / 8
+    let horizontal = rep.size.width / CGFloat(rep.pixelsWide)
+    func leftmostInk(rows: Range<Int>) -> Int? {
+      for x in 0..<rep.pixelsWide {
+        for y in rows where data[y * rep.bytesPerRow + x * bytesPerPixel + 3] > 16 {
+          return x
+        }
+      }
+      return nil
+    }
+    let middle = rep.pixelsHigh / 2
+    let top = try #require(leftmostInk(rows: 0..<middle))
+    let bottom = try #require(leftmostInk(rows: middle..<rep.pixelsHigh))
+    let shift = CGFloat(top - bottom) * horizontal
+    #expect(shift > 0.3)
+    #expect(shift < 2.5)
+  }
+
+  private func stackedPair(
+    top: String,
+    bottom: String,
+    icon: MenuBarLabelIcon? = .provider(.claude)
+  ) -> MenuBarLabelModel {
+    MenuBarLabelModel(
+      cells: [
+        MenuBarLabelCell(
+          icon: icon,
+          lines: [
+            MenuBarLabelLine(percent: top, compactCadence: "H"),
+            MenuBarLabelLine(percent: bottom, compactCadence: "W"),
+          ]
+        )
+      ],
+      accessibilityLabel: "QuotaBar"
+    )
+  }
+
   @Test
   func packedReadingsShareOneTemplateImageTallerThanNeitherCellAlone() {
     let packed = MenuBarLabelModel(
