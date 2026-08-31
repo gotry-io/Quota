@@ -79,6 +79,17 @@ pub fn slug(value: &str, separator: char) -> String {
     output
 }
 
+/// A plan name is a label, not a payload; anything longer than this is not one.
+const PLAN_SLUG_LIMIT: usize = 64;
+
+/// Normalizes a provider's display tier into the catalog's plan slug shape
+/// ("SuperGrok Heavy" → "supergrok_heavy"), so every provider hands the clients' plan tables
+/// one spelling rather than each inventing its own.
+pub fn plan_slug(display: Option<&str>) -> Option<String> {
+    let slug = slug(display?, '_');
+    (!slug.is_empty() && slug.len() <= PLAN_SLUG_LIMIT).then_some(slug)
+}
+
 /// Title-case a quota window name, keeping GPT, API, OAuth, USD, and CLI.
 /// Hyphens and underscores are word breaks (`gpt-reserve` → `GPT Reserve`).
 pub fn display_window_title(raw: &str) -> String {

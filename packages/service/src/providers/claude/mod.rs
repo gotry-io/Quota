@@ -9,7 +9,7 @@ use super::common::{
     CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret, LOCAL_FILE_LIMIT,
     ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
-    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date,
+    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
     read_bounded_file, run_bounded_command, slug, string,
 };
 
@@ -671,13 +671,11 @@ pub(super) fn claude_plan(
     claude_plan_slug(rate_limit_tier).or_else(|| claude_plan_slug(subscription_type))
 }
 
+/// Claude tiers arrive namespaced (`default_claude_max_5x`); the namespace is Claude's, not a
+/// plan, so it is stripped before the shared slug reaches a client's plan table.
 fn claude_plan_slug(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.chars().any(char::is_control) {
-        return None;
-    }
-    let lowered = trimmed.to_ascii_lowercase();
-    let stripped = lowered.strip_prefix("default_").unwrap_or(lowered.as_str());
+    let slug = plan_slug(raw)?;
+    let stripped = slug.strip_prefix("default_").unwrap_or(&slug);
     let stripped = stripped.strip_prefix("claude_").unwrap_or(stripped);
     (!stripped.is_empty()).then(|| stripped.to_owned())
 }

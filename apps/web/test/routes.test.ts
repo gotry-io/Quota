@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { KNOWN_PLANS } from "../src/lib/plan-display.generated.ts";
 import { DASHBOARD_PATH, planDisplayName, SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
 import { formatQuotaRemaining } from "../src/lib/format.ts";
 
@@ -21,6 +22,11 @@ test("matches QuotaBar plan capitalization", () => {
   assert.equal(planDisplayName("Credits"), "Credits");
   assert.equal(planDisplayName("custom_plan"), "Custom Plan");
   assert.equal(planDisplayName("Already Named"), "Already Named");
+});
+
+test("resolves a generated plan display row", () => {
+  assert.equal(KNOWN_PLANS.max5x, "Max 5x");
+  assert.equal(planDisplayName("max_5x"), "Max 5x");
 });
 
 test("keeps Cursor included-usage money out of compact quota cards", () => {

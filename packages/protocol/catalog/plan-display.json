@@ -1,0 +1,20 @@
+{
+  "$comment": "A plan slug reaches the clients with any separator (`supergrok_heavy`, `super-grok`, `pro lite`), so the lookup key is the slug with every separator dropped rather than one row per spelling.",
+  "plans": {
+    "free": "Free",
+    "plus": "Plus",
+    "pro": "Pro",
+    "prolite": "Pro Lite",
+    "max": "Max",
+    "max5x": "Max 5x",
+    "max20x": "Max 20x",
+    "team": "Team",
+    "business": "Business",
+    "enterprise": "Enterprise",
+    "edu": "Edu",
+    "education": "Education",
+    "supergrok": "SuperGrok",
+    "supergrokheavy": "SuperGrok Heavy",
+    "super": "Super"
+  }
+}

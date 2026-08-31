@@ -282,10 +282,10 @@ fn web_account_email(value: &Value) -> Option<String> {
 }
 
 fn web_account_plan(value: &Value) -> Option<String> {
-    let field = |keys: &[&str]| obj_get_any(value, keys).and_then(|v| string(Some(v)));
+    let field = |keys: &[&str]| obj_get_any(value, keys).and_then(Value::as_str);
     claude_plan(
-        field(&["subscription_type", "subscriptionType", "plan"]).as_deref(),
-        field(&["rate_limit_tier", "rateLimitTier"]).as_deref(),
+        field(&["subscription_type", "subscriptionType", "plan"]),
+        field(&["rate_limit_tier", "rateLimitTier"]),
     )
 }
 

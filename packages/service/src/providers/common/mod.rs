@@ -29,7 +29,8 @@ pub use identity::{
 pub use io::{BoundedExchange, LOCAL_FILE_LIMIT, read_bounded_file, run_bounded_command};
 pub use json::{
     clamp_percent, decode_jwt_payload, display_window_title, duration_seconds, jwt_subject, number,
-    obj_get, obj_get_any, parse_date, slug, string, unix_now, unix_seconds_to_iso, url_encode,
+    obj_get, obj_get_any, parse_date, plan_slug, slug, string, unix_now, unix_seconds_to_iso,
+    url_encode,
 };
 pub use renewal::{
     RENEWAL_FLOOR_SECONDS, RenewalAttempt, RenewalAttempts, RenewalOutcome, RenewalPlan,

@@ -8,8 +8,8 @@ use super::common::{
     CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
     QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
     clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
-    mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date, read_bounded_file,
-    slug, string,
+    mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
+    read_bounded_file, string,
 };
 
 mod billing_rpc;
@@ -20,7 +20,6 @@ pub const WEB_SOURCE: &str = billing_rpc::WEB_SOURCE;
 pub const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 pub const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
-const PLAN_SLUG_LIMIT: usize = 64;
 const OIDC_PREFIX: &str = "https://auth.x.ai::";
 const AUTH_REFRESH_SKEW: i64 = 60;
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
@@ -295,13 +294,6 @@ fn fetch_settings_plan(headers: &[(&str, &str)], context: &CollectionContext) ->
     let client = HttpClient::with_timeout(SETTINGS_TIMEOUT).ok()?;
     let (_, value) = client.get_json(SETTINGS_URL, headers, SOURCE).ok()?;
     plan_slug(string(obj_get(&value, "subscription_tier_display")).as_deref())
-}
-
-/// Normalizes a display tier into the catalog's plan slug shape
-/// ("SuperGrok Heavy" -> "supergrok_heavy").
-fn plan_slug(display: Option<&str>) -> Option<String> {
-    let slug = slug(display?, '_');
-    (!slug.is_empty() && slug.len() <= PLAN_SLUG_LIMIT).then_some(slug)
 }
 
 fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {

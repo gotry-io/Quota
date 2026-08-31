@@ -33,6 +33,14 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.displayName(nil) == nil)
   }
 
+  /// The generated table is reached through the public lookup rather than read directly, so
+  /// the test states what a caller sees and the table stays an implementation detail.
+  @Test
+  func generatedTableResolvesNormalizedMax5x() {
+    #expect(PlanDisplay.displayName("max_5x") == "Max 5x")
+    #expect(PlanDisplay.displayName("Max 20X") == "Max 20x")
+  }
+
   @Test
   func separatesPlanBadgeFromAccountLabel() {
     #expect(PlanDisplay.planBadge("prolite") == "Pro Lite")
