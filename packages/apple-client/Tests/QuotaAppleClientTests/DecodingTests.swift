@@ -197,4 +197,79 @@ struct DecodingTests {
       _ = try WireCodec.decode(IosOAuthTokenResponse.self, from: data)
     }
   }
+
+  @Test
+  func aWindowCarriesPrimaryCadenceAndAnUnknownMemberDoesNotThrow() throws {
+    let known = try WireCodec.decode(
+      QuotaWindow.self,
+      from: try JSONSerialization.data(withJSONObject: [
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 40.0,
+        "primary_cadence": "five_hour",
+      ])
+    )
+    #expect(known.primaryCadence == .fiveHour)
+
+    let unknown = try WireCodec.decode(
+      QuotaWindow.self,
+      from: try JSONSerialization.data(withJSONObject: [
+        "id": "weekly",
+        "title": "Weekly",
+        "used_percent": 29.0,
+        "primary_cadence": "yearly",
+      ])
+    )
+    #expect(unknown.primaryCadence == .unknown)
+  }
+
+  @Test
+  func primaryCadenceWindowsAreShortestFirstAndSkipUnmarked() {
+    let account = QuotaAccount(fingerprint: "fp", fingerprintScope: .global)
+    let observedAt = Date(timeIntervalSince1970: 1_786_300_000)
+    let snapshot = QuotaSnapshot(
+      provider: .claude,
+      account: account,
+      windows: [
+        QuotaWindow(id: "seven_day_sonnet", title: "Sonnet Weekly", usedPercent: 95),
+        QuotaWindow(id: "future", title: "Yearly", usedPercent: 5, primaryCadence: .unknown),
+        QuotaWindow(
+          id: "seven_day",
+          title: "Weekly",
+          usedPercent: 73,
+          primaryCadence: .weekly
+        ),
+        QuotaWindow(
+          id: "five_hour",
+          title: "5 Hours",
+          usedPercent: 40,
+          primaryCadence: .fiveHour
+        ),
+        QuotaWindow(
+          id: "monthly",
+          title: "Monthly",
+          usedPercent: 10,
+          primaryCadence: .monthly
+        ),
+        QuotaWindow(
+          id: "balance",
+          title: "Balance",
+          usedPercent: 0,
+          remainingValue: 3.75,
+          valueUnit: .usd,
+          primaryCadence: .weekly
+        ),
+        QuotaWindow(
+          id: "also_weekly",
+          title: "Weekly",
+          usedPercent: 90,
+          primaryCadence: .weekly
+        ),
+      ],
+      status: .available,
+      observedAt: observedAt
+    )
+
+    #expect(snapshot.primaryCadenceWindows.map(\.id) == ["five_hour", "seven_day", "monthly"])
+  }
 }
