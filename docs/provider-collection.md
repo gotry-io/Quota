@@ -230,7 +230,9 @@ Acquisition happens in QuotaBar, never during a refresh:
 5. Map primary, secondary, additional, and dedicated `code_review_rate_limit` windows without
    changing their used/remaining meaning. Classify primary and secondary by reported duration
    (5-hour, weekly, or 30-day monthly) rather than by payload slot, so a Free-tier monthly
-   window is not labeled **5 Hours**. Additional `limit_name` values are Title Case
+   window is not labeled **5 Hours**. Those headline windows carry `primary_cadence`
+   (`five_hour` / `weekly` / `monthly`); Spark, Code Review, and other additional limits do
+   not, even when they share a duration. Additional `limit_name` values are Title Case
    (`gpt-reserve` → **GPT Reserve**). Spark is **Codex Spark 5 Hours** / **Codex Spark Weekly**;
    Code Review is **Code Review 5 Hours** / **Code Review Weekly**. A null code-review object is
    absent, not malformed.
@@ -311,7 +313,9 @@ reset-credit redemption are not used.
    `anthropic-beta: oauth-2025-04-20`.
 5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Titles are
    **5 Hours**, **Weekly**, **Sonnet Weekly**, **Opus Weekly**, **OAuth Apps Weekly**,
-   **{Model} Only**, **Daily Routines**, and **Extra Usage**. Every weekly limit meters one
+   **{Model} Only**, **Daily Routines**, and **Extra Usage**. The five-hour and seven-day
+   windows are the headline meters (`primary_cadence` `five_hour` and `weekly`); model-scoped
+   weeklies, Daily Routines, and Extra Usage are not. Every weekly limit meters one
    seven-day cycle, so a weekly window that reports no reset of its own — model-scoped or not —
    takes the seven-day window's reset.
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.

@@ -77,6 +77,8 @@ pub struct QuotaWindow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_cadence: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit_value: Option<f64>,

@@ -270,6 +270,7 @@ fn map_windows(personal: Option<&Budget>, team: Option<&Budget>) -> Vec<QuotaWin
             used_percent: clamp_percent(budget.spend / limit * 100.0),
             resets_at: budget.reset.clone(),
             duration_seconds: None,
+            primary_cadence: None,
             remaining_value: Some(remaining),
             limit_value: Some(limit),
             value_unit: Some("usd"),

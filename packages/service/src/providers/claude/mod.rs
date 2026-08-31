@@ -383,6 +383,7 @@ struct ClaudeWindow {
     /// Weekly-group limits meter one seven-day cycle and therefore share its reset.
     /// Claude's other seven-day-long limits, such as Routines, are not in that group.
     weekly_group: bool,
+    primary_cadence: Option<&'static str>,
 }
 
 const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
@@ -392,6 +393,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "5 Hours",
         duration_seconds: 18_000,
         weekly_group: false,
+        primary_cadence: Some("five_hour"),
     },
     ClaudeWindow {
         field: "seven_day",
@@ -399,6 +401,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: Some("weekly"),
     },
     ClaudeWindow {
         field: "seven_day_sonnet",
@@ -406,6 +409,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Sonnet Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
     ClaudeWindow {
         field: "seven_day_opus",
@@ -413,6 +417,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "Opus Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
     ClaudeWindow {
         field: "seven_day_oauth_apps",
@@ -420,6 +425,7 @@ const CLAUDE_WINDOWS: &[ClaudeWindow] = &[
         title: "OAuth Apps Weekly",
         duration_seconds: 604_800,
         weekly_group: true,
+        primary_cadence: None,
     },
 ];
 
@@ -539,6 +545,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             entry.id,
             entry.title,
             entry.duration_seconds,
+            entry.primary_cadence,
         ) {
             if entry.weekly_group {
                 weekly_group.push(window.id.clone());
@@ -585,6 +592,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
                     .and_then(|v| parse_date(Some(v)))
                     .map(super::common::unix_seconds_to_iso),
                 duration_seconds: Some(WEEK_SECONDS),
+                primary_cadence: None,
                 remaining_value: None,
                 limit_value: None,
                 value_unit: None,
@@ -602,8 +610,13 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     ]
     .iter()
     .find_map(|key| obj_get(value, key));
-    if let Some(window) = usage_window(routines, "claude-routines", "Daily Routines", WEEK_SECONDS)
-    {
+    if let Some(window) = usage_window(
+        routines,
+        "claude-routines",
+        "Daily Routines",
+        WEEK_SECONDS,
+        None,
+    ) {
         windows.push(window);
     }
     let extra = obj_get(value, "extra_usage").or_else(|| obj_get(value, "extraUsage"));
@@ -614,6 +627,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
             used_percent: clamp_percent(utilization),
             resets_at: None,
             duration_seconds: None,
+            primary_cadence: None,
             remaining_value: None,
             limit_value: None,
             value_unit: None,
@@ -628,6 +642,7 @@ fn usage_window(
     id: &str,
     title: &str,
     duration: u64,
+    primary_cadence: Option<&'static str>,
 ) -> Option<QuotaWindow> {
     let value = value?;
     let utilization = number(obj_get_any(
@@ -642,6 +657,7 @@ fn usage_window(
             .and_then(|v| parse_date(Some(v)))
             .map(super::common::unix_seconds_to_iso),
         duration_seconds: Some(duration),
+        primary_cadence,
         remaining_value: None,
         limit_value: None,
         value_unit: None,
@@ -941,6 +957,28 @@ mod tests {
         let error = collect(&official, &cancelled).expect_err("cancelled");
         assert_eq!(error.category, ErrorCategory::Unavailable);
         assert_eq!(error.source_id, SOURCE);
+    }
+
+    #[test]
+    fn map_usage_marks_headline_windows_and_leaves_scoped_ones_unmarked() {
+        let windows = map_usage(&serde_json::json!({
+            "five_hour": {"utilization": 10},
+            "seven_day": {"utilization": 20},
+            "seven_day_sonnet": {"utilization": 30},
+            "extra_usage": {"utilization": 12.5},
+            "routines": {"utilization": 5}
+        }));
+        let cadence = |id: &str| {
+            windows
+                .iter()
+                .find(|window| window.id == id)
+                .and_then(|window| window.primary_cadence)
+        };
+        assert_eq!(cadence("five_hour"), Some("five_hour"));
+        assert_eq!(cadence("seven_day"), Some("weekly"));
+        assert_eq!(cadence("seven_day_sonnet"), None);
+        assert_eq!(cadence("extra_usage"), None);
+        assert_eq!(cadence("claude-routines"), None);
     }
 
     #[test]

@@ -298,7 +298,7 @@ fn fetch_settings_plan(headers: &[(&str, &str)], context: &CollectionContext) ->
 }
 
 /// Normalizes a display tier into the catalog's plan slug shape
-/// ("SuperGrok Heavy" → "supergrok_heavy").
+/// ("SuperGrok Heavy" -> "supergrok_heavy").
 fn plan_slug(display: Option<&str>) -> Option<String> {
     let slug = slug(display?, '_');
     (!slug.is_empty() && slug.len() <= PLAN_SLUG_LIMIT).then_some(slug)
@@ -339,6 +339,7 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
         used_percent: clamp_percent(used),
         resets_at: end.map(super::common::unix_seconds_to_iso),
         duration_seconds: duration_seconds(start, end),
+        primary_cadence: None,
         remaining_value: None,
         limit_value: None,
         value_unit: None,

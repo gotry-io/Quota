@@ -466,6 +466,7 @@ fn window(id: &str, title: &str, detail: &Detail) -> QuotaWindow {
         },
         resets_at: detail.resets_at.clone(),
         duration_seconds: None,
+        primary_cadence: None,
         remaining_value: Some(detail.remaining.max(0.0)),
         limit_value: (denom > 0.0).then_some(denom),
         value_unit: Some("count"),
