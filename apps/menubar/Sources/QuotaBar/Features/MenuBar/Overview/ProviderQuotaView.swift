@@ -172,7 +172,10 @@ struct QuotaWindowRow: View {
       if let resetsAt = window.resetsAt {
         Text("Resets \(ResetDateFormatter.string(from: resetsAt))")
           .quotaMetaStyle()
-      } else if window.showsPercentMeter {
+      } else if FreshnessCopy.showsNoResetTime(
+        remainingPercent: window.remainingPercent,
+        showsPercentMeter: window.showsPercentMeter
+      ) {
         Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
       }

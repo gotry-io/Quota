@@ -42,11 +42,17 @@ export function formatDate(value: string): string {
  * rather than as a calendar date, because an absolute instant makes the reader do the
  * subtraction before they learn the only thing they wanted to know.
  * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
- * thresholds and phrases; this file and `packages/apple-shared` both answer it.
+ * thresholds, phrases, and when the no-reset phrase prints; this file and
+ * `packages/apple-shared` both answer it.
  */
 export const NO_RESET_TIME_COPY = "No reset time reported";
 export const NOT_CHECKED_COPY = "Not checked";
 export const NO_READINGS_COPY = "no readings yet";
+
+/** Whether to print {@link NO_RESET_TIME_COPY} under a percent window. */
+export function showsNoResetTime(remainingPercent: number, showsPercentMeter: boolean): boolean {
+  return showsPercentMeter && remainingPercent < 100;
+}
 
 /** The bare compact duration: the largest whole unit that fits, with no words around it. */
 function compactAge(instant: string | number | Date, now: Date = new Date()): string {

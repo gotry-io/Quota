@@ -7,7 +7,8 @@ import Foundation
 /// do the subtraction before they learn the only thing they wanted to know.
 ///
 /// `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
-/// thresholds and phrases; this type and `apps/web/src/lib/format.ts` both answer it.
+/// thresholds, phrases, and when the no-reset phrase prints; this type and
+/// `apps/web/src/lib/format.ts` both answer it.
 public enum FreshnessCopy: Sendable {
   /// Stands in for an age before anything has been read at all.
   public static let notChecked = "Not checked"
@@ -17,6 +18,11 @@ public enum FreshnessCopy: Sendable {
 
   /// One phrase for a window whose provider never says when it refills.
   public static let noResetTime = "No reset time reported"
+
+  /// Whether to print ``noResetTime`` under a percent window.
+  public static func showsNoResetTime(remainingPercent: Double, showsPercentMeter: Bool) -> Bool {
+    showsPercentMeter && remainingPercent < 100
+  }
 
   /// The bare relative phrase: `just now`, `3m ago`, `2d ago`.
   ///

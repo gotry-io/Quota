@@ -37,7 +37,8 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
   so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase; a future
-  reset instant still prints as a date or a countdown, because that is not an age.
+  reset instant still prints as a date or a countdown, because that is not an age. A percent window
+  that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
   the only place a provider is named for a person. No surface keeps a second table and none derives
   a name from an identifier.

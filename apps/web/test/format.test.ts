@@ -10,6 +10,7 @@ import {
   lastReadingCopy,
   observationFreshnessCopy,
   relativeAge,
+  showsNoResetTime,
   updatedCopy,
 } from "../src/lib/format.ts";
 
@@ -29,6 +30,12 @@ const fixture = JSON.parse(
   phrases: Record<string, string>;
   age: { name: string; age_seconds: number; expected: string }[];
   observation: { name: string; status: string; age_seconds: number; expected: string }[];
+  missing_reset: {
+    name: string;
+    remaining_percent: number;
+    shows_percent_meter: boolean;
+    expected: boolean;
+  }[];
   device: { name: string; age_seconds: number | null; expected: string }[];
 };
 
@@ -68,5 +75,16 @@ test("device lines match the shared fixture", () => {
   for (const testCase of fixture.device) {
     const value = testCase.age_seconds === null ? null : instant(testCase.age_seconds);
     assert.equal(lastReadingCopy(value, now), testCase.expected, testCase.name);
+  }
+});
+
+test("missing reset display matches the shared fixture", () => {
+  assert.ok(fixture.missing_reset.length > 1);
+  for (const testCase of fixture.missing_reset) {
+    assert.equal(
+      showsNoResetTime(testCase.remaining_percent, testCase.shows_percent_meter),
+      testCase.expected,
+      testCase.name,
+    );
   }
 });
