@@ -28,6 +28,9 @@ concurrency:
 jobs:
   release:
     runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -300,3 +303,70 @@ jobs:
           set -euo pipefail
           echo "Skipping Homebrew Cask update for prerelease ${VERSION}"
           echo "Install the signed ZIP from the GitHub prerelease instead."
+
+  # A released version is spent: main moves to the next one so a later tag has its version
+  # already committed, and `Validate product version` passes without a release-time scramble.
+  # The bump is a pull request rather than a push because main requires one, and it is opened
+  # with a personal access token because a pull request opened with GITHUB_TOKEN starts no
+  # workflow run, which would leave the required checks unreported and the pull request stuck.
+  bump-next:
+    needs: release
+    if: needs.release.outputs.prerelease != 'true'
+    # macOS because `scripts/bump-version.mjs` writes the version with `plutil`, and one script
+    # knowing how to write it is worth more than a cheaper runner.
+    runs-on: macos-26
+    steps:
+      - name: Check the bump token is configured
+        id: token
+        env:
+          BUMP_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUMP_TOKEN:-}" ]; then
+            echo "::warning title=No bump token::RELEASE_BUMP_TOKEN is unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.token.outputs.ready == 'true'
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_BUMP_TOKEN }}
+
+      - name: Open the bump
+        if: steps.token.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
+          RELEASED: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CURRENT="$(plutil -extract CFBundleShortVersionString raw apps/menubar/Support/Info.plist)"
+          if [ "$CURRENT" != "$RELEASED" ]; then
+            echo "::notice::main is already at ${CURRENT}, past the released ${RELEASED}. Nothing to bump."
+            exit 0
+          fi
+          NEXT="$(node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            if ([major, minor, patch].some(Number.isNaN)) throw new Error("unbumpable version");
+            console.log(`${major}.${minor}.${patch + 1}`);
+          ' "$RELEASED")"
+          BRANCH="chore/bump-menubar-${NEXT}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::notice::${BRANCH} already exists."
+            exit 0
+          fi
+          git switch -c "$BRANCH"
+          node scripts/bump-version.mjs menubar "$NEXT"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(menubar): bump version to ${NEXT}" \
+            --body "$(printf '%s\n' \
+              "QuotaBar ${RELEASED} is released, so main moves to ${NEXT}." \
+              "" \
+              "Opened by \`release-menubar\`. A patch bump is the assumption; for a minor or major," \
+              "close this and bump by hand." )"
+          gh pr merge "$BRANCH" --auto --merge
