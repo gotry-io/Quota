@@ -35,6 +35,8 @@ public enum PlanDisplay: Sendable {
     "pro": "Pro",
     "prolite": "Pro Lite",
     "max": "Max",
+    "max5x": "Max 5x",
+    "max20x": "Max 20x",
     "team": "Team",
     "business": "Business",
     "enterprise": "Enterprise",

@@ -9,6 +9,8 @@ struct PlanDisplayTests {
     #expect(PlanDisplay.displayName("prolite") == "Pro Lite")
     #expect(PlanDisplay.displayName("pro_lite") == "Pro Lite")
     #expect(PlanDisplay.displayName("max") == "Max")
+    #expect(PlanDisplay.displayName("max_5x") == "Max 5x")
+    #expect(PlanDisplay.displayName("max_20x") == "Max 20x")
     #expect(PlanDisplay.displayName("team") == "Team")
     #expect(PlanDisplay.displayName("supergrok") == "SuperGrok")
     #expect(PlanDisplay.displayName("super_grok") == "SuperGrok")

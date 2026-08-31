@@ -502,10 +502,10 @@ fn collect_at(
             Err(_) => (None, None),
         }
     };
-    let plan = credentials
-        .subscription_type
-        .clone()
-        .or_else(|| credentials.rate_limit_tier.clone());
+    let plan = claude_plan(
+        credentials.subscription_type.as_deref(),
+        credentials.rate_limit_tier.as_deref(),
+    );
     let (fingerprint, scope) =
         account_identity("claude", "organization_id", organization_id.as_deref());
     Ok(QuotaSnapshot {
@@ -646,6 +646,24 @@ fn usage_window(
         limit_value: None,
         value_unit: None,
     })
+}
+
+pub(super) fn claude_plan(
+    subscription_type: Option<&str>,
+    rate_limit_tier: Option<&str>,
+) -> Option<String> {
+    claude_plan_slug(rate_limit_tier).or_else(|| claude_plan_slug(subscription_type))
+}
+
+fn claude_plan_slug(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    let stripped = lowered.strip_prefix("default_").unwrap_or(lowered.as_str());
+    let stripped = stripped.strip_prefix("claude_").unwrap_or(stripped);
+    (!stripped.is_empty()).then(|| stripped.to_owned())
 }
 
 fn map_profile(value: &Value) -> (Option<String>, Option<String>) {
@@ -1012,6 +1030,24 @@ mod tests {
             ),
             Some(Entry::Grant(_))
         ));
+    }
+
+    #[test]
+    fn snapshot_plan_prefers_the_rate_limit_tier() {
+        assert_eq!(
+            claude_plan(Some("max"), Some("default_claude_max_5x")).as_deref(),
+            Some("max_5x")
+        );
+        assert_eq!(
+            claude_plan(Some("max"), Some("default_claude_max_20x")).as_deref(),
+            Some("max_20x")
+        );
+        assert_eq!(claude_plan(Some("pro"), None).as_deref(), Some("pro"));
+        assert_eq!(claude_plan(Some("max"), None).as_deref(), Some("max"));
+        assert_eq!(
+            claude_plan(None, Some("default_claude_max_5x")).as_deref(),
+            Some("max_5x")
+        );
     }
 
     /// A collection failure and an account with nothing to report are different answers, and

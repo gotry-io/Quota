@@ -15,6 +15,8 @@ test("sends a signed-out visitor to Relay, and back to the page they wanted", ()
 
 test("matches QuotaBar plan capitalization", () => {
   assert.equal(planDisplayName("prolite"), "Pro Lite");
+  assert.equal(planDisplayName("max_5x"), "Max 5x");
+  assert.equal(planDisplayName("max_20x"), "Max 20x");
   assert.equal(planDisplayName("supergrok"), "SuperGrok");
   assert.equal(planDisplayName("Credits"), "Credits");
   assert.equal(planDisplayName("custom_plan"), "Custom Plan");

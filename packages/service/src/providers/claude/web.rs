@@ -13,7 +13,7 @@ use super::super::common::{
     QuotaSnapshot, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     cookie_named_value, mask_email, obj_get, obj_get_any, string,
 };
-use super::{answers_for_a_known_window, map_usage};
+use super::{answers_for_a_known_window, claude_plan, map_usage};
 
 pub const SOURCE: &str = "claude_web_usage_api";
 const ORIGIN: &str = "https://claude.ai";
@@ -282,18 +282,11 @@ fn web_account_email(value: &Value) -> Option<String> {
 }
 
 fn web_account_plan(value: &Value) -> Option<String> {
-    obj_get_any(
-        value,
-        &[
-            "subscription_type",
-            "subscriptionType",
-            "plan",
-            "rate_limit_tier",
-            "rateLimitTier",
-        ],
+    let field = |keys: &[&str]| obj_get_any(value, keys).and_then(|v| string(Some(v)));
+    claude_plan(
+        field(&["subscription_type", "subscriptionType", "plan"]).as_deref(),
+        field(&["rate_limit_tier", "rateLimitTier"]).as_deref(),
     )
-    .and_then(|v| string(Some(v)))
-    .filter(|plan| plan.len() <= 64 && !plan.chars().any(char::is_control))
 }
 
 #[cfg(test)]
@@ -400,6 +393,18 @@ mod tests {
         assert_eq!(error.category, ErrorCategory::Error);
         assert_eq!(error.source_id, SOURCE);
         assert_eq!(server.join().expect("server").len(), 3);
+    }
+
+    #[test]
+    fn account_plan_prefers_the_rate_limit_tier() {
+        assert_eq!(
+            web_account_plan(&serde_json::json!({
+                "subscription_type": "max",
+                "rate_limit_tier": "default_claude_max_20x"
+            }))
+            .as_deref(),
+            Some("max_20x")
+        );
     }
 
     /// A header without an Anthropic `sessionKey` is rejected before a request is made.

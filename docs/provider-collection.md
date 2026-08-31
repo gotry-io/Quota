@@ -271,10 +271,12 @@ reset-credit redemption are not used.
    item this process was refused is `access_denied`, "QuotaBar could not read Claude Code's
    Keychain item. Open Claude Code to refresh the sign-in" — Claude Code can read a grant this
    process cannot, and opening it has been seen to rewrite the file from that item. A grant needs
-   `accessToken` with a usable `user:profile` scope. The Keychain entry wins unless it is the only
-   expiring one of the two, an emptied entry counting as expiring; a Keychain that withheld its
-   entry outranks an emptied file beside it, because that file is what an older Claude Code left
-   behind and says nothing about the grant this device was refused.
+   `accessToken` with a usable `user:profile` scope. The Keychain entry wins unless it is the
+   only expiring one of the two, an emptied entry counting as expiring; a Keychain that withheld
+   its entry outranks an emptied file beside it, because that file is what an older Claude Code
+   left behind and says nothing about the grant this device was refused. The snapshot plan
+   prefers `rateLimitTier` over `subscriptionType`, written `max_5x` / `max_20x` / `max` /
+   `pro`.
 3. This build starts Claude Code when a grant is expired or within one minute of expiry and
    carries a non-empty `refreshToken`, **or** when the file holds no usable grant and the
    Keychain item exists but this process was refused it. Its access token lives about eight hours
