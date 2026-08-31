@@ -394,8 +394,7 @@ struct MenuBarLabelModelTests {
 
     // Titles are display copy. Without the wire cadence this is one percent, not a pair.
     #expect(label.text == "68%")
-    #expect(label.cells[0].lines.count == 1)
-    #expect(label.cells[0].lines[0].compactCadence == nil)
+    #expect(label.cells[0].content == .lone("68%"))
     #expect(label.accessibilityLabel == "QuotaBar, Codex 68% remaining")
   }
 
@@ -549,8 +548,7 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(label.text == "53%")
-    #expect(label.cells[0].lines.count == 1)
-    #expect(label.cells[0].lines[0].compactCadence == nil)
+    #expect(label.cells[0].isStacked == false)
     #expect(label.accessibilityLabel == "QuotaBar, Claude Code 53% remaining")
   }
 
@@ -643,10 +641,12 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(specs[0].label.cells[0].lines.map(\.compactCadence) == ["H", "W"])
-    // One headline meter has no neighbour to be told apart from, so it stays an unlabelled
-    // percent. The renderer still drops it to the stacked size beside the pair.
-    #expect(specs[0].label.cells[1].lines.map(\.compactCadence) == [nil])
-    #expect(specs[0].label.cells[1].text == "51%")
+    // One headline meter has no neighbour to be told apart from, so it stays a lone reading.
+    // The renderer still drops it to the stacked size beside the pair — that is the item's
+    // decision, which is why the cell does not have to claim to be a pair to get it.
+    #expect(specs[0].label.cells[1].content == .lone("51%"))
+    #expect(specs[0].label.cells[1].isStacked == false)
+    #expect(specs[0].label.isCompact)
     #expect(
       specs[0].label.accessibilityLabel
         == "QuotaBar, Codex 5 Hours 68% remaining, Weekly 84% remaining, "

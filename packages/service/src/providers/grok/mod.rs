@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::common::{
-    CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError, ProviderSession,
-    QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession, account_identity,
-    clamp_percent, collect_official_or_browser, discover_official_or_browser, duration_seconds,
-    mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
-    read_bounded_file, string,
+    Cadence, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
+    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
+    account_identity, clamp_percent, collect_official_or_browser, discover_official_or_browser,
+    duration_seconds, mask_display_name, mask_email, number, obj_get, obj_get_any, parse_date,
+    plan_slug, read_bounded_file, string,
 };
 
 mod billing_rpc;
@@ -318,16 +318,19 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
     // The period this account bills on is the only recurring allowance Grok reports, so when it
     // names one it is that subscription's headline meter. A cycle the response does not type
     // stays unnamed rather than being guessed into a cadence.
-    let (title, primary_cadence) = match string(obj_get_any(
+    let primary_cadence = match string(obj_get_any(
         current.unwrap_or(&Value::Null),
         &["type", "periodType", "period_type"],
     ))
     .map(|value| value.to_ascii_lowercase())
     {
-        Some(value) if value.contains("weekly") => ("Weekly", Some("weekly")),
-        Some(value) if value.contains("monthly") => ("Monthly", Some("monthly")),
-        _ => ("Billing Cycle", None),
+        Some(value) if value.contains("weekly") => Some(Cadence::Weekly),
+        Some(value) if value.contains("monthly") => Some(Cadence::Monthly),
+        _ => None,
     };
+    // A named period takes the shared title, so the word a person reads and the member a client
+    // trusts cannot drift apart. An unnamed one is generic on both counts.
+    let title = primary_cadence.map_or("Billing Cycle", Cadence::title);
     Ok(QuotaWindow {
         id: "billing_cycle".to_owned(),
         title: title.to_owned(),
@@ -462,7 +465,7 @@ mod tests {
         assert_eq!(window.used_percent, 8.0);
         assert_eq!(window.duration_seconds, Some(604800));
         assert_eq!(window.resets_at.as_deref(), Some("2026-08-06T07:33:06Z"));
-        assert_eq!(window.primary_cadence, Some("weekly"));
+        assert_eq!(window.primary_cadence, Some(Cadence::Weekly));
     }
 
     /// The billing period is the only recurring allowance Grok reports, so a typed one is that
@@ -472,7 +475,7 @@ mod tests {
         let monthly = serde_json::json!({"config": {"creditUsagePercent": 8, "currentPeriod": {"type": "USAGE_PERIOD_TYPE_MONTHLY", "start": "2026-07-01T00:00:00Z", "end": "2026-08-01T00:00:00Z"}}});
         let window = map_billing(&monthly).unwrap();
         assert_eq!(window.title, "Monthly");
-        assert_eq!(window.primary_cadence, Some("monthly"));
+        assert_eq!(window.primary_cadence, Some(Cadence::Monthly));
 
         let untyped = serde_json::json!({"config": {"creditUsagePercent": 8, "billingPeriodEnd": "2026-08-01T00:00:00Z"}});
         let window = map_billing(&untyped).unwrap();

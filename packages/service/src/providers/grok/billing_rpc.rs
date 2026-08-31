@@ -11,9 +11,9 @@ use std::time::Duration;
 use crate::catalog::ProviderId;
 
 use super::super::common::{
-    CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError, QuotaAccount,
-    QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
-    clamp_percent, cookie_named_value, jwt_subject,
+    Cadence, CollectionContext, ErrorCategory, HTTP_TIMEOUT, HttpClient, ProviderError,
+    QuotaAccount, QuotaSnapshot, QuotaWindow, VALIDATION_TIMEOUT, ValidatedBrowserSession,
+    account_identity, clamp_percent, cookie_named_value, jwt_subject,
 };
 
 pub const RPC_SOURCE: &str = "grok_billing_rpc";
@@ -188,10 +188,11 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
     let delta = billing.resets_at.and_then(|end| end.checked_sub(now));
     let (title, primary_cadence) = match delta {
         Some(seconds) if (20 * 86_400..=45 * 86_400).contains(&seconds) => {
-            ("Monthly", Some("monthly"))
+            (Cadence::Monthly.title(), Some(Cadence::Monthly))
         }
-        Some(seconds) if seconds <= 10 * 86_400 => ("Weekly", Some("weekly")),
-        Some(_) => ("Weekly", None),
+        Some(seconds) if seconds <= 10 * 86_400 => (Cadence::Weekly.title(), Some(Cadence::Weekly)),
+        // Still titled by the guess, deliberately unnamed: a title is a word, a cadence is a claim.
+        Some(_) => (Cadence::Weekly.title(), None),
         None => ("Billing Cycle", None),
     };
     QuotaWindow {
@@ -643,8 +644,8 @@ mod tests {
                 now,
             )
         };
-        assert_eq!(at(3).primary_cadence, Some("weekly"));
-        assert_eq!(at(30).primary_cadence, Some("monthly"));
+        assert_eq!(at(3).primary_cadence, Some(Cadence::Weekly));
+        assert_eq!(at(30).primary_cadence, Some(Cadence::Monthly));
         // Between the bands, and far past them: still titled, deliberately unnamed.
         assert_eq!(at(15).title, "Weekly");
         assert_eq!(at(15).primary_cadence, None);

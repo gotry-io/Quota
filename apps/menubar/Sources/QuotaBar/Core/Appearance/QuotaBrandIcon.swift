@@ -244,21 +244,30 @@ enum MenuBarItemImage {
     }
   }
 
+  /// `compact` is the item's decision, not the cell's: a lone reading is drawn at the menu bar's
+  /// own size on its own, and at the stacked size when it shares an item with a pair.
   private static func preparedText(_ cell: MenuBarLabelCell, compact: Bool) -> PreparedText? {
-    if !compact, let text = cell.text {
+    switch cell.content {
+    case .lone(let percent) where !compact:
       let font = textFont
-      let drawn = line(for: text, font: font)
+      let drawn = line(for: percent, font: font)
       return .single(line: drawn.line, width: drawn.width, capHeight: font.capHeight)
+    case .lone(let percent):
+      return stacked([MenuBarLabelLine(percent: percent)])
+    case .rows(let rows):
+      return rows.isEmpty ? nil : stacked(rows)
     }
-    if cell.lines.isEmpty { return nil }
+  }
+
+  private static func stacked(_ lines: [MenuBarLabelLine]) -> PreparedText {
     let font = stackedTextFont
     var rows: [StackedText.Row] = []
     var cadenceColumn: CGFloat = 0
     // Rows share a percent column at least as wide as a full reading, so a pair does not shuffle
     // sideways when a number loses a digit. A single row has nothing to line up with, so it pays
     // for its own ink and no more.
-    var percentColumn = cell.lines.count > 1 ? line(for: "100%", font: font).width : 0
-    for row in cell.lines {
+    var percentColumn = lines.count > 1 ? line(for: "100%", font: font).width : 0
+    for row in lines {
       let cadence = row.compactCadence.map { line(for: $0, font: font) }
       let percent = line(for: row.percent, font: font)
       cadenceColumn = max(cadenceColumn, cadence?.width ?? 0)
@@ -276,6 +285,7 @@ enum MenuBarItemImage {
       )
     )
   }
+
 
   /// Digits stand on the baseline and reach a cap height up, so putting that span's middle on
   /// the item's middle is what centering a number means. A line box would center the room it

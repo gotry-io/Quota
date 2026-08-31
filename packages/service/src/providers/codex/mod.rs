@@ -4,11 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::common::{
-    CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT, ProviderError,
-    ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow, ValidatedBrowserSession,
-    account_identity, clamp_percent, collect_official_or_browser, decode_jwt_payload,
-    discover_official_or_browser, display_window_title, mask_email, number, obj_get, obj_get_any,
-    parse_date, read_bounded_file, sha256_hex, slug, string,
+    Cadence, CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT,
+    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
+    decode_jwt_payload, discover_official_or_browser, display_window_title, mask_email, number,
+    obj_get, obj_get_any, parse_date, read_bounded_file, sha256_hex, slug, string,
 };
 
 pub mod refresh;
@@ -579,19 +579,12 @@ impl WindowKind {
         }
     }
 
-    fn labels(self) -> (&'static str, &'static str) {
+    /// Codex's headline windows are ided by their cadence, so the wire spelling is the id too.
+    fn cadence(self) -> Cadence {
         match self {
-            Self::FiveHour => ("five_hour", "5 Hours"),
-            Self::Weekly => ("weekly", "Weekly"),
-            Self::Monthly => ("monthly", "Monthly"),
-        }
-    }
-
-    fn primary_cadence(self) -> &'static str {
-        match self {
-            Self::FiveHour => "five_hour",
-            Self::Weekly => "weekly",
-            Self::Monthly => "monthly",
+            Self::FiveHour => Cadence::FiveHour,
+            Self::Weekly => Cadence::Weekly,
+            Self::Monthly => Cadence::Monthly,
         }
     }
 }
@@ -656,10 +649,10 @@ fn normalize_primary_secondary(
 
 fn label_window(mut window: QuotaWindow, fallback: WindowKind) -> (WindowKind, QuotaWindow) {
     let kind = WindowKind::classify(window.duration_seconds, fallback);
-    let (id, title) = kind.labels();
-    window.id = id.to_owned();
-    window.title = title.to_owned();
-    window.primary_cadence = Some(kind.primary_cadence());
+    let cadence = kind.cadence();
+    window.id = cadence.wire().to_owned();
+    window.title = cadence.title().to_owned();
+    window.primary_cadence = Some(cadence);
     (kind, window)
 }
 
@@ -971,8 +964,8 @@ mod tests {
                 .find(|window| window.id == id)
                 .and_then(|window| window.primary_cadence)
         };
-        assert_eq!(cadence("five_hour"), Some("five_hour"));
-        assert_eq!(cadence("weekly"), Some("weekly"));
+        assert_eq!(cadence("five_hour"), Some(Cadence::FiveHour));
+        assert_eq!(cadence("weekly"), Some(Cadence::Weekly));
         assert_eq!(cadence("codex-spark"), None);
         assert_eq!(cadence("codex-spark-weekly"), None);
     }

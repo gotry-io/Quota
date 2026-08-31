@@ -79,6 +79,45 @@ pub fn slug(value: &str, separator: char) -> String {
     output
 }
 
+/// One recurring allowance a subscription meters.
+///
+/// The protocol spelling a client trusts and the title a person reads are one fact, so they are
+/// stated here once rather than paired by hand at each collector. A provider decides *whether* a
+/// window is a headline meter — that derivation is its own, and differs by provider — but not what
+/// the answer is called.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Cadence {
+    FiveHour,
+    Weekly,
+    Monthly,
+}
+
+impl Cadence {
+    /// The `primary_cadence` member, as `PrimaryCadenceSchema` in `packages/protocol` spells it.
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::FiveHour => "five_hour",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
+
+    /// The window title a person reads.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5 Hours",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+        }
+    }
+}
+
+impl serde::Serialize for Cadence {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.wire())
+    }
+}
+
 /// A plan name is a label, not a payload; anything longer than this is not one.
 const PLAN_SLUG_LIMIT: usize = 64;
 
@@ -251,7 +290,25 @@ pub fn obj_get_any<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::display_window_title;
+    use super::{Cadence, display_window_title};
+
+    /// The enum exists so a collector cannot pair the wrong title with the wrong member, but the
+    /// bytes that leave this process still have to be the ones `PrimaryCadenceSchema` accepts.
+    #[test]
+    fn a_cadence_serializes_as_the_protocol_member() {
+        for (cadence, wire, title) in [
+            (Cadence::FiveHour, "five_hour", "5 Hours"),
+            (Cadence::Weekly, "weekly", "Weekly"),
+            (Cadence::Monthly, "monthly", "Monthly"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&cadence).unwrap(),
+                format!("\"{wire}\"")
+            );
+            assert_eq!(cadence.wire(), wire);
+            assert_eq!(cadence.title(), title);
+        }
+    }
 
     #[test]
     fn extra_limit_names_keep_standard_acronyms() {

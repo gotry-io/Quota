@@ -1,6 +1,8 @@
 use crate::catalog::ProviderId;
 use chrono_tz::Tz;
 use serde::Serialize;
+
+use super::json::Cadence;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, atomic::AtomicBool};
@@ -77,7 +79,7 @@ pub struct QuotaWindow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_cadence: Option<&'static str>,
+    pub primary_cadence: Option<Cadence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

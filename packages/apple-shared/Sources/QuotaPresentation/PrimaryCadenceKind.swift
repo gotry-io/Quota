@@ -7,9 +7,9 @@ public enum PrimaryCadenceKind: String, Sendable, CaseIterable, Comparable {
   case weekly
   case monthly
 
-  /// The tag a stacked menu-bar row wears beside its percent. One letter each: the row is
-  /// read next to its neighbour, so the cadences only have to differ from each other, and a
-  /// menu-bar item pays for every point of width it takes.
+  /// The one-letter form, for a surface that shows cadences stacked against each other. A tag is
+  /// read next to its neighbour, so the cadences only have to differ from each other — what that
+  /// buys a particular surface is that surface's own business.
   public var compactTag: String {
     switch self {
     case .fiveHour: "H"
