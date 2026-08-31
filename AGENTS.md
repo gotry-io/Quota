@@ -143,10 +143,11 @@ pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
 main carries the version being developed, not the one last released: after a stable
 `menubar-v*` release publishes, `release-menubar` opens the patch bump for the next one and lets
 it auto-merge, so a tag never waits on a version commit. Publishing is therefore the tag alone.
-A minor or major is the exception — close the bot's pull request and bump by hand. The bump needs
-repository secret `RELEASE_BUMP_TOKEN` (a token, not `GITHUB_TOKEN`, whose pull request would
-start no workflow run and so never satisfy the required checks); without it the release still
-publishes and warns that main was left on the released version.
+A minor or major is the exception — close the bot's pull request and bump by hand. The bump opens
+its pull request as a GitHub App (`BUMP_APP_CLIENT_ID` variable, `BUMP_APP_PRIVATE_KEY` secret)
+rather than with `GITHUB_TOKEN`, whose pull request would start no workflow run and so never
+satisfy the required checks; without those the release still publishes and warns that main was
+left on the released version.
 
 Targeted development entry points are defined by the root `package.json` scripts and each app's
 README. Do not duplicate their command lists in new documents.

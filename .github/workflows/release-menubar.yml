@@ -316,34 +316,50 @@ jobs:
     # knowing how to write it is worth more than a cheaper runner.
     runs-on: macos-26
     steps:
-      - name: Check the bump token is configured
-        id: token
+      - name: Check the app credentials are configured
+        id: app
         env:
-          BUMP_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
+          CLIENT_ID: ${{ vars.BUMP_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${BUMP_TOKEN:-}" ]; then
-            echo "::warning title=No bump token::RELEASE_BUMP_TOKEN is unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
+          if [ -z "${CLIENT_ID:-}" ] || [ -z "${PRIVATE_KEY:-}" ]; then
+            echo "::warning title=No bump app::BUMP_APP_CLIENT_ID / BUMP_APP_PRIVATE_KEY are unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # An installation token, not GITHUB_TOKEN: GitHub starts no workflow run for an event
+      # triggered by GITHUB_TOKEN, so the bump's required checks would never report and it
+      # would wait for a review that auto-merge is there to avoid. The token lasts an hour and
+      # the action revokes it when the job ends.
+      - uses: actions/create-github-app-token@v3
+        id: token
+        if: steps.app.outputs.ready == 'true'
+        with:
+          client-id: ${{ vars.BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
-        if: steps.token.outputs.ready == 'true'
+        if: steps.app.outputs.ready == 'true'
         with:
           ref: main
-          token: ${{ secrets.RELEASE_BUMP_TOKEN }}
+          token: ${{ steps.token.outputs.token }}
 
       - name: Open the bump
-        if: steps.token.outputs.ready == 'true'
+        if: steps.app.outputs.ready == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
           RELEASED: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Commit as the app, so the history says which bot moved the version.
+          BOT_ID="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+
           CURRENT="$(plutil -extract CFBundleShortVersionString raw apps/menubar/Support/Info.plist)"
           if [ "$CURRENT" != "$RELEASED" ]; then
             echo "::notice::main is already at ${CURRENT}, past the released ${RELEASED}. Nothing to bump."
