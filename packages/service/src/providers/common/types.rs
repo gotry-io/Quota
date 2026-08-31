@@ -481,6 +481,16 @@ fn is_cookie_octet(byte: u8) -> bool {
 mod tests {
     use super::*;
 
+    /// `normalize_primary_secondary` sorts a subscription's headline windows by this order, and
+    /// the menu bar stacks them in the order it receives. Declaration order is therefore
+    /// load-bearing, and reordering the variants would change what a person sees without
+    /// failing to compile.
+    #[test]
+    fn cadences_order_shortest_first() {
+        assert!(Cadence::FiveHour < Cadence::Weekly);
+        assert!(Cadence::Weekly < Cadence::Monthly);
+    }
+
     /// The enum exists so a collector cannot pair the wrong title with the wrong member, but the
     /// bytes that leave this process still have to be the ones `PrimaryCadenceSchema` accepts,
     /// and `wire()` has to keep answering the same string the derive writes.
