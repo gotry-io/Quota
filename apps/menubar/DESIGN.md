@@ -128,15 +128,19 @@ a network extra stacks up and down. The wire names the headline meter for each c
 (`five_hour`, `weekly`, `monthly`), so the item does not parse titles to decide the pair. Compact
 tags are one letter — **H**, **W**, **M** — because a tag is read against the tag beside it, and
 an item pays for every point of width it takes. Model-scoped, top-up, and feature-scoped windows
-carry no cadence and stay off the item; they never occupy a stacked line. **Every arrangement
-stacks**, Combined included: three pairs cost about 27pt more than three lone percents, which is
-not a reason to show a person half of what the reading says. A subscription with only one headline
-meter, or none, stays a single remaining percent — one number has no neighbour to be told apart
-from, so it wears no tag. **One item is one reading surface**: when any cell in it stacks, every
-cell drops to the stacked size, so a lone percent sits at the same weight as the pair beside it
-rather than looming over it at the menu bar's own size. A reading the source reported as failed,
-or one the shared freshness rule has aged out, answers for nothing. Balance-only windows have no
-budget to be a percent of and never set it. Ageing out is a fact about the clock rather than about
+carry no cadence and never occupy a stacked line. A subscription that names no cadence but
+carries two plan meters — Cursor Models beside Other Models — still stacks: the first two percent
+meters in wire order are its headline pair, because collectors emit headline meters before
+extras, and the rows wear no tags, told apart by position and their spoken titles rather than by
+a letter nobody assigned. **Every arrangement stacks**, Combined included: three pairs cost about
+27pt more than three lone percents, which is not a reason to show a person half of what the
+reading says. A subscription with only one headline meter stays a single remaining percent — one
+number has no neighbour to be told apart from, so it wears no tag — and it keeps the menu bar's
+own size beside a pair, because only a pair has two rows to fit. A reading the source reported as
+failed, or one the shared freshness rule has aged out, answers for nothing. Balance-only windows
+have no budget to be a percent of and never claim the Automatic slot, but a named cell whose
+subscription is only a wallet shows its whole-dollar balance — **$99** — because a named cell
+owes the person its number; the panel keeps the cents. Ageing out is a fact about the clock rather than about
 anything the service says, so each item re-asks the question once a minute — the freshness rule's
 smallest unit — and a Mac that stopped collecting loses its number without waiting for an event
 that is never coming. An item is only rebuilt when that answer changed.
@@ -167,12 +171,16 @@ A single remaining percent follows 4pt after the mark, set in the **menu-bar fon
 monospaced digits so the item does not twitch as it moves, and its baseline is placed so the
 digits' cap-height middle is the image's middle. A line box would center the room it reserves for
 descenders no digit uses, which is how a number ends up riding high next to a mark. A stacked pair
-uses the same family at 9pt. Two cap-heights and a 2pt gap have to fit the 18pt item, which puts
-the ceiling at 11pt; 9pt is a choice inside that, not the limit, and it leaves about 3pt spare.
-Cadence tags center in a shared left column — letters are proportional where digits are not, so a
-left-aligned **H** would sit adrift in the width **W** sets — and percents share a right-aligned
-column as wide as the wider number and no wider, 2pt apart. A cell drawn as one row has no second row to line up with, so it pays for its
-own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
+uses the same family at 9pt semibold — at that size regular strokes thin out against the bar. Two
+cap-heights and a 3pt gap have to fit the 18pt item, which puts the ceiling at 10pt; 9pt is a
+choice inside that, not the limit. Percents share a right-aligned column as wide as the wider
+number and no wider, so the % signs share an edge, and the cadence tag follows 3pt after as the
+reading's unit, the way a speed carries `KB/s`; each tag centers in the column the widest tag
+sets, because letters are proportional where digits are not. A shorter number's slack falls
+before it as leading air — ragged left beside the mark — never as a hole inside the reading.
+Every text origin snaps to a whole point: a fractional origin lands glyphs between pixels on a 1x
+display, smearing stems into something both thin and misaligned. A cell drawn as one row has no
+second row to line up with, so it pays for its own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
 template image, so remaining quota is not said in color. `MenuBarLabelLayoutTests` renders the
 image and measures the drawn pixels: the mark's ink and the digits' ink share a center within a
 quarter point, every mark lands at the same size, and a stacked pair stays the standard item

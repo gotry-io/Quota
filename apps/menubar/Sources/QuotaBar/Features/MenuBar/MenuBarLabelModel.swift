@@ -61,14 +61,6 @@ struct MenuBarLabelCell: Equatable, Hashable, Sendable {
     return percent
   }
 
-  /// Whether this cell is drawn as stacked rows, which is what puts the whole item at the
-  /// stacked size. One tagged row counts: it is the tag column that sets the type, not the
-  /// number of rows.
-  var isStacked: Bool {
-    if case .rows = content { return true }
-    return false
-  }
-
   /// What VoiceOver says for this cell's rows, in the order they are drawn. One assembly, so a
   /// lone item and a packed one cannot end up phrasing the same reading differently.
   var spokenReading: String {
@@ -99,9 +91,9 @@ struct MenuBarLabelCell: Equatable, Hashable, Sendable {
 ///
 /// The point of an item is that remaining quota is readable without opening anything, so
 /// each cell names a single subscription rather than an average or a count. Every cell may stack
-/// that subscription's primary cadence pair, a packed item's included, and an item with any
-/// stacked cell draws all of them at the stacked size. A reading that no longer describes live
-/// quota answers for nothing:
+/// that subscription's headline pair, a packed item's included; a lone reading beside a pair
+/// keeps the menu bar's own size, because only a pair has two rows to fit. A reading that no
+/// longer describes live quota answers for nothing:
 /// a lone item falls back to Quota's mark, and a packed item keeps that provider's mark so
 /// the strip does not jump.
 struct MenuBarLabelModel: Equatable, Hashable, Sendable {
@@ -110,12 +102,6 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
 
   var icon: MenuBarLabelIcon? { cells.count == 1 ? cells.first?.icon : nil }
   var text: String? { cells.count == 1 ? cells.first?.text : nil }
-
-  /// Whether this item is one reading surface at the stacked size. An item that stacks anywhere
-  /// stacks everywhere, so a lone percent sits at the same weight as the pair beside it rather
-  /// than looming over it. The renderer owns the point sizes; the rule belongs here, next to the
-  /// vocabulary it constrains.
-  var isCompact: Bool { cells.contains(where: \.isStacked) }
 
   /// This label's reading, named for the provider it belongs to, for a packed item that has to
   /// say whose number it is. Falls back to the bare name when there is no reading to report.
@@ -265,6 +251,14 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         now: now
       )
     else {
+      // A provider whose only current reading is a wallet has no percent to compete with, but
+      // a named cell still owes the person its number: the balance is that number. Wallets
+      // never claim the automatic slot — a balance has no percent to be tightest by.
+      if let allowed,
+        let balance = balanceLabel(in: overview, provider: allowed, style: style, now: now)
+      {
+        return balance
+      }
       return MenuBarLabelModel(icon: absentIcon, text: nil, accessibilityLabel: "QuotaBar")
     }
     let icon: MenuBarLabelIcon? = style.showsIcon ? .provider(tightest.provider) : nil
@@ -275,8 +269,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     )
   }
 
-  /// One cell's reading: the primary cadence pair when that subscription has one, otherwise the
-  /// one primary cadence, otherwise the tightest remaining percent. A subscription with one
+  /// One cell's reading: the primary cadence pair when that subscription has one, otherwise
+  /// its two named plan meters, otherwise the one headline percent. A subscription with one
   /// headline meter wears no tag — a number with no neighbour has nothing to be told apart from.
   private static func cadenceLabel(
     item: LocalServiceOverviewItem,
@@ -285,7 +279,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
   ) -> MenuBarLabelModel {
     let name = item.identity.provider.displayName
     let cadences = item.snapshot.primaryCadenceWindows
-    guard cadences.count > 1 else {
+    let headline = cadences.count > 1 ? Array(cadences.prefix(2)) : headlineMeters(of: item)
+    guard headline.count > 1 else {
       let percent = RemainingQuotaFormat.percent(
         cadences.first?.remainingPercent ?? fallbackPercent
       )
@@ -297,7 +292,7 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     }
     let cell = MenuBarLabelCell(
       icon: icon,
-      lines: cadences.prefix(2).map { window in
+      lines: headline.map { window in
         MenuBarLabelLine(
           percent: RemainingQuotaFormat.percent(window.remainingPercent),
           compactCadence: window.primaryCadenceKind?.compactTag,
@@ -309,6 +304,45 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       cells: [cell],
       accessibilityLabel: "QuotaBar, \(name), \(cell.spokenReading)"
     )
+  }
+
+  /// A subscription with no cadence pair can still carry two named plan meters — Cursor Models
+  /// beside Other Models. The first two percent meters in wire order are its headline pair,
+  /// because collectors emit headline meters before extras; they stack untagged, told apart by
+  /// position and their spoken titles rather than by a cadence letter nobody assigned.
+  private static func headlineMeters(of item: LocalServiceOverviewItem) -> [QuotaWindow] {
+    guard item.snapshot.primaryCadenceWindows.isEmpty else { return [] }
+    return Array(item.snapshot.windows.filter(\.showsPercentMeter).prefix(2))
+  }
+
+  /// The one balance-only reading a named provider offers, when it is current: whole dollars
+  /// for a wallet in dollars, the whole number otherwise. The glanceable bar rounds the cents
+  /// away; the panel keeps them.
+  private static func balanceLabel(
+    in overview: [LocalServiceOverviewItem],
+    provider: ProviderID,
+    style: MenuBarStylePreference,
+    now: Date
+  ) -> MenuBarLabelModel? {
+    for item in overview where isCurrent(item, now: now) {
+      guard item.identity.provider == provider else { continue }
+      for window in item.snapshot.windows {
+        guard window.isBalanceOnly, let text = balanceText(window) else { continue }
+        let icon: MenuBarLabelIcon? = style.showsIcon ? .provider(provider) : nil
+        return MenuBarLabelModel(
+          icon: icon,
+          text: text,
+          accessibilityLabel: "QuotaBar, \(provider.displayName) \(text) remaining"
+        )
+      }
+    }
+    return nil
+  }
+
+  private static func balanceText(_ window: QuotaWindow) -> String? {
+    guard let value = window.remainingValue else { return nil }
+    let whole = Int(max(value, 0).rounded(.down))
+    return window.valueUnit == .usd ? "$\(whole)" : "\(whole)"
   }
 
   private struct Reading {

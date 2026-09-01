@@ -124,9 +124,9 @@ struct MenuBarLabelLayoutTests {
     #expect(full.size.width >= narrow.size.width + 3)
   }
 
-  /// Letters are proportional where digits are not, so each tag centers in the shared column:
-  /// the narrower H starts right of the wider W below it instead of hugging the column's left
-  /// edge with all the slack piled against its own number.
+  /// The tag follows its percent as the reading's unit, and each tag centers in the column
+  /// the widest tag sets: the narrow H above ends inside W's span — inset from the right, not
+  /// flush against it and not sticking past it.
   @Test
   func aNarrowTagCentersInTheColumnTheWideTagSets() throws {
     let image = MenuBarItemImage.make(
@@ -137,8 +137,8 @@ struct MenuBarLabelLayoutTests {
     let data = try #require(rep.bitmapData)
     let bytesPerPixel = rep.bitsPerPixel / 8
     let horizontal = rep.size.width / CGFloat(rep.pixelsWide)
-    func leftmostInk(rows: Range<Int>) -> Int? {
-      for x in 0..<rep.pixelsWide {
+    func rightmostInk(rows: Range<Int>) -> Int? {
+      for x in stride(from: rep.pixelsWide - 1, through: 0, by: -1) {
         for y in rows where data[y * rep.bytesPerRow + x * bytesPerPixel + 3] > 16 {
           return x
         }
@@ -146,11 +146,34 @@ struct MenuBarLabelLayoutTests {
       return nil
     }
     let middle = rep.pixelsHigh / 2
-    let top = try #require(leftmostInk(rows: 0..<middle))
-    let bottom = try #require(leftmostInk(rows: middle..<rep.pixelsHigh))
-    let shift = CGFloat(top - bottom) * horizontal
-    #expect(shift > 0.3)
-    #expect(shift < 2.5)
+    let top = try #require(rightmostInk(rows: 0..<middle))
+    let bottom = try #require(rightmostInk(rows: middle..<rep.pixelsHigh))
+    let inset = CGFloat(bottom - top) * horizontal
+    #expect(inset > 0.3)
+    #expect(inset < 1.9)
+  }
+
+  /// A lone reading keeps the menu bar's own size beside a stacked pair, so its cell costs a
+  /// mixed item the same width it costs an item of its own.
+  @Test
+  func aLoneReadingKeepsItsSizeBesideAPair() {
+    let pair = stackedPair(top: "68%", bottom: "27%")
+    let lone = MenuBarLabelModel(
+      icon: .provider(.grok),
+      text: "49%",
+      accessibilityLabel: "QuotaBar, Grok 49% remaining"
+    )
+    let mixed = MenuBarLabelModel(
+      cells: pair.cells + lone.cells,
+      accessibilityLabel: "QuotaBar"
+    )
+    let width = MenuBarItemImage.make(mixed).size.width
+    let apart =
+      MenuBarItemImage.make(pair).size.width + MenuBarItemImage.cellSpacing
+      + MenuBarItemImage.make(lone).size.width
+    // Each image rounds its own width up, so composition may differ by the rounding — never
+    // by the several points a size drop would cost.
+    #expect(abs(width - apart) <= 2)
   }
 
   private func stackedPair(
