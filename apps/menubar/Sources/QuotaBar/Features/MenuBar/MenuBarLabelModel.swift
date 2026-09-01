@@ -341,7 +341,9 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
 
   private static func balanceText(_ window: QuotaWindow) -> String? {
     guard let value = window.remainingValue else { return nil }
-    let whole = Int(max(value, 0).rounded(.down))
+    // The read side is tolerant, so the wire puts no ceiling on this number; clamp before
+    // converting, because `Int.init(_: Double)` traps beyond its range.
+    let whole = Int(min(max(value, 0), 999_999_999).rounded(.down))
     return window.valueUnit == .usd ? "$\(whole)" : "\(whole)"
   }
 

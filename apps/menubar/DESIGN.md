@@ -171,17 +171,21 @@ A single remaining percent follows 4pt after the mark, set in the **menu-bar fon
 monospaced digits so the item does not twitch as it moves, and its baseline is placed so the
 digits' cap-height middle is the image's middle. A line box would center the room it reserves for
 descenders no digit uses, which is how a number ends up riding high next to a mark. A stacked pair
-uses the same family at 9pt semibold — at that size regular strokes thin out against the bar. Two
-cap-heights and a 3pt gap have to fit the 18pt item, which puts the ceiling at 10pt; 9pt is a
-choice inside that, not the limit. Percents share a right-aligned column as wide as the wider
+uses the same family at 9pt medium — at that size regular strokes thin out against the bar, and
+bold clots on a retina screen. Two cap-heights and a 2pt gap have to fit the 18pt item, which
+puts the ceiling at 11pt; 9pt is a choice inside that, not the limit. Percents share a right-aligned column as wide as the wider
 number and no wider, so the % signs share an edge, and the cadence tag follows 3pt after as the
 reading's unit, the way a speed carries `KB/s`; each tag centers in the column the widest tag
 sets, because letters are proportional where digits are not. A shorter number's slack falls
 before it as leading air — ragged left beside the mark — never as a hole inside the reading.
-Every text origin snaps to a whole point: a fractional origin lands glyphs between pixels on a 1x
-display, smearing stems into something both thin and misaligned. A cell drawn as one row has no
+Every text origin snaps to the pixel grid of the raster being drawn — whole points at 1x, half
+points at 2x — because a fractional origin lands glyphs between pixels and smears stems into
+something both thin and misaligned. The row step rounds up on that grid, so quantization may
+widen the air between the rows but never eats it, and a tag's odd slack pixel trails, keeping
+the tag against the number it belongs to. A cell drawn as one row has no
 second row to line up with, so it pays for its own ink and reserves neither column nor gap. Packed cells sit 8pt apart. The status bar renders a
-template image, so remaining quota is not said in color. `MenuBarLabelLayoutTests` renders the
+template image, so remaining quota is not said in color; the image carries a raster for each
+display scale, so a 1x screen shows glyphs drawn at 1x rather than a downsampled retina bitmap. `MenuBarLabelLayoutTests` renders the
 image and measures the drawn pixels: the mark's ink and the digits' ink share a center within a
 quarter point, every mark lands at the same size, and a stacked pair stays the standard item
 height.
