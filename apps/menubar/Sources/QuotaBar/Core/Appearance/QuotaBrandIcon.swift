@@ -34,11 +34,11 @@ enum MenuBarItemImage {
   nonisolated static let stackedTextSize: CGFloat = 9
 
   /// Gap between the two stacked cadence rows.
-  nonisolated static let stackedLineGap: CGFloat = 2
+  nonisolated static let stackedLineGap: CGFloat = 3
 
-  /// Gap between a cadence tag (`H`) and its remaining percent. They are one reading, so they
-  /// sit closer than the gap that separates whole cells.
-  nonisolated static let stackedCadenceSpacing: CGFloat = 2
+  /// Gap between a remaining percent and its cadence tag (`H`). The tag reads as the
+  /// reading's unit, the way a speed carries `KB/s`, so it sits a word-space after it.
+  nonisolated static let stackedCadenceSpacing: CGFloat = 3
 
   /// Menu-bar items are drawn at the backing scale; two covers every shipping Mac.
   nonisolated static let scale: CGFloat = 2
@@ -50,8 +50,9 @@ enum MenuBarItemImage {
   }
 
   /// The same family at ``stackedTextSize``, the way a network extra stacks up and down.
+  /// Semibold, so the small size keeps presence against the bar without clotting at 1x.
   static var stackedTextFont: NSFont {
-    monospacedDigitFont(NSFont.menuBarFont(ofSize: stackedTextSize))
+    monospacedDigitFont(NSFont.systemFont(ofSize: stackedTextSize, weight: .semibold))
   }
 
   private static func monospacedDigitFont(_ base: NSFont) -> NSFont {
@@ -135,9 +136,9 @@ enum MenuBarItemImage {
     var capHeight: CGFloat
 
     /// A cell with no tags at all — a lone percent riding along beside a stacked neighbour —
-    /// owes nothing for the tag column or the gap after it.
+    /// owes nothing for the tag column or the gap before it.
     var cadenceGap: CGFloat { cadenceColumn > 0 ? stackedCadenceSpacing : 0 }
-    var width: CGFloat { cadenceColumn + cadenceGap + percentColumn }
+    var width: CGFloat { percentColumn + cadenceGap + cadenceColumn }
   }
 
   private static func draw(
@@ -145,11 +146,10 @@ enum MenuBarItemImage {
     height: CGFloat,
     scale: CGFloat
   ) -> NSImage {
-    let compact = label.isCompact
     let prepared = label.cells.map {
       PreparedCell(
         mark: $0.icon.flatMap { placedMark($0, height: height) },
-        text: preparedText($0, compact: compact)
+        text: preparedText($0)
       )
     }
     var totalWidth = prepared.map(\.width).reduce(0, +)
@@ -246,18 +246,16 @@ enum MenuBarItemImage {
     }
   }
 
-  /// `compact` is the item's decision, not the cell's: a lone reading is drawn at the menu bar's
-  /// own size on its own, and at the stacked size when it shares an item with a pair.
-  private static func preparedText(_ cell: MenuBarLabelCell, compact: Bool) -> PreparedText? {
+  /// A lone reading keeps the menu bar's own size even beside a stacked pair: only a pair pays
+  /// the stacked size, because only a pair has two rows to fit.
+  private static func preparedText(_ cell: MenuBarLabelCell) -> PreparedText? {
     switch cell.content {
     case .absent:
       return nil
-    case .lone(let percent) where !compact:
+    case .lone(let percent):
       let font = textFont
       let drawn = line(for: percent, font: font)
       return .single(line: drawn.line, width: drawn.width, capHeight: font.capHeight)
-    case .lone(let percent):
-      return stacked([MenuBarLabelLine(percent: percent)])
     case .rows(let rows):
       return stacked(rows)
     }
@@ -306,7 +304,9 @@ enum MenuBarItemImage {
   ) {
     switch text {
     case .single(let line, _, let cap):
-      cgContext.textPosition = CGPoint(x: textX, y: (height - cap) / 2)
+      // Whole-point origins: a fractional origin lands glyphs between pixels on a 1x display,
+      // smearing stems across two columns — read as both "thin" and "misaligned".
+      cgContext.textPosition = CGPoint(x: textX.rounded(), y: ((height - cap) / 2).rounded())
       CTLineDraw(line, cgContext)
     case .stacked(let stacked):
       let cap = stacked.capHeight
@@ -314,18 +314,25 @@ enum MenuBarItemImage {
       let block = cap * CGFloat(stacked.rows.count) + stackedLineGap * extra
       var baseline = (height - block) / 2 + (cap + stackedLineGap) * extra
       for row in stacked.rows {
+        // Percents right-align so the % signs share an edge, and the tag follows as the
+        // reading's unit. A shorter number's slack falls before it as leading air — the way a
+        // ragged-left speed pair sits beside its mark — never as a hole inside the reading.
+        // Origins snap to whole points: fractional ones smear stems on a 1x display.
+        let y = baseline.rounded()
+        let percentX = (textX + (stacked.percentColumn - row.percentWidth)).rounded()
+        cgContext.textPosition = CGPoint(x: percentX, y: y)
+        CTLineDraw(row.percent, cgContext)
         if let cadence = row.cadence {
-          // Letters are proportional where digits are not, so H left-aligned in the column W
-          // set reads adrift of its own number; each tag centers in the shared column instead.
-          let cadenceX = textX + (stacked.cadenceColumn - row.cadenceWidth) / 2
-          cgContext.textPosition = CGPoint(x: cadenceX, y: baseline)
+          // Each tag is measured on its own and centered in the shared column, so H and W
+          // share a visual center; the whole-point snap keeps the raster crisp, at most half a
+          // pixel from the true center on a 1x display.
+          let cadenceX =
+            (textX + stacked.percentColumn + stacked.cadenceGap
+              + (stacked.cadenceColumn - row.cadenceWidth) / 2)
+            .rounded()
+          cgContext.textPosition = CGPoint(x: cadenceX, y: y)
           CTLineDraw(cadence, cgContext)
         }
-        let percentX =
-          textX + stacked.cadenceColumn + stacked.cadenceGap
-          + (stacked.percentColumn - row.percentWidth)
-        cgContext.textPosition = CGPoint(x: percentX, y: baseline)
-        CTLineDraw(row.percent, cgContext)
         baseline -= cap + stackedLineGap
       }
     }

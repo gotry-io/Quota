@@ -87,10 +87,13 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    // Codex's own tightest window, not Claude Code's tighter one.
-    #expect(label.text == "68%")
+    // Codex's own reading, not Claude Code's tighter one.
     #expect(label.icon == .provider(.codex))
-    #expect(label.accessibilityLabel == "QuotaBar, Codex 68% remaining")
+    #expect(label.cells[0].rows.map(\.percent) == ["68%", "74%"])
+    #expect(
+      label.accessibilityLabel
+        == "QuotaBar, Codex, five_hour 68% remaining, weekly 74% remaining"
+    )
   }
 
   @Test
@@ -177,11 +180,13 @@ struct MenuBarLabelModelTests {
     #expect(combined.count == 1)
     #expect(combined[0].id == .combined)
     #expect(combined[0].label.cells.count == 2)
-    #expect(combined[0].label.cells[0] == MenuBarLabelCell(icon: .provider(.codex), text: "68%"))
+    #expect(combined[0].label.cells[0].icon == .provider(.codex))
+    #expect(combined[0].label.cells[0].rows.map(\.percent) == ["68%", "74%"])
     #expect(combined[0].label.cells[1] == MenuBarLabelCell(icon: .provider(.claude), text: "27%"))
     #expect(
       combined[0].label.accessibilityLabel
-        == "QuotaBar, Codex 68% remaining, Claude Code 27% remaining"
+        == "QuotaBar, Codex five_hour 68% remaining, weekly 74% remaining, "
+          + "Claude Code 27% remaining"
     )
 
     let separate = MenuBarLabelModel.specs(
@@ -194,7 +199,7 @@ struct MenuBarLabelModelTests {
     )
     #expect(separate.map(\.id) == [.provider(.codex), .provider(.claude)])
     #expect(separate[0].label.icon == .provider(.codex))
-    #expect(separate[0].label.text == "68%")
+    #expect(separate[0].label.cells[0].rows.map(\.percent) == ["68%", "74%"])
     #expect(separate[1].label.text == "27%")
   }
 
@@ -287,7 +292,7 @@ struct MenuBarLabelModelTests {
       now: now
     )
     #expect(specs[0].label.icon == .provider(.codex))
-    #expect(specs[0].label.text == "68%")
+    #expect(specs[0].label.cells[0].rows.map(\.percent) == ["68%", "74%"])
     #expect(
       MenuBarLayout.resolve(
         selection: .providers([.codex, .claude]),
@@ -376,7 +381,7 @@ struct MenuBarLabelModelTests {
   }
 
   @Test
-  func aWeeklyTitleWithoutPrimaryCadenceIsNotStacked() {
+  func twoPlanMetersWithoutACadenceStackUntagged() {
     let label = MenuBarLabelModel.make(
       overview: [
         item(
@@ -392,10 +397,15 @@ struct MenuBarLabelModelTests {
       now: now
     )
 
-    // Titles are display copy. Without the wire cadence this is one percent, not a pair.
-    #expect(label.text == "68%")
-    #expect(label.cells[0].content == .lone("68%"))
-    #expect(label.accessibilityLabel == "QuotaBar, Codex 68% remaining")
+    // Titles stay display copy: the pair comes from wire order, not from parsing a title,
+    // and with no cadence named the rows wear no tags — position and the spoken titles tell
+    // them apart.
+    #expect(label.cells[0].rows.map(\.percent) == ["68%", "84%"])
+    #expect(label.cells[0].rows.map(\.compactCadence) == [nil, nil])
+    #expect(
+      label.accessibilityLabel
+        == "QuotaBar, Codex, 5 Hours 68% remaining, Weekly 84% remaining"
+    )
   }
 
   @Test
@@ -548,7 +558,6 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(label.text == "53%")
-    #expect(label.cells[0].isStacked == false)
     #expect(label.accessibilityLabel == "QuotaBar, Claude Code 53% remaining")
   }
 
@@ -641,12 +650,9 @@ struct MenuBarLabelModelTests {
     )
 
     #expect(specs[0].label.cells[0].rows.map(\.compactCadence) == ["H", "W"])
-    // One headline meter has no neighbour to be told apart from, so it stays a lone reading.
-    // The renderer still drops it to the stacked size beside the pair — that is the item's
-    // decision, which is why the cell does not have to claim to be a pair to get it.
+    // One headline meter has no neighbour to be told apart from, so it stays a lone reading,
+    // and the renderer keeps it at the menu bar's own size beside the pair.
     #expect(specs[0].label.cells[1].content == .lone("51%"))
-    #expect(specs[0].label.cells[1].isStacked == false)
-    #expect(specs[0].label.isCompact)
     #expect(
       specs[0].label.accessibilityLabel
         == "QuotaBar, Codex 5 Hours 68% remaining, Weekly 84% remaining, "
@@ -799,6 +805,71 @@ struct MenuBarLabelModelTests {
         QuotaWindow(id: "extra_usage", title: "Extra Usage", usedPercent: 99),
       ]
     )
+  }
+
+  /// Cursor's shape: two named plan meters and an extra, none carrying a cadence. The first
+  /// two percent meters in wire order are the headline pair; the extra stays off the item.
+  @Test
+  func planMetersPairLeavesTheExtraOffTheItem() {
+    let label = MenuBarLabelModel.make(
+      overview: [
+        item(
+          provider: .cursor,
+          fingerprint: "cursor",
+          windows: [
+            window(id: "cursor_models", title: "Cursor Models", usedPercent: 19),
+            window(id: "other_models", title: "Other Models", usedPercent: 87),
+            window(id: "grok_bot", title: "Grok Bot", usedPercent: 7),
+          ]
+        )
+      ],
+      style: .iconAndPercent,
+      provider: .provider(.cursor),
+      now: now
+    )
+    #expect(label.cells[0].rows.map(\.percent) == ["81%", "13%"])
+    #expect(label.cells[0].rows.map(\.compactCadence) == [nil, nil])
+    #expect(
+      label.accessibilityLabel
+        == "QuotaBar, Cursor, Cursor Models 81% remaining, Other Models 13% remaining"
+    )
+  }
+
+  /// A named cell whose subscription is only a wallet still owes the person its number: the
+  /// whole-dollar balance is that number. The wallet never claims the Automatic slot — a
+  /// balance has no percent to be tightest by.
+  @Test
+  func aNamedWalletShowsItsWholeDollarBalance() {
+    let wallet = item(
+      provider: .openrouter,
+      fingerprint: "openrouter",
+      windows: [
+        QuotaWindow(
+          id: "credits",
+          title: "Balance (USD)",
+          usedPercent: 0,
+          remainingValue: 99.79,
+          valueUnit: .usd
+        )
+      ]
+    )
+    let named = MenuBarLabelModel.make(
+      overview: [wallet],
+      style: .iconAndPercent,
+      provider: .provider(.openrouter),
+      now: now
+    )
+    #expect(named.text == "$99")
+    #expect(named.icon == .provider(.openrouter))
+    #expect(named.accessibilityLabel == "QuotaBar, OpenRouter $99 remaining")
+
+    let automatic = MenuBarLabelModel.make(
+      overview: [wallet],
+      style: .iconAndPercent,
+      provider: .automatic,
+      now: now
+    )
+    #expect(automatic.text == nil)
   }
 
   private func window(
