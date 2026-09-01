@@ -211,6 +211,18 @@ struct MenuBarLabelLayoutTests {
     #expect(two.size.width > one.size.width + MenuBarItemImage.cellSpacing)
   }
 
+  /// One raster per display scale: a 1x screen must get glyphs drawn at 1x, not a
+  /// downsampled retina bitmap.
+  @Test
+  func theItemCarriesARasterForEachDisplayScale() throws {
+    let image = MenuBarItemImage.make(stackedPair(top: "68%", bottom: "27%"))
+    let scales = image.representations
+      .compactMap { $0 as? NSBitmapImageRep }
+      .map { CGFloat($0.pixelsWide) / $0.size.width }
+      .sorted()
+    #expect(scales == [1, 2])
+  }
+
   private var iconAndPercent: MenuBarLabelModel {
     MenuBarLabelModel(
       icon: .provider(.codex),

@@ -34,13 +34,14 @@ enum MenuBarItemImage {
   nonisolated static let stackedTextSize: CGFloat = 9
 
   /// Gap between the two stacked cadence rows.
-  nonisolated static let stackedLineGap: CGFloat = 3
+  nonisolated static let stackedLineGap: CGFloat = 2
 
   /// Gap between a remaining percent and its cadence tag (`H`). The tag reads as the
   /// reading's unit, the way a speed carries `KB/s`, so it sits a word-space after it.
   nonisolated static let stackedCadenceSpacing: CGFloat = 3
 
-  /// Menu-bar items are drawn at the backing scale; two covers every shipping Mac.
+  /// The retina drawing scale. The shipped image also carries a 1x representation, so a
+  /// display picks the raster made for it instead of downsampling this one.
   nonisolated static let scale: CGFloat = 2
 
   /// The menu bar's own font, with monospaced digits so the item does not twitch as the number
@@ -50,11 +51,13 @@ enum MenuBarItemImage {
   }
 
   /// The same family at ``stackedTextSize``, the way a network extra stacks up and down.
-  /// Semibold, so the small size keeps presence against the bar without clotting at 1x.
+  /// Medium, so the small size keeps presence against the bar without clotting on retina.
   static var stackedTextFont: NSFont {
-    monospacedDigitFont(NSFont.systemFont(ofSize: stackedTextSize, weight: .semibold))
+    .monospacedDigitSystemFont(ofSize: stackedTextSize, weight: .medium)
   }
 
+  /// The bar's own font has no monospaced-digit variant of its own, so the feature is set on
+  /// its descriptor; the stacked font uses the system API for the same thing directly.
   private static func monospacedDigitFont(_ base: NSFont) -> NSFont {
     let descriptor = base.fontDescriptor.addingAttributes([
       .featureSettings: [
@@ -85,6 +88,13 @@ enum MenuBarItemImage {
       return cached.image
     }
     let image = draw(label, height: height, scale: scale)
+    // One raster per display scale, in one image: AppKit picks the representation matching
+    // the screen the item is on, so a 1x display shows glyphs rasterized at 1x — with the
+    // whole-point origins landing on its actual pixels — rather than a downsampled retina
+    // bitmap. This is what lets one bar item look native on both kinds of screen at once.
+    if let oneX = draw(label, height: height, scale: 1).representations.first {
+      image.addRepresentation(oneX)
+    }
     // Only the items currently on the bar are worth keeping, and they are redrawn on the next
     // reading anyway, so a full reset is cheaper to hold than an eviction order.
     if cached.count >= cacheLimit {
@@ -199,7 +209,7 @@ enum MenuBarItemImage {
         )
       }
       if let text = cell.text, let cgContext = context?.cgContext {
-        drawText(text, at: x + cell.textOrigin, height: height, in: cgContext)
+        drawText(text, at: x + cell.textOrigin, height: height, scale: scale, in: cgContext)
       }
       x += cell.width
     }
@@ -300,40 +310,45 @@ enum MenuBarItemImage {
     _ text: PreparedText,
     at textX: CGFloat,
     height: CGFloat,
+    scale: CGFloat,
     in cgContext: CGContext
   ) {
+    // Origins snap to the pixel grid of the raster being drawn — whole points at 1x, half
+    // points at 2x. A fractional origin lands glyphs between pixels, smearing stems into
+    // something both thin and misaligned; snapping to points alone would waste the retina
+    // raster's finer grid.
+    func snap(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
     switch text {
     case .single(let line, _, let cap):
-      // Whole-point origins: a fractional origin lands glyphs between pixels on a 1x display,
-      // smearing stems across two columns — read as both "thin" and "misaligned".
-      cgContext.textPosition = CGPoint(x: textX.rounded(), y: ((height - cap) / 2).rounded())
+      cgContext.textPosition = CGPoint(x: snap(textX), y: snap((height - cap) / 2))
       CTLineDraw(line, cgContext)
     case .stacked(let stacked):
       let cap = stacked.capHeight
       let extra = CGFloat(stacked.rows.count - 1)
-      let block = cap * CGFloat(stacked.rows.count) + stackedLineGap * extra
-      var baseline = (height - block) / 2 + (cap + stackedLineGap) * extra
+      // The row step rounds UP on the pixel grid: the designed gap is a minimum, so
+      // quantization on a 1x display may widen the air between the rows but never eat it.
+      let step = ((cap + stackedLineGap) * scale).rounded(.up) / scale
+      let block = cap + step * extra
+      var baseline = snap((height - block) / 2) + step * extra
       for row in stacked.rows {
         // Percents right-align so the % signs share an edge, and the tag follows as the
         // reading's unit. A shorter number's slack falls before it as leading air — the way a
         // ragged-left speed pair sits beside its mark — never as a hole inside the reading.
-        // Origins snap to whole points: fractional ones smear stems on a 1x display.
-        let y = baseline.rounded()
-        let percentX = (textX + (stacked.percentColumn - row.percentWidth)).rounded()
+        let y = snap(baseline)
+        let percentX = snap(textX + (stacked.percentColumn - row.percentWidth))
         cgContext.textPosition = CGPoint(x: percentX, y: y)
         CTLineDraw(row.percent, cgContext)
         if let cadence = row.cadence {
-          // Each tag is measured on its own and centered in the shared column, so H and W
-          // share a visual center; the whole-point snap keeps the raster crisp, at most half a
-          // pixel from the true center on a 1x display.
-          let cadenceX =
-            (textX + stacked.percentColumn + stacked.cadenceGap
-              + (stacked.cadenceColumn - row.cadenceWidth) / 2)
-            .rounded()
+          // Each tag is measured on its own and centered in the shared column. When the slack
+          // is an odd number of pixels, the spare pixel trails: the tag stays against the
+          // number it belongs to, and the leftover air falls outward.
+          let inset =
+            ((stacked.cadenceColumn - row.cadenceWidth) / 2 * scale).rounded(.down) / scale
+          let cadenceX = snap(textX + stacked.percentColumn + stacked.cadenceGap) + inset
           cgContext.textPosition = CGPoint(x: cadenceX, y: y)
           CTLineDraw(cadence, cgContext)
         }
-        baseline -= cap + stackedLineGap
+        baseline -= step
       }
     }
   }
