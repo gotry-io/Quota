@@ -839,6 +839,7 @@ const UsageCostAssumptionSchema = z.enum([
   "wildcard_context_bucket",
   "cache_write_inferred_rate",
   "source_reported",
+  "vendor_official_price",
 ]);
 export type UsageCostAssumption = z.infer<typeof UsageCostAssumptionSchema>;
 

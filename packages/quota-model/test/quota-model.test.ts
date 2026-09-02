@@ -391,6 +391,96 @@ describe("Usage cost", () => {
     expect(() => foldPreparedUsageCosts(prepared, [3])).toThrow(RangeError);
   });
 
+  it("values an unnamed-channel grok-4.5 row at the xAI official rate", () => {
+    const priceCatalog = catalog([
+      priceEntry({
+        entry_id: "xai_grok_45",
+        billing_channel: "xai_direct",
+        model: "grok-4.5",
+        rates: rates({
+          uncached_input_per_million: "2",
+          cache_read_per_million: "0.3",
+          cache_write_5m_per_million: null,
+          cache_write_1h_per_million: null,
+          cache_write_inferred_per_million: "2",
+          output_per_million: "6",
+        }),
+      }),
+    ]);
+    const cost = calculateUsageCost(
+      [
+        usageRow({
+          agent: "grok",
+          billing_channel: "unknown",
+          channel_source: "unknown",
+          model: "grok-4.5",
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+        }),
+      ],
+      priceCatalog,
+    );
+    expect(cost).toMatchObject({
+      status: "complete",
+      amount_microusd: "8000000",
+    });
+    expect(cost.assumptions).toContain("vendor_official_price");
+    expect(cost.assumptions).not.toContain("agent_default_channel");
+    expect(
+      resolvePricingEntry(
+        priceCatalog,
+        usageRow({
+          agent: "grok",
+          billing_channel: "unknown",
+          channel_source: "unknown",
+          model: "grok-4.5",
+        }),
+      ),
+    ).toMatchObject({
+      status: "priced",
+      entry: { entry_id: "xai_grok_45" },
+      assumptions: ["vendor_official_price"],
+    });
+  });
+
+  it("leaves an unnamed-channel row unpriced when two vendor-direct channels match", () => {
+    const priceCatalog = catalog([
+      priceEntry({
+        entry_id: "openai_shared",
+        billing_channel: "openai_direct",
+        model: "shared-model",
+      }),
+      priceEntry({
+        entry_id: "anthropic_shared",
+        billing_channel: "anthropic_direct",
+        model: "shared-model",
+      }),
+    ]);
+    expect(
+      resolvePricingEntry(
+        priceCatalog,
+        usageRow({
+          billing_channel: "unknown",
+          channel_source: "unknown",
+          model: "shared-model",
+        }),
+      ),
+    ).toEqual({ status: "unpriced", reason: "unknown_channel" });
+  });
+
+  it("reports unknown_model when an unnamed-channel row matches no vendor-direct entry", () => {
+    expect(
+      resolvePricingEntry(
+        catalog([priceEntry()]),
+        usageRow({
+          billing_channel: "unknown",
+          channel_source: "unknown",
+          model: "not-cataloged",
+        }),
+      ),
+    ).toEqual({ status: "unpriced", reason: "unknown_model" });
+  });
+
   it("surfaces reviewed wildcard and agent-default assumptions", () => {
     const priceCatalog = catalog([
       priceEntry({

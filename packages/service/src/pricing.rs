@@ -52,6 +52,7 @@ pub enum UsageCostAssumption {
     WildcardContextBucket,
     CacheWriteInferredRate,
     SourceReported,
+    VendorOfficialPrice,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -253,20 +254,39 @@ pub enum PricingResolution {
 }
 
 pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &DatedUsageRow) -> PricingResolution {
-    if row.billing_channel == BillingChannel::Unknown {
-        return PricingResolution::Unpriced(UsageUnpricedReason::UnknownChannel);
-    }
-    let by_model: Vec<&PricingCatalogEntry> = catalog
-        .entries
-        .iter()
-        .filter(|entry| {
-            entry.billing_channel == row.billing_channel
-                && (entry.model == row.model
-                    || entry.aliases.iter().any(|alias| alias == &row.model))
-        })
-        .collect();
+    let vendor_official_price = row.billing_channel == BillingChannel::Unknown;
+    let by_model: Vec<&PricingCatalogEntry> = if vendor_official_price {
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| {
+                is_vendor_direct_channel(entry.billing_channel)
+                    && (entry.model == row.model
+                        || entry.aliases.iter().any(|alias| alias == &row.model))
+            })
+            .collect()
+    } else {
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.billing_channel == row.billing_channel
+                    && (entry.model == row.model
+                        || entry.aliases.iter().any(|alias| alias == &row.model))
+            })
+            .collect()
+    };
     if by_model.is_empty() {
         return PricingResolution::Unpriced(UsageUnpricedReason::UnknownModel);
+    }
+    if vendor_official_price {
+        let mut channels = BTreeSet::new();
+        for entry in &by_model {
+            channels.insert(entry.billing_channel);
+        }
+        if channels.len() > 1 {
+            return PricingResolution::Unpriced(UsageUnpricedReason::UnknownChannel);
+        }
     }
     let date = row.date.as_str();
     let by_date: Vec<&PricingCatalogEntry> = by_model
@@ -315,6 +335,9 @@ pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &DatedUsageRow) -> P
     }
     if entry.context_bucket == "*" {
         assumptions.push(UsageCostAssumption::WildcardContextBucket);
+    }
+    if vendor_official_price {
+        assumptions.push(UsageCostAssumption::VendorOfficialPrice);
     }
     PricingResolution::Priced {
         entry: Box::new(entry.clone()),
@@ -896,6 +919,18 @@ fn ranges_overlap(
 fn dimensions_overlap(left: &str, right: &str) -> bool {
     left == "*" || right == "*" || left == right
 }
+/// A channel the model vendor bills on its own, not a gateway or proxy.
+fn is_vendor_direct_channel(channel: BillingChannel) -> bool {
+    matches!(
+        channel,
+        BillingChannel::OpenaiDirect
+            | BillingChannel::AnthropicDirect
+            | BillingChannel::XaiDirect
+            | BillingChannel::MoonshotDirect
+            | BillingChannel::DeepseekDirect
+    )
+}
+
 fn dimension_matches(expected: &str, actual: &str) -> bool {
     expected == "*" || expected == actual
 }
@@ -931,6 +966,7 @@ fn assumption_key(value: UsageCostAssumption) -> &'static str {
         UsageCostAssumption::WildcardContextBucket => "wildcard_context_bucket",
         UsageCostAssumption::CacheWriteInferredRate => "cache_write_inferred_rate",
         UsageCostAssumption::SourceReported => "source_reported",
+        UsageCostAssumption::VendorOfficialPrice => "vendor_official_price",
     }
 }
 fn reason_key(value: UsageUnpricedReason) -> &'static str {
@@ -1020,6 +1056,7 @@ fn checked_add(value: u64, increment: u64) -> Result<u64, UsageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usage::{BillingChannel, ChannelSource, ContextBucket, UsageAgent, UsageRow};
     use serde_json::{Value, json};
 
     const FIXTURE: &str = include_str!("../../protocol/fixtures/pricing-conformance.json");
@@ -1212,6 +1249,163 @@ mod tests {
             )
             .expect("serialize cost outcome");
             assert_eq!(&actual, expected, "{name}");
+        }
+    }
+
+    fn unnamed_channel_row(model: &str) -> DatedUsageRow {
+        DatedUsageRow {
+            date: "2026-08-10".into(),
+            row: UsageRow {
+                agent: UsageAgent::Grok,
+                billing_channel: BillingChannel::Unknown,
+                channel_source: ChannelSource::Unknown,
+                model: model.into(),
+                context_bucket: ContextBucket::Le128k,
+                service_tier: "default".into(),
+                speed: "standard".into(),
+                inference_geo: "global".into(),
+                input_tokens: 1_000_000,
+                cache_read_tokens: 0,
+                cache_write_5m_tokens: 0,
+                cache_write_1h_tokens: 0,
+                cache_write_inferred_tokens: 0,
+                output_tokens: 1_000_000,
+                reasoning_tokens: 0,
+                requests: 1,
+                web_search_requests: 0,
+                web_fetch_requests: 0,
+                source_cost_microusd: None,
+                source_cost_covered_requests: 0,
+            },
+        }
+    }
+
+    fn priced_entry(
+        entry_id: &str,
+        channel: BillingChannel,
+        model: &str,
+        input: &str,
+        output: &str,
+    ) -> PricingCatalogEntry {
+        PricingCatalogEntry {
+            entry_id: entry_id.into(),
+            billing_channel: channel,
+            model: model.into(),
+            aliases: Vec::new(),
+            effective_from: "2026-01-01".into(),
+            effective_to: None,
+            service_tier: "default".into(),
+            speed: "standard".into(),
+            inference_geo: "global".into(),
+            context_bucket: "le_128k".into(),
+            currency: "USD".into(),
+            rates: PricingRates {
+                uncached_input_per_million: Some(input.into()),
+                cache_read_per_million: Some("0.3".into()),
+                cache_write_5m_per_million: None,
+                cache_write_1h_per_million: None,
+                cache_write_inferred_per_million: Some("2".into()),
+                output_per_million: Some(output.into()),
+                web_search_per_request: None,
+                web_fetch_per_request: None,
+            },
+            source_url: "https://example.com/pricing".into(),
+            verified_at: "2026-08-02T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn unnamed_channel_grok_prices_at_the_xai_official_rate() {
+        let catalog = PricingCatalog {
+            protocol_version: 2,
+            revision: "test-xai".into(),
+            published_at: "2026-08-02T00:00:00Z".into(),
+            entries: vec![priced_entry(
+                "xai_grok_45",
+                BillingChannel::XaiDirect,
+                "grok-4.5",
+                "2",
+                "6",
+            )],
+        };
+        assert!(validate_catalog(&catalog).valid);
+        let row = unnamed_channel_row("grok-4.5");
+        match resolve_pricing_entry(&catalog, &row) {
+            PricingResolution::Priced { entry, assumptions } => {
+                assert_eq!(entry.entry_id, "xai_grok_45");
+                assert!(assumptions.contains(&UsageCostAssumption::VendorOfficialPrice));
+                assert!(!assumptions.contains(&UsageCostAssumption::AgentDefaultChannel));
+            }
+            other => panic!("expected priced, got {other:?}"),
+        }
+        let outcome = calculate_usage_cost(
+            std::slice::from_ref(&row),
+            Some(&catalog),
+            UsageCostMode::Calculate,
+        )
+        .expect("cost outcome");
+        assert_eq!(outcome.status, UsageCostStatus::Complete);
+        assert_eq!(outcome.amount_microusd.as_deref(), Some("8000000"));
+        assert!(
+            outcome
+                .assumptions
+                .contains(&UsageCostAssumption::VendorOfficialPrice)
+        );
+        assert!(
+            !outcome
+                .assumptions
+                .contains(&UsageCostAssumption::AgentDefaultChannel)
+        );
+    }
+
+    #[test]
+    fn unnamed_channel_two_vendor_directs_stay_unknown_channel() {
+        let catalog = PricingCatalog {
+            protocol_version: 2,
+            revision: "test-two-vendors".into(),
+            published_at: "2026-08-02T00:00:00Z".into(),
+            entries: vec![
+                priced_entry(
+                    "openai_shared",
+                    BillingChannel::OpenaiDirect,
+                    "shared-model",
+                    "1",
+                    "2",
+                ),
+                priced_entry(
+                    "anthropic_shared",
+                    BillingChannel::AnthropicDirect,
+                    "shared-model",
+                    "3",
+                    "4",
+                ),
+            ],
+        };
+        assert!(validate_catalog(&catalog).valid);
+        match resolve_pricing_entry(&catalog, &unnamed_channel_row("shared-model")) {
+            PricingResolution::Unpriced(UsageUnpricedReason::UnknownChannel) => {}
+            other => panic!("expected unknown_channel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unnamed_channel_unmatched_model_is_unknown_model() {
+        let catalog = PricingCatalog {
+            protocol_version: 2,
+            revision: "test-exact".into(),
+            published_at: "2026-08-02T00:00:00Z".into(),
+            entries: vec![priced_entry(
+                "openai_gpt_5",
+                BillingChannel::OpenaiDirect,
+                "gpt-5",
+                "2",
+                "10",
+            )],
+        };
+        assert!(validate_catalog(&catalog).valid);
+        match resolve_pricing_entry(&catalog, &unnamed_channel_row("not-cataloged")) {
+            PricingResolution::Unpriced(UsageUnpricedReason::UnknownModel) => {}
+            other => panic!("expected unknown_model, got {other:?}"),
         }
     }
 }

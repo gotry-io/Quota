@@ -19,6 +19,7 @@ describe("managed pricing catalog", () => {
         "gpt-5.6-terra",
         "grok-4.5",
         "grok-4.6",
+        "kimi-k2.5",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-opus-5",
@@ -26,10 +27,10 @@ describe("managed pricing catalog", () => {
         "claude-fable-5",
       ]),
     );
-    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-08-23-1"');
+    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-09-01-1"');
     // Pins the dimension expansion so a refactor cannot silently drop entries.
-    expect(PRICING_CATALOG.entries).toHaveLength(184);
-    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(184);
+    expect(PRICING_CATALOG.entries).toHaveLength(188);
+    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(188);
   });
 
   it("prices Grok 4.5 short and long context rows", () => {
@@ -131,6 +132,75 @@ describe("managed pricing catalog", () => {
     expect(calculateUsageCost([row("2026-08-11", "le_128k")], PRICING_CATALOG)).toMatchObject({
       status: "unavailable",
       unpriced: [{ model: "grok-4.6", reason: "outside_effective_range" }],
+    });
+  });
+
+  it("prices grok CLI build names as the canonical Grok models", () => {
+    const row = (model: string, usage_date: string) =>
+      usageRow({
+        agent: "grok",
+        billing_channel: "xai_direct",
+        model,
+        date: usage_date,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      });
+    expect(
+      calculateUsageCost([row("grok-4.6-build", "2026-08-12")], PRICING_CATALOG),
+    ).toMatchObject({
+      status: "complete",
+      amount_microusd: "8000000",
+      assumptions: [
+        "agent_default_channel",
+        "model_alias",
+        "wildcard_context_bucket",
+        "wildcard_inference_geo",
+      ],
+    });
+    expect(
+      calculateUsageCost([row("grok-4.5-build", "2026-08-10")], PRICING_CATALOG),
+    ).toMatchObject({
+      status: "complete",
+      amount_microusd: "8000000",
+      assumptions: [
+        "agent_default_channel",
+        "model_alias",
+        "wildcard_context_bucket",
+        "wildcard_inference_geo",
+      ],
+    });
+  });
+
+  it("prices OpenCode k2p5 as Kimi K2.5, including unnamed channels", () => {
+    const row = (
+      billing_channel: DatedUsageRow["billing_channel"],
+      channel_source: DatedUsageRow["channel_source"],
+    ) =>
+      usageRow({
+        agent: "opencode",
+        billing_channel,
+        channel_source,
+        model: "k2p5",
+        date: "2026-03-01",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      });
+    expect(calculateUsageCost([row("moonshot_direct", "explicit")], PRICING_CATALOG)).toMatchObject(
+      {
+        status: "complete",
+        amount_microusd: "3600000",
+        assumptions: ["model_alias", "wildcard_context_bucket", "wildcard_inference_geo"],
+      },
+    );
+    expect(calculateUsageCost([row("unknown", "unknown")], PRICING_CATALOG)).toMatchObject({
+      status: "complete",
+      amount_microusd: "3600000",
+      assumptions: [
+        "model_alias",
+        "vendor_official_price",
+        "wildcard_context_bucket",
+        "wildcard_inference_geo",
+      ],
     });
   });
 

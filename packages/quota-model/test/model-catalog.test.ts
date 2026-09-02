@@ -74,6 +74,39 @@ describe("report-time model catalog", () => {
     ).toMatchObject({ valid: false });
   });
 
+  it("maps grok CLI build names onto the canonical Grok models from their launch dates", () => {
+    expect(
+      resolveModel(MODEL_CATALOG, {
+        ...row("grok-4.6-build"),
+        agent: "grok",
+        date: "2026-08-12",
+      }),
+    ).toBe("grok-4.6");
+    expect(
+      resolveModel(MODEL_CATALOG, {
+        ...row("grok-4.5-build"),
+        agent: "grok",
+      }),
+    ).toBe("grok-4.5");
+    expect(
+      resolveModel(MODEL_CATALOG, {
+        ...row("grok-4.6-build"),
+        agent: "grok",
+        date: "2026-08-11",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("maps OpenCode k2p5 onto kimi-k2.5 from the generation start", () => {
+    expect(
+      resolveModel(MODEL_CATALOG, {
+        ...row("k2p5"),
+        agent: "opencode",
+        date: "2026-02-01",
+      }),
+    ).toBe("kimi-k2.5");
+  });
+
   it("keeps unknown model text unresolved and rejects overlapping aliases", () => {
     expect(resolveModel(MODEL_CATALOG, row("openrouter-3o[1m]"))).toBeUndefined();
     const invalid: ModelCatalog = {
