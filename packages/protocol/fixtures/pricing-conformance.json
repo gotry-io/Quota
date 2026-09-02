@@ -203,6 +203,95 @@
           "verified_at": "2026-08-02T00:00:00Z"
         }
       ]
+    },
+    "xai_grok": {
+      "protocol_version": 2,
+      "revision": "conformance-v1",
+      "published_at": "2026-08-02T00:00:00Z",
+      "entries": [
+        {
+          "entry_id": "xai_grok_45",
+          "billing_channel": "xai_direct",
+          "model": "grok-4.5",
+          "aliases": [],
+          "effective_from": "2026-07-08",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "2",
+            "cache_read_per_million": "0.3",
+            "cache_write_5m_per_million": null,
+            "cache_write_1h_per_million": null,
+            "cache_write_inferred_per_million": "2",
+            "output_per_million": "6",
+            "web_search_per_request": null,
+            "web_fetch_per_request": null
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        }
+      ]
+    },
+    "two_vendor_directs": {
+      "protocol_version": 2,
+      "revision": "conformance-v1",
+      "published_at": "2026-08-02T00:00:00Z",
+      "entries": [
+        {
+          "entry_id": "openai_shared",
+          "billing_channel": "openai_direct",
+          "model": "shared-model",
+          "aliases": [],
+          "effective_from": "2026-01-01",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "1",
+            "cache_read_per_million": null,
+            "cache_write_5m_per_million": null,
+            "cache_write_1h_per_million": null,
+            "cache_write_inferred_per_million": null,
+            "output_per_million": "2",
+            "web_search_per_request": null,
+            "web_fetch_per_request": null
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        },
+        {
+          "entry_id": "anthropic_shared",
+          "billing_channel": "anthropic_direct",
+          "model": "shared-model",
+          "aliases": [],
+          "effective_from": "2026-01-01",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "3",
+            "cache_read_per_million": null,
+            "cache_write_5m_per_million": null,
+            "cache_write_1h_per_million": null,
+            "cache_write_inferred_per_million": null,
+            "output_per_million": "4",
+            "web_search_per_request": null,
+            "web_fetch_per_request": null
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        }
+      ]
     }
   },
   "rows": {
@@ -338,6 +427,72 @@
       "web_fetch_requests": 0,
       "source_cost_microusd": "1234",
       "source_cost_covered_requests": 1
+    },
+    "unknown_channel_grok": {
+      "date": "2026-08-10",
+      "agent": "grok",
+      "billing_channel": "unknown",
+      "channel_source": "unknown",
+      "model": "grok-4.5",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 1000000,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 1000000,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "unknown_channel_shared": {
+      "date": "2026-08-10",
+      "agent": "codex",
+      "billing_channel": "unknown",
+      "channel_source": "unknown",
+      "model": "shared-model",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "unknown_channel_unknown_model": {
+      "date": "2026-08-10",
+      "agent": "codex",
+      "billing_channel": "unknown",
+      "channel_source": "unknown",
+      "model": "not-cataloged",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
     }
   },
   "validation": [
@@ -402,6 +557,34 @@
       "expected": {
         "status": "unpriced",
         "reason": "unsupported_dimensions"
+      }
+    },
+    {
+      "name": "unnamed channel prices at the vendor official rate",
+      "catalog": "xai_grok",
+      "row": "unknown_channel_grok",
+      "expected": {
+        "status": "priced",
+        "entry_id": "xai_grok_45",
+        "assumptions": ["vendor_official_price"]
+      }
+    },
+    {
+      "name": "unnamed channel with two vendor-direct matches stays unknown_channel",
+      "catalog": "two_vendor_directs",
+      "row": "unknown_channel_shared",
+      "expected": {
+        "status": "unpriced",
+        "reason": "unknown_channel"
+      }
+    },
+    {
+      "name": "unnamed channel with no vendor-direct match is unknown_model",
+      "catalog": "exact",
+      "row": "unknown_channel_unknown_model",
+      "expected": {
+        "status": "unpriced",
+        "reason": "unknown_model"
       }
     }
   ],
@@ -472,6 +655,24 @@
             "rows": 1
           }
         ]
+      }
+    },
+    {
+      "name": "unnamed channel grok-4.5 at the xAI official rate",
+      "catalog": "xai_grok",
+      "mode": "calculate",
+      "rows": ["unknown_channel_grok"],
+      "expected": {
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "8000000",
+        "catalog_revision": "conformance-v1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": ["vendor_official_price"],
+        "unpriced": []
       }
     }
   ]

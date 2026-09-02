@@ -267,11 +267,14 @@ than broken ([ADR 0022](decisions/0022-minimal-diagnostics.md)).
 
 Pricing is versioned and effective-dated with ETag caching. Rust calculates local cost and Relay
 keeps the equivalent TypeScript calculation for account summaries, both requiring exact
-channel/model/date/dimension matching. Every first-party client requests the `auto` cost mode, so a
-row the catalog cannot price falls back to a complete source-reported cost and This Mac, Account,
-iOS, and Web report the same basis for the same fact; `calculate` stays the route default for callers
-that do not ask. Costing memoizes catalog validation by identity, and raw facts are priced before
-report grouping, so normalization never creates a pricing alias or changes a cost outcome. Relay
+channel/model/date/dimension matching. A row whose source never named a billing channel is still
+valued at the vendor's official direct price when exact model or alias matching lands in exactly
+one vendor-direct channel ([ADR 0029](decisions/0029-official-price-for-an-unnamed-channel.md)).
+Every first-party client requests the `auto` cost mode, so a row the catalog cannot price falls
+back to a complete source-reported cost and This Mac, Account, iOS, and Web report the same basis
+for the same fact; `calculate` stays the route default for callers that do not ask. Costing
+memoizes catalog validation by identity, and raw facts are priced before report grouping, so
+normalization never creates a pricing alias or changes a cost outcome. Relay
 publishes the model catalog at `GET /api/v2/model/catalog` with ETag validation and `public,
 max-age=300, must-revalidate`; summaries carry its revision, the Rust client stores payload and ETag
 atomically with a last-known-good cache, and a fetch failure never blocks collection, upload, totals,

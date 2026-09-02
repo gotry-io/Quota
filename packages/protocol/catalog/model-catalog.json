@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "revision": "official-2026-08-27-1",
+  "revision": "official-2026-09-01-1",
   "families": [
     {
       "prefix": "gpt-",
@@ -92,6 +92,34 @@
           "reported_model": "grok-4.5-latest",
           "provider": "xai",
           "effective_from": "2026-07-08"
+        },
+        {
+          "reported_model": "grok-4.5-build",
+          "provider": "xai",
+          "agent": "grok",
+          "effective_from": "2026-07-08"
+        }
+      ]
+    },
+    {
+      "canonical_id": "grok-4.6",
+      "aliases": [
+        {
+          "reported_model": "grok-4.6-build",
+          "provider": "xai",
+          "agent": "grok",
+          "effective_from": "2026-08-12"
+        }
+      ]
+    },
+    {
+      "canonical_id": "kimi-k2.5",
+      "aliases": [
+        {
+          "reported_model": "k2p5",
+          "provider": "moonshot",
+          "agent": "opencode",
+          "effective_from": "2026-02-01"
         }
       ]
     }

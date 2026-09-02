@@ -30,6 +30,7 @@ import {
  * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/anthropic/models/claude-sonnet-5.toml
  * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/anthropic/models/claude-fable-5.toml
  * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/xai/models/grok-4.6.toml
+ * - https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/moonshotai/models/kimi-k2.5.toml
  *
  * The source repository is available at https://github.com/anomalyco/models.dev
  * and its license is https://github.com/anomalyco/models.dev/blob/dev/LICENSE.
@@ -41,6 +42,7 @@ import {
 
 const VERIFIED_AT = "2026-08-10T00:00:00.000Z";
 const VERIFIED_AT_2026_08_23 = "2026-08-23T00:00:00.000Z";
+const PUBLISHED_AT_2026_09_01 = "2026-09-01T00:00:00.000Z";
 const OPENAI_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_CODEX_52_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.2-codex";
 const OPENAI_CODEX_53_SOURCE = "https://developers.openai.com/api/docs/models/gpt-5.3-codex";
@@ -52,6 +54,7 @@ const OPENAI_56_PRICE_CHANGE_SOURCE =
   "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/";
 const XAI_GROK_45_SOURCE = "https://docs.x.ai/developers/models/grok-4.5";
 const XAI_GROK_46_SOURCE = "https://docs.x.ai/developers/models/grok-4.6";
+const MOONSHOT_PRICING_SOURCE = "https://platform.moonshot.ai/docs/pricing/chat";
 const ANTHROPIC_PRICING_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing";
 const ANTHROPIC_OPUS_46_SOURCE = "https://www.anthropic.com/news/claude-opus-4-6";
 const ANTHROPIC_RELEASE_NOTES_SOURCE = "https://platform.claude.com/docs/en/release-notes/overview";
@@ -616,7 +619,7 @@ function xaiEntries(): PricingCatalogEntry[] {
       entryPrefix: "xai-grok-4.5-standard",
       model: "grok-4.5",
       billingChannel: "xai_direct",
-      aliases: ["grok-4.5-latest"],
+      aliases: ["grok-4.5-latest", "grok-4.5-build"],
       effectiveFrom: "2026-07-08",
       effectiveTo: null,
       serviceTiers: ["standard", "unknown"],
@@ -632,6 +635,7 @@ function xaiEntries(): PricingCatalogEntry[] {
       entryPrefix: "xai-grok-4.6-standard",
       model: "grok-4.6",
       billingChannel: "xai_direct",
+      aliases: ["grok-4.6-build"],
       effectiveFrom: "2026-08-12",
       effectiveTo: null,
       serviceTiers: ["standard", "unknown"],
@@ -645,11 +649,33 @@ function xaiEntries(): PricingCatalogEntry[] {
   ];
 }
 
+function moonshotEntries(): PricingCatalogEntry[] {
+  // kimi-for-coding is a subscription endpoint with no official per-token price; it stays unpriced.
+  // models.dev states Kimi K2.5's release_date only as the month "2026-01", so
+  // effective_from is floored to the first day after that month rather than a
+  // guessed day inside it.
+  return expandEntries({
+    entryPrefix: "moonshot-kimi-k2.5-standard",
+    model: "kimi-k2.5",
+    aliases: ["k2p5"],
+    billingChannel: "moonshot_direct",
+    effectiveFrom: "2026-02-01",
+    effectiveTo: null,
+    serviceTiers: ["standard", "unknown"],
+    speeds: ["standard", "unknown"],
+    inferenceGeos: ["*"],
+    contexts: ["*"],
+    rates: tokenRates("0.6", "0.1", null, null, "3"),
+    sourceUrl: MOONSHOT_PRICING_SOURCE,
+    verifiedAt: PUBLISHED_AT_2026_09_01,
+  });
+}
+
 export const PRICING_CATALOG: PricingCatalog = PricingCatalogSchema.parse({
   protocol_version: 2,
-  revision: "official-2026-08-23-1",
-  published_at: VERIFIED_AT_2026_08_23,
-  entries: [...openAIEntries(), ...anthropicEntries(), ...xaiEntries()],
+  revision: "official-2026-09-01-1",
+  published_at: PUBLISHED_AT_2026_09_01,
+  entries: [...openAIEntries(), ...anthropicEntries(), ...xaiEntries(), ...moonshotEntries()],
 });
 
 export const PRICING_CATALOG_ETAG = `"${PRICING_CATALOG.revision}"`;

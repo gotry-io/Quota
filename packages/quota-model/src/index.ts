@@ -530,22 +530,27 @@ export type PricingResolution =
     }
   | { status: "unpriced"; reason: Exclude<UsageUnpricedReason, "invalid_catalog"> };
 
-/** Resolve only an exact channel/model/date/dimension entry or an explicit catalog wildcard. */
+/** Resolve an exact channel/model/date/dimension entry, or the unique vendor-direct match for an unnamed channel. */
 export function resolvePricingEntry(
   catalog: PricingCatalog,
   row: DatedUsageRow,
 ): PricingResolution {
-  if (row.billing_channel === "unknown") {
-    return { status: "unpriced", reason: "unknown_channel" };
-  }
-  const byChannel = catalog.entries.filter(
-    (entry) => entry.billing_channel === row.billing_channel,
-  );
-  const byModel = byChannel.filter(
-    (entry) => entry.model === row.model || entry.aliases.includes(row.model),
-  );
+  const vendorOfficialPrice = row.billing_channel === "unknown";
+  const byModel = vendorOfficialPrice
+    ? vendorOfficialCandidates(catalog, row.model)
+    : catalog.entries.filter(
+        (entry) =>
+          entry.billing_channel === row.billing_channel &&
+          (entry.model === row.model || entry.aliases.includes(row.model)),
+      );
   if (byModel.length === 0) {
     return { status: "unpriced", reason: "unknown_model" };
+  }
+  if (vendorOfficialPrice) {
+    const channels = new Set(byModel.map((entry) => entry.billing_channel));
+    if (channels.size > 1) {
+      return { status: "unpriced", reason: "unknown_channel" };
+    }
   }
   const pricingDate = row.date;
   const byDate = byModel.filter(
@@ -580,6 +585,7 @@ export function resolvePricingEntry(
   if (entry.speed === "*") assumptions.push("wildcard_speed");
   if (entry.inference_geo === "*") assumptions.push("wildcard_inference_geo");
   if (entry.context_bucket === "*") assumptions.push("wildcard_context_bucket");
+  if (vendorOfficialPrice) assumptions.push("vendor_official_price");
   return { status: "priced", entry, assumptions };
 }
 
@@ -906,6 +912,25 @@ function rangesOverlap(
 
 function dimensionsOverlap(left: string, right: string): boolean {
   return left === "*" || right === "*" || left === right;
+}
+
+function vendorOfficialCandidates(catalog: PricingCatalog, model: string): PricingCatalogEntry[] {
+  return catalog.entries.filter(
+    (entry) =>
+      isVendorDirectChannel(entry.billing_channel) &&
+      (entry.model === model || entry.aliases.includes(model)),
+  );
+}
+
+/** A channel the model vendor bills on its own, not a gateway or proxy. */
+function isVendorDirectChannel(channel: BillingChannel): boolean {
+  return (
+    channel === "openai_direct" ||
+    channel === "anthropic_direct" ||
+    channel === "xai_direct" ||
+    channel === "moonshot_direct" ||
+    channel === "deepseek_direct"
+  );
 }
 
 function dimensionMatches(expected: string, actual: string): boolean {

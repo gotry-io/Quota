@@ -92,6 +92,7 @@ public enum UsageCostAssumption: String, Codable, Sendable, TolerantWireEnum {
   case wildcardContextBucket = "wildcard_context_bucket"
   case cacheWriteInferredRate = "cache_write_inferred_rate"
   case sourceReported = "source_reported"
+  case vendorOfficialPrice = "vendor_official_price"
   case unknown
 }
 

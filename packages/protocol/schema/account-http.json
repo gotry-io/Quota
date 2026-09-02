@@ -941,7 +941,8 @@
         "wildcard_inference_geo",
         "wildcard_context_bucket",
         "cache_write_inferred_rate",
-        "source_reported"
+        "source_reported",
+        "vendor_official_price"
       ]
     },
     "__schema23": {
