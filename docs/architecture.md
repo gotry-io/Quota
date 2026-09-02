@@ -214,9 +214,12 @@ device sync through the device-scoped profile endpoint, and the local session re
 profile so another write happens only after login, upgrade, or a host rename. Collection login
 returns one session — a single access/refresh family that reads this Account and writes this Device,
 with explicit expiry and compare-and-swap refresh rotation
-([ADR 0027](decisions/0027-one-token-per-client.md)). The `client_id` value is `quotabar`. That
-exchange also answers with the Account's `display_label`, the same value the Account read carries, so
-a client names the account it just reached without waiting for its first read.
+([ADR 0027](decisions/0027-one-token-per-client.md)); a rotation whose successor was never
+presented can be repeated with the token it replaced
+([ADR 0030](decisions/0030-a-rotation-never-received-did-not-happen.md)). The `client_id` value is
+`quotabar`. That exchange also answers with the Account's `display_label`, the same value the
+Account read carries, so a client names the account it just reached without waiting for its first
+read.
 
 QuotaBar updates in place with Sparkle 2: it reads
 `https://github.com/gotry-io/Quota/releases/latest/download/appcast.xml` and verifies EdDSA
@@ -240,7 +243,9 @@ carries a strong `ETag` over an account version stamp, the request's full query 
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
 moves `today` with no write behind it. The stamp is a handful of aggregates over the devices and
 observation rows the response projects, so a matching `If-None-Match` returns 304 before any Usage
-query runs. The Rust service and the iOS client both read conditionally, storing each response with
+query runs. The summary's Usage fold is stored keyed by what it depends on
+([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
+and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a
 failure; signing out drops the stored reads with the session.
 
@@ -318,8 +323,8 @@ or a report.
 QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the managed quota and Usage
 data contract at `/api/v6`, browser sign-in and sign-out at `/api/auth`, and the health routes. It
 authenticates each route with the minimum account, device, or browser scope and performs
-Device/Account deletion, rotation/revocation, and hour replacement with its daily rollup in storage
-transactions. An Account read carries every stored agent and channel with no opt-in query: the only
+Device/Account deletion, rotation/revocation, hour replacement with its daily rollup, and the
+Usage-fold sweep in storage transactions. An Account read carries every stored agent and channel with no opt-in query: the only
 thing it asks for is the caller's `tz`, because a local day begins at local midnight and that
 decides where the three trailing periods start and end. Every route that reads a query names the
 keys it accepts, and a key it did not name is a 400. The managed data contract is

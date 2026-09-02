@@ -7,7 +7,7 @@ import { AccountService } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
-import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { D1UsageState, storedScanVersionsSql } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
@@ -48,6 +48,7 @@ beforeEach(async () => {
   // Migrations are applied once per worker, so each case clears what the last one wrote.
   await env.DB.batch(
     [
+      "account_usage_folds",
       "usage_daily",
       "usage_hourly",
       "usage_hour_scans",
@@ -64,6 +65,13 @@ beforeEach(async () => {
 });
 
 describe("managed data v6 end to end", () => {
+  it("probes the usage_hour_scans primary key for the named hours", async () => {
+    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${storedScanVersionsSql}`)
+      .bind("device_alpha", "codex", JSON.stringify(["2026-08-10T09:00:00Z"]))
+      .all<{ detail: string }>();
+    expect(plan.results.some((row) => row.detail.includes("bucket_start_utc=?"))).toBe(true);
+  });
+
   it("keeps only the newest scan of an hour and ignores one already overtaken", async () => {
     await addDevice("alpha");
     const usage = new D1UsageState(env.DB);
@@ -267,6 +275,11 @@ describe("managed data v6 end to end", () => {
       .bind(...edges)
       .run();
     expect(removed.meta.changes).toBeGreaterThan(0);
+    // The first read stored a fold. Drop it so this second read still has to fold from the
+    // rollup and the hours the edges still hold, which is what this case is measuring.
+    await env.DB.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
+      .bind(accountId)
+      .run();
     expect(await periods(app, "tz=Asia/Singapore")).toEqual(summary);
   });
 
@@ -294,7 +307,11 @@ describe("managed data v6 end to end", () => {
     });
 
     // With every hour deleted the summary is unchanged, which is the only way to say that the
-    // read never reaches for one.
+    // read never reaches for one. Drop the fold the first read stored, or the second would
+    // answer from that row and would not prove the rollup is what it folded.
+    await env.DB.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
+      .bind(accountId)
+      .run();
     await env.DB.prepare("DELETE FROM usage_hourly").run();
     expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_hourly").first("count")).toBe(
       0,

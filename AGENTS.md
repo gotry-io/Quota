@@ -31,6 +31,8 @@ Read the relevant source before changing that area:
 | Strict writes, tolerant reads, and unknown enum members | `docs/decisions/0023-strict-writes-tolerant-reads.md` |
 | Writes refused only at their boundary, and the evidence a refusal leaves | `docs/decisions/0028-the-boundary-answers-the-write.md` |
 | Official price for an unnamed billing channel | `docs/decisions/0029-official-price-for-an-unnamed-channel.md` |
+| A rotation whose successor was never presented did not happen | `docs/decisions/0030-a-rotation-never-received-did-not-happen.md` |
+| The Usage fold of an Account summary is stored, keyed by what it depends on | `docs/decisions/0031-the-usage-fold-is-stored.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |

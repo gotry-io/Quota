@@ -243,6 +243,11 @@ export interface AccountMaintenanceInput {
    * folds, so it outlives both the hours behind it and the widest window `all` covers.
    */
   usage_day_before: string;
+  /**
+   * Folds this old are deleted; a fold never outlives the local date in its key by more than
+   * retention.
+   */
+  usage_fold_before: string;
   limit: number;
 }
 
@@ -305,6 +310,15 @@ export interface AccountState {
     checkedAt: string,
     marksDeviceSeen: boolean,
   ): Promise<SessionPrincipal | null>;
+  /**
+   * A rotation whose successor was never presented did not happen from the client's point of
+   * view. The row remembers the refresh token it replaced and when. While the successor is
+   * unspent (`last_used_at = rotated_at`), the replaced token is accepted wherever the current
+   * one is: a refresh with it rotates the family again (the unspent successor dies), a revoke
+   * with it ends the family. Once the successor has been spent, the replaced token is dead for
+   * every purpose. There is no time bound: the predicate is "unspent". Rotation returns its
+   * principal from the write; there is no read after it.
+   */
   refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null>;
   revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void>;
   revokePrincipalFamily(

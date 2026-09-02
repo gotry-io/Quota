@@ -44,6 +44,11 @@ interface StoredDailyRow extends Omit<StoredUsageDailyRow, "source_cost_microusd
   source_cost_microusd: string | null;
 }
 
+export const storedScanVersionsSql = `SELECT bucket_start_utc AS bucket, scan_version
+FROM usage_hour_scans
+WHERE device_id = ?1 AND agent = ?2
+  AND bucket_start_utc IN (SELECT value FROM json_each(?3))`;
+
 export class D1UsageState implements UsageState {
   constructor(private readonly database: D1Database) {}
 
@@ -212,13 +217,45 @@ export class D1UsageState implements UsageState {
     };
   }
 
+  async readUsageFold(accountId: string, foldKey: string): Promise<string | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT usage_json FROM account_usage_folds
+         WHERE account_id = ?1 AND fold_key = ?2`,
+      )
+      .bind(accountId, foldKey)
+      .first<{ usage_json: string }>();
+    return row?.usage_json ?? null;
+  }
+
+  async storeUsageFold(
+    accountId: string,
+    foldKey: string,
+    usageJson: string,
+    createdAt: string,
+  ): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO account_usage_folds (account_id, fold_key, usage_json, created_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(account_id, fold_key) DO UPDATE SET
+           usage_json = excluded.usage_json,
+           created_at = excluded.created_at`,
+      )
+      .bind(accountId, foldKey, usageJson, createdAt)
+      .run();
+  }
+
   /**
    * The newest scan already stored for each named hour.
    *
    * It is read from `usage_hour_scans` rather than from the facts, because an hour a scan found
    * empty has a version and no rows. The wanted hours travel as one JSON array rather than as a
    * bound list, because an upload may name more hours than D1 allows bound parameters, and as a
-   * range they would drag in every hour between the first and the last.
+   * range they would drag in every hour between the first and the last. Production D1 probes the
+   * primary key `(device_id, agent, bucket_start_utc)`:
+   * `SEARCH scans USING INDEX sqlite_autoindex_usage_hour_scans_1 (device_id=? AND agent=? AND bucket_start_utc=?)`
+   * plus a `LIST SUBQUERY` scanning `json_each` once.
    */
   private async storedScanVersions(
     deviceId: string,
@@ -227,12 +264,7 @@ export class D1UsageState implements UsageState {
   ): Promise<Map<string, number>> {
     if (buckets.length === 0) return new Map();
     const rows = await this.database
-      .prepare(
-        `SELECT scans.bucket_start_utc AS bucket, scans.scan_version AS scan_version
-         FROM usage_hour_scans AS scans
-         INNER JOIN json_each(?3) AS wanted ON wanted.value = scans.bucket_start_utc
-         WHERE scans.device_id = ?1 AND scans.agent = ?2`,
-      )
+      .prepare(storedScanVersionsSql)
       .bind(deviceId, agent, JSON.stringify(buckets))
       .all<{ bucket: string; scan_version: number }>();
     return new Map(rows.results.map((row) => [row.bucket, row.scan_version]));

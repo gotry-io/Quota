@@ -106,7 +106,8 @@ calculation assumptions.
 
 Readiness probes and the hourly Worker schedule run the bounded credential and quota-observation
 cleanup defined in [`docs/security.md`](../../docs/security.md), and the same batch retires Usage:
-`usage_hourly` and the hour versions beside it after 400 days, `usage_daily` after 800. Each is at
-most a hundred rows per run, so a sweep never competes with the uploads it runs alongside. An
+`usage_hourly` and the hour versions beside it after 400 days, `usage_daily` after 800, and stored
+Account Usage folds after two days. Each is at most a hundred rows per run, so a sweep never
+competes with the uploads it runs alongside. An
 unhandled request failure writes one `relay_request_failed` line carrying only the path, the status,
 and the error's class name.

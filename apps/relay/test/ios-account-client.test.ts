@@ -328,6 +328,16 @@ describe("quota-ios read-only account client", () => {
         })
       ).status,
     ).toBe(401);
+    // The replaced token stays usable until the successor is spent. Spend it at a later
+    // instant so last_used_at moves off rotated_at.
+    harness.checkedAt = new Date(now.getTime() + 1_000);
+    expect(
+      (
+        await harness.app.request("https://quota.gotry.io/api/v2/account", {
+          headers: { Authorization: `Bearer ${rotated.session.access_token}` },
+        })
+      ).status,
+    ).toBe(200);
     expect(
       (
         await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
@@ -342,13 +352,6 @@ describe("quota-ios read-only account client", () => {
         })
       ).status,
     ).toBe(400);
-    expect(
-      (
-        await harness.app.request("https://quota.gotry.io/api/v2/account", {
-          headers: { Authorization: `Bearer ${rotated.session.access_token}` },
-        })
-      ).status,
-    ).toBe(200);
 
     expect(
       (
