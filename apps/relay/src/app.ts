@@ -7,6 +7,7 @@ import {
 import {
   AccountResponseSchema,
   AccountSummarySchema,
+  type AccountUsage,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
@@ -41,6 +42,7 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
+  AccountVersionStamp,
   DeviceRecord,
   DeviceWriterPrincipal,
   SessionPrincipal,
@@ -68,7 +70,7 @@ import {
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { bearerToken, canonicalRequestDigest, type SecretHasher } from "./security.ts";
+import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
 import { planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
@@ -112,6 +114,9 @@ const usageDayRetentionDays = 800;
 const accountUsageAllDays = 730;
 const maintenanceBatchLimit = 100;
 const dayMilliseconds = 24 * 60 * 60 * 1000;
+const usageFoldRetentionMilliseconds = 2 * 24 * 60 * 60 * 1000;
+/** Bumped when `buildAccountUsage` changes what it folds. */
+const USAGE_FOLD_VERSION = 1;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
   const validation = validatePricingCatalog(value);
@@ -166,6 +171,7 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     // A stored hour carries no milliseconds, and these are compared as text.
     usage_hour_before: `${daysBefore(checkedAt, usageHourRetentionDays).toISOString().slice(0, 19)}Z`,
     usage_day_before: utcDate(daysBefore(checkedAt, usageDayRetentionDays)),
+    usage_fold_before: new Date(checkedAt.getTime() - usageFoldRetentionMilliseconds).toISOString(),
     limit: maintenanceBatchLimit,
   };
 }
@@ -568,64 +574,89 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     // trailing periods start and end — and, one local midnight at a time, when this answer stops
     // being the one they already hold.
     const plan = planLocalPeriods(timezone, checkedAt);
-    const conditional = await answerConditionally(context, principal, options, {
+    const { notModified, stamp } = await answerConditionally(context, principal, options, {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
       rolloverKey: summaryRolloverKey(plan.localDate, checkedAt),
     });
-    if (conditional) return conditional;
-    const [account, devices, stored, daily, boundary] = await Promise.all([
+    if (notModified) return notModified;
+    const foldKey = await canonicalDigest({
+      fold: USAGE_FOLD_VERSION,
+      account: principal.account_id,
+      tz: timezone,
+      local_date: plan.localDate,
+      devices: stamp.devices,
+      device_generation: stamp.device_generation,
+      usage_revision: stamp.usage_revision,
+      pricing_revision: catalog.revision,
+      model_catalog_revision: modelCatalog.revision,
+    });
+    const [account, devices, stored, fold] = await Promise.all([
       options.state.getAccount(principal.account_id),
       options.state.listAccountDevices(principal.account_id),
       options.state.listLatestSnapshots(principal.account_id),
-      options.usageState.queryDailyUsage(principal.account_id, {
-        from: utcDate(daysBefore(checkedAt, accountUsageAllDays - 1)),
-        limit: maximumAccountDailyRows,
-      }),
-      options.usageState.queryBoundaryHours(principal.account_id, {
-        ranges: plan.boundaries.map((edge) => edge.range),
-        limit: maximumAccountDailyRows,
-      }),
+      options.usageState.readUsageFold(principal.account_id, foldKey),
     ]);
     if (!account) return unauthorized(context);
     // `daily.truncated` is not a failure here. The rollup is read newest first, so what a
     // truncated read drops is the far end of `all` — which is a window this route defines — and
     // never a day the three trailing periods fold. An account that has outgrown one response
     // gets a shorter history, not a permanently unanswerable summary.
-    if (
-      devices.length > maximumAccountDevices ||
-      stored.length > maximumAccountSnapshots ||
-      boundary.truncated
-    ) {
+    if (devices.length > maximumAccountDevices || stored.length > maximumAccountSnapshots) {
       return resultLimit(context);
     }
-    const lastObserved = newestObservationPerDevice(stored);
-    try {
-      return context.json(
-        AccountSummarySchema.parse({
-          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-          account: publicAccount(account),
-          devices: devices.map((device) => publicDevice(device, lastObserved)),
-          subscriptions: resolvedSubscriptions(stored, checkedAt),
-          usage: buildAccountUsage({
-            daily: daily.rows,
-            boundaries: plan.boundaries.map((edge, index) => ({
-              periods: edge.periods,
-              rows: boundary.ranges[index] ?? [],
-            })),
-            days: plan.days,
-            catalog,
-            modelCatalog,
-          }),
-          pricing_revision: catalog.revision,
-          model_catalog_revision: modelCatalog.revision,
+    let usage: AccountUsage;
+    if (fold !== null) {
+      usage = JSON.parse(fold) as AccountUsage;
+    } else {
+      const [daily, boundary] = await Promise.all([
+        options.usageState.queryDailyUsage(principal.account_id, {
+          from: utcDate(daysBefore(checkedAt, accountUsageAllDays - 1)),
+          limit: maximumAccountDailyRows,
         }),
+        options.usageState.queryBoundaryHours(principal.account_id, {
+          ranges: plan.boundaries.map((edge) => edge.range),
+          limit: maximumAccountDailyRows,
+        }),
+      ]);
+      if (boundary.truncated) {
+        return resultLimit(context);
+      }
+      try {
+        usage = buildAccountUsage({
+          daily: daily.rows,
+          boundaries: plan.boundaries.map((edge, index) => ({
+            periods: edge.periods,
+            rows: boundary.ranges[index] ?? [],
+          })),
+          days: plan.days,
+          catalog,
+          modelCatalog,
+        });
+      } catch (error) {
+        if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+        throw error;
+      }
+      await options.usageState.storeUsageFold(
+        principal.account_id,
+        foldKey,
+        JSON.stringify(usage),
+        checkedAt.toISOString(),
       );
-    } catch (error) {
-      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
-      throw error;
     }
+    const lastObserved = newestObservationPerDevice(stored);
+    return context.json(
+      AccountSummarySchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        account: publicAccount(account),
+        devices: devices.map((device) => publicDevice(device, lastObserved)),
+        subscriptions: resolvedSubscriptions(stored, checkedAt),
+        usage,
+        pricing_revision: catalog.revision,
+        model_catalog_revision: modelCatalog.revision,
+      }),
+    );
   });
 
   app.get("/api/v6/account/usage/activity", async (context) => {
@@ -639,13 +670,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     });
     if (!range.success) return invalidRequest(context);
     // The range is pinned by the request, so nothing about this answer turns over on its own.
-    const conditional = await answerConditionally(context, principal, options, {
+    const { notModified } = await answerConditionally(context, principal, options, {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
       checkedAt,
       rolloverKey: null,
     });
-    if (conditional) return conditional;
+    if (notModified) return notModified;
     const daily = await options.usageState.queryDailyUsage(principal.account_id, {
       from: range.data.from,
       to: range.data.to,
@@ -910,13 +941,13 @@ async function answerConditionally(
     /** What makes this answer turn over with no write behind it, or null when nothing does. */
     rolloverKey: string | null;
   },
-): Promise<Response | null> {
+): Promise<{ notModified: Response | null; stamp: AccountVersionStamp }> {
   const url = new URL(context.req.url);
   const stamp = await options.state.accountVersionStamp(
     principal.account_id,
     new Date(input.checkedAt.getTime() - activeDeviceMilliseconds).toISOString(),
   );
-  const entity = await canonicalRequestDigest({
+  const entity = await canonicalDigest({
     // Two routes answer the same query string with different bodies, so the path is part of
     // the identity. The Account is in the digest because two empty Accounts have the same
     // stamp, and a client that switched between them must not be told its held body applies.
@@ -931,7 +962,10 @@ async function answerConditionally(
   const etag = `"${entity}"`;
   context.header("ETag", etag);
   context.header("Cache-Control", "private, no-cache");
-  return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
+  return {
+    notModified: context.req.header("If-None-Match") === etag ? context.body(null, 304) : null,
+    stamp,
+  };
 }
 
 async function beginGitHubSignIn(

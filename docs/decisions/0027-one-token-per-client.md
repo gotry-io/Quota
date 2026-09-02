@@ -4,6 +4,8 @@
 - Date: 2026-08-26
 - Updates: [ADR 0006](0006-managed-account-device-usage.md),
   [ADR 0013](0013-readonly-ios-account-client.md), [ADR 0025](0025-one-session-system.md)
+- Extended by [ADR 0030](0030-a-rotation-never-received-did-not-happen.md) on 2026-09-02: a
+  rotation whose successor was never presented can be repeated with the token it replaced
 
 ## Decision
 

@@ -76,4 +76,11 @@ export interface UsageState {
   ): Promise<UsageWriteResult>;
   queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult>;
   queryBoundaryHours(accountId: string, query: UsageBoundaryQuery): Promise<UsageBoundaryResult>;
+  readUsageFold(accountId: string, foldKey: string): Promise<string | null>;
+  storeUsageFold(
+    accountId: string,
+    foldKey: string,
+    usageJson: string,
+    createdAt: string,
+  ): Promise<void>;
 }

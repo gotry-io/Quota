@@ -29,7 +29,7 @@ export async function sha256Base64Url(value: string): Promise<string> {
   return bytesToBase64Url(new Uint8Array(digest));
 }
 
-export async function canonicalRequestDigest(value: unknown): Promise<string> {
+export async function canonicalDigest(value: unknown): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(canonicalJSON(value)));
   return bytesToHex(new Uint8Array(digest));
 }

@@ -1,6 +1,10 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { MAXIMUM_USAGE_PERIOD_LEAVES, type OAuthTokenResponse } from "@gotry-io/quota-protocol";
+import {
+  MAXIMUM_USAGE_PERIOD_LEAVES,
+  type OAuthTokenResponse,
+  type SessionRefreshResponse,
+} from "@gotry-io/quota-protocol";
 import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
@@ -622,6 +626,7 @@ describe("managed Relay on real Workers and D1", () => {
        ORDER BY name`,
     ).all<{ name: string }>();
     expect(tables.results.map((row) => row.name)).toEqual([
+      "account_usage_folds",
       "accounts",
       "devices",
       "login_grants",
@@ -1045,6 +1050,207 @@ describe("managed Relay on real Workers and D1", () => {
         .first("count"),
     ).toBe(0);
   });
+
+  it("a refresh whose answer was lost can be repeated with the token it replaced", async () => {
+    const clock = { now };
+    const { app, webSessions } = await quotabarHarness("account_rotation_grace", clock);
+    const login = await loginQuotabar(app, webSessions);
+    const r0 = login.session.refresh_token;
+
+    const first = await refreshQuotabar(app, r0);
+    expect(first.status).toBe(200);
+    const rotated = (await first.json()) as SessionRefreshResponse;
+    const a1 = rotated.session.access_token;
+    const r1 = rotated.session.refresh_token;
+    expect(a1).not.toBe(login.session.access_token);
+    expect(r1).not.toBe(r0);
+
+    const replay = await refreshQuotabar(app, r0);
+    expect(replay.status).toBe(200);
+    const recovered = (await replay.json()) as SessionRefreshResponse;
+    const a2 = recovered.session.access_token;
+    const r2 = recovered.session.refresh_token;
+    expect(a2).not.toBe(a1);
+    expect(r2).not.toBe(r1);
+
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers: { Authorization: `Bearer ${a1}` },
+        })
+      ).status,
+    ).toBe(401);
+
+    clock.now = new Date(now.getTime() + 1_000);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers: { Authorization: `Bearer ${a2}` },
+        })
+      ).status,
+    ).toBe(200);
+
+    const spent = await refreshQuotabar(app, r0);
+    expect(spent.status).toBe(400);
+    expect(await spent.json()).toMatchObject({ error: { code: "invalid_grant" } });
+    const predecessor = await refreshQuotabar(app, r1);
+    expect(predecessor.status).toBe(400);
+    expect(await predecessor.json()).toMatchObject({ error: { code: "invalid_grant" } });
+  });
+
+  it("the replaced token can end the family while its successor is unspent", async () => {
+    const { app, webSessions } = await quotabarHarness("account_rotation_revoke", { now });
+    const login = await loginQuotabar(app, webSessions);
+    const first = await refreshQuotabar(app, login.session.refresh_token);
+    expect(first.status).toBe(200);
+    const rotated = (await first.json()) as SessionRefreshResponse;
+
+    expect(
+      (
+        await app.request("https://quota.gotry.io/oauth/v2/revoke", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${login.session.refresh_token}` },
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await app.request("https://quota.gotry.io/api/v6/account/summary", {
+          headers: { Authorization: `Bearer ${rotated.session.access_token}` },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT signed_out_at FROM devices WHERE id = ?1")
+        .bind(login.device_id)
+        .first("signed_out_at"),
+    ).toBe(now.toISOString());
+  });
+
+  it("serves a stored Usage fold when a snapshot upload moves the ETag", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_etag', 'subject_fold_etag', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at, last_seen_at
+         ) VALUES ('device_fold_etag', 'account_fold_etag', 'installation_fold_etag', 1, ?1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_fold_etag",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_fold_etag");
+    const summaryPath = "https://quota.gotry.io/api/v6/account/summary";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { usage: unknown };
+    const stored = await usageFolds("account_fold_etag");
+    expect(stored).toHaveLength(1);
+
+    await env.DB.prepare(
+      `INSERT INTO quota_snapshots (
+         device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+       ) VALUES ('device_fold_etag', 'codex', 'fingerprint_fold_etag', ?1, ?2, ?1)`,
+    )
+      .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
+      .run();
+    const afterSnapshot = await app.request(summaryPath, {
+      headers: { "If-None-Match": first.headers.get("ETag") ?? "" },
+    });
+    expect(afterSnapshot.status).toBe(200);
+    expect(afterSnapshot.headers.get("ETag")).not.toBe(first.headers.get("ETag"));
+    const afterBody = (await afterSnapshot.json()) as { usage: unknown };
+    expect(afterBody.usage).toEqual(firstBody.usage);
+    const unchanged = await usageFolds("account_fold_etag");
+    expect(unchanged).toEqual(stored);
+  });
+
+  it("stores a new Usage fold when an accepted upload changes what the summary folds", async () => {
+    await seedDevice("fold_usage");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("fold_usage", 1);
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T10:00:00Z", 1)]),
+      now.toISOString(),
+    );
+    const app = appFor("account_fold_usage");
+    const summaryPath = "https://quota.gotry.io/api/v6/account/summary";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      usage: { all: { totals: { messages: number } } };
+    };
+    expect(firstBody.usage.all.totals.messages).toBe(1);
+    const firstFold = await usageFolds("account_fold_usage");
+    expect(firstFold).toHaveLength(1);
+
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T11:00:00Z", 2)]),
+      now.toISOString(),
+    );
+    const second = await app.request(summaryPath);
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as {
+      usage: { all: { totals: { messages: number } } };
+    };
+    expect(secondBody.usage.all.totals.messages).toBe(2);
+    const folds = await usageFolds("account_fold_usage");
+    expect(folds).toHaveLength(2);
+    expect(folds.map((row) => row.fold_key)).toContain(firstFold[0]?.fold_key);
+    expect(folds.some((row) => row.fold_key !== firstFold[0]?.fold_key)).toBe(true);
+  });
+
+  it("stores a different Usage fold for a different timezone", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_tz', 'subject_fold_tz', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_fold_tz', 'account_fold_tz', 'installation_fold_tz', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_fold_tz",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_fold_tz");
+    expect((await app.request("https://quota.gotry.io/api/v6/account/summary")).status).toBe(200);
+    expect(
+      (await app.request("https://quota.gotry.io/api/v6/account/summary?tz=Asia/Singapore")).status,
+    ).toBe(200);
+    const folds = await usageFolds("account_fold_tz");
+    expect(folds).toHaveLength(2);
+    expect(folds[0]?.fold_key).not.toBe(folds[1]?.fold_key);
+  });
+
+  it("sweeps a Usage fold older than retention and keeps a newer one", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_sweep', 'subject_fold_sweep', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO account_usage_folds (account_id, fold_key, usage_json, created_at)
+         VALUES ('account_fold_sweep', 'old', '{}', '2026-08-07T00:00:00.000Z')`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO account_usage_folds (account_id, fold_key, usage_json, created_at)
+         VALUES ('account_fold_sweep', 'new', '{}', '2026-08-09T00:00:00.000Z')`,
+      ),
+    ]);
+
+    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
+
+    expect(await usageFolds("account_fold_sweep")).toEqual([
+      { fold_key: "new", created_at: "2026-08-09T00:00:00.000Z" },
+    ]);
+  });
 });
 
 async function seedDevice(name: string, generation = 1): Promise<void> {
@@ -1268,6 +1474,92 @@ function appFor(accountId: string, readAt: Date = now) {
     hasher,
     now: () => readAt,
   });
+}
+
+async function quotabarHarness(accountId: string, clock: { now: Date }) {
+  await env.DB.prepare(
+    `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
+     VALUES (?1, ?1, 'Quota Tester', ?2, ?2)`,
+  )
+    .bind(accountId, clock.now.toISOString())
+    .run();
+  const state = new D1AccountState(env.DB);
+  const hasher = new SecretHasher(secret);
+  const webSessions = new SignedInWebSessionStub(accountId, clock.now);
+  const app = createRelayApp({
+    state,
+    usageState: new D1UsageState(env.DB),
+    accountService: new AccountService(state, hasher, secret),
+    webSessions,
+    hasher,
+    now: () => clock.now,
+  });
+  return { app, state, hasher, webSessions };
+}
+
+async function loginQuotabar(
+  app: ReturnType<typeof createRelayApp>,
+  webSessions: SignedInWebSessionStub,
+): Promise<OAuthTokenResponse> {
+  const verifier = "a".repeat(43);
+  const challengeBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(challengeBuffer)))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  const authorize = new URL("https://quota.gotry.io/oauth/v2/authorize");
+  authorize.search = new URLSearchParams({
+    response_type: "code",
+    client_id: "quotabar",
+    redirect_uri: "http://127.0.0.1:43210/callback",
+    state: "client-state-123456789",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+  }).toString();
+  expect((await app.request(authorize)).status).toBe(302);
+  const complete = await app.request(`https://quota.gotry.io${webSessions.returnTo}`);
+  expect(complete.status).toBe(302);
+  const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
+  const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol_version: 2,
+      grant_type: "authorization_code",
+      client_id: "quotabar",
+      code,
+      code_verifier: verifier,
+      redirect_uri: "http://127.0.0.1:43210/callback",
+      installation_id: "4a7f950d-89ea-4f64-a7c1-b4aeb46a67f8",
+      device_display_name: "Test Mac",
+      platform: "macos",
+    }),
+  });
+  expect(exchanged.status).toBe(200);
+  return (await exchanged.json()) as OAuthTokenResponse;
+}
+
+function refreshQuotabar(app: ReturnType<typeof createRelayApp>, refreshToken: string) {
+  return app.request("https://quota.gotry.io/oauth/v2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol_version: 2,
+      grant_type: "refresh_token",
+      client_id: "quotabar",
+      refresh_token: refreshToken,
+    }),
+  });
+}
+
+async function usageFolds(accountId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT fold_key, created_at FROM account_usage_folds
+     WHERE account_id = ?1 ORDER BY created_at, fold_key`,
+  )
+    .bind(accountId)
+    .all<{ fold_key: string; created_at: string }>();
+  return rows.results;
 }
 
 function quotaSnapshotJson() {

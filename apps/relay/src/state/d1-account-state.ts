@@ -132,6 +132,14 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.usage_day_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM account_usage_folds WHERE rowid IN (
+             SELECT rowid FROM account_usage_folds WHERE created_at <= ?1
+             ORDER BY created_at ASC, rowid ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.usage_fold_before, input.limit),
     ]);
   }
 
@@ -598,30 +606,19 @@ export class D1AccountState implements AccountState {
   }
 
   /**
-   * Rotate one refresh token, compare-and-swap.
-   *
-   * The update matches on the refresh token being spent, so two racing refreshes cannot both
-   * succeed: the second finds no row to update and the caller is told to sign in again. The
-   * rotated row is read back through the same authorization every request takes, so a refresh
-   * cannot outlive the Device the session names.
+   * See `AccountState.refreshSession`. Rotation is not the Device speaking for itself; the
+   * request that spends the new token is.
    */
   async refreshSession(input: RefreshSessionInput): Promise<SessionPrincipal | null> {
-    const rotated = await this.database
+    const current = await this.database
       .prepare(
         `UPDATE sessions
          SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
-             refresh_expires_at = ?5, last_used_at = ?6
+             refresh_expires_at = ?5, last_used_at = ?6, previous_refresh_token_hash = ?1,
+             rotated_at = ?6
          WHERE refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
-           AND (
-             device_id IS NULL
-             OR EXISTS (
-               SELECT 1 FROM devices
-               WHERE devices.id = sessions.device_id
-                 AND devices.account_id = sessions.account_id
-                 AND devices.generation = sessions.device_generation
-                 AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL
-             )
-           )`,
+           AND ${sessionDeviceIsCurrent}
+         RETURNING ${sessionPrincipalReturning}`,
       )
       .bind(
         input.refresh_token_hash,
@@ -631,12 +628,29 @@ export class D1AccountState implements AccountState {
         input.refresh_expires_at,
         input.refreshed_at,
       )
-      .run();
-    if (rotated.meta.changes !== 1) {
-      return null;
+      .first<SessionPrincipalRow>();
+    if (current) {
+      return sessionPrincipal(current);
     }
-    // Rotation is not the Device speaking for itself; the request that spends the new token is.
-    return this.authorizeSession(input.new_access_token_hash, input.refreshed_at, false);
+    const replaced = await this.database
+      .prepare(
+        `UPDATE sessions
+         SET access_token_hash = ?2, refresh_token_hash = ?3, expires_at = ?4,
+             refresh_expires_at = ?5, last_used_at = ?6, rotated_at = ?6
+         WHERE previous_refresh_token_hash = ?1 AND revoked_at IS NULL AND refresh_expires_at > ?6
+           AND last_used_at = rotated_at AND ${sessionDeviceIsCurrent}
+         RETURNING ${sessionPrincipalReturning}`,
+      )
+      .bind(
+        input.refresh_token_hash,
+        input.new_access_token_hash,
+        input.new_refresh_token_hash,
+        input.access_expires_at,
+        input.refresh_expires_at,
+        input.refreshed_at,
+      )
+      .first<SessionPrincipalRow>();
+    return replaced ? sessionPrincipal(replaced) : null;
   }
 
   /**
@@ -646,18 +660,19 @@ export class D1AccountState implements AccountState {
    * presented may already have been replaced, and its successor belongs to the same family.
    */
   async revokeRefreshSession(input: RevokeRefreshSessionInput): Promise<void> {
-    const family = "SELECT family_id FROM sessions WHERE refresh_token_hash = ?1";
+    const presentedRefresh = `(refresh_token_hash = ?1 OR (previous_refresh_token_hash = ?1 AND last_used_at = rotated_at))`;
+    const family = `SELECT family_id FROM sessions WHERE ${presentedRefresh}`;
     await this.database.batch([
       this.database
         .prepare(
           `UPDATE devices SET signed_out_at = ?2
            WHERE id = (
              SELECT device_id FROM sessions
-             WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
+             WHERE ${presentedRefresh} AND revoked_at IS NULL
            )
              AND generation = (
                SELECT device_generation FROM sessions
-               WHERE refresh_token_hash = ?1 AND revoked_at IS NULL
+               WHERE ${presentedRefresh} AND revoked_at IS NULL
              )
              AND signed_out_at IS NULL AND deleted_at IS NULL`,
         )
@@ -887,6 +902,9 @@ export class D1AccountState implements AccountState {
         .bind(accountId),
       this.database.prepare("DELETE FROM sessions WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM login_grants WHERE account_id = ?1").bind(accountId),
+      this.database
+        .prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
+        .bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
     ]);
@@ -1085,6 +1103,20 @@ const loginGrantSelect = `SELECT id, client_id, account_id, pkce_challenge, redi
 const deviceSelect = `SELECT id, account_id, display_name, platform, generation,
   usage_sync_revision, created_at, last_login_at, last_seen_at,
   signed_out_at, deleted_at, deleted_before FROM devices`;
+
+const sessionPrincipalReturning = `id, family_id, account_id, device_id, device_generation,
+  client_kind, scopes_json, authenticated_at`;
+
+const sessionDeviceIsCurrent = `(
+  device_id IS NULL
+  OR EXISTS (
+    SELECT 1 FROM devices
+    WHERE devices.id = sessions.device_id
+      AND devices.account_id = sessions.account_id
+      AND devices.generation = sessions.device_generation
+      AND devices.signed_out_at IS NULL AND devices.deleted_at IS NULL
+  )
+)`;
 
 function sessionPrincipal(row: SessionPrincipalRow): SessionPrincipal {
   return {
