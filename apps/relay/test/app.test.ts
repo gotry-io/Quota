@@ -1230,6 +1230,49 @@ describe("managed Relay on real Workers and D1", () => {
     expect(folds[0]?.fold_key).not.toBe(folds[1]?.fold_key);
   });
 
+  it("refolds a stored Usage fold the current contract cannot read", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_stale', 'subject_fold_stale', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_fold_stale', 'account_fold_stale', 'installation_fold_stale', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_fold_stale",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_fold_stale");
+    const summaryPath = "https://quota.gotry.io/api/v6/account/summary";
+    const first = await app.request(summaryPath);
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { usage: unknown };
+    const stored = await usageFolds("account_fold_stale");
+    expect(stored).toHaveLength(1);
+
+    await env.DB.prepare(
+      `UPDATE account_usage_folds SET usage_json = '{"stale":true}'
+       WHERE account_id = ?1 AND fold_key = ?2`,
+    )
+      .bind("account_fold_stale", stored[0]?.fold_key)
+      .run();
+
+    const second = await app.request(summaryPath);
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { usage: unknown };
+    expect(secondBody.usage).toEqual(firstBody.usage);
+    expect(
+      await env.DB.prepare(
+        "SELECT usage_json FROM account_usage_folds WHERE account_id = ?1 AND fold_key = ?2",
+      )
+        .bind("account_fold_stale", stored[0]?.fold_key)
+        .first("usage_json"),
+    ).not.toBe('{"stale":true}');
+  });
+
   it("sweeps a Usage fold older than retention and keeps a newer one", async () => {
     await env.DB.batch([
       env.DB.prepare(

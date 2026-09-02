@@ -9,6 +9,7 @@ import {
   AccountSummarySchema,
   type AccountUsage,
   AccountUsageActivityResponseSchema,
+  AccountUsageSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
@@ -71,7 +72,7 @@ import {
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
-import { planLocalPeriods } from "./local-periods.ts";
+import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 /** The issuer GitHub states in its authorization-code redirect (RFC 9207). */
@@ -115,7 +116,10 @@ const accountUsageAllDays = 730;
 const maintenanceBatchLimit = 100;
 const dayMilliseconds = 24 * 60 * 60 * 1000;
 const usageFoldRetentionMilliseconds = 2 * 24 * 60 * 60 * 1000;
-/** Bumped when `buildAccountUsage` changes what it folds. */
+/**
+ * Bumped when `buildAccountUsage` changes the meaning of what it folds without changing its
+ * shape; a shape change is caught on read.
+ */
 const USAGE_FOLD_VERSION = 1;
 
 function requireValidPricingCatalog(value: PricingCatalog): PricingCatalog {
@@ -581,11 +585,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       rolloverKey: summaryRolloverKey(plan.localDate, checkedAt),
     });
     if (notModified) return notModified;
+    const allFrom = utcDate(daysBefore(checkedAt, accountUsageAllDays - 1));
     const foldKey = await canonicalDigest({
       fold: USAGE_FOLD_VERSION,
       account: principal.account_id,
       tz: timezone,
       local_date: plan.localDate,
+      all_from: allFrom,
       devices: stamp.devices,
       device_generation: stamp.device_generation,
       usage_revision: stamp.usage_revision,
@@ -606,44 +612,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (devices.length > maximumAccountDevices || stored.length > maximumAccountSnapshots) {
       return resultLimit(context);
     }
-    let usage: AccountUsage;
+    let usage: AccountUsage | undefined;
     if (fold !== null) {
-      usage = JSON.parse(fold) as AccountUsage;
-    } else {
-      const [daily, boundary] = await Promise.all([
-        options.usageState.queryDailyUsage(principal.account_id, {
-          from: utcDate(daysBefore(checkedAt, accountUsageAllDays - 1)),
-          limit: maximumAccountDailyRows,
-        }),
-        options.usageState.queryBoundaryHours(principal.account_id, {
-          ranges: plan.boundaries.map((edge) => edge.range),
-          limit: maximumAccountDailyRows,
-        }),
-      ]);
-      if (boundary.truncated) {
-        return resultLimit(context);
-      }
-      try {
-        usage = buildAccountUsage({
-          daily: daily.rows,
-          boundaries: plan.boundaries.map((edge, index) => ({
-            periods: edge.periods,
-            rows: boundary.ranges[index] ?? [],
-          })),
-          days: plan.days,
-          catalog,
-          modelCatalog,
-        });
-      } catch (error) {
-        if (error instanceof UsageSummaryLimitError) return resultLimit(context);
-        throw error;
-      }
-      await options.usageState.storeUsageFold(
-        principal.account_id,
+      const parsed = AccountUsageSchema.safeParse(JSON.parse(fold));
+      if (parsed.success) usage = parsed.data;
+    }
+    if (usage === undefined) {
+      const folded = await foldUsage({
+        context,
+        usageState: options.usageState,
+        accountId: principal.account_id,
         foldKey,
-        JSON.stringify(usage),
-        checkedAt.toISOString(),
-      );
+        allFrom,
+        plan,
+        catalog,
+        modelCatalog,
+        storedAt: checkedAt.toISOString(),
+      });
+      if (folded instanceof Response) return folded;
+      usage = folded;
     }
     const lastObserved = newestObservationPerDevice(stored);
     return context.json(
@@ -921,6 +908,55 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   return app;
 }
 
+async function foldUsage(input: {
+  context: Context;
+  usageState: UsageState;
+  accountId: string;
+  foldKey: string;
+  allFrom: string;
+  plan: LocalPeriodPlan;
+  catalog: PricingCatalog;
+  modelCatalog: ModelCatalog;
+  storedAt: string;
+}): Promise<AccountUsage | Response> {
+  const [daily, boundary] = await Promise.all([
+    input.usageState.queryDailyUsage(input.accountId, {
+      from: input.allFrom,
+      limit: maximumAccountDailyRows,
+    }),
+    input.usageState.queryBoundaryHours(input.accountId, {
+      ranges: input.plan.boundaries.map((edge) => edge.range),
+      limit: maximumAccountDailyRows,
+    }),
+  ]);
+  if (boundary.truncated) {
+    return resultLimit(input.context);
+  }
+  let usage: AccountUsage;
+  try {
+    usage = buildAccountUsage({
+      daily: daily.rows,
+      boundaries: input.plan.boundaries.map((edge, index) => ({
+        periods: edge.periods,
+        rows: boundary.ranges[index] ?? [],
+      })),
+      days: input.plan.days,
+      catalog: input.catalog,
+      modelCatalog: input.modelCatalog,
+    });
+  } catch (error) {
+    if (error instanceof UsageSummaryLimitError) return resultLimit(input.context);
+    throw error;
+  }
+  await input.usageState.storeUsageFold(
+    input.accountId,
+    input.foldKey,
+    JSON.stringify(usage),
+    input.storedAt,
+  );
+  return usage;
+}
+
 /**
  * Stamps an Account read with its validator and answers a matching conditional request.
  *
@@ -928,7 +964,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
  * holds. Comparing a handful of aggregates is far cheaper than folding every retained day
  * again, so the validator is computed first and a match returns before any Usage query runs.
  * `no-cache` rather than `no-store`: a browser may keep the body as long as it asks before
- * showing it, which is what makes the conditional request possible at all.
+ * showing it, which is what makes the conditional request possible at all. The stamp is
+ * returned because the summary keys its stored Usage fold on it (ADR 0031).
  */
 async function answerConditionally(
   context: Context,
