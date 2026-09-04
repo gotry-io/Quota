@@ -58,6 +58,32 @@ interface SnapshotRow {
   snapshot_json: string;
 }
 
+interface StoredSnapshotCursor {
+  observed_at: string;
+  status: string | null;
+}
+
+/**
+ * Same accept rule as the `ON CONFLICT … WHERE` in `recordSnapshot`: a newer `observed_at`
+ * always wins; a same-instant restatement wins only when it changes `available` to a failure.
+ */
+function snapshotWriteIsAccepted(
+  stored: StoredSnapshotCursor | undefined,
+  incoming: { observed_at: string; status: string },
+): boolean {
+  if (stored === undefined) {
+    return true;
+  }
+  if (incoming.observed_at > stored.observed_at) {
+    return true;
+  }
+  return (
+    incoming.observed_at === stored.observed_at &&
+    stored.status === "available" &&
+    incoming.status !== "available"
+  );
+}
+
 export class D1AccountState implements AccountState {
   constructor(private readonly database: D1Database) {}
 
@@ -915,10 +941,11 @@ export class D1AccountState implements AccountState {
    * Store this device's readings and drop the fingerprints it no longer sees.
    *
    * A reading is placed by `(provider, fingerprint)` and ordered by the instant it was observed,
-   * so a re-sent envelope changes nothing and a reading older than the stored one cannot
-   * overwrite it. The envelope states the fingerprints this device currently sees for each
-   * provider it names, so a subscription it has stopped observing stops speaking for it here
-   * rather than waiting out retention.
+   * so a reading older than the stored one cannot overwrite it. A restatement at the same instant
+   * is ignored unless it only changes status from `available` to a failure, which is how a device
+   * republishes a collection failure without pretending the numbers are newer. The envelope states
+   * the fingerprints this device currently sees for each provider it names, so a subscription it
+   * has stopped observing stops speaking for it here rather than waiting out retention.
    */
   async recordSnapshot(
     principal: DeviceWriterPrincipal,
@@ -943,25 +970,31 @@ export class D1AccountState implements AccountState {
 
     const stored = await this.database
       .prepare(
-        `SELECT provider, account_fingerprint AS fingerprint, observed_at
+        `SELECT provider, account_fingerprint AS fingerprint, observed_at,
+                json_extract(snapshot_json, '$.status') AS status
          FROM quota_snapshots WHERE device_id = ?1`,
       )
       .bind(principal.device_id)
-      .all<{ provider: string; fingerprint: string; observed_at: string }>();
+      .all<{ provider: string; fingerprint: string } & StoredSnapshotCursor>();
     const observed = new Map(
-      stored.results.map((row) => [`${row.provider}\u0000${row.fingerprint}`, row.observed_at]),
+      stored.results.map((row) => [
+        `${row.provider}\u0000${row.fingerprint}`,
+        { observed_at: row.observed_at, status: row.status },
+      ]),
     );
 
     const accepted = new Set<ProviderId>();
     const ignored = new Set<ProviderId>();
     const statements: D1PreparedStatement[] = [];
     for (const snapshot of envelope.snapshots) {
-      const current = observed.get(`${snapshot.provider}\u0000${snapshot.account.fingerprint}`);
-      if (current !== undefined && Date.parse(snapshot.observed_at) <= Date.parse(current)) {
+      const key = `${snapshot.provider}\u0000${snapshot.account.fingerprint}`;
+      const current = observed.get(key);
+      if (!snapshotWriteIsAccepted(current, snapshot)) {
         ignored.add(snapshot.provider);
         continue;
       }
       accepted.add(snapshot.provider);
+      observed.set(key, { observed_at: snapshot.observed_at, status: snapshot.status });
       statements.push(
         this.database
           .prepare(
@@ -978,7 +1011,12 @@ export class D1AccountState implements AccountState {
                observed_at = excluded.observed_at,
                snapshot_json = excluded.snapshot_json,
                updated_at = excluded.updated_at
-             WHERE excluded.observed_at > quota_snapshots.observed_at`,
+             WHERE excluded.observed_at > quota_snapshots.observed_at
+                OR (
+                  excluded.observed_at = quota_snapshots.observed_at
+                  AND json_extract(quota_snapshots.snapshot_json, '$.status') = 'available'
+                  AND json_extract(excluded.snapshot_json, '$.status') != 'available'
+                )`,
           )
           .bind(
             principal.device_id,
