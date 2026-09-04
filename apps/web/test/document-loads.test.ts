@@ -29,8 +29,8 @@ test("unsigned /my redirects home and signed-in /my loads a shell", () => {
 
 test("the /my document load does not start account/summary; the client asks once with tz", () => {
   const root = dirname(fileURLToPath(import.meta.url));
-  const server = readFileSync(join(root, "../src/routes/my/+page.server.ts"), "utf8");
-  const page = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
+  const server = readFileSync(join(root, "../src/routes/my/+layout.server.ts"), "utf8");
+  const page = readFileSync(join(root, "../src/lib/account-dashboard.svelte.ts"), "utf8");
   const client = readFileSync(join(root, "../src/lib/account-client.ts"), "utf8");
   const reads = readFileSync(join(root, "../src/lib/account-reads.ts"), "utf8");
 
@@ -51,7 +51,7 @@ test("the /my document load does not start account/summary; the client asks once
   }
 
   assert.match(page, /fetchAccountSummary\(\)/);
-  assert.match(page, /from "\$lib\/account-client"/);
+  assert.match(page, /from "\.\/account-client\.ts"/);
   assert.match(client, /accountSummaryPath\(browserTimezone\(\)\)/);
   assert.match(reads, /\/api\/v6\/account\/summary\?\$\{new URLSearchParams\(\{ tz: timezone \}\)/);
 });
