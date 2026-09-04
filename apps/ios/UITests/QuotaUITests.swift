@@ -640,9 +640,10 @@ final class QuotaUITests: XCTestCase {
     scrollContent(app, up: false)
   }
 
-  /// Scrolls Overview/Usage so the tab bar can minimize. iOS 26's tab-bar accessibility
-  /// frame does not change when the capsule minimizes, so the proof is a real List scroll
-  /// (the collection view screenshot changes) plus the screenshot attachment.
+  /// Scrolls Overview/Usage so the tab bar can minimize. A minimized iOS 26 tab bar exposes a
+  /// single element (the selected tab's capsule) on iOS 26.5 and still exposes all four on
+  /// iOS 26.3, so the proof is a real List scroll (the collection view screenshot changes), a
+  /// tab bar that survives it in either shape, and the screenshot attachment.
   private func assertTabBarMinimizesOnScroll(
     _ app: XCUIApplication,
     screenshot: String? = nil
@@ -659,7 +660,11 @@ final class QuotaUITests: XCTestCase {
     let after = list.screenshot().pngRepresentation
     XCTAssertNotEqual(before, after, "list scrolls down so the tab bar can minimize")
     XCTAssertTrue(tabBar.exists, "tab bar remains after scroll")
-    XCTAssertEqual(tabBar.buttons.count, 4, "tab bar still has four tabs")
+    let tabs = tabBar.buttons.count
+    XCTAssertTrue(
+      tabs == 4 || tabs == 1,
+      "tab bar is either expanded (4 tabs) or minimized (1 element); saw \(tabs)"
+    )
     if let screenshot {
       attachScreenshot(app, name: screenshot)
     }
