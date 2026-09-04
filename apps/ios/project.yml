@@ -59,6 +59,7 @@ targets:
     scheme:
       testTargets:
         - QuotaTests
+        - QuotaUITests
   QuotaWidgets:
     type: app-extension
     platform: iOS
@@ -109,3 +110,15 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+  QuotaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quota.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Quota
+    dependencies:
+      - target: Quota

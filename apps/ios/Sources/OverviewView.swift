@@ -39,6 +39,7 @@ struct OverviewView: View {
       .padding(.vertical, 16)
       .frame(maxWidth: .infinity)
     }
+    .accessibilityIdentifier("overview.root")
     .refreshable {
       await model.refresh()
     }
@@ -211,6 +212,7 @@ struct TodayUsageCard: View {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .quotaSurface()
+    .accessibilityIdentifier("overview.today")
   }
 
   private func metric(label: String, value: String, accessibility: String) -> some View {

@@ -50,6 +50,17 @@
                ReferencedContainer = "container:Quota.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "8227BBCD9B7C7AE53A0098C6"
+               BuildableName = "QuotaUITests.xctest"
+               BlueprintName = "QuotaUITests"
+               ReferencedContainer = "container:Quota.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

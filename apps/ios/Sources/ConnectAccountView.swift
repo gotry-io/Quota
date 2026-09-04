@@ -21,7 +21,9 @@ struct ConnectAccountView: View {
               "See remaining quota and Today Usage for the GitHub Account you already use on Mac or Linux."
             )
             .font(.body)
-            .foregroundStyle(.secondary)
+            // .secondary and vibrant .primary both fail the contrast audit on the glass
+            // surface; an explicit label color opts out of vibrancy.
+            .foregroundStyle(Color(uiColor: .label))
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
           }
@@ -65,6 +67,7 @@ struct ConnectAccountView: View {
       .padding(.horizontal, QuotaTheme.contentGutter)
       .frame(maxWidth: .infinity)
     }
+    .accessibilityIdentifier("connect.root")
     .navigationBarTitleDisplayMode(.inline)
   }
 
