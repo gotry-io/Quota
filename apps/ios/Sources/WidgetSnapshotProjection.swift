@@ -4,8 +4,8 @@ import QuotaWidgetData
 import QuotaWire
 
 enum WidgetSnapshotProjection {
-  static func make(summary: AccountSummary, fetchedAt: Date) -> WidgetSnapshot {
-    let items = projectItems(from: summary.subscriptions)
+  static func make(summary: AccountSummary, fetchedAt: Date, salt: Data) -> WidgetSnapshot {
+    let items = projectItems(from: summary.subscriptions, salt: salt)
     let today = WidgetTodayUsage(
       inputTokens: summary.usage.today.totals.inputTokens,
       outputTokens: summary.usage.today.totals.outputTokens,
@@ -16,16 +16,19 @@ enum WidgetSnapshotProjection {
 
   /// Relay resolves an account's readings into one row per subscription, so the widget ranks
   /// those rows rather than one card per reporting device.
-  static func projectItems(from subscriptions: [QuotaSubscription]) -> [WidgetQuotaItem] {
+  static func projectItems(from subscriptions: [QuotaSubscription], salt: Data) -> [WidgetQuotaItem]
+  {
     let candidates = subscriptions.flatMap { subscription in
-      subscription.snapshot.windows.map { window in
+      let selectionID = SelectionIDs.make(selector: selector(for: subscription), salt: salt)
+      return subscription.snapshot.windows.map { window in
         WidgetSnapshotCandidate(
           snapshot: subscription.snapshot,
           window: window,
           providerID: subscription.snapshot.provider.rawValue,
           fingerprint: subscription.snapshot.account.fingerprint,
           sourceID: subscription.key,
-          windowID: window.id
+          windowID: window.id,
+          selectionID: selectionID
         )
       }
     }
@@ -90,6 +93,29 @@ enum WidgetSnapshotProjection {
     ProviderID(rawValue: providerID)?.sortOrder ?? Int.max
   }
 
+  private static func selector(for subscription: QuotaSubscription) -> String {
+    SubscriptionSelector.make(
+      provider: subscription.snapshot.provider.rawValue,
+      fingerprint: subscription.snapshot.account.fingerprint,
+      fingerprintScope: subscription.snapshot.account.fingerprintScope.rawValue,
+      sourceID: selectorSourceID(from: subscription)
+    )
+  }
+
+  /// The resolved key is `provider|fingerprint|scope|source_id`; none of the four parts
+  /// contain `|`. Global subscriptions carry an empty source id.
+  private static func selectorSourceID(from subscription: QuotaSubscription) -> String? {
+    guard subscription.snapshot.account.fingerprintScope == .source else { return nil }
+    let parts = subscription.key.split(
+      separator: "|",
+      maxSplits: 3,
+      omittingEmptySubsequences: false
+    )
+    guard parts.count == 4 else { return nil }
+    let value = String(parts[3])
+    return value.isEmpty ? nil : value
+  }
+
   private static func mapCost(_ cost: UsageCostOutcome) -> WidgetCost {
     switch cost.status {
     case .complete:
@@ -111,6 +137,7 @@ private struct WidgetSnapshotCandidate {
   var fingerprint: String
   var sourceID: String
   var windowID: String
+  var selectionID: String
 
   var isBalanceOnly: Bool {
     RemainingQuotaFormat.isBalanceOnly(
@@ -131,6 +158,7 @@ private struct WidgetSnapshotCandidate {
     let hasLimit = window.limitValue != nil
     let provider = snapshot.provider
     return WidgetQuotaItem(
+      selectionID: selectionID,
       providerID: provider.rawValue,
       providerDisplayName: provider.displayName,
       windowTitle: windowTitle,

@@ -10,6 +10,12 @@ enum OverviewWidgetContent {
   static let overviewURL = URL(string: "io.gotry.quota:/overview")!
   static let refreshInterval: TimeInterval = 15 * 60
 
+  /// Per-item deep link. The widget as a whole (medium/large with several items) still
+  /// opens `overviewURL`.
+  static func subscriptionURL(for item: WidgetQuotaItem) -> URL {
+    URL(string: "io.gotry.quota:/subscriptions/\(item.selectionID)")!
+  }
+
   /// Copy used when a reset instant is at or before `now` (avoids a misleading "0s").
   static let resetDueCopy = "now"
 

@@ -37,6 +37,9 @@ shape of a released contract still moves its version.
 - `fixtures/freshness-copy-conformance.json` states the thresholds and the words every Quota
   surface uses to say how old a reading is, so the website and the Apple clients say the same
   thing about the same instant.
+- `fixtures/alert-transition-conformance.json` states when a remaining-quota reading should fire a
+  local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS
+  both answer it.
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge

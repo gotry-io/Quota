@@ -60,7 +60,9 @@ deadline, and a helper leaving two consecutive pings unanswered is replaced.
 including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately. Components carry
 independent status, last-good value, update time, error/recovery code, and refreshing flag; there
 are five of them — quota, Usage, account, pricing, and providers, the last of which a refresh never
-touches and a configuration change always does. The service begins a background startup refresh once IPC is available,
+touches and a configuration change always does. QuotaBar evaluates local notification rules in Swift
+from the quota readings those events already carry; there is no notification IPC event and no sixth
+component. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and then waits on one scheduler thread for the next of
 three events: an Account conditional read every minute, a quota collection at the stored interval
 (1, 2, 5, 10, or 15 minutes; default five), and a quota-only catch-up when a window `resets_at`
@@ -236,7 +238,9 @@ Device fields and returns only an account session: it is not a collection Device
 `packages/apple-client` and fetches `GET /api/v6/account/summary`. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
-`group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file.
+`group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may
+carry a locally salted `selection_id`; the salt stays in the app-private Keychain and is never
+written to the App Group.
 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
@@ -298,19 +302,21 @@ or a report.
   semantics and on QuotaWire for the managed wire types and `ProviderID`, and must not depend on
   QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this product.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
-  quota, plan and account labels, compact counts, Usage cost, compact relative age, and the
-  observation-freshness rule each snapshot type conforms to. It depends on neither app and does not
-  own `ProviderID`, decode wire types, network, persist, or reach Relay; `packages/apple-client` may
-  depend on it so a wire type can answer a presentation question about itself. QuotaWire's
-  `ProviderID` carries only providers that sync to an account, because a local-only collector there
-  would force QuotaBar's enum to diverge again.
+  quota, plan and account labels, compact counts, Usage cost, compact relative age, the
+  observation-freshness rule each snapshot type conforms to, and the subscription selector every
+  Apple client hashes the same way. It depends on neither app and does not own `ProviderID`, decode
+  wire types, network, persist, or reach Relay; `packages/apple-client` may depend on it so a wire
+  type can answer a presentation question about itself. QuotaWire's `ProviderID` carries only
+  providers that sync to an account, because a local-only collector there would force QuotaBar's
+  enum to diverge again.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
   client, account session refresh/revoke, the last-good Account summary cache, and the
   Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios` owns SwiftUI,
-  `ASWebAuthenticationSession`, App Group snapshot publish/clear, and the WidgetKit extension; its
-  views do not call `URLSession` or Security or decode JSON. `QuotaWidgets` depends only on
-  `QuotaWidgetData` and `QuotaPresentation`, and must not import `QuotaWire`, `QuotaRelay`,
-  `QuotaAccount`, or Security, or use `URLSession` or Keychain.
+  `ASWebAuthenticationSession`, App Group snapshot publish/clear, the app-private selection-salt
+  Keychain item, and the WidgetKit extension; its views do not call `URLSession` or Security or
+  decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`, and must
+  not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or
+  Keychain.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
 - `packages/quota-model` and `packages/relay-core` are runtime-neutral TypeScript for Relay and Web;

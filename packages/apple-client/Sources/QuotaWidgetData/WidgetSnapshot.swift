@@ -3,9 +3,9 @@ import QuotaPresentation
 
 /// Versioned, bounded widget-facing quota projection. Foundation-only; no account/session fields.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
-  /// 2 carries per-item freshness facts (`state`, `validUntil`) where 1 carried a published
-  /// `isStale` verdict. A file written by the older shape is rejected by this gate and the
-  /// app republishes.
+  /// 2 carries per-item freshness facts (`state`, `validUntil`) and a locally salted
+  /// `selectionID`. iOS has not shipped, so the shape changes in place: a file written
+  /// without `selectionID` is rejected by this gate and the app republishes.
   public static let currentVersion = 2
   public static let maximumItemCount = 16
 
@@ -85,7 +85,11 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public static let maximumProviderIDLength = 64
   public static let maximumDisplayNameLength = 128
   public static let maximumWindowTitleLength = 128
+  public static let selectionIDLength = 12
 
+  /// Locally salted twelve-hex id. The App Group file never sees the fingerprint, account
+  /// id, or unsalted selector this was derived from.
+  public let selectionID: String
   public let providerID: String
   public let providerDisplayName: String
   public let windowTitle: String
@@ -101,6 +105,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public let validUntil: Date?
 
   public init(
+    selectionID: String,
     providerID: String,
     providerDisplayName: String,
     windowTitle: String,
@@ -112,6 +117,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     state: WidgetQuotaState = .available,
     validUntil: Date? = nil
   ) {
+    self.selectionID = selectionID
     self.providerID = providerID
     self.providerDisplayName = providerDisplayName
     self.windowTitle = windowTitle
@@ -126,10 +132,11 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
-      "providerId", "providerDisplayName", "windowTitle", "remainingPercent", "remainingValue",
-      "unit", "hasLimit", "resetsAt", "state", "validUntil",
+      "selectionId", "providerId", "providerDisplayName", "windowTitle", "remainingPercent",
+      "remainingValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    selectionID = try container.decode(String.self, forKey: .selectionID)
     providerID = try container.decode(String.self, forKey: .providerID)
     providerDisplayName = try container.decode(String.self, forKey: .providerDisplayName)
     windowTitle = try container.decode(String.self, forKey: .windowTitle)
@@ -142,7 +149,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
-        forKey: .providerID,
+        forKey: .selectionID,
         in: container,
         debugDescription: "Invalid widget quota item."
       )
@@ -160,6 +167,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
       )
     }
     var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(selectionID, forKey: .selectionID)
     try container.encode(providerID, forKey: .providerID)
     try container.encode(providerDisplayName, forKey: .providerDisplayName)
     try container.encode(windowTitle, forKey: .windowTitle)
@@ -173,7 +181,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   }
 
   public var isValid: Bool {
-    WidgetValidation.isTrimmedText(providerID, maximum: Self.maximumProviderIDLength)
+    WidgetValidation.isSelectionID(selectionID)
+      && WidgetValidation.isTrimmedText(providerID, maximum: Self.maximumProviderIDLength)
       && WidgetValidation.isTrimmedText(
         providerDisplayName, maximum: Self.maximumDisplayNameLength)
       && WidgetValidation.isTrimmedText(windowTitle, maximum: Self.maximumWindowTitleLength)
@@ -185,6 +194,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
+    case selectionID = "selectionId"
     case providerID = "providerId"
     case providerDisplayName
     case windowTitle
@@ -359,6 +369,14 @@ enum WidgetValidation {
   static func isTrimmedText(_ value: String, maximum: Int) -> Bool {
     !value.isEmpty && value.count <= maximum
       && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// `^[0-9a-f]{12}$` — a locally salted id, never a fingerprint or account id.
+  static func isSelectionID(_ value: String) -> Bool {
+    guard value.utf8.count == WidgetQuotaItem.selectionIDLength else { return false }
+    return value.utf8.allSatisfy { byte in
+      (48...57).contains(byte) || (97...102).contains(byte)
+    }
   }
 
   static func isSafeNonnegative(_ value: Int) -> Bool {
