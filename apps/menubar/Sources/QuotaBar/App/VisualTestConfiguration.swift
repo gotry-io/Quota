@@ -70,6 +70,7 @@
     case providerLiteLLMKey = "provider-litellm-key"
     case devices
     case usage
+    case notifications
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
     case support
@@ -98,6 +99,7 @@
       ]
       case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
+      case .notifications: [.settings, .notifications]
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
       case .support: [.settings, .support]

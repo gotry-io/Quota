@@ -1,6 +1,6 @@
 import Foundation
 
-/// One local notification the evaluator decided to fire. Delivery is a later concern.
+/// One local notification the evaluator decided to fire.
 enum NotificationEvent: Equatable, Sendable {
   case thresholdCrossed(
     selector: String,
@@ -10,6 +10,31 @@ enum NotificationEvent: Equatable, Sendable {
     resetsAt: Date?
   )
   case windowReset(selector: String, windowID: String, resetsAt: Date?)
+
+  var selector: String {
+    switch self {
+    case .thresholdCrossed(let selector, _, _, _, _): selector
+    case .windowReset(let selector, _, _): selector
+    }
+  }
+
+  var windowID: String {
+    switch self {
+    case .thresholdCrossed(_, let windowID, _, _, _): windowID
+    case .windowReset(_, let windowID, _): windowID
+    }
+  }
+
+  var dedupKey: NotificationDedupKey {
+    switch self {
+    case .thresholdCrossed(let selector, let windowID, let threshold, _, let resetsAt):
+      NotificationDedupKey(
+        selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: threshold)
+    case .windowReset(let selector, let windowID, let resetsAt):
+      NotificationDedupKey(
+        selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
+    }
+  }
 }
 
 /// The last available reading of one evaluated window, used to detect crossings and resets.
@@ -26,6 +51,25 @@ struct NotificationDedupKey: Equatable, Hashable, Sendable {
   var windowID: String
   var resetsAt: Date?
   var threshold: Int?
+
+  /// `UNNotificationRequest.identifier` — the same string the scheduler and the sink use.
+  var requestIdentifier: String {
+    let reset = Self.dateToken(resetsAt)
+    if let threshold {
+      return "threshold:\(selector):\(windowID):\(reset):\(threshold)"
+    }
+    return "reset:\(selector):\(windowID):\(reset)"
+  }
+
+  /// Pending reset reminders for one window, regardless of which `resets_at` they were booked for.
+  static func resetIdentifierPrefix(selector: String, windowID: String) -> String {
+    "reset:\(selector):\(windowID):"
+  }
+
+  static func dateToken(_ date: Date?) -> String {
+    guard let date else { return "none" }
+    return String(Int(date.timeIntervalSince1970))
+  }
 }
 
 /// Dedup keys already fired this cycle, plus the last available remaining percent per window.

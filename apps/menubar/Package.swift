@@ -32,7 +32,10 @@ let package = Package(
         .product(name: "Sparkle", package: "Sparkle"),
         "QuotaBarKeychainShim",
       ],
-      resources: [.process("Resources")]),
+      resources: [.process("Resources")],
+      linkerSettings: [
+        .linkedFramework("UserNotifications")
+      ]),
     .testTarget(
       name: "QuotaBarTests",
       dependencies: ["QuotaBar"]),

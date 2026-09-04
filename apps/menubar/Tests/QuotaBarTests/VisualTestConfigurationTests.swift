@@ -45,6 +45,7 @@
       ("provider-litellm-key", "API Key", 4),
       ("devices", "Devices", 3),
       ("usage", "Usage", 2),
+      ("notifications", "Notifications", 2),
       ("menu-bar-style", "Menu Bar Style", 2),
       ("menu-bar-provider", "Menu Bar Provider", 2),
       ("support", "Support", 2),

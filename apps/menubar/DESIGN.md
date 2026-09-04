@@ -424,15 +424,25 @@ Notifications is a Settings destination under Quota. It holds the local remainin
 Mac evaluates itself: one master switch, remaining-percent thresholds on each subscription Overview
 is showing, and a switch for window-reset reminders.
 
-- The master switch is off until the page is opened and the system permission is granted, then it
-  turns on.
-- Each visible subscription defaults to **20** and **10**. Values are 1–99, stored descending and
-  unique.
-- Reset reminders default on.
-- Quota reminds when a refresh brings new data; it does not promise real-time.
+- The master switch is off until the person turns it on and macOS grants alerts and sound. Turning
+  it on asks `UNUserNotificationCenter` for `.alert` and `.sound`. A refusal puts the switch back
+  to off and shows **Allow notifications for QuotaBar in System Settings.** with **Open System
+  Settings**, which opens `x-apple.systempreferences:com.apple.Notifications-Settings.extension`.
+  Opening the page re-reads the system permission; a later grant in System Settings does not turn
+  the switch on by itself.
+- Each visible subscription is one group: the catalog `display_name` and the masked account label.
+  Two compact menus pick remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
+  defaults to **20**; the second defaults to **10** and may be **Off**, which stores a single
+  threshold. Stored values stay descending and unique.
+- Reset reminders default on. QuotaBar books a calendar notification at each available
+  subscription's primary window `resets_at` and replaces it when a new reading arrives. Signing out
+  or turning the master switch off removes every pending reminder. A `windowReset` the evaluator
+  emits for a window that already has a reminder is left to that reminder.
+- The page footer is **Quota reminds you when a refresh brings new data.** Quota does not promise
+  real-time.
+- The Settings home row trails **On** or **Off**. Delivery is native.
 
-The page uses the same Settings list rows as the rest of this panel. Delivery and permission
-prompts are native.
+The page uses the same Settings list rows as the rest of this panel.
 
 ### Account
 
@@ -690,7 +700,7 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), a source, Devices, Usage, Menu Bar
+setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
 Style, Menu Bar Provider, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.

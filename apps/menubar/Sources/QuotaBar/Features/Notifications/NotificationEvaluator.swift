@@ -26,7 +26,7 @@ enum NotificationEvaluator {
 
     for subscription in current {
       guard subscription.status == "available" else { continue }
-      for window in windowsToEvaluate(subscription.windows) {
+      for window in Self.evaluatedWindows(in: subscription.windows) {
         let id = ReadingID(selector: subscription.selector, windowID: window.id)
         let previousReading = readings[id]
         let remaining = window.remainingPercent
@@ -102,8 +102,8 @@ enum NotificationEvaluator {
   }
 
   /// Headline cadence windows, shortest first; otherwise the first percent window.
-  private static func windowsToEvaluate(
-    _ windows: [NotificationWindowReading]
+  static func evaluatedWindows(
+    in windows: [NotificationWindowReading]
   ) -> [NotificationWindowReading] {
     let order = ["five_hour", "weekly", "monthly"]
     let primary = windows.filter { window in
