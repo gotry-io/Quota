@@ -33,6 +33,7 @@ final class AppModel {
   private let authenticator: any BrowserSessionAuthenticating
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
+  private let selectionSaltStore: any SelectionSaltStore
   private let backgroundRefresh: any BackgroundRefreshScheduling
 
   var phase: Phase = .launching
@@ -52,6 +53,7 @@ final class AppModel {
     account: AccountClient,
     authenticator: any BrowserSessionAuthenticating,
     widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+    selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore(),
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
@@ -60,6 +62,7 @@ final class AppModel {
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
+    self.selectionSaltStore = selectionSaltStore
     self.backgroundRefresh = backgroundRefresh
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
   }
@@ -73,6 +76,7 @@ final class AppModel {
       ),
       authenticator: SystemBrowserAuthenticator(),
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
+      selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh
     )
   }
@@ -240,11 +244,17 @@ final class AppModel {
     expiredMessage = nil
     phase = .signedOut
     backgroundRefresh.cancelPendingRefresh()
+    try? selectionSaltStore.clear()
     clearWidget()
   }
 
   private func publishWidget(summary: AccountSummary, fetchedAt: Date) {
-    let snapshot = WidgetSnapshotProjection.make(summary: summary, fetchedAt: fetchedAt)
+    guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
+    let snapshot = WidgetSnapshotProjection.make(
+      summary: summary,
+      fetchedAt: fetchedAt,
+      salt: salt
+    )
     try? widgetPublisher.publish(snapshot)
   }
 

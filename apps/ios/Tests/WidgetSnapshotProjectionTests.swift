@@ -7,6 +7,8 @@ import Testing
 @testable import Quota
 
 struct WidgetSnapshotProjectionTests {
+  private let testSalt = Data(repeating: 0x5a, count: 32)
+
   @Test
   func projectsOneItemPerWindowOfEachResolvedSubscription() throws {
     // Relay resolves an account's readings into one row per subscription, so the widget shows
@@ -28,7 +30,7 @@ struct WidgetSnapshotProjectionTests {
       usedPercent: 50,
     )
     let summary = try decodeSummary(subscriptions: [subscription, otherFingerprint])
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
     #expect(items.count == 2)
     #expect(items.map(\.remainingPercent).sorted() == [50, 90])
     #expect(items.allSatisfy { $0.providerID == "codex" })
@@ -66,7 +68,7 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
     #expect(items.count == 4)
     // Percentage first: lowest remainingPercent, then provider sortOrder, then title.
     #expect(items[0].providerID == "codex")
@@ -106,12 +108,12 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
     #expect(items.count == 4)
     // Same remaining percent and provider: title, then fingerprint, then window id.
     #expect(items.map(\.windowTitle) == ["Daily", "Daily", "Weekly", "Weekly"])
     // Fingerprint is not published; order is still stable across runs.
-    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
     #expect(items == again)
   }
 
@@ -135,11 +137,11 @@ struct WidgetSnapshotProjectionTests {
     let summary = try decodeSummary(
       subscriptions: [observation("device_b", 40), observation("device_a", 40)])
 
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
 
     #expect(items.count == 2)
     #expect(
-      WidgetSnapshotProjection.projectItems(from: summary.subscriptions) == items
+      WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt) == items
     )
   }
 
@@ -155,7 +157,7 @@ struct WidgetSnapshotProjectionTests {
       )
     }
     let summary = try decodeSummary(subscriptions: subscriptions)
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
     #expect(items.count == 16)
   }
 
@@ -175,7 +177,8 @@ struct WidgetSnapshotProjectionTests {
     )
     let snapshot = WidgetSnapshotProjection.make(
       summary: summary,
-      fetchedAt: date("2026-08-14T16:00:00Z")
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      salt: testSalt
     )
     #expect(snapshot.items.first?.state == .stale)
     #expect(snapshot.today.inputTokens == 1000)
@@ -198,7 +201,7 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt).first)
 
     #expect(item.state == .available)
     #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
@@ -221,7 +224,7 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt).first)
 
     // The wire status, the payload state, and the shared vocabulary have to agree; the
     // reading has not aged out, so only what the source reported can say otherwise.
@@ -247,7 +250,8 @@ struct WidgetSnapshotProjectionTests {
     )
     let snapshot = WidgetSnapshotProjection.make(
       summary: summary,
-      fetchedAt: date("2026-08-14T16:00:00Z")
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      salt: testSalt
     )
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -257,11 +261,23 @@ struct WidgetSnapshotProjectionTests {
     try store.save(snapshot)
     let encoded = try String(contentsOf: store.fileURL, encoding: .utf8)
 
+    let unsaltedSelector = SubscriptionSelector.make(
+      provider: "codex",
+      fingerprint: "fp_codex_01",
+      fingerprintScope: "global",
+      sourceID: nil
+    )
+    let expectedID = SelectionIDs.make(selector: unsaltedSelector, salt: testSalt)
+    #expect(snapshot.items.first?.selectionID == expectedID)
+    #expect(expectedID != unsaltedSelector)
+
     let forbiddenValues = [
       "account_01",
       "fp_codex_01",
       "device_01",
       "chatgpt",
+      "octocat",
+      unsaltedSelector,
       "\"sequence\"",
     ]
     for value in forbiddenValues {
@@ -270,7 +286,43 @@ struct WidgetSnapshotProjectionTests {
     #expect(!encoded.contains("fingerprint"))
     #expect(!encoded.contains("account_id"))
     #expect(!encoded.contains("device_id"))
+    #expect(!encoded.contains("display_label"))
     #expect(!encoded.contains("\"source\""))
+    #expect(encoded.contains("selection_id"))
+    #expect(encoded.contains(expectedID))
+  }
+
+  @Test
+  func selectionIDIsStableForTheSameSaltAndChangesWhenTheSaltDoes() throws {
+    let summary = try decodeSummary(
+      subscriptions: [
+        observation(
+          provider: "codex",
+          fingerprint: "fp_codex_01",
+          windowID: "weekly",
+          title: "Weekly",
+          usedPercent: 29
+        )
+      ]
+    )
+    let first = WidgetSnapshotProjection.projectItems(
+      from: summary.subscriptions,
+      salt: testSalt
+    )
+    let again = WidgetSnapshotProjection.projectItems(
+      from: summary.subscriptions,
+      salt: testSalt
+    )
+    #expect(first.map(\.selectionID) == again.map(\.selectionID))
+    #expect(first.first?.selectionID.count == 12)
+
+    let otherSalt = Data(repeating: 0xa5, count: 32)
+    let rotated = WidgetSnapshotProjection.projectItems(
+      from: summary.subscriptions,
+      salt: otherSalt
+    )
+    #expect(first.map(\.selectionID) != rotated.map(\.selectionID))
+    #expect(rotated.first?.selectionID.count == 12)
   }
 
   private func decodeSummary(

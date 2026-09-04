@@ -121,7 +121,8 @@ Shared rules:
   system material fallback applies.
 - When a window's reset instant is at or before the entry date, reset age copy is **now** (never
   `0s`).
-- `widgetURL` is `io.gotry.quota:/overview`.
+- Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
+  widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole.
 - Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
   safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
   extension never fetches. The app republishes the snapshot on a foreground refresh and on a
