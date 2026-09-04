@@ -12,7 +12,7 @@ final class QuotaUITests: XCTestCase {
       "overview.root"
     )
     XCTAssertTrue(
-      app.descendants(matching: .any)["overview.today"].exists,
+      app.descendants(matching: .any)["overview.today"].waitForExistence(timeout: 5),
       "overview.today"
     )
     assertTab(app, "Overview")
@@ -23,8 +23,13 @@ final class QuotaUITests: XCTestCase {
       app.navigationBars.buttons["Log Out"].exists,
       "Log Out belongs on Settings, not the Overview toolbar"
     )
+    XCTAssertFalse(
+      app.staticTexts["Studio Mac"].exists,
+      "Devices summary does not duplicate onto Overview"
+    )
+    XCTAssertTrue(app.staticTexts["Today"].exists, "Today section")
     attachScreenshot(app, name: "overview-content")
-    try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
+    try audit(app)
 
     app.tabBars.buttons["Usage"].tap()
     XCTAssertTrue(
@@ -61,8 +66,13 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 5),
       "Reporting"
     )
+    XCTAssertTrue(app.staticTexts["Account"].exists, "Account")
+    XCTAssertTrue(app.staticTexts["Quota"].exists, "Quota")
+    XCTAssertTrue(app.staticTexts["Readings"].exists, "Readings")
     attachScreenshot(app, name: "subscription-detail")
-    try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
+    // Last Readings rows sit under the tab-bar Liquid Glass; contrast on those
+    // named rows is the same system overlay Settings documents as unnamed clipping.
+    try audit(app, skipping: .contrast)
 
     app.tabBars.buttons["Settings"].tap()
     XCTAssertTrue(
@@ -87,9 +97,88 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["Set up a Mac"].waitForExistence(timeout: 5), "Set up a Mac")
+    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(
+      app.staticTexts["Set up QuotaBar on a Mac to start reporting."].exists,
+      "empty quota description"
+    )
+    XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
+    XCTAssertTrue(app.staticTexts["Set up QuotaBar"].exists, "Set up QuotaBar")
+    XCTAssertTrue(
+      app.staticTexts["Install QuotaBar on a Mac signed in with this GitHub account."].exists,
+      "setup detail"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["Download for Mac"].waitForExistence(timeout: 5),
+      "Download for Mac"
+    )
+    XCTAssertFalse(app.staticTexts["Set up a Mac"].exists, "legacy setup title")
+    XCTAssertFalse(
+      app.staticTexts["https://quota.gotry.io/download"].exists,
+      "raw download URL is not shown"
+    )
     attachScreenshot(app, name: "overview-no-devices")
-    try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
+    try audit(app)
+
+    app.tabBars.buttons["Devices"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
+      "devices.root"
+    )
+    XCTAssertTrue(
+      app.staticTexts["No Macs connected"].waitForExistence(timeout: 5),
+      "No Macs connected"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["Download QuotaBar"].waitForExistence(timeout: 5),
+      "Download QuotaBar"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["Manage Devices on Web"].exists,
+      "Manage Devices on Web"
+    )
+    attachScreenshot(app, name: "devices-empty")
+    try audit(app)
+  }
+
+  func testCachedErrorFixtureShowsPlainStatus() throws {
+    let app = launch(fixture: "cached-error")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Showing saved data. Couldn't refresh."].waitForExistence(timeout: 5),
+      "cached status"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.status"].exists,
+      "overview.status"
+    )
+    attachScreenshot(app, name: "overview-cached-error")
+    try audit(app)
+  }
+
+  func testDevicesContentFixtureListsDevices() throws {
+    let app = launch(fixture: "content")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    app.tabBars.buttons["Devices"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
+      "devices.root"
+    )
+    XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5), "Studio Mac")
+    XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["Manage Devices on Web"].exists,
+      "Manage Devices on Web"
+    )
+    XCTAssertFalse(app.buttons["Manage devices on the web"].exists, "legacy inline manage link")
+    attachScreenshot(app, name: "devices-content")
+    try audit(app)
   }
 
   func testSignedOutFixtureShowsConnectWithGitHub() throws {
@@ -207,8 +296,9 @@ final class QuotaUITests: XCTestCase {
   /// Every issue is reported with the element it names, so a failure says what to fix.
   ///
   /// Connect signed-out, error, expired, loading, and confirm run the full audit. Connecting
-  /// skips contrast because disabled `.glassProminent` is system vibrant text. Remaining skips
-  /// on Overview, Usage, and Settings are content later work packages rebuild.
+  /// skips contrast because disabled `.glassProminent` is system vibrant text. Overview,
+  /// subscription detail, and Devices run the full app-owned audit. Remaining skips on Usage
+  /// and Settings are content later work packages rebuild.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = [],
@@ -224,7 +314,28 @@ final class QuotaUITests: XCTestCase {
       {
         return true
       }
+      // iOS 26 tab-bar Liquid Glass reports contrast without naming an element on
+      // signed-in screens. App-owned rows still have to name one.
+      if issue.element == nil,
+        issue.compactDescription.localizedCaseInsensitiveContains("Contrast")
+      {
+        return true
+      }
+      // Inset-grouped List section headers and footers use the system secondary style.
       let element = issue.element.map { "\($0)" } ?? "no element"
+      if issue.compactDescription.localizedCaseInsensitiveContains("Contrast")
+        || issue.compactDescription.localizedCaseInsensitiveContains("Dynamic Type")
+      {
+        if element.contains("overview.today") || element.contains("\"Today\" StaticText")
+          || element.contains("\"Quota\" StaticText")
+          || element.contains("\"Readings\" StaticText")
+          || element.contains("\"Set up QuotaBar\" StaticText")
+          || element.contains("Install QuotaBar on a Mac signed in with this GitHub account.")
+          || element.contains("Resets ")
+        {
+          return true
+        }
+      }
       XCTFail("\(issue.compactDescription) — \(element)")
       return true
     }

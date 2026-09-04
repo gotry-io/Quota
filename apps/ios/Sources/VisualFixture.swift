@@ -106,7 +106,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = AppModel.Banner(
           kind: .offlineCached,
-          text: "Showing saved account data. Could not refresh.",
+          text: AppModel.Banner.cachedText,
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil

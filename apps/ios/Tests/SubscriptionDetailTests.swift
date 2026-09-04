@@ -94,6 +94,48 @@ struct SubscriptionDetailContentTests {
   }
 
   @Test
+  func emptySourcesPrintNoDeviceReadingsYet() {
+    let content = SubscriptionDetailContent.make(
+      subscription: QuotaSubscription(
+        key: key,
+        provider: .codex,
+        snapshot: snapshot(usedPercent: 32, observedAt: now),
+        sources: []
+      ),
+      devices: devices(),
+      now: now
+    )
+    #expect(content.sources.isEmpty)
+    #expect(content.displayedStrings.contains("No device readings yet."))
+    #expect(!content.displayedStrings.contains("Reporting"))
+  }
+
+  @Test
+  func emptyWindowsPrintNoQuotaWindowsYet() {
+    let empty = QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(
+        fingerprint: fingerprint,
+        label: "pe***@example.com",
+        plan: "Plus",
+        fingerprintScope: .global
+      ),
+      windows: [],
+      status: .available,
+      observedAt: now
+    )
+    let content = SubscriptionDetailContent.make(
+      subscription: QuotaSubscription(
+        key: key, provider: .codex, snapshot: empty, sources: []),
+      devices: devices(),
+      now: now
+    )
+    #expect(content.windows.isEmpty)
+    #expect(content.displayedStrings.contains("No quota windows yet."))
+    #expect(content.displayedStrings.contains("No device readings yet."))
+  }
+
+  @Test
   func sourceWithoutSnapshotHasNoRemainingAndIsNotInvented() {
     let studio = snapshot(usedPercent: 32, observedAt: now.addingTimeInterval(-90))
     let sources = [
@@ -124,7 +166,8 @@ struct SubscriptionDetailContentTests {
   }
 
   private func subscription(sources: [QuotaSubscriptionSource]) -> QuotaSubscription {
-    let selected = sources.first { $0.deviceID == studioID }?.snapshot
+    let selected =
+      sources.first { $0.deviceID == studioID }?.snapshot
       ?? snapshot(usedPercent: 32, observedAt: now)
     return QuotaSubscription(
       key: key,

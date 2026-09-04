@@ -62,24 +62,10 @@ struct ConnectAccountView: View {
   @ViewBuilder
   private var statusLine: some View {
     if let expired = model.expiredMessage {
-      statusLabel(text: expired, symbolName: "lock.slash")
+      StatusMessage(symbolName: "lock.slash", text: expired)
     } else if let banner = model.banner {
-      statusLabel(text: banner.text, symbolName: banner.symbolName)
+      StatusMessage(symbolName: banner.symbolName, text: banner.text)
     }
-  }
-
-  private func statusLabel(text: String, symbolName: String) -> some View {
-    Label {
-      Text(text)
-        .foregroundStyle(Color(uiColor: .label))
-        .fixedSize(horizontal: false, vertical: true)
-    } icon: {
-      Image(systemName: symbolName)
-        .foregroundStyle(Color(uiColor: .label))
-    }
-    .font(.subheadline)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
   }
 
   private var mark: some View {

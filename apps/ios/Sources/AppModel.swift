@@ -27,6 +27,9 @@ final class AppModel {
     var kind: BannerKind
     var text: String
     var symbolName: String
+
+    static let cachedText = "Showing saved data. Couldn't refresh."
+    static let failedText = "Couldn't refresh. Pull to try again."
   }
 
   private let account: AccountClient
@@ -125,7 +128,7 @@ final class AppModel {
     PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
   }
 
-  /// One card per provider, and inside it one row per subscription rather than per
+  /// One group per provider, and inside it one Overview row per subscription rather than per
   /// reporting device: an account collected on three Macs is one subscription, not three,
   /// and Relay has already resolved it that way.
   var providerCards: [ProviderQuotaCardModel] {
@@ -486,13 +489,13 @@ final class AppModel {
     if hasCachedSummary {
       return Banner(
         kind: offline ? .offlineCached : .refreshFailed,
-        text: "Showing saved account data. Could not refresh.",
+        text: Banner.cachedText,
         symbolName: offline ? "icloud.slash" : "exclamationmark.triangle"
       )
     }
     return Banner(
       kind: .refreshFailed,
-      text: "Could not refresh account data. Pull to try again.",
+      text: Banner.failedText,
       symbolName: "exclamationmark.triangle"
     )
   }

@@ -2,123 +2,106 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
+struct DeviceRowContent: Equatable {
+  var displayName: String
+  var verdict: String
+  var platform: String
+  var age: String
+
+  static func make(_ device: AccountDevice, now: Date = Date()) -> Self {
+    let activity = device.activity(now: now)
+    let platform =
+      switch device.platform {
+      case .macos: "macOS"
+      case .unknown: "Unknown"
+      }
+    return DeviceRowContent(
+      displayName: device.displayName,
+      verdict: activity.label,
+      platform: platform,
+      age: FreshnessCopy.lastReading(since: activity.since, now: now)
+    )
+  }
+
+  var details: String { "\(platform) · \(age)" }
+
+  var accessibilityLabel: String {
+    "\(displayName), \(verdict), \(platform), \(age)"
+  }
+
+  var displayedStrings: [String] {
+    [displayName, verdict, platform, age]
+  }
+}
+
 struct DevicesView: View {
   @Bindable var model: AppModel
 
   private static let manageURL = URL(string: "https://quota.gotry.io/my")!
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        if let devices = model.summary?.devices, !devices.isEmpty {
-          AccountDevicesCard(devices: devices)
-        } else {
-          MacSetupGuideCard()
+    List {
+      if let devices = model.summary?.devices, !devices.isEmpty {
+        ForEach(devices) { device in
+          DeviceRow(device: device)
         }
-
-        Link(destination: Self.manageURL) {
-          Text("Manage devices on the web")
-            .font(.subheadline)
-            .frame(
-              maxWidth: .infinity,
-              minHeight: QuotaTheme.minimumTouchTarget,
-              alignment: .leading
-            )
+      } else {
+        ContentUnavailableView {
+          Label(MacSetupGuide.emptyDevicesTitle, systemImage: "desktopcomputer")
+            .foregroundStyle(Color(uiColor: .label))
+        } description: {
+          Text(MacSetupGuide.detail)
+            .foregroundStyle(Color(uiColor: .label))
+            .fixedSize(horizontal: false, vertical: true)
+        } actions: {
+          Link(MacSetupGuide.devicesAction, destination: MacSetupGuide.downloadURL)
+            .frame(minHeight: QuotaTheme.minimumTouchTarget)
         }
-        .contentShape(Rectangle())
-        .frame(minHeight: QuotaTheme.minimumTouchTarget, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, minHeight: 220)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
       }
-      .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
-      .padding(.horizontal, QuotaTheme.contentGutter)
-      .padding(.vertical, 16)
-      .frame(maxWidth: .infinity)
     }
+    .listStyle(.insetGrouped)
+    .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("devices.root")
     .navigationTitle("Devices")
     .navigationBarTitleDisplayMode(.large)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Link(destination: Self.manageURL) {
+          Label("Manage Devices on Web", systemImage: "arrow.up.right")
+        }
+        .accessibilityIdentifier("devices.manage")
+      }
+    }
   }
 }
 
-struct AccountDevicesCard: View {
-  let devices: [AccountDevice]
+struct DeviceRow: View {
+  let device: AccountDevice
 
   var body: some View {
-    let now = Date()
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Devices")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
-        if index > 0 { Divider() }
-        deviceRow(device, now: now)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let activity = device.activity(now: now)
-    let details = deviceDetails(device, activity: activity, now: now)
-    return VStack(alignment: .leading, spacing: 5) {
+    let content = DeviceRowContent.make(device)
+    VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(device.displayName)
+        Text(content.displayName)
           .font(.subheadline.weight(.medium))
+          .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 8)
-        Text(activity.label)
+        Text(content.verdict)
           .font(.footnote.weight(.medium))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.primary)
           .multilineTextAlignment(.trailing)
       }
-      Text(details)
+      Text(content.details)
         .font(.footnote.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color(uiColor: .label))
         .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(device.displayName), \(activity.label), \(details)")
-  }
-
-  private func deviceDetails(
-    _ device: AccountDevice,
-    activity: DeviceActivity,
-    now: Date
-  ) -> String {
-    let platform =
-      switch device.platform {
-      case .macos: "macOS"
-      case .unknown: "Unknown"
-      }
-    return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
-  }
-}
-
-struct OverviewDevicesSummary: View {
-  let devices: [AccountDevice]
-
-  var body: some View {
-    let now = Date()
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Devices")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
-        if index > 0 { Divider() }
-        let activity = device.activity(now: now)
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(device.displayName)
-            .font(.subheadline.weight(.medium))
-          Spacer(minLength: 8)
-          Text(activity.label)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(device.displayName), \(activity.label)")
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityLabel(content.accessibilityLabel)
+    .accessibilityIdentifier("devices.row")
   }
 }
