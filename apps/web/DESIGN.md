@@ -160,9 +160,11 @@ current number — so the card needs no separate status pill.
 Device cards show display name, an **Active** / **Idle** / **Not reporting** pill, and one line of
 platform plus the age that verdict came from. Never a claim that a sleeping or closed app failed,
 never raw Device IDs, and never a request that the viewing browser fix another Device's provider
-credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed. Agent Usage uses a semantic table with real column headers. Empty, loading,
-unauthenticated, recent-auth-required, and service-error states use plain explanatory text and one
-next action.
+credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed. Agent
+Usage uses a semantic table with real column headers. Empty and loading states use a skeleton
+(`aria-busy`); a failed Relay response is **Your session ended. Sign in again.** (401), **Sign in
+again to confirm this change.** or **You don't have permission to do that.** (403), or **Quota
+couldn't load this. Retry.** — at most one next action.
 
 ## Responsive behavior
 

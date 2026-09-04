@@ -1,22 +1,47 @@
 import {
+  type AccountSummaryRead,
   type AccountUsageActivityResponseRead,
   AccountUsageActivityResponseReadSchema,
 } from "@gotry-io/quota-protocol";
+import { type AccountError, classifyAccountError } from "./account-errors.ts";
 
 /**
- * The Account reads, stated as the paths and ranges they ask for.
+ * The Account reads: paths, ranges, and the in-memory summary cache a 304 answers from.
  *
- * They live apart from the rest of the client because a request builder is worth testing on
- * its own, and the rest of that file reaches into SvelteKit's `$lib` alias.
+ * They live apart from the mutation client so node tests can exercise a request without
+ * going through SvelteKit.
  */
 
 /** How far back the activity chart asks, ending today. */
 export const ACTIVITY_DAYS = 365;
 
+export type AccountSummaryResult = { status: "ok"; summary: AccountSummaryRead } | AccountError;
+
 export type AccountActivityResult =
   | { status: "ok"; activity: AccountUsageActivityResponseRead }
-  | { status: "unauthorized" }
-  | { status: "error" };
+  | AccountError;
+
+type CachedSummary = { etag: string; summary: AccountSummaryRead };
+
+let cachedSummary: CachedSummary | null = null;
+
+/** The ETag the next summary GET should offer back, if a previous read stored one. */
+export function storedSummaryETag(): string | null {
+  return cachedSummary?.etag ?? null;
+}
+
+/** The summary a matching 304 is asserting is still current. */
+export function storedSummary(): AccountSummaryRead | null {
+  return cachedSummary?.summary ?? null;
+}
+
+export function storeSummary(etag: string, summary: AccountSummaryRead): void {
+  cachedSummary = { etag, summary };
+}
+
+export function clearStoredSummary(): void {
+  cachedSummary = null;
+}
 
 /** The chart's range, in dates, ending on the day the browser is having. */
 export function accountActivityRange(today: Date): { from: string; to: string } {
@@ -39,10 +64,11 @@ export function browserTimezone(): string {
 }
 
 export function parseAccountActivityResponse(status: number, body: unknown): AccountActivityResult {
-  if (status === 401) return { status: "unauthorized" };
-  if (status < 200 || status >= 300) return { status: "error" };
+  if (status < 200 || status >= 300) {
+    return classifyAccountError(new Response(null, { status }));
+  }
   const parsed = AccountUsageActivityResponseReadSchema.safeParse(body);
-  return parsed.success ? { status: "ok", activity: parsed.data } : { status: "error" };
+  return parsed.success ? { status: "ok", activity: parsed.data } : classifyAccountError(null);
 }
 
 function localDate(instant: Date): string {
