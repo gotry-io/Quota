@@ -1,16 +1,17 @@
 import Foundation
+import QuotaAlerts
 import UserNotifications
 
 /// Where evaluated notification events go.
 protocol NotificationSink: Sendable {
-  func deliver(_ events: [NotificationEvent])
+  func deliver(_ events: [AlertEvent])
 }
 
 struct NoOpNotificationSink: NotificationSink {
-  func deliver(_ events: [NotificationEvent]) {}
+  func deliver(_ events: [AlertEvent]) {}
 }
 
-/// Provider display names and window titles the sink needs to write `NotificationCopy`.
+/// Provider display names and window titles the sink needs to write `AlertCopy`.
 struct NotificationDeliveryCatalog: Equatable, Sendable {
   struct Entry: Equatable, Sendable {
     var providerDisplayName: String
@@ -45,7 +46,7 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
     self.center = center
   }
 
-  func deliver(_ events: [NotificationEvent]) {
+  func deliver(_ events: [AlertEvent]) {
     for event in events {
       if case .windowReset(let selector, let windowID, _) = event,
         scheduledResetKeys.contains(Self.resetKey(selector: selector, windowID: windowID))
@@ -61,7 +62,7 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
     "\(selector)\u{1e}\(windowID)"
   }
 
-  private func request(for event: NotificationEvent) -> UNNotificationRequest? {
+  private func request(for event: AlertEvent) -> UNNotificationRequest? {
     guard let windowTitle = catalog.windowTitle(selector: event.selector, windowID: event.windowID)
     else { return nil }
     let content = UNMutableNotificationContent()
@@ -70,9 +71,9 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
     switch event {
     case .thresholdCrossed(_, _, _, let remainingPercent, let resetsAt):
       guard let provider = catalog.providerDisplayName(selector: event.selector) else { return nil }
-      content.title = NotificationCopy.title(
+      content.title = AlertCopy.title(
         providerDisplayName: provider, windowTitle: windowTitle)
-      content.body = NotificationCopy.thresholdBody(
+      content.body = AlertCopy.thresholdBody(
         remainingPercent: remainingPercent,
         resetsAt: resetsAt,
         now: now,
@@ -81,9 +82,9 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
       )
     case .windowReset:
       guard let provider = catalog.providerDisplayName(selector: event.selector) else { return nil }
-      content.title = NotificationCopy.title(
+      content.title = AlertCopy.title(
         providerDisplayName: provider, windowTitle: windowTitle)
-      content.body = NotificationCopy.resetBody(windowTitle: windowTitle)
+      content.body = AlertCopy.resetBody(windowTitle: windowTitle)
     }
     return UNNotificationRequest(
       identifier: event.dedupKey.requestIdentifier,

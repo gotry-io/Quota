@@ -1,21 +1,19 @@
 import Foundation
+import QuotaAlerts
 import Testing
 
-@testable import QuotaBar
-
-struct NotificationCopyTests {
+struct AlertCopyTests {
   private let now = Date(timeIntervalSince1970: 1_773_576_000)
   private let utc = TimeZone(secondsFromGMT: 0)!
 
   @Test func titleJoinsProviderDisplayNameAndWindowTitle() {
-    #expect(NotificationCopy.title(providerDisplayName: "Codex", windowTitle: "Weekly")
-      == "Codex · Weekly")
+    #expect(AlertCopy.title(providerDisplayName: "Codex", windowTitle: "Weekly") == "Codex · Weekly")
   }
 
   @Test func thresholdBodyUsesIntegerPercentAndLowercaseResetCountdown() {
     let resetsAt = now.addingTimeInterval(42 * 60)
     #expect(
-      NotificationCopy.thresholdBody(
+      AlertCopy.thresholdBody(
         remainingPercent: 12,
         resetsAt: resetsAt,
         now: now,
@@ -26,7 +24,7 @@ struct NotificationCopyTests {
 
   @Test func thresholdBodyOmitsResetWhenTheInstantHasPassedOrIsMissing() {
     #expect(
-      NotificationCopy.thresholdBody(
+      AlertCopy.thresholdBody(
         remainingPercent: 12,
         resetsAt: nil,
         now: now,
@@ -34,7 +32,7 @@ struct NotificationCopyTests {
       ) == "12% left"
     )
     #expect(
-      NotificationCopy.thresholdBody(
+      AlertCopy.thresholdBody(
         remainingPercent: 12,
         resetsAt: now.addingTimeInterval(-1),
         now: now,
@@ -44,6 +42,6 @@ struct NotificationCopyTests {
   }
 
   @Test func resetBodyIsTheWindowTitlePlusQuotaReset() {
-    #expect(NotificationCopy.resetBody(windowTitle: "Weekly") == "Weekly quota reset")
+    #expect(AlertCopy.resetBody(windowTitle: "Weekly") == "Weekly quota reset")
   }
 }

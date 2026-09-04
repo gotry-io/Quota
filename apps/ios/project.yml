@@ -57,6 +57,8 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+      - package: QuotaAppleShared
+        product: QuotaAlerts
       - sdk: BackgroundTasks.framework
       - target: QuotaWidgets
         embed: true
@@ -115,6 +117,8 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+      - package: QuotaAppleShared
+        product: QuotaAlerts
   QuotaUITests:
     type: bundle.ui-testing
     platform: iOS

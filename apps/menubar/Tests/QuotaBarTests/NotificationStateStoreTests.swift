@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import Testing
 
 @testable import QuotaBar
@@ -12,9 +13,9 @@ struct NotificationStateStoreTests {
 
     let store = FileNotificationStateStore(directory: directory)
     let resetsAt = Date(timeIntervalSince1970: 1_773_576_000)
-    let state = NotificationDedupState(
+    let state = AlertDedupState(
       fired: [
-        NotificationDedupKey(
+        AlertDedupKey(
           selector: "codex_acct",
           windowID: "weekly",
           resetsAt: resetsAt,
@@ -22,7 +23,7 @@ struct NotificationStateStoreTests {
         )
       ],
       readings: [
-        NotificationStoredReading(
+        AlertStoredReading(
           selector: "codex_acct",
           windowID: "weekly",
           remainingPercent: 18,
@@ -46,9 +47,9 @@ struct NotificationStateStoreTests {
 
   @Test func memoryStoreRoundTripsAndClearEmpties() throws {
     let store = InMemoryNotificationStateStore()
-    let state = NotificationDedupState(
+    let state = AlertDedupState(
       fired: [
-        NotificationDedupKey(
+        AlertDedupKey(
           selector: "codex_acct", windowID: "weekly", resetsAt: nil, threshold: 10)
       ],
       readings: []

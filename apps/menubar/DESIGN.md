@@ -65,6 +65,9 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   **`12% left · resets in 42m`**, using the shared reset countdown in lowercase; if that countdown
   is nil, the body is only **`12% left`**. A window refill reads **`<Window title> quota reset`**.
   Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
+  When a remaining-quota reading should fire a local threshold or reset notification is
+  `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
+  answer that file through `QuotaAlerts`.
 - **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
   days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
   it **2 Years**; the accessibility name stays **Up to 2 years**.

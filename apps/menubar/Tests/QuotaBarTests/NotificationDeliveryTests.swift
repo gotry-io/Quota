@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import Testing
 import UserNotifications
 
@@ -8,12 +9,12 @@ struct UserNotificationSinkTests {
   @Test func dedupKeyIdentifierEncodesSelectorWindowResetAndThreshold() {
     let resetsAt = Date(timeIntervalSince1970: 1_786_300_000)
     #expect(
-      NotificationDedupKey(
+      AlertDedupKey(
         selector: "ccfc96629357", windowID: "weekly", resetsAt: resetsAt, threshold: 20
       ).requestIdentifier == "threshold:ccfc96629357:weekly:1786300000:20"
     )
     #expect(
-      NotificationDedupKey(
+      AlertDedupKey(
         selector: "ccfc96629357", windowID: "weekly", resetsAt: resetsAt, threshold: nil
       ).requestIdentifier == "reset:ccfc96629357:weekly:1786300000"
     )
@@ -44,7 +45,7 @@ struct UserNotificationSinkTests {
     let request = try #require(center.added.first)
     #expect(
       request.identifier
-        == NotificationDedupKey(
+        == AlertDedupKey(
           selector: "ccfc96629357",
           windowID: "weekly",
           resetsAt: now.addingTimeInterval(42 * 60),
@@ -105,13 +106,13 @@ struct ResetReminderSchedulerTests {
     ])
 
     scheduler.reschedule(
-      rules: NotificationRules(enabled: true, resetReminders: true),
+      rules: AlertRules(enabled: true, resetReminders: true),
       subscriptions: [
-        NotificationSubscriptionReading(
+        AlertSubscriptionReading(
           selector: selector,
           status: "available",
           windows: [
-            NotificationWindowReading(
+            AlertWindowReading(
               id: "weekly",
               title: "Weekly",
               remainingPercent: 40,
@@ -130,7 +131,7 @@ struct ResetReminderSchedulerTests {
     let request = try #require(center.pending.first)
     #expect(
       request.identifier
-        == NotificationDedupKey(
+        == AlertDedupKey(
           selector: selector, windowID: "weekly", resetsAt: resetsAt, threshold: nil
         ).requestIdentifier
     )
@@ -159,11 +160,11 @@ struct ResetReminderSchedulerTests {
       selector: .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
     let subscription = { (resetsAt: Date) in
-      NotificationSubscriptionReading(
+      AlertSubscriptionReading(
         selector: selector,
         status: "available",
         windows: [
-          NotificationWindowReading(
+          AlertWindowReading(
             id: "weekly",
             title: "Weekly",
             remainingPercent: 40,
@@ -173,7 +174,7 @@ struct ResetReminderSchedulerTests {
         ]
       )
     }
-    let rules = NotificationRules(enabled: true, resetReminders: true)
+    let rules = AlertRules(enabled: true, resetReminders: true)
 
     scheduler.reschedule(
       rules: rules, subscriptions: [subscription(first)], catalog: catalog, now: now)
@@ -187,7 +188,7 @@ struct ResetReminderSchedulerTests {
     #expect(center.pending.first?.identifier != firstID)
     #expect(
       center.pending.first?.identifier
-        == NotificationDedupKey(
+        == AlertDedupKey(
           selector: selector, windowID: "weekly", resetsAt: second, threshold: nil
         ).requestIdentifier
     )
@@ -202,13 +203,13 @@ struct ResetReminderSchedulerTests {
       selector: .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
     scheduler.reschedule(
-      rules: NotificationRules(enabled: true, resetReminders: true),
+      rules: AlertRules(enabled: true, resetReminders: true),
       subscriptions: [
-        NotificationSubscriptionReading(
+        AlertSubscriptionReading(
           selector: selector,
           status: "available",
           windows: [
-            NotificationWindowReading(
+            AlertWindowReading(
               id: "weekly",
               title: "Weekly",
               remainingPercent: 40,
@@ -224,7 +225,7 @@ struct ResetReminderSchedulerTests {
     #expect(!center.pending.isEmpty)
 
     scheduler.reschedule(
-      rules: NotificationRules(enabled: false, resetReminders: true),
+      rules: AlertRules(enabled: false, resetReminders: true),
       subscriptions: [],
       catalog: catalog,
       now: now
@@ -233,13 +234,13 @@ struct ResetReminderSchedulerTests {
     #expect(!scheduler.hasScheduledReset(selector: selector, windowID: "weekly"))
 
     scheduler.reschedule(
-      rules: NotificationRules(enabled: true, resetReminders: true),
+      rules: AlertRules(enabled: true, resetReminders: true),
       subscriptions: [
-        NotificationSubscriptionReading(
+        AlertSubscriptionReading(
           selector: selector,
           status: "available",
           windows: [
-            NotificationWindowReading(
+            AlertWindowReading(
               id: "weekly",
               title: "Weekly",
               remainingPercent: 40,
@@ -267,13 +268,13 @@ struct ResetReminderSchedulerTests {
     ])
 
     scheduler.reschedule(
-      rules: NotificationRules(enabled: true, resetReminders: true),
+      rules: AlertRules(enabled: true, resetReminders: true),
       subscriptions: [
-        NotificationSubscriptionReading(
+        AlertSubscriptionReading(
           selector: "a",
           status: "available",
           windows: [
-            NotificationWindowReading(
+            AlertWindowReading(
               id: "weekly",
               title: "Weekly",
               remainingPercent: 40,
@@ -282,11 +283,11 @@ struct ResetReminderSchedulerTests {
             )
           ]
         ),
-        NotificationSubscriptionReading(
+        AlertSubscriptionReading(
           selector: "b",
           status: "auth_required",
           windows: [
-            NotificationWindowReading(
+            AlertWindowReading(
               id: "five_hour",
               title: "5 Hours",
               remainingPercent: 10,
