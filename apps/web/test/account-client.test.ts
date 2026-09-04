@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { fetchAccountSummary } from "../src/lib/account-client.ts";
+import { fetchAccountActivity, fetchAccountSummary } from "../src/lib/account-client.ts";
 import { classifyAccountError } from "../src/lib/account-errors.ts";
 import {
   ACTIVITY_DAYS,
@@ -33,6 +33,36 @@ test("asks the activity chart for a year ending today", () => {
   assert.equal(url.searchParams.get("from"), range.from);
   assert.equal(url.searchParams.get("to"), range.to);
   assert.equal([...url.searchParams.keys()].sort().join(","), "from,to");
+});
+
+test("asks a single UTC day for its agent tree", async () => {
+  const range = { from: "2026-08-12", to: "2026-08-12" };
+  const url = new URL(accountActivityPath(range, "agents"), "https://quota.gotry.io");
+  assert.equal(url.pathname, "/api/v6/account/usage/activity");
+  assert.equal(url.searchParams.get("from"), "2026-08-12");
+  assert.equal(url.searchParams.get("to"), "2026-08-12");
+  assert.equal(url.searchParams.get("detail"), "agents");
+  assert.equal([...url.searchParams.keys()].sort().join(","), "detail,from,to");
+
+  let requested = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    requested = String(input);
+    return new Response(JSON.stringify({ protocol_version: 6, days: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const result = await fetchAccountActivity(range, "agents");
+    assert.equal(result.status, "ok");
+    const asked = new URL(requested, "https://quota.gotry.io");
+    assert.equal(asked.searchParams.get("from"), "2026-08-12");
+    assert.equal(asked.searchParams.get("to"), "2026-08-12");
+    assert.equal(asked.searchParams.get("detail"), "agents");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("classifies 401 as a session that ended", () => {

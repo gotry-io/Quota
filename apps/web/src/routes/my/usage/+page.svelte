@@ -11,6 +11,7 @@ import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsagePeriodTabs from "$lib/components/UsagePeriodTabs.svelte";
 import { costBasisLabel, formatCost, formatCount } from "$lib/format";
+import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
 import {
   type UsagePeriodQuery,
   usagePeriodFromQuery,
@@ -21,15 +22,51 @@ import {
 const dashboard = getAccountDashboard();
 let activityDays = $state<UsageActivityDayRead[] | null>(null);
 let activityError = $state<AccountError | null>(null);
+let dayDetail = $state<UsageActivityDayRead | null>(null);
+let dayError = $state<AccountError | null>(null);
+let dayReady = $state(false);
+let dayRetry = $state(0);
 
 const activityRange = accountActivityRange(new Date());
 const selectedQuery = $derived(usagePeriodFromQuery(page.url.searchParams.get("period")));
+const selectedDay = $derived(
+  usageActivityDayFromQuery(page.url.searchParams.get("day"), activityRange),
+);
 let period = $derived<UsagePeriodRead | null>(
   dashboard.summary ? dashboard.summary.usage[usagePeriodKey(selectedQuery)] : null,
 );
 
 $effect(() => {
   void loadActivity();
+});
+
+$effect(() => {
+  const date = selectedDay;
+  void dayRetry;
+  if (!date) {
+    dayDetail = null;
+    dayError = null;
+    dayReady = false;
+    return;
+  }
+  dayReady = false;
+  dayDetail = null;
+  dayError = null;
+  let cancelled = false;
+  void fetchAccountActivity({ from: date, to: date }, "agents").then((result) => {
+    if (cancelled) return;
+    dayReady = true;
+    if (result.status === "ok") {
+      dayDetail = result.activity.days[0] ?? null;
+      dayError = null;
+      return;
+    }
+    dayError = result;
+    dayDetail = null;
+  });
+  return () => {
+    cancelled = true;
+  };
 });
 
 async function loadActivity(): Promise<void> {
@@ -44,6 +81,14 @@ async function loadActivity(): Promise<void> {
 
 function selectPeriod(query: UsagePeriodQuery): void {
   void goto(usagePeriodHref(page.url, query), {
+    replaceState: true,
+    keepFocus: true,
+    noScroll: true,
+  });
+}
+
+function writeDay(day: string | null): void {
+  void goto(usageActivityDayHref(page.url, day), {
     replaceState: true,
     keepFocus: true,
     noScroll: true,
@@ -104,7 +149,19 @@ function selectPeriod(query: UsagePeriodQuery): void {
     </span>
   </div>
   {#if activityDays}
-    <UsageActivity days={activityDays} range={activityRange} />
+    <UsageActivity
+      days={activityDays}
+      range={activityRange}
+      selectedDate={selectedDay}
+      detail={dayDetail}
+      detailError={dayError}
+      detailLoading={selectedDay !== null && !dayReady}
+      onSelectDate={(date) => writeDay(date)}
+      onClose={() => writeDay(null)}
+      onRetryDetail={() => {
+        dayRetry += 1;
+      }}
+    />
   {:else if activityError}
     <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
       <RetryNotice

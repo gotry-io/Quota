@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { accountActivity, accountSummary } from "./account-fixture.ts";
+import { accountActivity, accountActivityDay, accountSummary } from "./account-fixture.ts";
 
 async function mockV6(page: Page): Promise<void> {
   await page.route("**/api/v6/**", async (route) => {
@@ -14,10 +14,13 @@ async function mockV6(page: Page): Promise<void> {
       return;
     }
     if (url.includes("/api/v6/account/usage/activity")) {
+      const asked = new URL(url);
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const detailed = asked.searchParams.get("detail") === "agents";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(accountActivity),
+        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
       });
       return;
     }
@@ -88,6 +91,33 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   );
   await expect(page.locator("#device-list")).toContainText("Studio");
   await expect(page.locator("#device-list")).toContainText("macOS");
+});
+
+test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my/usage");
+  await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
+  await expect(page.locator("button.usage-activity-cell[tabindex='0']")).toHaveCount(1);
+
+  const rover = page.locator("button.usage-activity-cell[tabindex='0']");
+  await rover.focus();
+  await page.keyboard.press("Home");
+  const start = await page
+    .locator("button.usage-activity-cell[tabindex='0']")
+    .getAttribute("data-date");
+  await page.keyboard.press("ArrowRight");
+  const moved = page.locator("button.usage-activity-cell[tabindex='0']");
+  await expect(moved).not.toHaveAttribute("data-date", start ?? "");
+  await page.keyboard.press("Enter");
+
+  const panel = page.locator(".usage-activity-detail");
+  await expect(panel.getByRole("button", { name: "Close" })).toBeVisible();
+  await expect(page).toHaveURL(/[?&]day=\d{4}-\d{2}-\d{2}/);
+  await expect(
+    panel.getByRole("table", { name: "Usage by agent, provider, and model" }),
+  ).toBeVisible();
+  await expect(panel.getByRole("rowheader", { name: "Codex" })).toBeVisible();
+  await expect(panel.getByRole("rowheader", { name: "gpt-5.6-sol" })).toBeVisible();
 });
 
 test("axe reports no serious or critical violations on /", async ({ page }) => {

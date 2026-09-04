@@ -4,7 +4,13 @@ import { agentDisplayName, inferenceProviderDisplayName } from "@gotry-io/quota-
 import { formatCost, formatCount, usageModelDisplayName } from "$lib/format";
 import { hiddenModelCount, USAGE_MODEL_FOLD_LIMIT } from "$lib/usage-period";
 
-let { period }: { period: UsagePeriodRead } = $props();
+let {
+  period,
+  id = "usage-breakdown",
+}: {
+  period: UsagePeriodRead;
+  id?: string;
+} = $props();
 
 let expanded = $state<Record<string, boolean>>({});
 
@@ -29,7 +35,7 @@ function toggleGroup(agent: string, provider: string): void {
   <p class="empty-state">No Usage in this period.</p>
 {:else}
   <div class="table-wrap">
-    <table class="usage-tree" id="usage-breakdown">
+    <table class="usage-tree" {id}>
       <caption class="visually-hidden">Usage by agent, provider, and model</caption>
       <thead>
         <tr>

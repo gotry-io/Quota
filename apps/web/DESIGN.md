@@ -41,7 +41,8 @@ The site has four surfaces:
      detail page is a later task), today's Tokens and API-equivalent cost, and a Devices summary
      (count plus one verdict line per Device).
    - `/my/usage` — Totals (period tabs, Tokens and API-equivalent cost, an agent → provider →
-     model tree) and Activity. The activity keyboard model is a later task.
+     model tree) and Activity. The graph is one tab stop (roving tabindex). Choosing a day
+     opens its details under the grid and writes `?day=YYYY-MM-DD`.
    - `/my/devices` — Device cards and Device deletion.
    - `/my/settings` — appearance (the same ThemeToggle as the footer, as one row) and Delete
      Account. `?delete=account` scrolls to the delete region and focuses its heading.
@@ -145,23 +146,31 @@ plan names use the English presentation shared with QuotaBar rather than the bro
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
 shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
 labels sit on the Sunday-first week that contains that month’s first visible in-range day, then
-are dropped when they would overlap. In-range days are focusable buttons; padding days stay inert.
-Cell fill still maps token volume to highlight levels. Today keeps a distinct ink outline. The
-selected day uses `aria-pressed`. Hover and keyboard focus scale a cell about 1.35× with a raised
-z-index and no layout shift; `prefers-reduced-motion` disables the transition. A visible tooltip
-appears immediately on pointer hover and keyboard focus with the full UTC date, token total, and
-API-equivalent estimated cost, including Unpriced and priced-subset-only wording. It is not clipped
-by the graph’s horizontal scroller, does not scale with the cell, and stays inside the viewport so
-it cannot overflow the page. Leave and blur hide it. Narrow viewports scroll the graph horizontally
-so weekday labels stay readable and the page does not overflow.
+are dropped when they would overlap. In-range days are buttons; padding days stay inert. The graph is a group (`role="group"`,
+`aria-roledescription="grid"`) with one tab stop: only the active day is `tabindex="0"`, the rest
+are `-1`. Arrow keys move the active day — left and right by one day, up and down by one week.
+Home and End move to the first and last in-range day of that week; Page Up and Page Down move by
+30 days. Enter or Space opens the focused day. `aria-label` is the full UTC date, token total, and
+estimated cost; `aria-pressed` marks the selected day. Cell fill still maps token volume to
+highlight levels. Today keeps a distinct ink outline. Hover and keyboard focus scale a cell about
+1.35× with a raised z-index and no layout shift; `prefers-reduced-motion` disables the transition.
+A visible tooltip appears immediately on pointer hover and keyboard focus with the full UTC date,
+token total, and API-equivalent estimated cost, including Unpriced and priced-subset-only wording.
+It follows the active cell, is not clipped by the graph’s horizontal scroller, does not scale with
+the cell, and stays inside the viewport so it cannot overflow the page. Leave and blur hide it.
+Narrow viewports scroll the graph horizontally so weekday labels stay readable and the page does
+not overflow.
 
-Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
-owns selected, loading, error, and data state and reads that day from the activity range it already
-holds, which `GET /api/v6/account/usage/activity` answers in UTC days. A 401 starts GitHub sign-in.
-Failures stay on the page with a retry control. The panel can be closed. It shows that day's date,
-input, output, requests, estimated cost, and whether any hour behind it was scanned incompletely,
-with honest empty, partial, and unpriced copy. The dashboard does not repeat the GitHub username in
-the page heading.
+Choosing a day — click, Enter, or Space — opens an inline details panel under the Activity card,
+not a modal, and writes `?day=YYYY-MM-DD` so a refresh keeps it. Close removes the query and
+returns focus to that day's cell. The dashboard owns selected, loading, error, and data state. The
+panel shows that day's UTC date, tokens, input/output, requests, estimated cost and its basis, and
+whether any hour behind it was scanned incompletely, from the activity range it already holds. The
+agent tree is a second read:
+`GET /api/v6/account/usage/activity?from=D&to=D&detail=agents`. Loading uses a skeleton; a failed
+Relay response uses the same retry notice as the rest of the dashboard. An empty `agents` list
+reads **No Usage on this day.** A 401 starts GitHub sign-in. The dashboard does not repeat the
+GitHub username in the page heading.
 
 Quota cards show one subscription, not one upload: an account collected on several Macs is one card
 carrying the reading that still describes it, with the reporting device and the shared freshness
