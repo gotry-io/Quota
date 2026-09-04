@@ -41,15 +41,14 @@ The site has four surfaces:
    the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
    denser web layout. Quota cards share `.quota-grid`: two columns on desktop and one column
    below 620 px. Cursor's Other Models percentage and included-usage dollar amount are separate
-   provider meters: compact Quota cards show only the percentage while retaining the amount in the
-   typed response for a future detail surface. Empty quota states span the full row. Selecting an Activity day loads that
-   day's Usage under the grid. The header shows the GitHub username;
+   provider meters: compact Quota cards show only the percentage; the amount stays in the typed
+   response. Empty quota states span the full row. Activity cells are focusable buttons; they do
+   not yet open a day-details panel. The header shows the GitHub username;
    the name opens `/my`, and its menu
    contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
-   `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
-   Worker starts `GET /api/v6/account/summary` internally, reuses the resolved session,
-   and streams the typed result into the page. The browser fetch is only a development or retry
-   path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
+   `WebDocumentPort.getViewer` on the first HTML byte. The `/my` document is a signed-in shell
+   and carries no Account data. The client fills it once with `GET /api/v6/account/summary`,
+   sending its own IANA timezone as `tz`. Unsigned visits to `/my` are a server redirect to
    `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
    without a session.
 
@@ -128,28 +127,25 @@ toggle in a controls group. The toggle keeps a visible focus ring and a 42 px ta
 The dashboard leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
 cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
-plan names use the English presentation shared with QuotaBar rather than the browser locale.
+partial cost uses a lower bound marker. It reads Last 30 days by default. User-facing dates,
+numbers, units, and plan names use the English presentation shared with QuotaBar rather than the
+browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
 shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
 labels sit on the Sunday-first week that contains that month’s first visible in-range day, then
 are dropped when they would overlap. In-range days are focusable buttons; padding days stay inert.
-Cell fill still maps token volume to highlight levels. Today keeps a distinct ink outline. The
-selected day uses `aria-pressed`. Hover and keyboard focus scale a cell about 1.35× with a raised
-z-index and no layout shift; `prefers-reduced-motion` disables the transition. A visible tooltip
+Cell fill still maps token volume to highlight levels. Today keeps a distinct ink outline. Hover
+and keyboard focus scale a cell about 1.35× with a raised z-index and no layout shift;
+`prefers-reduced-motion` disables the transition. A visible tooltip
 appears immediately on pointer hover and keyboard focus with the full UTC date, token total, and
 API-equivalent estimated cost, including Unpriced and priced-subset-only wording. It is not clipped
 by the graph’s horizontal scroller, does not scale with the cell, and stays inside the viewport so
 it cannot overflow the page. Leave and blur hide it. Narrow viewports scroll the graph horizontally
 so weekday labels stay readable and the page does not overflow.
 
-Choosing a day opens an inline details panel under the Activity card, not a modal. The dashboard
-owns selected, loading, error, and data state and reads that day from the activity range it already
-holds, which `GET /api/v6/account/usage/activity` answers in UTC days. A 401 starts GitHub sign-in.
-Failures stay on the page with a retry control. The panel can be closed. It shows that day's date,
-input, output, requests, estimated cost, and whether any hour behind it was scanned incompletely,
-with honest empty, partial, and unpriced copy. The dashboard does not repeat the GitHub username in
-the page heading.
+Activity cells are focusable buttons with a tooltip; they do not yet open a details panel. A
+day-details panel is planned and is not specified in this file. The dashboard does not repeat the
+GitHub username in the page heading.
 
 Quota cards show one subscription, not one upload: an account collected on several Macs is one card
 carrying the reading that still describes it, with the reporting device and the shared freshness
