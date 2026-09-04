@@ -204,7 +204,6 @@ jobs:
           test -f "$RUNNER_TEMP/export/Quota.ipa"
 
       - name: Upload to App Store Connect
-        if: ${{ secrets.ASC_KEY_ID != '' }}
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
