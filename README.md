@@ -128,6 +128,11 @@ pnpm version:bump:menubar patch  # or minor | major | explicit semver
 
 The marketing version lives in `apps/menubar/Support/Info.plist`.
 
+Quota iOS publishes through an `ios-vX.Y.Z` tag that must match `apps/ios/project.yml`
+`MARKETING_VERSION`. The owner-only workflow archives, exports, and uploads to App Store Connect
+when the secrets listed in [`apps/ios/README.md`](apps/ios/README.md) are set. Signing identities
+are not in git.
+
 ## Current status
 
 The menu bar shows the tightest current subscription Overview still counts as live, and stacks that

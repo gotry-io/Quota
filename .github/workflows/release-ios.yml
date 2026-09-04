@@ -1,0 +1,223 @@
+name: release-ios
+
+# An ios-v* tag archives Quota iOS for App Store Connect and uploads the IPA.
+# Signing identities, provisioning profiles, and the App Store Connect API key stay in
+# repository secrets; they are not in git. Upload is an owner action: missing secrets
+# fail the job before export rather than producing an unsigned archive that looks done.
+on:
+  push:
+    tags: ["ios-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quota-ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen --version
+          xcodebuild -version
+
+      - name: Generate Xcode project
+        run: ./scripts/generate-ios.sh
+
+      - name: Resolve version
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_NAME" != ios-v* ]]; then
+            echo "expected tag ios-v*, got: $REF_NAME" >&2
+            exit 1
+          fi
+          VERSION="${REF_NAME#ios-v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
+            echo "invalid version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate product version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/check-ios-version.sh "$VERSION"
+
+      - name: Require signing and App Store Connect secrets
+        env:
+          IOS_DISTRIBUTION_CERT_P12: ${{ secrets.IOS_DISTRIBUTION_CERT_P12 }}
+          IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+          IOS_PROFILE_APP: ${{ secrets.IOS_PROFILE_APP }}
+          IOS_PROFILE_WIDGETS: ${{ secrets.IOS_PROFILE_WIDGETS }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          check() {
+            local name="$1"
+            local value="$2"
+            if [ -z "$value" ]; then
+              echo "Missing secret ${name}" >&2
+              missing=1
+            fi
+          }
+          check IOS_DISTRIBUTION_CERT_P12 "$IOS_DISTRIBUTION_CERT_P12"
+          check IOS_DISTRIBUTION_CERT_PASSWORD "$IOS_DISTRIBUTION_CERT_PASSWORD"
+          check IOS_PROFILE_APP "$IOS_PROFILE_APP"
+          check IOS_PROFILE_WIDGETS "$IOS_PROFILE_WIDGETS"
+          check ASC_KEY_ID "$ASC_KEY_ID"
+          check ASC_ISSUER_ID "$ASC_ISSUER_ID"
+          check ASC_KEY_P8 "$ASC_KEY_P8"
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure the iOS release secrets listed in apps/ios/README.md." >&2
+            echo "The job stops before export when they are unset." >&2
+            exit 1
+          fi
+
+      - name: Import certificate and provisioning profiles
+        id: signing
+        env:
+          P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+          IOS_PROFILE_APP: ${{ secrets.IOS_PROFILE_APP }}
+          IOS_PROFILE_WIDGETS: ${{ secrets.IOS_PROFILE_WIDGETS }}
+        run: |
+          set -euo pipefail
+          P12_PATH="$RUNNER_TEMP/quota-ios-distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/quota-ios-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          printf '%s' "$P12_BASE64" | base64 -D > "$P12_PATH"
+          chmod 600 "$P12_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "$HOME/Library/Keychains/login.keychain-db"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q 'Apple Distribution'
+
+          PROFILES_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+
+          install_profile() {
+            local b64="$1"
+            local label="$2"
+            local provision="$RUNNER_TEMP/${label}.mobileprovision"
+            local plist="$RUNNER_TEMP/${label}.plist"
+            printf '%s' "$b64" | base64 -D > "$provision"
+            security cms -D -i "$provision" > "$plist"
+            local uuid
+            uuid="$(plutil -extract UUID raw "$plist")"
+            cp "$provision" "$PROFILES_DIR/${uuid}.mobileprovision"
+            local app_id name team bundle
+            app_id="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$plist")"
+            name="$(plutil -extract Name raw "$plist")"
+            team="$(plutil -extract TeamIdentifier.0 raw "$plist")"
+            bundle="$(printf '%s' "$app_id" | sed 's/^[^.]*\.//')"
+            printf '%s\t%s\t%s\n' "$bundle" "$name" "$team"
+          }
+
+          APP_LINE="$(install_profile "$IOS_PROFILE_APP" quota-app)"
+          WIDGETS_LINE="$(install_profile "$IOS_PROFILE_WIDGETS" quota-widgets)"
+          APP_BUNDLE="$(printf '%s' "$APP_LINE" | cut -f1)"
+          APP_NAME="$(printf '%s' "$APP_LINE" | cut -f2)"
+          APP_TEAM="$(printf '%s' "$APP_LINE" | cut -f3)"
+          WIDGETS_BUNDLE="$(printf '%s' "$WIDGETS_LINE" | cut -f1)"
+          WIDGETS_NAME="$(printf '%s' "$WIDGETS_LINE" | cut -f2)"
+          WIDGETS_TEAM="$(printf '%s' "$WIDGETS_LINE" | cut -f3)"
+
+          if [ "$APP_BUNDLE" != io.gotry.quota ]; then
+            echo "IOS_PROFILE_APP bundle is ${APP_BUNDLE}, expected io.gotry.quota" >&2
+            exit 1
+          fi
+          if [ "$WIDGETS_BUNDLE" != io.gotry.quota.widgets ]; then
+            echo "IOS_PROFILE_WIDGETS bundle is ${WIDGETS_BUNDLE}, expected io.gotry.quota.widgets" >&2
+            exit 1
+          fi
+          if [ "$APP_TEAM" != "$WIDGETS_TEAM" ]; then
+            echo "app team ${APP_TEAM} does not match widgets team ${WIDGETS_TEAM}" >&2
+            exit 1
+          fi
+
+          {
+            echo "DEVELOPMENT_TEAM = ${APP_TEAM}"
+            echo "CODE_SIGN_STYLE = Manual"
+            echo "CODE_SIGN_IDENTITY = Apple Distribution"
+            echo "QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER = ${APP_NAME}"
+            echo "QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER = ${WIDGETS_NAME}"
+          } > apps/ios/Local.xcconfig
+
+          {
+            echo "team=$APP_TEAM"
+            echo "app_profile=$APP_NAME"
+            echo "widgets_profile=$WIDGETS_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        env:
+          TEAM_ID: ${{ steps.signing.outputs.team }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project apps/ios/Quota.xcodeproj \
+            -scheme Quota \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/Quota.xcarchive" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution"
+
+      - name: Export
+        env:
+          TEAM_ID: ${{ steps.signing.outputs.team }}
+          APP_PROFILE: ${{ steps.signing.outputs.app_profile }}
+          WIDGETS_PROFILE: ${{ steps.signing.outputs.widgets_profile }}
+        run: |
+          set -euo pipefail
+          EXPORT_PLIST="$RUNNER_TEMP/ExportOptions.plist"
+          cp apps/ios/ExportOptions.plist "$EXPORT_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :teamID '${TEAM_ID}'" "$EXPORT_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:io.gotry.quota '${APP_PROFILE}'" "$EXPORT_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:io.gotry.quota.widgets '${WIDGETS_PROFILE}'" "$EXPORT_PLIST"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Quota.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$EXPORT_PLIST"
+          test -f "$RUNNER_TEMP/export/Quota.ipa"
+
+      - name: Upload to App Store Connect
+        if: ${{ secrets.ASC_KEY_ID != '' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$RUNNER_TEMP/export/Quota.ipa" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"

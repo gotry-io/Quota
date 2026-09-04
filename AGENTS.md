@@ -142,6 +142,7 @@ pnpm test
 pnpm build
 pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
 # Publish: git tag menubar-vX.Y.Z
+# Publish iOS: git tag ios-vX.Y.Z
 ```
 
 main carries the version being developed, not the one last released: after a stable
