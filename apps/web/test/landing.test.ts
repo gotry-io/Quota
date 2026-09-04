@@ -3,11 +3,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { agentDisplayName, BILLING_AGENTS } from "@gotry-io/quota-protocol";
+import { AGENT_DISPLAY_NAMES, PROVIDER_DISPLAY_NAMES } from "../src/lib/providers.ts";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(root, "../src/app.html"), "utf8");
 const landing = readFileSync(join(root, "../src/routes/+page.svelte"), "utf8");
 const install = readFileSync(join(root, "../src/lib/components/InstallOptions.svelte"), "utf8");
+const providers = readFileSync(join(root, "../src/lib/providers.ts"), "utf8");
 const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
@@ -18,6 +21,9 @@ const devices = readFileSync(join(root, "../src/routes/my/devices/+page.svelte")
 const settings = readFileSync(join(root, "../src/routes/my/settings/+page.svelte"), "utf8");
 const accountLayout = readFileSync(join(root, "../src/routes/my/+layout.svelte"), "utf8");
 const accountNav = readFileSync(join(root, "../src/lib/components/AccountNav.svelte"), "utf8");
+const catalog = JSON.parse(
+  readFileSync(join(root, "../../../packages/provider/catalog.json"), "utf8"),
+) as { providers: Array<{ display_name: string; order: number }> };
 
 test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /Know what you have left/);
@@ -49,10 +55,52 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(styles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
 });
 
-test("the hero shows remaining quota, with its reset and how fresh it is", () => {
-  assert.match(landing, /class="provider-list"/);
-  assert.match(landing, /class="quota-track"/);
-  assert.match(landing, /Resets Thu 4:03 PM · Updated 3m ago/);
+test("the hero uses real light and dark screenshots, not a coded mock", () => {
+  assert.equal((landing.match(/<picture>/g) ?? []).length, 2);
+  assert.match(landing, /quotabar-overview-light\.png/);
+  assert.match(landing, /quotabar-overview-dark\.png/);
+  assert.match(landing, /web-overview-light-desktop\.png/);
+  assert.match(landing, /web-overview-dark-desktop\.png/);
+  assert.match(landing, /prefers-color-scheme: dark/);
+  assert.match(landing, /width="640"/);
+  assert.match(landing, /height="960"/);
+  assert.doesNotMatch(landing, /class="provider-list"/);
+  assert.doesNotMatch(landing, /class="quota-track"/);
+});
+
+test("works-with names come from the catalog and billing agents", () => {
+  assert.match(providers, /packages\/provider\/catalog\.json/);
+  assert.match(landing, /PROVIDER_DISPLAY_NAMES/);
+  assert.match(landing, /AGENT_DISPLAY_NAMES/);
+  const catalogNames = catalog.providers
+    .slice()
+    .sort((left, right) => left.order - right.order)
+    .map((provider) => provider.display_name);
+  assert.equal(catalogNames.length, 8);
+  assert.deepEqual(PROVIDER_DISPLAY_NAMES, catalogNames);
+  assert.equal(AGENT_DISPLAY_NAMES.length, 6);
+  assert.deepEqual(
+    AGENT_DISPLAY_NAMES,
+    BILLING_AGENTS.map((agent) => agentDisplayName(agent)),
+  );
+  for (const name of catalogNames) {
+    assert.doesNotMatch(landing, new RegExp(`>${name}<`));
+  }
+});
+
+test("the privacy callout is the documented sentence and links /privacy", () => {
+  assert.match(
+    landing,
+    /Provider credentials, prompts, and local paths never leave your Mac\. Quota uploads remaining\s+quota and privacy-preserving Usage totals only\./,
+  );
+  assert.match(landing, /href="\/privacy"/);
+  assert.match(landing, /Quota for iPhone: coming soon/);
+});
+
+test("the homepage does not advertise an App Store destination", () => {
+  assert.doesNotMatch(landing, /App Store/);
+  assert.doesNotMatch(landing, /apps\.apple\.com/);
+  assert.doesNotMatch(landing, /itunes\.apple\.com/);
 });
 
 test("no surface explains itself in implementation words", () => {

@@ -1,10 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import {
-  accountActivity,
-  accountActivityDay,
+  screenshotAccountActivity,
+  screenshotAccountActivityDay,
   screenshotAccountSummary,
 } from "./account-fixture.ts";
 
@@ -31,11 +31,14 @@ async function mockV6(page: Page): Promise<void> {
     if (url.includes("/api/v6/account/usage/activity")) {
       const asked = new URL(url);
       const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
       const detailed = asked.searchParams.get("detail") === "agents";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
+        body: JSON.stringify(
+          detailed ? screenshotAccountActivityDay(from) : screenshotAccountActivity(from, to),
+        ),
       });
       return;
     }
@@ -65,10 +68,15 @@ for (const appearance of appearances) {
       await mockV6(page);
       await page.goto("/my");
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
-      await expect(page.locator(".quota-card")).toBeVisible();
+      await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
       await expect(page.getByText("Studio Mac").first()).toBeVisible();
+      await expect(page.getByText("Kitchen Mac").first()).toBeVisible();
+      await expect(page.getByText("68%").first()).toBeVisible();
+      await expect(page.getByText("84%").first()).toBeVisible();
+      await expect(page.getByText("53%").first()).toBeVisible();
+      await expect(page.getByText("27%").first()).toBeVisible();
       await shot(page, `web-overview-${appearance}-desktop.png`);
     });
 
@@ -76,8 +84,11 @@ for (const appearance of appearances) {
       await mockV6(page);
       await page.goto("/my/usage");
       await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
-      await expect(page.locator("#token-total")).not.toHaveText("—");
+      await expect(page.locator("#token-total")).toHaveText("11.4M");
+      await expect(page.locator("#cost-total")).toHaveText("$8.50");
+      await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
+      await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
       await shot(page, `web-usage-${appearance}-desktop.png`);
     });
   });
@@ -93,10 +104,11 @@ for (const appearance of appearances) {
       await mockV6(page);
       await page.goto("/my");
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
-      await expect(page.locator(".quota-card")).toBeVisible();
+      await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
       await expect(page.getByText("Studio Mac").first()).toBeVisible();
+      await expect(page.getByText("Kitchen Mac").first()).toBeVisible();
       await shot(page, `web-overview-${appearance}-mobile.png`);
     });
   });

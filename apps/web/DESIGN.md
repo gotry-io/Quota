@@ -134,9 +134,19 @@ choosing System removes it. Do not render three permanent footer buttons.
 
 The hero headline is “Know what you have left.” Its primary action is the QuotaBar `.dmg`
 download and its secondary action scrolls to the product explanation. GitHub sign-in is only
-in the header. The product preview shows what the product is for: representative remaining quota —
-provider, plan, window, percent, meter, reset, and freshness — with one quiet Today line under it.
-It does not lead with a monthly spend figure.
+in the header. The product preview is two real screenshots, not a hand-coded mock: QuotaBar
+overview and the account overview, each with a light and dark asset selected by
+`prefers-color-scheme`. Images declare `width` and `height`. Beside the menu-bar shot at
+840 px and above, the account screenshot is a cropped strip of the desktop capture; below
+840 px it stacks and uses the mobile capture. The shots show remaining quota — provider, plan,
+window, percent, meter, reset, and freshness — and do not lead with a monthly spend figure.
+
+After the hero, a Works with list names every catalog provider and a Usage from list names
+every billing agent; those names come from `packages/provider/catalog.json` and
+`agentDisplayName`, not from a page-local table. A privacy callout states that provider
+credentials, prompts, and local paths never leave the Mac, that Quota uploads remaining quota
+and privacy-preserving Usage totals only, and links `/privacy`. One account copy includes
+“Quota for iPhone: coming soon” as plain text — no App Store badge and no dead store link.
 
 The explanation follows this order:
 
