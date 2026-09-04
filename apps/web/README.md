@@ -49,8 +49,9 @@ its platform, when it was last seen, and when its newest reading was taken, labe
 or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
 rather than broken.
 
-New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, and `schema/`
-need a matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
+New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
+`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, and `schema/` need a
+matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
