@@ -28,7 +28,7 @@ Lock Screen overview widgets. It does not ship the later Usage / Account tab she
 
 ## Shared product vocabulary
 
-Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, and Devices copy follow
+Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, period names, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
 and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
