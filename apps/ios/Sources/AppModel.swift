@@ -34,6 +34,7 @@ final class AppModel {
   private let authenticator: any BrowserSessionAuthenticating
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
+  private let selectionSaltStore: any SelectionSaltStore
   private let backgroundRefresh: any BackgroundRefreshScheduling
   private let alertCoordinator: AlertCoordinator
 
@@ -44,6 +45,11 @@ final class AppModel {
   var isRefreshing = false
   var banner: Banner?
   var expiredMessage: String?
+  var selectedTab: AppTab = .overview
+  /// Selection id from a subscription deep link, held until a summary can name it.
+  var pendingSubscriptionSelection: String?
+  /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
+  var overviewPath: [String] = []
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -54,6 +60,7 @@ final class AppModel {
     account: AccountClient,
     authenticator: any BrowserSessionAuthenticating,
     widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
+    selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore(),
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     alertCoordinator: AlertCoordinator? = nil,
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
@@ -63,6 +70,7 @@ final class AppModel {
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
+    self.selectionSaltStore = selectionSaltStore
     self.backgroundRefresh = backgroundRefresh
     self.alertCoordinator =
       alertCoordinator
@@ -83,6 +91,7 @@ final class AppModel {
       ),
       authenticator: SystemBrowserAuthenticator(),
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
+      selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
       alertCoordinator: AlertCoordinator(
         rulesStore: IOSAlertRulesStore(),
@@ -118,6 +127,7 @@ final class AppModel {
       if let cached {
         publishWidget(summary: cached.summary, fetchedAt: cached.fetchedAt)
       }
+      resolvePendingSubscriptionSelection()
       await refresh()
     } else {
       applySignedOut()
@@ -187,6 +197,38 @@ final class AppModel {
     applySignedOut()
   }
 
+  func openDeepLink(_ url: URL) {
+    selectedTab = .overview
+    if case .subscription(let id) = DeepLink.parse(url) {
+      pendingSubscriptionSelection = id
+      resolvePendingSubscriptionSelection()
+    } else {
+      pendingSubscriptionSelection = nil
+      overviewPath = []
+    }
+  }
+
+  /// When a summary exists, match `pendingSubscriptionSelection` against each subscription's
+  /// salted selection id. A hit pushes that row; a miss stays on Overview and clears pending.
+  /// No summary yet keeps the pending id so a later restore or refresh can answer it.
+  func resolvePendingSubscriptionSelection() {
+    guard let pending = pendingSubscriptionSelection else { return }
+    guard let summary else { return }
+    guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
+    pendingSubscriptionSelection = nil
+    if let match = summary.subscriptions.first(where: {
+      WidgetSnapshotProjection.selectionID(for: $0, salt: salt) == pending
+    }) {
+      overviewPath = [match.key]
+    } else {
+      overviewPath = []
+    }
+  }
+
+  func subscription(forKey key: String) -> QuotaSubscription? {
+    summary?.subscriptions.first { $0.key == key }
+  }
+
   private func apply(_ result: AccountRefreshResult) {
     summary = result.summary
     fetchedAt = result.fetchedAt
@@ -216,6 +258,20 @@ final class AppModel {
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
+    }
+    if phase == .signedIn {
+      resolvePendingSubscriptionSelection()
+      pruneOverviewPath()
+    }
+  }
+
+  private func pruneOverviewPath() {
+    guard let summary else {
+      overviewPath = []
+      return
+    }
+    overviewPath.removeAll { key in
+      !summary.subscriptions.contains { $0.key == key }
     }
   }
 
@@ -255,13 +311,22 @@ final class AppModel {
     banner = nil
     expiredMessage = nil
     phase = .signedOut
+    selectedTab = .overview
+    pendingSubscriptionSelection = nil
+    overviewPath = []
     backgroundRefresh.cancelPendingRefresh()
+    try? selectionSaltStore.clear()
     clearWidget()
     alertCoordinator.clearState()
   }
 
   private func publishWidget(summary: AccountSummary, fetchedAt: Date) {
-    let snapshot = WidgetSnapshotProjection.make(summary: summary, fetchedAt: fetchedAt)
+    guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
+    let snapshot = WidgetSnapshotProjection.make(
+      summary: summary,
+      fetchedAt: fetchedAt,
+      salt: salt
+    )
     try? widgetPublisher.publish(snapshot)
   }
 

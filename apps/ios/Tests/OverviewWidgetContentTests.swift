@@ -42,6 +42,7 @@ struct OverviewWidgetContentTests {
   @Test
   func primaryItemAndMediumItemsPreferMostConstrainedOrder() {
     let first = WidgetQuotaItem(
+      selectionID: "aaaaaaaaaaaa",
       providerID: "codex",
       providerDisplayName: "Codex",
       windowTitle: "5h",
@@ -49,6 +50,7 @@ struct OverviewWidgetContentTests {
       hasLimit: true
     )
     let second = WidgetQuotaItem(
+      selectionID: "bbbbbbbbbbbb",
       providerID: "claude",
       providerDisplayName: "Claude",
       windowTitle: "Weekly",
@@ -56,6 +58,7 @@ struct OverviewWidgetContentTests {
       hasLimit: true
     )
     let third = WidgetQuotaItem(
+      selectionID: "cccccccccccc",
       providerID: "grok",
       providerDisplayName: "Grok",
       windowTitle: "Weekly",
@@ -81,6 +84,7 @@ struct OverviewWidgetContentTests {
   @Test
   func formatsPrimaryRemainingAndTodayCompactLabels() {
     let percentItem = WidgetQuotaItem(
+      selectionID: "0123456789ab",
       providerID: "codex",
       providerDisplayName: "Codex",
       windowTitle: "Weekly",
@@ -96,6 +100,7 @@ struct OverviewWidgetContentTests {
     )
 
     let balanceItem = WidgetQuotaItem(
+      selectionID: "fedcba987654",
       providerID: "openrouter",
       providerDisplayName: "OpenRouter",
       windowTitle: "Balance",
@@ -139,6 +144,7 @@ struct OverviewWidgetContentTests {
     #expect(FreshnessCopy.resetCopy(resetsAt: atInstant, now: now) == nil)
     #expect(FreshnessCopy.resetCopy(resetsAt: past, now: now) == nil)
     let item = WidgetQuotaItem(
+      selectionID: "ccfc96629357",
       providerID: "codex",
       providerDisplayName: "Codex",
       windowTitle: "Weekly",
@@ -152,11 +158,29 @@ struct OverviewWidgetContentTests {
     )
   }
 
+  @Test
+  func subscriptionURLUsesTheSelectionIdPath() {
+    let item = WidgetQuotaItem(
+      selectionID: "ccfc96629357",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "Weekly",
+      remainingPercent: 71,
+      hasLimit: true
+    )
+    #expect(
+      OverviewWidgetContent.subscriptionURL(for: item)
+        == URL(string: "io.gotry.quota:/subscriptions/ccfc96629357")
+    )
+    #expect(OverviewWidgetContent.overviewURL == URL(string: "io.gotry.quota:/overview")!)
+  }
+
   private func makeSnapshot() -> WidgetSnapshot {
     WidgetSnapshot(
       fetchedAt: date("2026-08-14T16:00:00Z"),
       items: [
         WidgetQuotaItem(
+          selectionID: "0123456789ab",
           providerID: "codex",
           providerDisplayName: "Codex",
           windowTitle: "Weekly",
@@ -182,6 +206,7 @@ struct OverviewWidgetContentTests {
 @Test
 func aReportedFailureIsNamedEvenWhenTheReadingStillCarriesAReset() {
   let item = WidgetQuotaItem(
+    selectionID: "0123456789ab",
     providerID: "codex",
     providerDisplayName: "Codex",
     windowTitle: "Weekly",

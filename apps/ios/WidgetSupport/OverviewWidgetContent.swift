@@ -10,6 +10,12 @@ enum OverviewWidgetContent {
   static let overviewURL = URL(string: "io.gotry.quota:/overview")!
   static let refreshInterval: TimeInterval = 15 * 60
 
+  /// Per-item deep link. The widget as a whole (medium/large with several items) still
+  /// opens `overviewURL`.
+  static func subscriptionURL(for item: WidgetQuotaItem) -> URL {
+    URL(string: "io.gotry.quota:/subscriptions/\(item.selectionID)")!
+  }
+
   static func loadSnapshot(
     containerURL: URL? = FileManager.default.containerURL(
       forSecurityApplicationGroupIdentifier: appGroupIdentifier

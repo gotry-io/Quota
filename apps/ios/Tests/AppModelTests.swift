@@ -348,6 +348,31 @@ struct AppModelTests {
     // The pending request outlives the session unless it is cancelled.
     #expect(scheduler.cancelCount == 1)
   }
+
+  @Test
+  func logoutClearsTheSelectionSaltSoTheNextPublishGetsANewOne() async throws {
+    let salt = Data(repeating: 0x11, count: 32)
+    let saltStore = InMemorySelectionSaltStore(salt: salt) {
+      Data(repeating: 0x22, count: 32)
+    }
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+        summaryStore: MemoryAccountSummaryStore(),
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      widgetPublisher: publisher,
+      selectionSaltStore: saltStore
+    )
+
+    #expect(try saltStore.loadOrCreate() == salt)
+    await model.logout()
+    #expect(model.phase == .signedOut)
+    #expect(try saltStore.loadOrCreate() == Data(repeating: 0x22, count: 32))
+  }
 }
 
 @MainActor

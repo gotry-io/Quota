@@ -50,7 +50,7 @@ The canonical documents are [architecture](docs/architecture.md),
 ## Repository layout
 
 ```text
-apps/ios/                 Quota iPhone/iPad SwiftUI account app
+apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI

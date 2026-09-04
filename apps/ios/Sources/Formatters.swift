@@ -51,6 +51,15 @@ enum QuotaFormat {
     FreshnessCopy.updated(since: date, now: now)
   }
 
+  /// The shared observation line: Updated age, or why the reading is not current.
+  static func observation(_ snapshot: QuotaSnapshot, now: Date = Date()) -> String {
+    FreshnessCopy.observation(
+      state: snapshot.observedState(now: now),
+      observedAt: snapshot.observedAt,
+      now: now
+    )
+  }
+
   static func resetTime(
     _ date: Date,
     now: Date = Date(),
@@ -60,8 +69,29 @@ enum QuotaFormat {
     FreshnessCopy.resetCopy(resetsAt: date, now: now, timeZone: timeZone, calendar: calendar)
   }
 
+  /// Live countdown under a day; shared reset copy at a day or more; `nil` once the instant has passed.
+  static func countdown(
+    resetsAt: Date?,
+    now: Date = Date(),
+    timeZone: TimeZone = .current,
+    calendar: Calendar = .current
+  ) -> QuotaResetCountdown? {
+    guard let resetsAt else { return nil }
+    let seconds = resetsAt.timeIntervalSince(now)
+    guard seconds > 0 else { return nil }
+    if seconds < 86_400 {
+      return .live(end: resetsAt)
+    }
+    return resetTime(resetsAt, now: now, timeZone: timeZone, calendar: calendar).map { .copy($0) }
+  }
+
   static func planBadge(_ raw: String?) -> String? {
     PlanDisplay.planBadge(raw)
   }
+}
+
+enum QuotaResetCountdown: Equatable, Sendable {
+  case live(end: Date)
+  case copy(String)
 }
 

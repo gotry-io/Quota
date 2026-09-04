@@ -30,6 +30,9 @@ struct QuotaApp: App {
           #endif
           await model.restore()
         }
+        .onOpenURL { url in
+          model.openDeepLink(url)
+        }
     }
   }
 }

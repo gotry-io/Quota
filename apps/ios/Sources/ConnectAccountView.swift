@@ -18,10 +18,12 @@ struct ConnectAccountView: View {
               .accessibilityAddTraits(.isHeader)
 
             Text(
-              "See remaining quota and Today Usage for the GitHub Account you already use on Mac or Linux."
+              "See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on your Mac."
             )
             .font(.body)
-            .foregroundStyle(.secondary)
+            // .secondary and vibrant .primary both fail the contrast audit on the glass
+            // surface; an explicit label color opts out of vibrancy.
+            .foregroundStyle(Color(uiColor: .label))
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
           }
@@ -49,7 +51,7 @@ struct ConnectAccountView: View {
           .accessibilityLabel("Connect Account")
           .accessibilityHint("Opens a browser to sign in with GitHub.")
 
-          Text("This iPhone or iPad does not collect local usage or upload snapshots.")
+          Text("This iPhone does not collect local usage or upload snapshots.")
             .font(.footnote)
             .foregroundStyle(.tertiary)
             .multilineTextAlignment(.center)
@@ -65,6 +67,7 @@ struct ConnectAccountView: View {
       .padding(.horizontal, QuotaTheme.contentGutter)
       .frame(maxWidth: .infinity)
     }
+    .accessibilityIdentifier("connect.root")
     .navigationBarTitleDisplayMode(.inline)
   }
 

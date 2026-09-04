@@ -238,7 +238,9 @@ Device fields and returns only an account session: it is not a collection Device
 `packages/apple-client` and fetches `GET /api/v6/account/summary`. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
-`group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file.
+`group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may
+carry a locally salted `selection_id`; the salt stays in the app-private Keychain and is never
+written to the App Group.
 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
@@ -312,10 +314,11 @@ or a report.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
   client, account session refresh/revoke, the last-good Account summary cache, and the
   Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios` owns SwiftUI,
-  `ASWebAuthenticationSession`, App Group snapshot publish/clear, and the WidgetKit extension; its
-  views do not call `URLSession` or Security or decode JSON. `QuotaWidgets` depends only on
-  `QuotaWidgetData` and `QuotaPresentation`, and must not import `QuotaWire`, `QuotaRelay`,
-  `QuotaAccount`, or Security, or use `URLSession` or Keychain.
+  `ASWebAuthenticationSession`, App Group snapshot publish/clear, the app-private selection-salt
+  Keychain item, and the WidgetKit extension; its views do not call `URLSession` or Security or
+  decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`, and must
+  not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or
+  Keychain.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
 - `packages/quota-model` and `packages/relay-core` are runtime-neutral TypeScript for Relay and Web;

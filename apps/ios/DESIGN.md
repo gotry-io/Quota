@@ -6,14 +6,14 @@ belongs in `apps/menubar/DESIGN.md`.
 
 ## Product character
 
-Quota on iPhone and iPad is a read-only Account instrument: remaining quota first, Today Usage
+Quota on iPhone is a read-only Account instrument: remaining quota first, Today Usage
 second, GitHub identity as context. It uses native SwiftUI, system materials, and a restrained
 emerald accent. It is not a compressed website and not the QuotaBar menu panel.
 
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect Account and Log Out are the only account actions in this slice.
+2. Connect Account and Log Out are the only account actions.
 3. Last-good Account data stays visible across transient failures. A banner states that in words,
    not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
@@ -22,9 +22,6 @@ Core rules:
    dark appearance.
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
-
-This slice is Connect Account → Overview, including a read-only Devices card, plus Home Screen /
-Lock Screen overview widgets. It does not ship the later Usage / Account tab shell.
 
 ## Shared product vocabulary
 
@@ -40,7 +37,11 @@ through `QuotaAlerts`.
 
 ```text
 Connect Account
-Overview
+TabView
+  Overview
+  Usage
+  Devices
+  Settings
 Widget overview (small, medium, circular, rectangular)
 ```
 
@@ -49,7 +50,8 @@ Widget overview (small, medium, circular, rectangular)
 Shown when no Keychain account session exists, including after logout and after an expired refresh.
 
 - Product name **Quota**.
-- One sentence: remaining quota and Today Usage for the signed-in GitHub Account.
+- One sentence: **See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on
+  your Mac.**
 - Primary action **Connect Account**.
 - Quiet note that this device does not collect or upload local usage.
 - Optional status line after an expired session: **Session expired. Connect Account to continue.**
@@ -69,8 +71,6 @@ refresh of Today.
 Header:
 
 - Title is the account display label, or **Account** when the label is absent.
-- Trailing **Log Out** uses a native confirmation: remote Account data remains; this device forgets
-  the session.
 
 Body, in order:
 
@@ -79,17 +79,18 @@ Body, in order:
    Dynamic Type keeps a single-line horizontal row; accessibility sizes stack label and age
    vertically with full wrapping (no one-line ellipsis). VoiceOver reads the full label and the
    same line.
-3. Provider quota cards in catalog order. Each observation shows provider name, optional account
-   label and plan, remaining value as the strongest number, one meter per percent window, and reset
-   time. A reading that is not current names why in place of, or ahead of, that reset time, because
-   the reset it names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**,
-   or **Can’t refresh** for a state its device reported, and **Not current** for one that aged past
-   its `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or "remaining"
-   suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
-   balance-only windows use **Balance** plus the unit amount.
-4. Devices: display name, an **Active** / **Idle** / **Not reporting** verdict, and one line of
-   platform plus the age that verdict came from. Never infer failure from sleep, shutdown, or a
-   closed app, and never show raw Device IDs or request a remote Device's credentials.
+3. Provider quota cards in catalog order, one card per subscription. Each observation shows
+   provider name, optional account label and plan, remaining value as the strongest number, one
+   meter per percent window, and reset time. The whole card opens subscription detail. A reading
+   that is not current names why in place of, or ahead of, that reset time, because the reset it
+   names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
+   refresh** for a state its device reported, and **Not current** for one that aged past its
+   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or
+   "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use
+   `71%`, and balance-only windows use **Balance** plus the unit amount.
+4. Devices: when `summary.devices` is empty, the Mac setup card. When it has devices, a compact
+   summary of display names and **Active** / **Idle** / **Not reporting** verdicts. The full list
+   lives on the Devices tab.
 5. Today: tokens and API-equivalent cost as the headline — the same one QuotaBar and the website
    show — then input and output as supporting detail. Complete cost is `$X.XX`, partial is
    `≥ $X.XX`, unavailable is **— unpriced**.
@@ -98,6 +99,22 @@ Pull to refresh runs one Today fetch. A fetch in flight ignores additional refre
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
 then provider/window, then support ages). Do not copy Nowdex assets or layout chrome.
+
+### Subscription detail
+
+Opened from an Overview quota card, and from `io.gotry.quota:/subscriptions/<selection_id>` when
+that id matches a current subscription. An unmatched selection stays on Overview.
+
+The title is the provider display name. The body is the masked account label and plan, the shared
+freshness line, each window's remaining value, meter, and reset countdown, then one row per
+reporting device.
+
+A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
+later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
+
+Each device row is that device's display name (or **Device** when the name is missing), the primary
+remaining figure from that source, and freshness. The source whose reading is the one on the card
+is marked **Reporting**. The page never shows a device id, fingerprint, or subscription key.
 
 ### Widget overview
 
@@ -124,11 +141,43 @@ Shared rules:
   system material fallback applies.
 - When a window's reset instant is at or before the entry date, the widget prints no Resets line,
   matching the shared reset copy.
-- `widgetURL` is `io.gotry.quota:/overview`.
+- Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
+  widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole.
 - Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
   safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
   extension never fetches. The app republishes the snapshot on a foreground refresh and on a
   background app refresh it asks for no sooner than every thirty minutes.
+
+### Usage
+
+Placeholder: navigation title **Usage** and **Usage detail arrives with the next update.**
+
+### Devices
+
+The Account's collection devices: display name, an **Active** / **Idle** / **Not reporting**
+verdict, and one line of platform plus the age that verdict came from. Never infer failure from
+sleep, shutdown, or a closed app, and never show raw Device IDs or request a remote Device's
+credentials. Empty state shows the Mac setup card rather than hiding the section. A trailing
+**Manage devices on the web** link opens `https://quota.gotry.io/my`.
+
+### Settings
+
+Placeholder rows for **Notifications**, **Appearance**, and **About**. Trailing **Log Out** uses a
+native confirmation: remote Account data remains; this device forgets the session.
+
+### Mac setup
+
+Shown on Overview and Devices when `summary.devices` is empty. Title **Set up a Mac**. One sentence:
+**Quota shows what QuotaBar on your Mac reports. Install it on a Mac signed in with the same GitHub
+account.** A `Link` to `https://quota.gotry.io/download` and a QR code generated locally with
+CoreImage `CIQRCodeGenerator` for that same URL. No network.
+
+### Deep links
+
+`io.gotry.quota:/overview` opens Overview. `io.gotry.quota:/subscriptions/<selection_id>` records the
+selection, opens Overview, and pushes the matching subscription detail when the Account summary can
+name it. An unmatched or unknown id stays on Overview. `selection_id` is twelve lowercase hex digits
+after percent-decoding. Any other URL returns to Overview.
 
 ## Liquid Glass (main app)
 
@@ -142,6 +191,7 @@ Progressive behavior:
 | Semantic cards, banners, Connect panel | `glassEffect(.regular, in: continuous 16pt shape)` | `.regularMaterial` in the same continuous shape |
 | Primary button | `.glassProminent` with emerald tint | `.borderedProminent` with emerald tint |
 | Navigation / toolbar | System navigation chrome | System navigation chrome |
+| Tab bar | System TabView | System TabView |
 
 Rules:
 
@@ -157,7 +207,7 @@ Rules:
 | State | Presentation |
 | --- | --- |
 | Loading, no cache | Centered progress and **Loading account…** |
-| Empty quota | **No quota reported yet.** Collection happens on a Mac or Linux device. |
+| Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
 | Empty Today | **No Usage for Today.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
@@ -174,7 +224,7 @@ A banner always includes a symbol and a sentence. Color never carries status alo
 Use the system grouped background (under the ambient wash) and semantic text styles (`largeTitle` /
 `title2` for remaining values, `headline` for provider names, `subheadline` and `footnote` for
 support). Cards are continuous 16pt corners. Content has a readable measure: 20pt horizontal gutter
-and a maximum 720pt column on iPad.
+and a maximum 720pt column.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt. Dynamic Type may wrap every
 label; do not clip remaining values. Accessibility text sizes and widget no-data layouts must keep
@@ -201,11 +251,15 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect Account, loading, signed-in content, empty quota/Today, cached content with a
-refresh banner, expired session, and each widget family in placeholder, content, and no-data
-states. Check iPhone and iPad, light and dark, standard and accessibility text sizes, VoiceOver
-labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
-contain access tokens, refresh tokens, or production data.
+Inspect Connect Account, loading, signed-in content, empty quota/Today, no-devices Mac setup, cached
+content with a refresh banner, expired session, the four tabs, subscription detail (windows,
+countdown, Reporting row), and each widget family in placeholder, content, and no-data states.
+Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver labels, and Reduce
+Motion. Synthetic fixtures may contain display labels only; they must never contain access tokens,
+refresh tokens, or production data.
+
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, and
+`subscription-detail` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -216,14 +270,16 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
+--visual-fixture no-devices
 ```
 
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect Account, no session restore |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No Usage for Today.** |
+| `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
 access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time

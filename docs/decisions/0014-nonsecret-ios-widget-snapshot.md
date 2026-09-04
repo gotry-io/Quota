@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-14
 - Related: [ADR 0013](./0013-readonly-ios-account-client.md)
+- Updated 2026-09-04: locally salted `selection_id`; unpublished v2 shape changes in place
 
 ## Context
 
@@ -22,9 +23,10 @@ Relay.
   and projects Account summary data into `WidgetSnapshot`.
 - The snapshot is written with
   `ProtectedFileWidgetSnapshotStore` (`completeFileProtectionUntilFirstUserAuthentication`, atomic
-  replace, excluded from backup). It contains display-oriented remaining quota and Today token/cost
-  fields only. It never includes account ids, device ids, fingerprints, tokens, sequences, or raw
-  sources.
+  replace, excluded from backup). It contains display-oriented remaining quota, Today token/cost
+  fields, and a locally salted `selection_id` per item. It never includes account ids, device ids,
+  fingerprints, tokens, sequences, raw sources, account display labels, or the unsalted
+  subscription selector. Widget Intent configuration is not stored in the snapshot.
 - The extension target `QuotaWidgets` (`io.gotry.quota.widgets`) embeds in Quota, uses the same App
   Group, and depends only on `QuotaWidgetData` and `QuotaPresentation`. It must not import or link
   `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
@@ -37,10 +39,18 @@ Relay.
   re-draws on its own timeline and applies the shared rule at the instant it renders, exactly as the
   app does; a published verdict would freeze at publish time and keep claiming a sleeping device's
   counters are current. That shape is snapshot version 2, and a version 1 file is rejected by the
-  version gate so the app republishes.
+  version gate so the app republishes. iOS has not shipped, so `selection_id` joins version 2 in
+  place rather than as a new version; a file missing it is rejected and the app republishes.
+- Each item's `selection_id` is the first twelve lowercase hex characters of
+  SHA-256(`SubscriptionSelector` ‖ "|" ‖ salt). The 32-byte salt is generated on first use, stored
+  in the app-private Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not an App
+  Group item), and deleted on logout. Regenerating the salt invalidates old deep links and widget
+  Intent configuration, which fall back to Overview. The App Group file sees only the irreversible
+  `selection_id`.
 - Missing, corrupt, or oversize snapshot files degrade to a safe no-data presentation. Logout,
   expired session, and absence of a trusted summary clear the published file and reload timelines.
-- `widgetURL` opens `io.gotry.quota:/overview` so taps return to the app Overview.
+- Each item opens `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large widget with
+  more than one item keeps `io.gotry.quota:/overview` for the widget as a whole.
 
 ## Consequences
 
@@ -51,4 +61,4 @@ Relay.
 - Presentation text reuses `packages/apple-shared` formatters; snapshot encode/decode and the
   protected file store live in `QuotaWidgetData`.
 - Future secret-bearing widget features would need a new decision. This ADR does not authorize
-  tokens, account identifiers, or network inside the extension.
+  tokens, account identifiers, the installation salt, or network inside the extension.

@@ -24,9 +24,9 @@ Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 Quota iOS is not a collection Device. It does not configure Providers, collect local logs, upload
-snapshots or Usage, or add `ios` to `PlatformSchema`. Overview lists the collection Devices with
-their platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
-credentials for them. See
+snapshots or Usage, or add `ios` to `PlatformSchema`. The Devices tab lists the collection Devices
+with their platform and how recently each one spoke — Active, Idle, or Not reporting — without
+requesting credentials for them. See
 [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
@@ -69,8 +69,25 @@ Xcode project. Do not add a third-party package manager. The app has no Sparkle,
 analytics, or App Store upload workflow.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and, when an iPhone 17 Pro simulator is
-available, the Quota iOS unit tests. `pnpm build:ios` builds for the generic iOS Simulator. These
-commands are not part of root `pnpm test` or `pnpm build`.
+available, the Quota scheme tests (`QuotaTests` and `QuotaUITests`). `pnpm build:ios` builds for the
+generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm build`.
+
+### UI tests
+
+`QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
+`overview.root` / `overview.today` for `content`, opens the first quota card for
+`subscription-detail`, the Mac setup card for `no-devices`, and the
+Connect Account control for `signed-out`, and runs an iOS 17+ accessibility audit on each. Log Out
+is on the Settings tab.
+
+```bash
+./scripts/ios-ui-screenshots.sh
+```
+
+That script runs only `QuotaUITests`, writes `dist/ios-ui.xcresult`, and exports PNG attachments to
+`dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the first available
+iPhone from `xcrun simctl list devices available -j`. Screenshot artifacts are for local visual QA
+and are not part of CI.
 
 ### DEBUG visual fixtures
 
@@ -79,7 +96,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | content | cached-error | empty
+# Values: signed-out | content | cached-error | empty | no-devices
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

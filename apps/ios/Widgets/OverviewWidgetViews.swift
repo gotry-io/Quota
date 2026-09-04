@@ -10,37 +10,40 @@ struct OverviewSmallView: View {
     if entry.isPlaceholder {
       placeholder
     } else if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(OverviewWidgetContent.remainingLabel(for: item))
-          .font(.title2.monospacedDigit().weight(.semibold))
-          .foregroundStyle(.primary)
-          .widgetAccentable()
-          .minimumScaleFactor(0.65)
-          .lineLimit(1)
-        Text(item.providerDisplayName)
-          .font(.subheadline.weight(.medium))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Text(item.windowTitle)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
-        Spacer(minLength: 0)
-        supportLine(item: item, fetchedAt: entry.snapshot?.fetchedAt)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .lineLimit(2)
-          .minimumScaleFactor(0.85)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        OverviewWidgetContent.itemAccessibility(
-          item: item,
-          fetchedAt: entry.snapshot?.fetchedAt,
-          now: entry.date
+      Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(OverviewWidgetContent.remainingLabel(for: item))
+            .font(.title2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.primary)
+            .widgetAccentable()
+            .minimumScaleFactor(0.65)
+            .lineLimit(1)
+          Text(item.providerDisplayName)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Text(item.windowTitle)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+          Spacer(minLength: 0)
+          supportLine(item: item, fetchedAt: entry.snapshot?.fetchedAt)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(2)
+            .minimumScaleFactor(0.85)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+          OverviewWidgetContent.itemAccessibility(
+            item: item,
+            fetchedAt: entry.snapshot?.fetchedAt,
+            now: entry.date
+          )
         )
-      )
+      }
+      .widgetURL(OverviewWidgetContent.subscriptionURL(for: item))
     } else {
       noData
     }
@@ -109,8 +112,11 @@ struct OverviewMediumView: View {
         HStack(alignment: .top, spacing: 12) {
           ForEach(Array(OverviewWidgetContent.mediumItems(from: snapshot).enumerated()), id: \.offset)
           { _, item in
-            itemColumn(item: item)
-              .frame(maxWidth: .infinity, alignment: .leading)
+            Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+              itemColumn(item: item)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .widgetURL(OverviewWidgetContent.subscriptionURL(for: item))
           }
         }
         footer(snapshot: snapshot)
@@ -194,20 +200,23 @@ struct OverviewCircularView: View {
 
   var body: some View {
     if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot), !entry.isPlaceholder {
-      Group {
-        if OverviewWidgetContent.isBalanceOnly(item) {
-          balanceContent(item)
-        } else {
-          percentGauge(item)
+      Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+        Group {
+          if OverviewWidgetContent.isBalanceOnly(item) {
+            balanceContent(item)
+          } else {
+            percentGauge(item)
+          }
         }
-      }
-      .accessibilityLabel(
-        OverviewWidgetContent.itemAccessibility(
-          item: item,
-          fetchedAt: entry.snapshot?.fetchedAt,
-          now: entry.date
+        .accessibilityLabel(
+          OverviewWidgetContent.itemAccessibility(
+            item: item,
+            fetchedAt: entry.snapshot?.fetchedAt,
+            now: entry.date
+          )
         )
-      )
+      }
+      .widgetURL(OverviewWidgetContent.subscriptionURL(for: item))
     } else {
       ZStack {
         AccessoryWidgetBackground()
@@ -252,36 +261,39 @@ struct OverviewRectangularView: View {
 
   var body: some View {
     if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot), !entry.isPlaceholder {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(OverviewWidgetContent.remainingLabel(for: item))
-          .font(.headline.monospacedDigit().weight(.semibold))
-          .widgetAccentable()
-          .lineLimit(1)
-          .minimumScaleFactor(0.65)
-        Text("\(item.providerDisplayName) · \(item.windowTitle)")
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.85)
-        if let resetsAt = item.resetsAt,
-          let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
-        {
-          Text(reset)
+      Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(OverviewWidgetContent.remainingLabel(for: item))
+            .font(.headline.monospacedDigit().weight(.semibold))
+            .widgetAccentable()
+            .lineLimit(1)
+            .minimumScaleFactor(0.65)
+          Text("\(item.providerDisplayName) · \(item.windowTitle)")
             .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .minimumScaleFactor(0.85)
+          if let resetsAt = item.resetsAt,
+            let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+          {
+            Text(reset)
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+              .minimumScaleFactor(0.85)
+          }
         }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        OverviewWidgetContent.itemAccessibility(
-          item: item,
-          fetchedAt: entry.snapshot?.fetchedAt,
-          now: entry.date
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+          OverviewWidgetContent.itemAccessibility(
+            item: item,
+            fetchedAt: entry.snapshot?.fetchedAt,
+            now: entry.date
+          )
         )
-      )
+      }
+      .widgetURL(OverviewWidgetContent.subscriptionURL(for: item))
     } else {
       VStack(alignment: .leading, spacing: 2) {
         Text("Quota")
@@ -307,6 +319,7 @@ private enum OverviewWidgetPreviewFixtures {
     fetchedAt: now.addingTimeInterval(-900),
     items: [
       WidgetQuotaItem(
+        selectionID: "aaaaaaaaaaaa",
         providerID: "codex",
         providerDisplayName: "Codex",
         windowTitle: "5 Hours",
@@ -315,6 +328,7 @@ private enum OverviewWidgetPreviewFixtures {
         resetsAt: now.addingTimeInterval(2_700)
       ),
       WidgetQuotaItem(
+        selectionID: "bbbbbbbbbbbb",
         providerID: "claude",
         providerDisplayName: "Claude Code",
         windowTitle: "5 Hours",
@@ -323,6 +337,7 @@ private enum OverviewWidgetPreviewFixtures {
         resetsAt: now.addingTimeInterval(7_200)
       ),
       WidgetQuotaItem(
+        selectionID: "cccccccccccc",
         providerID: "openrouter",
         providerDisplayName: "OpenRouter",
         windowTitle: "Balance",
