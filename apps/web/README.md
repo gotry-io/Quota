@@ -64,5 +64,11 @@ New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`
 `apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, and `schema/` need a
 matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
 
+Public pages `/download`, `/support`, `/privacy`, and `/terms` are SvelteKit routes. Support,
+Privacy, and Terms copy lives in `src/content/*.md` and is rendered by `src/lib/markdown.ts`
+(headings through `###`, paragraphs, `-` lists, `**bold**`, inline code, `>` quotes, and `http(s)`
+or same-site `/` links only; raw HTML is escaped). Privacy and Terms show a Draft label until
+review removes it.
+
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).

@@ -1,17 +1,7 @@
 <script lang="ts">
+import InstallOptions from "$lib/components/InstallOptions.svelte";
+
 const brewCommand = "brew install gotry-io/tap/quotabar";
-
-let copied = $state(false);
-let copiedReset: ReturnType<typeof setTimeout> | undefined;
-
-async function copyBrew(): Promise<void> {
-  await navigator.clipboard.writeText(brewCommand);
-  copied = true;
-  clearTimeout(copiedReset);
-  copiedReset = setTimeout(() => {
-    copied = false;
-  }, 1600);
-}
 </script>
 
 <svelte:head>
@@ -38,31 +28,9 @@ async function copyBrew(): Promise<void> {
         QuotaBar shows remaining Codex, Claude, Grok, Cursor, and API-key quota from the menu bar.
         Usage stays on your machines unless you sync an account.
       </p>
-      <div class="hero-actions">
-        <a
-          class="button button-primary"
-          href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
-          >Download QuotaBar .dmg</a
-        >
+      <InstallOptions>
         <a class="button button-secondary" href="#product">See how it works</a>
-      </div>
-      <div class="install-panel">
-        <div class="install-copy">
-          <p class="install-label">Homebrew</p>
-          <p class="install-note">Install or update QuotaBar from the tap.</p>
-        </div>
-        <div class="brew-row">
-          <code id="brew-install">{brewCommand}</code>
-          <button
-            class="button button-secondary install-copy-button"
-            type="button"
-            onclick={() => void copyBrew()}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <span class="visually-hidden" aria-live="polite">{copied ? "Copied" : ""}</span>
-        </div>
-      </div>
+      </InstallOptions>
       <p class="release-note">Apple Silicon · Open source · GitHub is the only sign-in</p>
     </div>
 

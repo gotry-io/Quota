@@ -1,5 +1,10 @@
 import type { WebDocumentPort, WebDocumentViewer } from "$lib/server/document-port";
 
+declare module "*.md?raw" {
+  const markdown: string;
+  export default markdown;
+}
+
 declare global {
   namespace App {
     interface Locals {

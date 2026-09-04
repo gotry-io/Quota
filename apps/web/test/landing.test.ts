@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(root, "../src/app.html"), "utf8");
 const landing = readFileSync(join(root, "../src/routes/+page.svelte"), "utf8");
+const install = readFileSync(join(root, "../src/lib/components/InstallOptions.svelte"), "utf8");
 const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
@@ -15,14 +16,16 @@ const dashboard = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf
 
 test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /Know what you have left/);
-  assert.match(landing, /Download QuotaBar \.dmg/);
+  assert.match(landing, /InstallOptions/);
+  assert.match(install, /Download QuotaBar \.dmg/);
   assert.match(
-    landing,
+    install,
     /https:\/\/github.com\/gotry-io\/Quota\/releases\/latest\/download\/QuotaBar-macos-arm64.dmg/,
   );
+  assert.match(install, /brew install gotry-io\/tap\/quotabar/);
+  assert.match(install, /aria-live="polite"/);
+  assert.match(install, /copied \? "Copied" : "Copy"/);
   assert.match(landing, /brew install gotry-io\/tap\/quotabar/);
-  assert.match(landing, /aria-live="polite"/);
-  assert.match(landing, /copied \? "Copied" : "Copy"/);
   assert.match(header, /Continue with GitHub/);
   assert.match(header, /id="header-account"/);
   assert.doesNotMatch(header, /ThemeToggle/);
