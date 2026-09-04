@@ -25,6 +25,7 @@ struct VisualFixtureParserTests {
       ("connect-error", VisualFixture.connectError),
       ("expired", VisualFixture.expired),
       ("confirm-account", VisualFixture.confirmAccount),
+      ("connect-refresh-failed", VisualFixture.connectRefreshFailed),
       ("loading", VisualFixture.loading),
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
@@ -94,6 +95,16 @@ struct VisualFixtureParserTests {
       #expect(model.phase == .confirmingAccount(label: "octocat"))
       #expect(model.summary?.account.displayLabel == "octocat")
       #expect(model.banner == nil)
+    }
+
+    @Test
+    func connectRefreshFailedShowsRetryCopyWithoutConfirmation() {
+      let model = AppModel.visualFixture(
+        .connectRefreshFailed, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .pendingRefreshFailed)
+      #expect(model.banner?.text == "Could not reach quota.gotry.io.")
+      #expect(model.expiredMessage == nil)
     }
 
     @Test

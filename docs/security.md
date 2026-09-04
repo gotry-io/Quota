@@ -113,9 +113,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   false`) so GitHub can finish Relay's browser round trip; the GitHub login state is the system
   browser's, not an in-app cookie jar, which is why the app confirms the Account `display_label`
   before keeping the session and why switching accounts uses an ephemeral sheet. The Quota
-  session is one Keychain item with
-  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, UserDefaults holds UI preferences only, and the
-  client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
+  session is one Keychain item with `activation: pending | active` and
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; a pending record may identify the account but
+  is not a signed-in session until Continue promotes it. UserDefaults holds UI preferences only,
+  and the client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
   summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
   the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
   iOS alert dedup file (`Application Support/alert-state.json`) and pending reset reminders hold

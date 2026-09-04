@@ -311,9 +311,74 @@ struct AccountClientTests {
     )!
     let session = try await client.completeLogin(callback: callback, expected: attempt)
     #expect(session.accessToken == Fixtures.accessToken)
+    #expect(session.activation == .pending)
+    #expect(try sessions.load()?.activation == .pending)
     #expect(try cache.load() == nil)
     #expect(transport.tokenPosts == 1)
     #expect(transport.recordedURLs.first?.path == "/oauth/v2/token")
+  }
+
+  @Test
+  func activateSessionPromotesPendingAndLeavesActiveUnchanged() async throws {
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session(activation: .pending))
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport([])),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    try await client.activateSession()
+    #expect(try sessions.load()?.activation == .active)
+    try await client.activateSession()
+    #expect(try sessions.load()?.activation == .active)
+  }
+
+  @Test
+  func activateSessionWithoutARecordIsNotSignedIn() async throws {
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport([])),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    await #expect(throws: AccountClientError.notSignedIn) {
+      try await client.activateSession()
+    }
+  }
+
+  @Test
+  func tokenRotationPreservesPendingActivation() async throws {
+    let summary = try Fixtures.accountSummaryJSON()
+    let transport = ScriptedTransport([
+      .init(status: 401, body: try Fixtures.errorBody(code: "unauthorized")),
+      .init(status: 200, body: try Fixtures.refreshResponse()),
+      .init(status: 200, body: summary),
+    ])
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session(activation: .pending))
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let result = await client.fetchTodaySummary()
+    #expect(result.error == nil)
+    #expect(try sessions.load()?.accessToken == Fixtures.rotatedAccess)
+    #expect(try sessions.load()?.activation == .pending)
+  }
+
+  @Test
+  func persistedSessionRequiresActivation() throws {
+    let encoded = try WireCodec.encode(Fixtures.session())
+    let object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    #expect(object["activation"] as? String == "active")
+    let decoded = try WireCodec.decode(AccountSession.self, from: encoded)
+    #expect(decoded.activation == .active)
+
+    var missing = object
+    missing.removeValue(forKey: "activation")
+    let stripped = try JSONSerialization.data(withJSONObject: missing)
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(AccountSession.self, from: stripped)
+    }
   }
 
   @Test
@@ -392,9 +457,10 @@ struct AccountClientTests {
         "/api/v6/account/usage/activity",
       ])
     #expect(transport.recordedIfNoneMatch == [nil, nil, nil])
-    let activityQuery = URLComponents(
-      url: transport.recordedURLs[0], resolvingAgainstBaseURL: false
-    )?.queryItems ?? []
+    let activityQuery =
+      URLComponents(
+        url: transport.recordedURLs[0], resolvingAgainstBaseURL: false
+      )?.queryItems ?? []
     #expect(activityQuery.map(\.name) == ["from", "to", "detail"])
     #expect(activityQuery.last?.value == "agents")
   }

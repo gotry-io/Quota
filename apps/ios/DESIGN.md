@@ -54,11 +54,22 @@ iOS 26 `Tab` initializer and `tabBarMinimizeBehavior(.onScrollDown)`. There is n
 
 ### Connect Account
 
-Shown when no Keychain account session exists, including after logout and after an expired refresh.
+Shown when no Keychain account session exists, including after logout and after an expired refresh,
+and while a session is still `pending` (issued but not confirmed).
 
-- A 56-point Quota app mark. It is content, not glass.
+The Keychain record is one session with `activation: pending | active`. `completeLogin` writes
+`pending`. A pending session may fetch the identifying Account summary. `restore()` of a pending
+session returns to this confirmation flow (or its first-refresh failure state) and never to the
+signed-in tabs. **Continue** is the only promotion of that same session to `active`. **Use a
+different account** and Log Out revoke and clear either state.
+
+- A 56-point Quota app mark, shared with confirmation. It is content, not glass. The glyph fills
+  the 56-point frame.
 - Primary action **Connect with GitHub**. Connecting: **Connecting…** with an inline ProgressView,
-  disabled. Minimum hit height 50pt. `buttonStyle(.glassProminent)` and the emerald tint.
+  disabled. Minimum hit height 50pt. Idle uses `buttonStyle(.glassProminent)` and the emerald tint.
+  Connecting uses neutral system `.glass` with explicit label-color foreground so the spinner and
+  **Connecting…** stay readable. The accessibility label stays **Connect with GitHub**; the value
+  is **Connecting** and the control is not actionable.
 - Footnote: **This iPhone only reads data reported by QuotaBar.**
 - No product title, value-proposition paragraph, card, banner container, or raw URL.
 - Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
@@ -71,22 +82,27 @@ an account already signed in in Safari; the session lives in the system browser,
 The system sheet owns cancel and is the connecting progress presentation. Cancellation returns to
 the normal signed-out state without an error. The app never embeds a web view.
 
-After Relay issues a session and the first Account refresh names `summary.account.displayLabel`,
-the app does not open the signed-in tabs. It replaces Connect content on the same signed-out
-screen:
+After Relay issues a session the first Account refresh must succeed and name a non-blank
+`summary.account.displayLabel` before confirmation is constructed. The app does not open the
+signed-in tabs. It replaces Connect content on the same signed-out screen:
 
-- The 56-point Quota app mark.
+- The 56-point Quota app mark (the same view Connect uses).
 - Title **Use this GitHub account?** (`title2` semibold).
 - Body **Connected as `<label>`.** with the label in bold.
-- Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — enters the signed-in
-  tabs.
+- Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — promotes the pending
+  session to `active` and enters the signed-in tabs.
 - Secondary **Use a different account** (`.bordered`) — revokes the session just opened and starts
   Connect with GitHub again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a
   login page. That second success confirms the same way.
 
+If that first refresh fails, the session stays `pending`. Connect is replaced by **Retry** (repeats
+the identifying read) and **Use a different account**. Continue is not shown, and the app does not
+invent a generic **Account** identity. A 401 or expired result revokes the pending session and
+shows the expired connect copy.
+
 There is no sheet, card, `presentationDetents`, or `glassEffect` on the title or body. Layout is a
 vertically centered, scroll-safe column with a maximum content width of 320 points and system
-safe-area padding. Hit targets stay at least 44pt (Connect and Continue 50pt).
+safe-area padding. Hit targets stay at least 44pt (Connect, Retry, and Continue 50pt).
 
 Connect failures use a specific sentence when one is known, otherwise the default retry:
 
@@ -95,11 +111,12 @@ Connect failures use a specific sentence when one is known, otherwise the defaul
 | Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
 | Network (`unavailable` / timeout) | **Could not reach quota.gotry.io.** |
 | Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
+| Malformed summary or blank `displayLabel` | **Couldn't connect. Try again.** |
 | Anything else | **Couldn't connect. Try again.** |
 
 ### Overview
 
-Shown when a session exists. Content comes from the last complete Account summary, then from a
+Shown when an `active` session exists. Content comes from the last complete Account summary, then from a
 refresh of Today.
 
 Header:
@@ -374,7 +391,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 - Icon-only controls have accessibility labels.
 - The Connect mark is one static element named **Quota**. The button's accessibility label is
-  exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.**
+  exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.** While
+  connecting, the value is **Connecting** and the control does not respond to interaction.
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - The account context line is the shared freshness phrase, read in full.
@@ -383,11 +401,11 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Widget entries combine provider, remaining, why the reading is not current, reset, and updated
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
-- Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes.
+- Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes. The root
+  phase replacement is an explicit `.opacity` transition; Reduce Motion only shortens it.
 - Reduce Transparency is system-owned. Do not skip Connect's contrast audit in the signed-out
-  state. Disabled `.glassProminent` Connecting… contrast is system glass, documented on that
-  control. Confirm is inline on the signed-out screen and runs the full accessibility audit with
-  no skip.
+  or connecting state. Confirm is inline on the signed-out screen and runs the full accessibility
+  audit with no skip.
 
 ## Visual QA
 
@@ -402,8 +420,9 @@ fixtures may contain display labels only; they must never contain access tokens,
 production data.
 
 `scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `connecting`, `connect-error`,
-`expired`, `loading`, `confirm-account`, `no-devices`, `usage-content`, `usage-activity`,
-`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
+`expired`, `connect-refresh-failed`, `loading`, `confirm-account`, `no-devices`, `usage-content`,
+`usage-activity`, `subscription-detail`, and `settings` fixture screenshots to
+`dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -415,6 +434,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture connect-error
 --visual-fixture expired
 --visual-fixture confirm-account
+--visual-fixture connect-refresh-failed
 --visual-fixture loading
 --visual-fixture content
 --visual-fixture cached-error
@@ -425,9 +445,10 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect with GitHub: mark, button, and footnote. No session restore |
-| `connecting` | Disabled **Connecting…** button with visible progress |
+| `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
 | `expired` | Connect with GitHub plus **Session expired. Connect again.** |
+| `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Could not reach quota.gotry.io.** No Continue |
 | `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |

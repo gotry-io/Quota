@@ -11,6 +11,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case connectError = "connect-error"
   case expired
   case confirmAccount = "confirm-account"
+  case connectRefreshFailed = "connect-refresh-failed"
   case loading
   case content
   case cachedError = "cached-error"
@@ -88,6 +89,18 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.fromCache = false
         model.isRefreshing = false
         model.banner = nil
+        model.expiredMessage = nil
+      case .connectRefreshFailed:
+        model.phase = .pendingRefreshFailed
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = AppModel.Banner(
+          kind: .refreshFailed,
+          text: "Could not reach quota.gotry.io.",
+          symbolName: "exclamationmark.triangle"
+        )
         model.expiredMessage = nil
       case .content:
         model.phase = .signedIn
@@ -609,8 +622,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       switch fixture {
       case .content, .cachedError:
         days = VisualFixtureContent.activityDays(ending: now)
-      case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .loading, .empty,
-        .noDevices:
+      case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
+        .loading, .empty, .noDevices:
         days = []
       }
       let model = AppModel(
