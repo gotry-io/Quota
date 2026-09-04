@@ -302,9 +302,11 @@ or a report.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
   quota, plan and account labels, compact counts, Usage cost, compact relative age, the
   observation-freshness rule each snapshot type conforms to, and the subscription selector every
-  Apple client hashes the same way. It depends on neither app and does not own `ProviderID`, decode
-  wire types, network, persist, or reach Relay; `packages/apple-client` may depend on it so a wire
-  type can answer a presentation question about itself. QuotaWire's `ProviderID` carries only
+  Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
+  evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
+  wire types, network, persist, or reach Relay; `QuotaAlerts` may depend on `QuotaPresentation`.
+  `packages/apple-client` may depend on it so a wire type can answer a presentation question about
+  itself. QuotaWire's `ProviderID` carries only
   providers that sync to an account, because a local-only collector there would force QuotaBar's
   enum to diverge again.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import Testing
 
 @testable import QuotaBar
@@ -17,23 +18,15 @@ struct NotificationRulesTests {
     #expect(rules.thresholds(for: "codex_acct") == [20, 10])
   }
 
-  @Test func thresholdsAreKeptDescendingAndUniqueInsideOneToNinetyNine() {
-    #expect(NotificationRules.normalized([10, 20, 20, 5]) == [20, 10, 5])
-    #expect(NotificationRules.normalized([1, 99]) == [99, 1])
-    #expect(NotificationRules.normalized([0, 100, -1, 20]) == [20])
-    #expect(NotificationRules.normalized([0, 100]) == [20, 10])
-    #expect(NotificationRules.normalized([]) == [20, 10])
-  }
-
   @Test func roundTripPersistsEnabledResetRemindersAndPerSelectorThresholds() {
     let defaults = isolatedDefaults()
     defer { defaults.tearDown() }
-    let written = NotificationRules(
+    let written = AlertRules(
       enabled: true,
       resetReminders: false,
       thresholds: ["codex_acct": [10, 30, 30, 0]]
     )
-    written.save(to: defaults.store)
+    NotificationRules.save(written, to: defaults.store)
     let read = NotificationRules.load(from: defaults.store)
     #expect(read.enabled)
     #expect(!read.resetReminders)

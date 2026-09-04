@@ -1,23 +1,19 @@
 import Foundation
+import QuotaAlerts
 import Testing
 
-@testable import QuotaBar
-
-/// Quota iOS will answer the same file. A case one of them changes cannot quietly drift.
-struct NotificationEvaluatorConformanceTests {
+/// QuotaBar and Quota iOS both answer this file. A case one of them changes cannot quietly drift.
+struct AlertEvaluatorConformanceTests {
   @Test func everyAlertTransitionCaseMatchesTheSharedFixture() throws {
     let fixture = try AlertTransitionFixture.load()
     #expect(fixture.cases.count >= 8)
     for testCase in fixture.cases {
       if testCase.signOut {
-        let store = InMemoryNotificationStateStore(state: testCase.previous ?? .empty)
-        try store.clear()
-        let loaded = try store.load()
         #expect(eventsMatch([], testCase.expectedEvents), "\(testCase.name)")
-        #expect(statesMatch(loaded, testCase.expectedStateAfter), "\(testCase.name)")
+        #expect(statesMatch(.empty, testCase.expectedStateAfter), "\(testCase.name)")
         continue
       }
-      let result = NotificationEvaluator.evaluate(
+      let result = AlertEvaluator.evaluate(
         rules: testCase.rules,
         previous: testCase.previous ?? .empty,
         current: testCase.current,
@@ -30,7 +26,7 @@ struct NotificationEvaluatorConformanceTests {
 }
 
 private func eventsMatch(
-  _ actual: [NotificationEvent],
+  _ actual: [AlertEvent],
   _ expected: [AlertTransitionFixture.Event]
 ) -> Bool {
   guard actual.count == expected.count else { return false }
@@ -54,9 +50,7 @@ private func eventsMatch(
   }
 }
 
-private func statesMatch(_ actual: NotificationDedupState, _ expected: NotificationDedupState)
-  -> Bool
-{
+private func statesMatch(_ actual: AlertDedupState, _ expected: AlertDedupState) -> Bool {
   actual.sorted() == expected.sorted()
 }
 
@@ -67,11 +61,11 @@ private struct AlertTransitionFixture: Decodable {
     var name: String
     var now: Date
     var signOut: Bool
-    var rules: NotificationRules
-    var previous: NotificationDedupState?
-    var current: [NotificationSubscriptionReading]
+    var rules: AlertRules
+    var previous: AlertDedupState?
+    var current: [AlertSubscriptionReading]
     var expectedEvents: [Event]
-    var expectedStateAfter: NotificationDedupState
+    var expectedStateAfter: AlertDedupState
   }
 
   struct Event: Decodable {
@@ -186,18 +180,18 @@ private struct AlertTransitionFixture: Decodable {
           name: try container.decode(String.self, forKey: .name),
           now: try container.decode(Date.self, forKey: .now),
           signOut: try container.decodeIfPresent(Bool.self, forKey: .signOut) ?? false,
-          rules: NotificationRules(
+          rules: AlertRules(
             enabled: rules.enabled,
             resetReminders: rules.resetReminders,
             thresholds: rules.thresholds
           ),
           previous: previous.map(Self.state),
           current: current.map { subscription in
-            NotificationSubscriptionReading(
+            AlertSubscriptionReading(
               selector: subscription.selector,
               status: subscription.status,
               windows: subscription.windows.map {
-                NotificationWindowReading(
+                AlertWindowReading(
                   id: $0.id,
                   title: $0.title,
                   remainingPercent: $0.remainingPercent,
@@ -217,10 +211,10 @@ private struct AlertTransitionFixture: Decodable {
 
   private enum RootKeys: String, CodingKey { case cases }
 
-  private static func state(_ dto: StateDTO) -> NotificationDedupState {
-    NotificationDedupState(
+  private static func state(_ dto: StateDTO) -> AlertDedupState {
+    AlertDedupState(
       fired: dto.fired.map {
-        NotificationDedupKey(
+        AlertDedupKey(
           selector: $0.selector,
           windowID: $0.windowID,
           resetsAt: $0.resetsAt,
@@ -228,7 +222,7 @@ private struct AlertTransitionFixture: Decodable {
         )
       },
       readings: dto.readings.map {
-        NotificationStoredReading(
+        AlertStoredReading(
           selector: $0.selector,
           windowID: $0.windowID,
           remainingPercent: $0.remainingPercent,
@@ -249,6 +243,5 @@ private struct AlertTransitionFixture: Decodable {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("packages/protocol/fixtures/alert-transition-conformance.json")
+    .appendingPathComponent("protocol/fixtures/alert-transition-conformance.json")
 }

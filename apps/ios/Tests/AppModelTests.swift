@@ -351,7 +351,7 @@ struct AppModelTests {
 }
 
 @MainActor
-private final class ScriptedAuthenticator: BrowserSessionAuthenticating {
+final class ScriptedAuthenticator: BrowserSessionAuthenticating {
   var result: Result<URL, Error>
   var lastURL: URL?
   var lastCallbackScheme: String?
@@ -367,7 +367,7 @@ private final class ScriptedAuthenticator: BrowserSessionAuthenticating {
   }
 }
 
-private final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
+final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
   struct Exchange {
     var status: Int
     var body: Data
@@ -394,12 +394,13 @@ private final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
 }
 
 @MainActor
-private func makeModel(
+func makeModel(
   session: AccountSession?,
   cache: CachedAccountSummary?,
   exchanges: [ScriptedHTTPTransport.Exchange],
   widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
-  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler()
+  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
+  alertCoordinator: AlertCoordinator? = nil
 ) -> AppModel {
   AppModel(
     account: AccountClient(
@@ -412,7 +413,8 @@ private func makeModel(
       result: .failure(AuthorizationError.cancelled)
     ),
     widgetPublisher: widgetPublisher,
-    backgroundRefresh: backgroundRefresh
+    backgroundRefresh: backgroundRefresh,
+    alertCoordinator: alertCoordinator
   )
 }
 
@@ -446,7 +448,7 @@ private func tokenResponse() throws -> Data {
   )
 }
 
-private enum Fixtures {
+enum Fixtures {
   static let accessToken = "qia_synthetic_access_token"
   static let refreshToken = "qiar_synthetic_refresh_token"
 

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 import SweetCookieKit
@@ -277,7 +278,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   @ObservationIgnored
   private let userNotificationSink: UserNotificationSink?
 
-  private(set) var notificationRules: NotificationRules
+  private(set) var notificationRules: AlertRules
   private(set) var notificationAuthorizationDenied = false
 
   init(
@@ -368,7 +369,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       notificationCenter = center
       resetScheduler = ResetReminderScheduler(center: center)
       userNotificationSink = nil
-      notificationRules = NotificationRules()
+      notificationRules = AlertRules()
       initializationError = nil
       self.errorMessage = errorMessage
       self.lastCheckedAt = lastCheckedAt
@@ -1363,11 +1364,11 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     _ = loginURLOpener.open(NotificationsSettingsCopy.systemSettingsURL)
   }
 
-  private func persistNotificationRules(_ update: (inout NotificationRules) -> Void) {
+  private func persistNotificationRules(_ update: (inout AlertRules) -> Void) {
     var rules = notificationRules
     update(&rules)
     guard rules != notificationRules else { return }
-    rules.save(to: notificationDefaults)
+    NotificationRules.save(rules, to: notificationDefaults)
     notificationRules = rules
     evaluateNotifications(overview: overview, now: Date())
   }
@@ -1380,7 +1381,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     let previous = (try? notificationStore.load()) ?? .empty
     let current = NotificationOverview.readings(from: overview)
     let catalog = NotificationOverview.catalog(from: overview)
-    let result = NotificationEvaluator.evaluate(
+    let result = AlertEvaluator.evaluate(
       rules: rules,
       previous: previous,
       current: current,

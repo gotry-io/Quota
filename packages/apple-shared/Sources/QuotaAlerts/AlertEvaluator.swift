@@ -1,28 +1,28 @@
 import Foundation
 
-/// Pure evaluation of local remaining-quota notification rules.
+/// Pure evaluation of local remaining-quota alert rules.
 ///
 /// Input is the rules, the last dedup state, and the current subscription readings. Output is
-/// the events to deliver and the state to persist. Sign-out is `NotificationDedupState.empty`,
+/// the events to deliver and the state to persist. Sign-out is `AlertDedupState.empty`,
 /// not an evaluation.
-enum NotificationEvaluator {
-  static func evaluate(
-    rules: NotificationRules,
-    previous: NotificationDedupState,
-    current: [NotificationSubscriptionReading],
+public enum AlertEvaluator {
+  public static func evaluate(
+    rules: AlertRules,
+    previous: AlertDedupState,
+    current: [AlertSubscriptionReading],
     now: Date
-  ) -> NotificationEvaluation {
+  ) -> AlertEvaluation {
     guard rules.enabled else {
-      return NotificationEvaluation(events: [], state: previous)
+      return AlertEvaluation(events: [], state: previous)
     }
 
     var fired = Set(previous.fired)
-    var readings: [ReadingID: NotificationStoredReading] = Dictionary(
+    var readings: [ReadingID: AlertStoredReading] = Dictionary(
       uniqueKeysWithValues: previous.readings.map {
         (ReadingID(selector: $0.selector, windowID: $0.windowID), $0)
       }
     )
-    var events: [NotificationEvent] = []
+    var events: [AlertEvent] = []
 
     for subscription in current {
       guard subscription.status == "available" else { continue }
@@ -36,7 +36,7 @@ enum NotificationEvaluator {
         if didReset {
           fired = fired.filter { $0.selector != id.selector || $0.windowID != id.windowID }
           if rules.resetReminders {
-            let key = NotificationDedupKey(
+            let key = AlertDedupKey(
               selector: id.selector,
               windowID: id.windowID,
               resetsAt: window.resetsAt,
@@ -53,7 +53,7 @@ enum NotificationEvaluator {
         }
 
         for threshold in rules.thresholds(for: subscription.selector) {
-          let key = NotificationDedupKey(
+          let key = AlertDedupKey(
             selector: id.selector,
             windowID: id.windowID,
             resetsAt: window.resetsAt,
@@ -83,7 +83,7 @@ enum NotificationEvaluator {
           )
         }
 
-        readings[id] = NotificationStoredReading(
+        readings[id] = AlertStoredReading(
           selector: id.selector,
           windowID: id.windowID,
           remainingPercent: remaining,
@@ -92,9 +92,9 @@ enum NotificationEvaluator {
       }
     }
 
-    return NotificationEvaluation(
+    return AlertEvaluation(
       events: events,
-      state: NotificationDedupState(
+      state: AlertDedupState(
         fired: Array(fired),
         readings: Array(readings.values)
       ).sorted()
@@ -102,9 +102,9 @@ enum NotificationEvaluator {
   }
 
   /// Headline cadence windows, shortest first; otherwise the first percent window.
-  static func evaluatedWindows(
-    in windows: [NotificationWindowReading]
-  ) -> [NotificationWindowReading] {
+  public static func evaluatedWindows(
+    in windows: [AlertWindowReading]
+  ) -> [AlertWindowReading] {
     let order = ["five_hour", "weekly", "monthly"]
     let primary = windows.filter { window in
       window.primaryCadence.map { order.contains($0) } ?? false
@@ -121,8 +121,8 @@ enum NotificationEvaluator {
 
   /// Remaining rose, and either the previous `resets_at` has passed or the new one is later.
   private static func isWindowReset(
-    previous: NotificationStoredReading,
-    current: NotificationWindowReading,
+    previous: AlertStoredReading,
+    current: AlertWindowReading,
     now: Date
   ) -> Bool {
     guard current.remainingPercent > previous.remainingPercent else { return false }

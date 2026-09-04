@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import UserNotifications
 
 /// Calendar reminders for each available subscription's primary windows.
@@ -28,8 +29,8 @@ final class ResetReminderScheduler: @unchecked Sendable {
   }
 
   func reschedule(
-    rules: NotificationRules,
-    subscriptions: [NotificationSubscriptionReading],
+    rules: AlertRules,
+    subscriptions: [AlertSubscriptionReading],
     catalog: NotificationDeliveryCatalog,
     now: Date
   ) {
@@ -40,23 +41,23 @@ final class ResetReminderScheduler: @unchecked Sendable {
     guard rules.enabled, rules.resetReminders else { return }
 
     for subscription in subscriptions where subscription.status == "available" {
-      for window in NotificationEvaluator.evaluatedWindows(in: subscription.windows) {
+      for window in AlertEvaluator.evaluatedWindows(in: subscription.windows) {
         guard let resetsAt = window.resetsAt, resetsAt > now else { continue }
         guard
           let windowTitle = catalog.windowTitle(
             selector: subscription.selector, windowID: window.id),
           let provider = catalog.providerDisplayName(selector: subscription.selector)
         else { continue }
-        let key = NotificationDedupKey(
+        let key = AlertDedupKey(
           selector: subscription.selector,
           windowID: window.id,
           resetsAt: resetsAt,
           threshold: nil
         )
         let content = UNMutableNotificationContent()
-        content.title = NotificationCopy.title(
+        content.title = AlertCopy.title(
           providerDisplayName: provider, windowTitle: windowTitle)
-        content.body = NotificationCopy.resetBody(windowTitle: windowTitle)
+        content.body = AlertCopy.resetBody(windowTitle: windowTitle)
         content.threadIdentifier = subscription.selector
         content.sound = .default
         var components = calendar.dateComponents(

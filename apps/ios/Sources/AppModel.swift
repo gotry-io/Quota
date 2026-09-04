@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import QuotaAccount
+import QuotaAlerts
 import QuotaPresentation
 import QuotaRelay
 import QuotaWidgetData
@@ -34,6 +35,7 @@ final class AppModel {
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
   private let backgroundRefresh: any BackgroundRefreshScheduling
+  private let alertCoordinator: AlertCoordinator
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -53,6 +55,7 @@ final class AppModel {
     authenticator: any BrowserSessionAuthenticating,
     widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
+    alertCoordinator: AlertCoordinator? = nil,
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
     }
@@ -61,6 +64,13 @@ final class AppModel {
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
     self.backgroundRefresh = backgroundRefresh
+    self.alertCoordinator =
+      alertCoordinator
+      ?? AlertCoordinator(
+        rulesStore: IOSAlertRulesStore(),
+        stateStore: InMemoryIOSAlertStateStore(),
+        sink: NoOpAlertSink()
+      )
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
   }
 
@@ -73,7 +83,12 @@ final class AppModel {
       ),
       authenticator: SystemBrowserAuthenticator(),
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
-      backgroundRefresh: backgroundRefresh
+      backgroundRefresh: backgroundRefresh,
+      alertCoordinator: AlertCoordinator(
+        rulesStore: IOSAlertRulesStore(),
+        stateStore: FileIOSAlertStateStore.applicationSupport(),
+        sink: NoOpAlertSink()
+      )
     )
   }
 
@@ -183,6 +198,7 @@ final class AppModel {
       phase = .signedIn
       if let summary = result.summary, let fetchedAt = result.fetchedAt {
         publishWidget(summary: summary, fetchedAt: fetchedAt)
+        alertCoordinator.evaluate(summary: summary)
       } else {
         clearWidget()
       }
@@ -241,6 +257,7 @@ final class AppModel {
     phase = .signedOut
     backgroundRefresh.cancelPendingRefresh()
     clearWidget()
+    alertCoordinator.clearState()
   }
 
   private func publishWidget(summary: AccountSummary, fetchedAt: Date) {

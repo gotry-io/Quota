@@ -55,7 +55,8 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
 - The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
   managed wire types — quota, account, and Usage — plus `ProviderID` and Relay access;
-  `packages/apple-shared` owns Foundation-only presentation semantics. QuotaBar owns its private IPC
+  `packages/apple-shared` owns Foundation-only presentation semantics and `QuotaAlerts`, the
+  Foundation-only remaining-quota rule evaluator both Apple apps share. QuotaBar owns its private IPC
   models, its Usage upload and local-report types, and app-only provider behavior, and extends the
   shared types rather than declaring a second copy. Wire validation lives with the type it protects,
   so both products answer the same input the same way. Do not restate a type one of those packages

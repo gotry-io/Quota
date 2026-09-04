@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuotaAlerts
 import QuotaWire
 import Testing
 import UserNotifications
@@ -659,7 +660,7 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
 func quotaApplyDeliversFirstSeenThresholdEventsWhenNotificationsAreEnabled() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules(enabled: true, resetReminders: true, thresholds: [:]).save(to: defaults.store)
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
   let store = InMemoryNotificationStateStore()
   let sink = RecordingNotificationSink()
   let now = Date(timeIntervalSince1970: 1_786_300_000)
@@ -692,13 +693,13 @@ func signingOutClearsNotificationDedupState() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
   let store = InMemoryNotificationStateStore(
-    state: NotificationDedupState(
+    state: AlertDedupState(
       fired: [
-        NotificationDedupKey(
+        AlertDedupKey(
           selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
       ],
       readings: [
-        NotificationStoredReading(
+        AlertStoredReading(
           selector: "ccfc96629357", windowID: "weekly", remainingPercent: 18, resetsAt: nil)
       ]
     )
@@ -719,7 +720,7 @@ func signingOutClearsNotificationDedupState() throws {
 func newReadingsRescheduleResetReminders() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules(enabled: true, resetReminders: true, thresholds: [:]).save(to: defaults.store)
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
   let center = FakeNotificationCenter()
   let now = Date()
   let firstReset = now.addingTimeInterval(3_600)
@@ -738,7 +739,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(center.pending.first?.trigger is UNCalendarNotificationTrigger)
   #expect(
     firstID
-      == NotificationDedupKey(
+      == AlertDedupKey(
         selector: "ccfc96629357", windowID: "weekly", resetsAt: firstReset, threshold: nil
       ).requestIdentifier
   )
@@ -751,7 +752,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(center.pending.first?.identifier != firstID)
   #expect(
     center.pending.first?.identifier
-      == NotificationDedupKey(
+      == AlertDedupKey(
         selector: "ccfc96629357", windowID: "weekly", resetsAt: secondReset, threshold: nil
       ).requestIdentifier
   )
@@ -761,7 +762,7 @@ func newReadingsRescheduleResetReminders() throws {
 func signingOutRemovesScheduledResetReminders() {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules(enabled: true, resetReminders: true, thresholds: [:]).save(to: defaults.store)
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
   let center = FakeNotificationCenter()
   let now = Date()
   let resetsAt = now.addingTimeInterval(3_600)
@@ -783,7 +784,7 @@ func signingOutRemovesScheduledResetReminders() {
 func turningOffResetRemindersClearsScheduledReminders() {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules(enabled: true, resetReminders: true, thresholds: [:]).save(to: defaults.store)
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
   let center = FakeNotificationCenter()
   let now = Date()
   let model = MenuBarViewModel(
@@ -806,9 +807,9 @@ func turningOffResetRemindersClearsScheduledReminders() {
 }
 
 final class RecordingNotificationSink: NotificationSink, @unchecked Sendable {
-  var events: [NotificationEvent] = []
+  var events: [AlertEvent] = []
 
-  func deliver(_ events: [NotificationEvent]) {
+  func deliver(_ events: [AlertEvent]) {
     self.events.append(contentsOf: events)
   }
 }

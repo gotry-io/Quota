@@ -32,7 +32,9 @@ Freshness copy, reset copy, the one no-reset phrase, provider display names, quo
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
 and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
-`FreshnessCopy` and never assemble their own.
+`FreshnessCopy` and never assemble their own. Local remaining-quota alerts answer
+`packages/protocol/fixtures/alert-transition-conformance.json`; both Apple apps evaluate that file
+through `QuotaAlerts`.
 
 ## Surfaces
 

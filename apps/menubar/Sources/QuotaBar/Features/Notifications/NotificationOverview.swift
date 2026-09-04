@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 
@@ -15,14 +16,14 @@ enum NotificationOverview {
 
   static func readings(
     from overview: [LocalServiceOverviewItem]
-  ) -> [NotificationSubscriptionReading] {
+  ) -> [AlertSubscriptionReading] {
     overview.map { item in
-      NotificationSubscriptionReading(
+      AlertSubscriptionReading(
         selector: selector(for: item),
         status: item.snapshot.status.rawValue,
         windows: item.snapshot.windows.compactMap { window in
           guard window.showsPercentMeter else { return nil }
-          return NotificationWindowReading(
+          return AlertWindowReading(
             id: window.id,
             title: window.title,
             remainingPercent: window.remainingPercent,
