@@ -1,10 +1,10 @@
 import Foundation
 
-/// The bare compact duration behind every relative time this app shows: the largest whole unit
+/// The bare compact duration behind every relative age this app shows: the largest whole unit
 /// that fits, with no words around it.
 ///
-/// ``FreshnessCopy`` turns it into how old a reading is; a reset countdown reads it forward. Both
-/// speak the same units, so `3m` never means one thing on one surface and another elsewhere.
+/// ``FreshnessCopy`` turns it into how old a reading is. Reset copy is a different phrase on
+/// that type: a future refill rounds minutes up and can name hours and minutes together.
 public enum CompactAgeFormat: Sendable {
   public static func string(since date: Date, now: Date = Date()) -> String {
     let seconds = max(0, Int(now.timeIntervalSince(date)))

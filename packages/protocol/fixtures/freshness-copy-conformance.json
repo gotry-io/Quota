@@ -1,5 +1,5 @@
 {
-  "$comment": "How old a reading is, in the words every Quota client uses. One rule, one voice: the menu bar footer, a provider row, a device row, the website, and the widgets all state age relative to now rather than as a clock time or a calendar date, because an absolute instant makes the reader do the subtraction. `age` is the bare relative phrase; `observation` is the whole line under a reading, which names why a reading is not current instead of only that it is not; `device` is the age half of a device row; `missing_reset` is whether a percent window with no refill instant prints the no-reset phrase. `packages/apple-shared` and `apps/web/src/lib/format.ts` both answer this file, so a phrase one of them changes cannot drift from the other.",
+  "$comment": "How old a reading is, and when a window refills, in the words every Quota client uses. One rule, one voice: the menu bar footer, a provider row, a device row, the website, and the widgets all state age relative to now rather than as a clock time or a calendar date, because an absolute instant makes the reader do the subtraction. `age` is the bare relative phrase; `observation` is the whole line under a reading, which names why a reading is not current instead of only that it is not; `device` is the age half of a device row; `missing_reset` is whether a percent window with no refill instant prints the no-reset phrase; `reset` is the line under a window that still has a future refill. Weekday and month cases pin `now` and `resets_at` as RFC 3339 with an offset so every runtime formats that local time. `packages/apple-shared` and `apps/web/src/lib/format.ts` both answer this file, so a phrase one of them changes cannot drift from the other.",
   "phrases": {
     "no_reset_time": "No reset time reported",
     "not_checked": "Not checked",
@@ -130,6 +130,74 @@
       "name": "a device the Account has never heard from",
       "age_seconds": null,
       "expected": "no readings yet"
+    }
+  ],
+  "reset": [
+    {
+      "name": "the last second before a minute still rounds up to a minute",
+      "seconds_until": 59,
+      "expected": "Resets in 1m"
+    },
+    {
+      "name": "a whole minute is the first exact minute",
+      "seconds_until": 60,
+      "expected": "Resets in 1m"
+    },
+    {
+      "name": "the last second before an hour rounds up into the hour",
+      "seconds_until": 3599,
+      "expected": "Resets in 1h"
+    },
+    {
+      "name": "an hour drops the zero minutes",
+      "seconds_until": 3600,
+      "expected": "Resets in 1h"
+    },
+    {
+      "name": "three hours exactly omits the minutes",
+      "seconds_until": 10800,
+      "expected": "Resets in 3h"
+    },
+    {
+      "name": "three hours and twelve minutes names both",
+      "seconds_until": 11520,
+      "expected": "Resets in 3h 12m"
+    },
+    {
+      "name": "the last minute before a day still counts in hours",
+      "seconds_until": 86340,
+      "expected": "Resets in 23h 59m"
+    },
+    {
+      "name": "a day away names the weekday and the 24-hour local time",
+      "seconds_until": 86400,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-08T14:00:00-07:00",
+      "expected": "Resets Tue 14:00"
+    },
+    {
+      "name": "the last hour before a week still names the weekday",
+      "seconds_until": 601200,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-14T13:00:00-07:00",
+      "expected": "Resets Mon 13:00"
+    },
+    {
+      "name": "a week away names the month and day",
+      "seconds_until": 604800,
+      "now": "2026-09-05T12:00:00-07:00",
+      "resets_at": "2026-09-12T12:00:00-07:00",
+      "expected": "Resets Sep 12"
+    },
+    {
+      "name": "a reset that has already passed prints nothing",
+      "seconds_until": -1,
+      "expected": null
+    },
+    {
+      "name": "a reset a day ago prints nothing",
+      "seconds_until": -86400,
+      "expected": null
     }
   ]
 }
