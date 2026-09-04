@@ -27,14 +27,25 @@ provider or agent name table of its own.
 
 ## Information architecture
 
-The site has four surfaces:
+The site has these routes:
 
 1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
    The hero offers a QuotaBar `.dmg` download as the primary action. Homebrew is a compact
    secondary install under that CTA: a Homebrew label, a short tap note, the
    `brew install gotry-io/tap/quotabar` command, and a Copy control with brief Copied feedback.
    GitHub sign-in lives only in the site header. The appearance control lives in the footer.
-2. `/my` is the signed-in dashboard, quota first: compact remaining-quota cards, then account
+2. `/download` is the install page: the same `.dmg` and Homebrew controls as the hero, plus
+   requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
+   that Quota for iPhone is coming soon. It does not present an App Store badge or a dead store
+   link.
+3. `/support` answers FAQ from `src/content/support.md`: where data comes from, why iPhone has no
+   data until a Mac running QuotaBar has signed in, how to copy a diagnostic report, and how to
+   delete an account from `/my`.
+4. `/privacy` and `/terms` render `src/content/privacy.md` and `src/content/terms.md`. Both are
+   labeled Draft until review. Privacy states what Relay collects and does not collect, who
+   processes it, how long it is kept, and how to delete it, from
+   [`docs/security.md`](../../docs/security.md).
+5. `/my` is the signed-in dashboard, quota first: compact remaining-quota cards, then account
    totals, Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
    has no "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only
    windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
@@ -120,8 +131,9 @@ monospace; Copy announces a short Copied state through `aria-live`. Narrow viewp
 scroll the command safely without overflowing the page. Do not present unavailable downloads
 or documentation as active destinations.
 
-The footer shows `© {year} GoTry IO · MIT`, repository and account links, and the appearance
-toggle in a controls group. The toggle keeps a visible focus ring and a 42 px target.
+The footer shows `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
+and Account, and the appearance toggle in a controls group. The toggle keeps a visible focus ring
+and a 42 px target.
 
 ## Account dashboard
 
@@ -188,8 +200,9 @@ next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/` and `/my` (and the shipped `/app` redirect) at desktop and narrow mobile widths in
-  both light and dark appearance when browser tooling is available;
+- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, and `/my` (and the shipped `/app`
+  redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
+  tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

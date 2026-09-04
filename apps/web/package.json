@@ -15,7 +15,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && node scripts/check-web-imports.mjs",
     "dev": "vite dev",
     "preview": "vite preview",
-    "test": "node --test test/routes.test.ts test/landing.test.ts test/document-loads.test.ts test/publish-protocol-schemas.test.ts test/usage-activity.test.ts test/account-client.test.ts test/device-activity.test.ts test/format.test.ts"
+    "test": "node --test test/markdown.test.ts test/public-pages.test.ts test/routes.test.ts test/landing.test.ts test/document-loads.test.ts test/publish-protocol-schemas.test.ts test/usage-activity.test.ts test/account-client.test.ts test/device-activity.test.ts test/format.test.ts"
   },
   "devDependencies": {
     "@gotry-io/quota-model": "workspace:*",
