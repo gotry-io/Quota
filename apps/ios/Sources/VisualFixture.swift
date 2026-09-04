@@ -7,7 +7,11 @@ import QuotaWire
 /// Parser is always available for unit tests; UI state application is DEBUG-only.
 enum VisualFixture: String, CaseIterable, Sendable {
   case signedOut = "signed-out"
+  case connecting
+  case connectError = "connect-error"
+  case expired
   case confirmAccount = "confirm-account"
+  case loading
   case content
   case cachedError = "cached-error"
   case empty
@@ -34,6 +38,42 @@ enum VisualFixture: String, CaseIterable, Sendable {
       switch self {
       case .signedOut:
         model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .connecting:
+        model.phase = .connecting
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .connectError:
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = AppModel.Banner(
+          kind: .refreshFailed,
+          text: AuthorizationError.genericConnectFailureMessage,
+          symbolName: "exclamationmark.triangle"
+        )
+        model.expiredMessage = nil
+      case .expired:
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = "Session expired. Connect again."
+      case .loading:
+        model.phase = .launching
         model.summary = nil
         model.fetchedAt = nil
         model.fromCache = false
@@ -282,7 +322,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
               provider: .anthropic,
               models: [
                 model(
-                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18, microusd: 210_000,
+                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18,
+                  microusd: 210_000,
                   scale: scale),
                 model(
                   "claude-opus-4", input: 50_000, output: 10_000, messages: 8, microusd: 180_000,
@@ -568,7 +609,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       switch fixture {
       case .content, .cachedError:
         days = VisualFixtureContent.activityDays(ending: now)
-      case .signedOut, .confirmAccount, .empty, .noDevices:
+      case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .loading, .empty,
+        .noDevices:
         days = []
       }
       let model = AppModel(
@@ -610,7 +652,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     ) async -> AccountActivityResult {
       if from == to {
         let base = days.first { $0.date == from } ?? UsageActivityChart.emptyDay(date: from)
-        let agents: [UsageAgentUsage] = detail == .agents && base.totals.totalTokens > 0
+        let agents: [UsageAgentUsage] =
+          detail == .agents && base.totals.totalTokens > 0
           ? populatedAgents
           : (detail == .agents ? [] : (base.agents ?? []))
         let day = UsageActivityDay(

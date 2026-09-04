@@ -6,21 +6,24 @@ belongs in `apps/menubar/DESIGN.md`.
 
 ## Product character
 
-Quota on iPhone is a read-only Account instrument: remaining quota first, Today Usage
-second, GitHub identity as context. It uses native SwiftUI, system materials, and a restrained
-emerald accent. It is not a compressed website and not the QuotaBar menu panel.
+Quota on iPhone is a native iOS 26 read-only Account instrument: remaining quota first, Today Usage
+second, collection/setup and account-management support third. Liquid Glass belongs to the system
+navigation and control layer. Quota data, settings rows, status text, meters, charts, and
+empty-state explanations are content and do not use glass. It is not a compressed website and not
+the QuotaBar menu panel.
 
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect Account and Log Out are the only account actions this device performs. Delete Account
+2. Connect with GitHub and Log Out are the only account actions this device performs. Delete Account
    starts on the website after a fresh GitHub sign-in.
-3. Last-good Account data stays visible across transient failures. A banner states that in words,
-   not color alone.
+3. Last-good Account data stays visible across transient failures. A status line states that in
+   words, not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
    material, raw JSON, or device identifiers.
-5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, and light or
-   dark appearance.
+5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, Reduce
+   Transparency, and light or dark appearance. System controls handle Reduce Transparency; the app
+   does not simulate transparency.
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
@@ -37,7 +40,7 @@ through `QuotaAlerts`.
 ## Surfaces
 
 ```text
-Connect Account
+Connect with GitHub
 TabView
   Overview
   Usage
@@ -46,44 +49,53 @@ TabView
 Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
+Signed-out Connect is presented directly, without an empty NavigationStack. Signed-in tabs use the
+iOS 26 `Tab` initializer and `tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
+
 ### Connect Account
 
 Shown when no Keychain account session exists, including after logout and after an expired refresh.
 
-- Product name **Quota**.
-- One sentence: **See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on
-  your Mac.**
-- Primary action **Connect Account**.
-- Quiet note that this device does not collect or upload local usage.
-- Optional status line after an expired session: **Session expired. Connect Account to continue.**
+- A 56-point Quota app mark. It is content, not glass.
+- Primary action **Connect with GitHub**. Connecting: **Connecting…** with an inline ProgressView,
+  disabled. Minimum hit height 50pt. `buttonStyle(.glassProminent)` and the emerald tint.
+- Footnote: **This iPhone only reads data reported by QuotaBar.**
+- No product title, value-proposition paragraph, card, banner container, or raw URL.
+- Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
+  - expired: **Session expired. Connect again.**
+  - connect failure default: **Couldn't connect. Try again.**
 
-Connect Account starts `ASWebAuthenticationSession` for the Relay authorize URL with
+Connect with GitHub starts `ASWebAuthenticationSession` for the Relay authorize URL with
 `prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
 an account already signed in in Safari; the session lives in the system browser, not in the app.
-The system sheet owns cancel. The app never embeds a web view.
+The system sheet owns cancel and is the connecting progress presentation. Cancellation returns to
+the normal signed-out state without an error. The app never embeds a web view.
 
 After Relay issues a session and the first Account refresh names `summary.account.displayLabel`,
-the app does not open the signed-in tabs. It shows a full-screen confirmation:
+the app does not open the signed-in tabs. It replaces Connect content on the same signed-out
+screen:
 
-- Title **Use this GitHub account?**
+- The 56-point Quota app mark.
+- Title **Use this GitHub account?** (`title2` semibold).
 - Body **Connected as `<label>`.** with the label in bold.
-- Primary **Continue** — enters the signed-in tabs.
-- Secondary **Use a different account** — revokes the session just opened and starts Connect
-  Account again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a login page.
-  That second success confirms the same way.
+- Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — enters the signed-in
+  tabs.
+- Secondary **Use a different account** (`.bordered`) — revokes the session just opened and starts
+  Connect with GitHub again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a
+  login page. That second success confirms the same way.
 
-Layout is a calm centered instrument: compact Quota mark, value proposition, privacy note, and the
-primary action inside one semantic surface. Status banners (connecting, failure, expired) sit
-inside that panel. Hit targets stay at least 44pt.
+There is no sheet, card, `presentationDetents`, or `glassEffect` on the title or body. Layout is a
+vertically centered, scroll-safe column with a maximum content width of 320 points and system
+safe-area padding. Hit targets stay at least 44pt (Connect and Continue 50pt).
 
-Connect Account failures use a specific sentence, not a generic retry:
+Connect failures use a specific sentence when one is known, otherwise the default retry:
 
 | Cause | Copy |
 | --- | --- |
 | Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
 | Network (`unavailable` / timeout) | **Could not reach quota.gotry.io.** |
 | Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
-| Anything else | **Could not connect this account. Try again.** |
+| Anything else | **Couldn't connect. Try again.** |
 
 ### Overview
 
@@ -167,9 +179,8 @@ Shared rules:
   `CompactAgeFormat`, and `FreshnessCopy`. Digits are monospaced. Semantic text styles and colors
   only.
 - Mark the strongest remaining value with `widgetAccentable()`.
-- Use `containerBackground(for: .widget)`. Do not call `glassEffect`. On iOS 26 the system owns
-  widget Liquid Glass, accented, and vibrant rendering inside that container; on iOS 17–25 the
-  system material fallback applies.
+- Use `containerBackground(for: .widget)`. Do not call `glassEffect`. The system owns widget
+  Liquid Glass, accented, and vibrant rendering inside that container.
 - A future reset under 24 hours uses `Text(timerInterval:countsDown:)` so the system ticks seconds
   without a new timeline entry. Otherwise the line is static `FreshnessCopy.resetCopy`. A reset
   instant at or before the entry date prints no Resets line.
@@ -297,32 +308,31 @@ silently ineffective.
 
 ## Liquid Glass (main app)
 
-Quota on iOS 26 uses Apple's native SwiftUI glass APIs. There is no third-party UI kit and no custom
-glass shader.
+Quota is iOS 26-only. It uses Apple's native SwiftUI glass APIs on system navigation and controls.
+There is no third-party UI kit, no custom glass shader, and no app-owned glass on content.
 
-Progressive behavior:
-
-| Surface | iOS 26 | iOS 17–25 |
-| --- | --- | --- |
-| Semantic cards, banners, Connect panel | `glassEffect(.regular, in: continuous 16pt shape)` | `.regularMaterial` in the same continuous shape |
-| Primary button | `.glassProminent` with emerald tint | `.borderedProminent` with emerald tint |
-| Navigation / toolbar | System navigation chrome | System navigation chrome |
-| Tab bar | System TabView | System TabView |
+| Surface | Treatment |
+| --- | --- |
+| Tab bar | System `Tab` chrome; `tabBarMinimizeBehavior(.onScrollDown)` |
+| Navigation / toolbar | System navigation chrome |
+| Connect with GitHub | `.glassProminent` with emerald tint |
+| Confirm Continue | `.glassProminent` with the system accent; no extra `.tint` |
+| Sheets | System sheet chrome |
+| Quota data, status, meters, charts, settings rows, empty states | Content. List/Form/Section grouping. No `glassEffect`. |
 
 Rules:
 
-1. One glass/material surface per semantic card. Nested rows, meters, and plan chips stay plain.
-2. An ambient Quota backdrop (semantic grouped fill plus a restrained emerald wash, light and dark)
-   sits behind content so glass and material read clearly.
-3. Surface and button modifiers live in `QuotaTheme` (`quotaSurface`, `quotaProminentButtonStyle`).
-   Views do not invent alternate corner radii or fills.
+1. Do not put an explicit glass effect inside another system glass control.
+2. Do not reproduce system materials with gradients, strokes, shadows, custom blur, or rounded
+   glass panels. There is no `quotaSurface`, ambient backdrop, or card token.
+3. Reduce Transparency is owned by system glass. The app does not simulate transparency.
 4. Widgets never call `glassEffect`; system widget chrome owns that rendering.
 
 ## States
 
 | State | Presentation |
 | --- | --- |
-| Loading, no cache | Centered progress and **Loading account…** |
+| Loading, no cache | Centered progress and **Loading account…**. No surface. |
 | Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
 | Empty Today | **No Usage for Today.** |
 | Empty Usage period | **No Usage in this period.** |
@@ -332,9 +342,10 @@ Rules:
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
-| Expired session | Connect Account with **Session expired. Connect Account to continue.** |
-| Connect running | Connect Account with **Continue in the browser.** |
-| Confirm GitHub account | Full-screen **Use this GitHub account?** with **Continue** and **Use a different account** |
+| Expired session | Connect with GitHub plus **Session expired. Connect again.** |
+| Connect running | One disabled **Connecting…** button with visible progress. No status line. |
+| Connect failure | Connect with GitHub plus one plain status Label. Default **Couldn't connect. Try again.** |
+| Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
 | Widget placeholder | Redacted remaining / provider skeleton |
 
@@ -342,15 +353,15 @@ A banner always includes a symbol and a sentence. Color never carries status alo
 
 ## Layout and type
 
-Use the system grouped background (under the ambient wash) and semantic text styles (`largeTitle` /
-`title2` for remaining values, `headline` for provider names, `subheadline` and `footnote` for
-support). Cards are continuous 16pt corners. Content has a readable measure: 20pt horizontal gutter
-and a maximum 720pt column.
+Signed-in tabs use the system grouped background supplied by List/Form. There is no root background
+modifier and no ambient wash. Semantic text styles (`largeTitle` / `title2` for remaining values,
+`headline` for provider names, `subheadline` and `footnote` for support). Connect content is a
+320-point column.
 
-Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt. Dynamic Type may wrap every
-label; do not clip remaining values. Accessibility text sizes and widget no-data layouts must keep
-the strongest remaining figure readable (`minimumScaleFactor` is preferred over truncation of the
-primary value).
+Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt). Dynamic
+Type may wrap every label, including the Connect footnote; do not clip remaining values.
+Accessibility text sizes and widget no-data layouts must keep the strongest remaining figure
+readable (`minimumScaleFactor` is preferred over truncation of the primary value).
 
 The accent is adaptive emerald (`#087456` light, `#82ddb8` dark). Ink, body, and mute follow
 `Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
@@ -362,6 +373,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Accessibility
 
 - Icon-only controls have accessibility labels.
+- The Connect mark is one static element named **Quota**. The button's accessibility label is
+  exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.**
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - The account context line is the shared freshness phrase, read in full.
@@ -371,20 +384,26 @@ provider and support, and no custom card chrome beyond the system widget contain
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
 - Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes.
+- Reduce Transparency is system-owned. Do not skip Connect's contrast audit in the signed-out
+  state. Disabled `.glassProminent` Connecting… contrast is system glass, documented on that
+  control. Confirm is inline on the signed-out screen and runs the full accessibility audit with
+  no skip.
 
 ## Visual QA
 
-Inspect Connect Account, the GitHub account confirmation, loading, signed-in content, empty quota/Today, Usage at 30 Days with the
-Activity heatmap, a single-day sheet, no-devices Mac setup, cached content with a refresh banner,
-expired session, the four tabs, Settings (Notifications switch, Log Out, Appearance), subscription
-detail (windows, countdown, Reporting row), and each widget family in placeholder, content, and
-no-data states. Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver
-labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
-contain access tokens, refresh tokens, or production data.
+Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
+connect error, expired session, the inline GitHub account confirmation, loading, signed-in content,
+empty quota/Today, Usage at 30 Days with the Activity heatmap, a single-day sheet, no-devices Mac
+setup, cached content with a refresh banner, the four tabs, Settings (Notifications switch, Log
+Out, Appearance), subscription detail (windows, countdown, Reporting row), and each widget family
+in placeholder, content, and no-data states. Check iPhone, light and dark, standard and
+accessibility text sizes, VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic
+fixtures may contain display labels only; they must never contain access tokens, refresh tokens, or
+production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `confirm-account`,
-`no-devices`, `usage-content`, `usage-activity`, `subscription-detail`, and `settings` fixture
-screenshots to `dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `connecting`, `connect-error`,
+`expired`, `loading`, `confirm-account`, `no-devices`, `usage-content`, `usage-activity`,
+`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -392,7 +411,11 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 ```text
 --visual-fixture signed-out
+--visual-fixture connecting
+--visual-fixture connect-error
+--visual-fixture expired
 --visual-fixture confirm-account
+--visual-fixture loading
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
@@ -401,8 +424,12 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 | Fixture | UI state |
 | --- | --- |
-| `signed-out` | Connect Account, no session restore |
-| `confirm-account` | Full-screen **Use this GitHub account?** for **octocat**, with **Continue** and **Use a different account** |
+| `signed-out` | Connect with GitHub: mark, button, and footnote. No session restore |
+| `connecting` | Disabled **Connecting…** button with visible progress |
+| `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
+| `expired` | Connect with GitHub plus **Session expired. Connect again.** |
+| `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
+| `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |

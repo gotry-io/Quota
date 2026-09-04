@@ -31,7 +31,6 @@ struct UsageActivityCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
     .accessibilityIdentifier("usage.activity")
   }
 
@@ -334,7 +333,6 @@ struct UsageDayDetailSheet: View {
       }
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .quotaSurface()
     case .empty:
       Text("No Usage on this day.")
         .font(.subheadline)
@@ -342,7 +340,6 @@ struct UsageDayDetailSheet: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .quotaSurface()
         .accessibilityIdentifier("usage.day.empty")
     case .loaded(let agents):
       ForEach(UsageBreakdown.sections(agents: agents)) { section in
@@ -361,7 +358,6 @@ struct UsageDayDetailSheet: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
     .redacted(reason: .placeholder)
     .accessibilityLabel("Loading this day's usage")
     .accessibilityIdentifier("usage.day.loading")

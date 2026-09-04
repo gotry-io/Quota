@@ -92,15 +92,72 @@ final class QuotaUITests: XCTestCase {
     try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
   }
 
-  func testSignedOutFixtureShowsConnectAccount() throws {
+  func testSignedOutFixtureShowsConnectWithGitHub() throws {
     let app = launch(fixture: "signed-out")
     XCTAssertTrue(
       app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
       "connect.root"
     )
-    XCTAssertTrue(app.buttons["Connect Account"].exists, "Connect Account")
+    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertTrue(
+      app.staticTexts["This iPhone only reads data reported by QuotaBar."].exists,
+      "footnote"
+    )
+    XCTAssertFalse(app.buttons["Connect Account"].exists, "legacy Connect Account label")
+    XCTAssertFalse(
+      app.staticTexts[
+        "See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on your Mac."
+      ].exists,
+      "value proposition is not on Connect"
+    )
     attachScreenshot(app, name: "connect-signed-out")
+    try audit(app)
+  }
+
+  func testConnectingFixtureDisablesTheConnectButton() throws {
+    let app = launch(fixture: "connecting")
+    let button = app.buttons["Connect with GitHub"]
+    XCTAssertTrue(button.waitForExistence(timeout: 10), "Connect with GitHub")
+    XCTAssertFalse(button.isEnabled, "Connecting disables the button")
+    attachScreenshot(app, name: "connect-connecting")
+    // Disabled `.glassProminent` paints Connecting… as system vibrant text on
+    // the glass control. Signed-out Connect runs the full contrast audit.
     try audit(app, skipping: .contrast)
+  }
+
+  func testConnectErrorFixtureShowsTheFailureLine() throws {
+    let app = launch(fixture: "connect-error")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
+      "connect.root"
+    )
+    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertTrue(app.staticTexts["Couldn't connect. Try again."].exists, "connect error")
+    attachScreenshot(app, name: "connect-error")
+    try audit(app)
+  }
+
+  func testExpiredFixtureShowsTheReconnectLine() throws {
+    let app = launch(fixture: "expired")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
+      "connect.root"
+    )
+    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertTrue(app.staticTexts["Session expired. Connect again."].exists, "expired")
+    attachScreenshot(app, name: "connect-expired")
+    try audit(app)
+  }
+
+  func testLoadingFixtureShowsCenteredProgress() throws {
+    let app = launch(fixture: "loading")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["root.loading"].waitForExistence(timeout: 10),
+      "root.loading"
+    )
+    XCTAssertTrue(app.staticTexts["Loading account…"].exists, "Loading account…")
+    attachScreenshot(app, name: "root-loading")
+    try audit(app)
   }
 
   func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
@@ -113,7 +170,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.buttons["Continue"].exists, "Continue")
     XCTAssertTrue(app.buttons["Use a different account"].exists, "Use a different account")
     attachScreenshot(app, name: "confirm-account")
-    try audit(app, skipping: .contrast)
+    try audit(app)
   }
 
   private func launch(fixture: String) -> XCUIApplication {
@@ -149,35 +206,27 @@ final class QuotaUITests: XCTestCase {
 
   /// Every issue is reported with the element it names, so a failure says what to fix.
   ///
-  /// Two checks are skipped where the system, not this app, decides the answer. `.contrast`:
-  /// on iOS 26 the audit flags text on Liquid Glass cards — an opaque `.label` subtitle on
-  /// Connect, and card copy on Overview and Usage — although the rendered text is black on a
-  /// light surface (see the attached screenshots). `.hitRegion` on Overview and Usage: iOS 26
-  /// system TabView exposes ~28pt tab icons; system control, not ours. `.dynamicType` on
-  /// Overview: the masked account label still reports partial support at accessibility sizes.
-  /// Usage keeps the same skip set so the shared tab chrome is not a second failure. Clipping,
-  /// element description, and trait checks run on both fixtures. An unnamed "Text clipped" on
-  /// Settings is the glass tab bar covering a Form row the audit cannot name.
+  /// Connect signed-out, error, expired, loading, and confirm run the full audit. Connecting
+  /// skips contrast because disabled `.glassProminent` is system vibrant text. Remaining skips
+  /// on Overview, Usage, and Settings are content later work packages rebuild.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = [],
     ignoringUnnamedClipping: Bool = false
   ) throws {
-    if #available(iOS 17.0, *) {
-      var types = XCUIAccessibilityAuditType.all
-      types.remove(skipping)
-      try app.performAccessibilityAudit(for: types) { issue in
-        // Only the Settings Form asks for this: its last rows sit under the glass tab bar and
-        // the audit reports the clip without naming an element. Every other page must name one.
-        if ignoringUnnamedClipping, issue.element == nil,
-          issue.compactDescription.localizedCaseInsensitiveContains("Text clipped")
-        {
-          return true
-        }
-        let element = issue.element.map { "\($0)" } ?? "no element"
-        XCTFail("\(issue.compactDescription) — \(element)")
+    var types = XCUIAccessibilityAuditType.all
+    types.remove(skipping)
+    try app.performAccessibilityAudit(for: types) { issue in
+      // Only the Settings Form asks for this: its last rows sit under the glass tab bar and
+      // the audit reports the clip without naming an element. Every other page must name one.
+      if ignoringUnnamedClipping, issue.element == nil,
+        issue.compactDescription.localizedCaseInsensitiveContains("Text clipped")
+      {
         return true
       }
+      let element = issue.element.map { "\($0)" } ?? "no element"
+      XCTFail("\(issue.compactDescription) — \(element)")
+      return true
     }
   }
 }

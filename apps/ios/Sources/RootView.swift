@@ -8,69 +8,64 @@ struct RootView: View {
     Group {
       switch model.phase {
       case .launching:
-        ProgressView("Loading account…")
-          .accessibilityLabel("Loading account")
+        loading
       case .signedOut, .connecting:
-        NavigationStack {
-          ConnectAccountView(model: model)
-        }
+        ConnectAccountView(model: model)
       case .confirmingAccount(let label):
-        NavigationStack {
-          ConfirmAccountView(model: model, label: label)
-        }
-      case .signedIn where model.summary == nil && model.isRefreshing:
-        ProgressView("Loading account…")
-          .accessibilityLabel("Loading account")
+        ConfirmAccountView(model: model, label: label)
       case .signedIn:
-        signedInTabs
+        if model.summary == nil && model.isRefreshing {
+          loading
+        } else {
+          signedInTabs
+        }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background { QuotaAmbientBackdrop() }
     .animation(reduceMotion ? .easeInOut(duration: 0.15) : .default, value: model.phase)
+  }
+
+  private var loading: some View {
+    ProgressView("Loading account…")
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Color(uiColor: .systemBackground))
+      .accessibilityIdentifier("root.loading")
   }
 
   private var signedInTabs: some View {
     TabView(selection: $model.selectedTab) {
-      NavigationStack(path: $model.overviewPath) {
-        OverviewView(model: model)
-          .navigationDestination(for: String.self) { key in
-            if let subscription = model.subscription(forKey: key) {
-              SubscriptionDetailView(
-                subscription: subscription,
-                devices: model.summary?.devices ?? []
-              )
+      Tab(AppTab.overview.title, systemImage: AppTab.overview.systemImage, value: AppTab.overview) {
+        NavigationStack(path: $model.overviewPath) {
+          OverviewView(model: model)
+            .navigationDestination(for: String.self) { key in
+              if let subscription = model.subscription(forKey: key) {
+                SubscriptionDetailView(
+                  subscription: subscription,
+                  devices: model.summary?.devices ?? []
+                )
+              }
             }
-          }
+        }
       }
-      .tabItem {
-        Label(AppTab.overview.title, systemImage: AppTab.overview.systemImage)
-      }
-      .tag(AppTab.overview)
 
-      NavigationStack {
-        UsageView(model: model)
+      Tab(AppTab.usage.title, systemImage: AppTab.usage.systemImage, value: AppTab.usage) {
+        NavigationStack {
+          UsageView(model: model)
+        }
       }
-      .tabItem {
-        Label(AppTab.usage.title, systemImage: AppTab.usage.systemImage)
-      }
-      .tag(AppTab.usage)
 
-      NavigationStack {
-        DevicesView(model: model)
+      Tab(AppTab.devices.title, systemImage: AppTab.devices.systemImage, value: AppTab.devices) {
+        NavigationStack {
+          DevicesView(model: model)
+        }
       }
-      .tabItem {
-        Label(AppTab.devices.title, systemImage: AppTab.devices.systemImage)
-      }
-      .tag(AppTab.devices)
 
-      NavigationStack {
-        SettingsView(model: model)
+      Tab(AppTab.settings.title, systemImage: AppTab.settings.systemImage, value: AppTab.settings) {
+        NavigationStack {
+          SettingsView(model: model)
+        }
       }
-      .tabItem {
-        Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage)
-      }
-      .tag(AppTab.settings)
     }
+    .tabBarMinimizeBehavior(.onScrollDown)
   }
 }

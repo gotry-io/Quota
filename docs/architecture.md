@@ -7,7 +7,7 @@ links to it rather than restating it.
 
 ## Product boundaries
 
-- **Quota** is the iOS 17+ presentation product. It signs in with the registered `quota-ios` public
+- **Quota** is the iOS 26+ presentation product. It signs in with the registered `quota-ios` public
   client, reads Account remaining quota and Today Usage, and publishes the non-secret App Group
   snapshot its widgets render. It is not a collection Device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
@@ -237,7 +237,7 @@ The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKC
 exact redirect `io.gotry.quota:/oauth/callback`. Its exchange rejects installation identity and
 Device fields and returns only an account session: it is not a collection Device, is absent from
 `PlatformSchema`, and never receives write authority. Quota iOS consumes that session through
-`packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect Account presents
+`packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect with GitHub presents
 `ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. Because GitHub may silently reuse that Safari

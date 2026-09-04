@@ -71,7 +71,6 @@ struct UsageView: View {
       .fixedSize(horizontal: false, vertical: true)
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .quotaSurface()
       .accessibilityIdentifier("usage.empty")
   }
 }
@@ -130,7 +129,6 @@ struct UsageHeadlineCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
     .accessibilityIdentifier(identifier)
   }
 
@@ -198,7 +196,6 @@ struct UsageAgentCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 
   private func providerBlock(_ provider: UsageBreakdown.ProviderSection) -> some View {

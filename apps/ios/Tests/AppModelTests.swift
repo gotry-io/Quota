@@ -54,8 +54,8 @@ struct AppModelTests {
     #expect(scheduler.cancelCount == 1)
   }
 
-  /// A deliberate logout, or a first launch, is not an expiry. Connect Account says only what it
-  /// always says, and the background window nobody can use any more is withdrawn.
+  /// A deliberate logout, or a first launch, is not an expiry. Connect with GitHub says only what
+  /// it always says, and the background window nobody can use any more is withdrawn.
   @Test
   func refreshWithoutASessionIsPlainSignedOutAndWithdrawsTheBackgroundWindow() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
@@ -204,7 +204,7 @@ struct AppModelTests {
     #expect(publisher.clearCount == 1)
   }
 
-  /// An expired session still says so — it is the one status line Connect Account has — and the
+  /// An expired session still says so — it is the one status line Connect with GitHub has — and the
   /// standing background window goes with the session behind it.
   @Test
   func expiredSessionReturnsToConnect() async throws {
@@ -230,7 +230,7 @@ struct AppModelTests {
     )
     await model.restore()
     #expect(model.phase == .signedOut)
-    #expect(model.expiredMessage == "Session expired. Connect Account to continue.")
+    #expect(model.expiredMessage == "Session expired. Connect again.")
     #expect(model.summary == nil)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 1)
@@ -415,7 +415,8 @@ struct AppModelTests {
       challenge: "challenge"
     )
     let callback = URL(
-      string: "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+      string:
+        "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
     )!
     let authenticator = ScriptedAuthenticator(results: [.success(callback), .success(callback)])
     let transport = ScriptedHTTPTransport([
@@ -481,6 +482,10 @@ struct AppModelTests {
     let expired = model(throwing: AccountClientError.relay(.invalidGrant))
     await expired.connectAccount()
     #expect(expired.banner?.text == AuthorizationError.expiredSignInMessage)
+
+    let generic = model(throwing: AccountClientError.accountMismatch)
+    await generic.connectAccount()
+    #expect(generic.banner?.text == "Couldn't connect. Try again.")
   }
 }
 

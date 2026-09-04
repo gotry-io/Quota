@@ -4,83 +4,90 @@ struct ConnectAccountView: View {
   @Bindable var model: AppModel
 
   var body: some View {
-    ScrollView {
-      VStack(spacing: 0) {
-        Spacer(minLength: 32)
-
+    GeometryReader { proxy in
+      ScrollView {
         VStack(spacing: 24) {
           mark
-
-          VStack(spacing: 10) {
-            Text("Quota")
-              .font(.largeTitle.weight(.semibold))
-              .foregroundStyle(.primary)
-              .accessibilityAddTraits(.isHeader)
-
-            Text(
-              "See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on your Mac."
-            )
-            .font(.body)
-            // .secondary and vibrant .primary both fail the contrast audit on the glass
-            // surface; an explicit label color opts out of vibrancy.
-            .foregroundStyle(Color(uiColor: .label))
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
+          connectButton
+          VStack(spacing: 12) {
+            footnote
+            statusLine
           }
-
-          if let expired = model.expiredMessage {
-            StatusBanner(
-              symbolName: "lock.slash",
-              text: expired
-            )
-          } else if let banner = model.banner {
-            StatusBanner(symbolName: banner.symbolName, text: banner.text)
-          }
-
-          Button {
-            Task { await model.connectAccount() }
-          } label: {
-            Text(model.phase == .connecting ? "Connecting…" : "Connect Account")
-              .font(.headline)
-              .frame(maxWidth: .infinity)
-              .frame(minHeight: QuotaTheme.minimumTouchTarget - 12)
-              .padding(.vertical, 6)
-          }
-          .quotaProminentButtonStyle()
-          .disabled(model.phase == .connecting)
-          .accessibilityLabel("Connect Account")
-          .accessibilityHint("Opens a browser to sign in with GitHub.")
-
-          Text("This iPhone does not collect local usage or upload snapshots.")
-            .font(.footnote)
-            .foregroundStyle(.tertiary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 8)
+          .frame(maxWidth: .infinity)
+          .background(Color(uiColor: .systemBackground))
         }
-        .padding(20)
-        .frame(maxWidth: 420)
-        .quotaSurface()
-
-        Spacer(minLength: 48)
+        .frame(maxWidth: 320)
+        .padding()
+        .frame(minHeight: proxy.size.height)
+        .frame(maxWidth: .infinity)
       }
-      .frame(maxWidth: QuotaTheme.contentMaxWidth)
-      .padding(.horizontal, QuotaTheme.contentGutter)
-      .frame(maxWidth: .infinity)
     }
+    .safeAreaPadding()
+    .background(Color(uiColor: .systemBackground))
     .accessibilityIdentifier("connect.root")
-    .navigationBarTitleDisplayMode(.inline)
+  }
+
+  private var connectButton: some View {
+    Button {
+      Task { await model.connectAccount() }
+    } label: {
+      HStack(spacing: 8) {
+        if model.phase == .connecting {
+          ProgressView()
+            .accessibilityHidden(true)
+        }
+        Text(model.phase == .connecting ? "Connecting…" : "Connect with GitHub")
+          .font(.headline)
+          .accessibilityHidden(true)
+      }
+      .frame(maxWidth: .infinity)
+      .frame(minHeight: 50)
+    }
+    .buttonStyle(.glassProminent)
+    .tint(QuotaTheme.emerald)
+    .disabled(model.phase == .connecting)
+    .accessibilityLabel("Connect with GitHub")
+    .accessibilityHint("Opens GitHub sign-in in your browser.")
+  }
+
+  private var footnote: some View {
+    Text("This iPhone only reads data reported by QuotaBar.")
+      .font(.footnote)
+      .foregroundStyle(Color(uiColor: .label))
+      .multilineTextAlignment(.center)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  @ViewBuilder
+  private var statusLine: some View {
+    if let expired = model.expiredMessage {
+      statusLabel(text: expired, symbolName: "lock.slash")
+    } else if let banner = model.banner {
+      statusLabel(text: banner.text, symbolName: banner.symbolName)
+    }
+  }
+
+  private func statusLabel(text: String, symbolName: String) -> some View {
+    Label {
+      Text(text)
+        .foregroundStyle(Color(uiColor: .label))
+        .fixedSize(horizontal: false, vertical: true)
+    } icon: {
+      Image(systemName: symbolName)
+        .foregroundStyle(Color(uiColor: .label))
+    }
+    .font(.subheadline)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
   }
 
   private var mark: some View {
-    ZStack {
-      Circle()
-        .fill(QuotaTheme.emerald.opacity(0.16))
-        .frame(width: 72, height: 72)
-      Image(systemName: "gauge.with.dots.needle.33percent")
-        .font(.system(size: 30, weight: .semibold))
-        .foregroundStyle(QuotaTheme.emerald)
-        .accessibilityHidden(true)
-    }
-    .accessibilityLabel("Quota")
+    Image(systemName: "gauge.with.dots.needle.33percent")
+      .font(.system(size: 28, weight: .semibold))
+      .foregroundStyle(QuotaTheme.emerald)
+      .frame(width: 56, height: 56)
+      .accessibilityLabel("Quota")
+      .accessibilityAddTraits(.isImage)
   }
 }

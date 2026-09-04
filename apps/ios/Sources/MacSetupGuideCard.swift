@@ -35,12 +35,11 @@ struct MacSetupGuideCard: View {
       DownloadQRCode(url: Self.downloadURL)
         .frame(width: 160, height: 160)
         .padding(8)
-        .background(Color.white, in: QuotaTheme.cardShape)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityHidden(true)
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
     .accessibilityElement(children: .contain)
   }
 }

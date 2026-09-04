@@ -1,6 +1,6 @@
 # Quota iOS
 
-Quota is the native iOS 17+ account viewer. It signs in with the registered `quota-ios` public
+Quota is the native iOS 26+ account viewer. It signs in with the registered `quota-ios` public
 client and reads the GitHub Account's remaining quota and Today Usage from the fixed Relay origin.
 One read answers all of it: Relay resolves an account's readings into one subscription per key, so
 the app renders those rows rather than collapsing one card per reporting Mac.
@@ -98,10 +98,11 @@ project. Pass `--no-commit` to skip the commit.
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
 `usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota card for
-`subscription-detail`, the Mac setup card for `no-devices`, the Connect Account control for
-`signed-out`, the GitHub account confirmation for `confirm-account`, and Settings for the
-Notifications switch and Log Out, and runs an iOS 17+ accessibility audit on each. Log Out is on
-the Settings tab. Delete Account starts on the website.
+`subscription-detail`, the Mac setup card for `no-devices`, the Connect with GitHub control for
+`signed-out`, connecting / connect-error / expired / loading fixtures, the GitHub account
+inline GitHub account confirmation for `confirm-account`, and Settings for the Notifications switch and Log Out,
+and runs an accessibility audit on each. Connect's audit does not skip contrast. Log Out is on the
+Settings tab. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
@@ -119,7 +120,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | confirm-account | content | cached-error | empty | no-devices
+# Values: signed-out | connecting | connect-error | expired | confirm-account | loading | content | cached-error | empty | no-devices
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

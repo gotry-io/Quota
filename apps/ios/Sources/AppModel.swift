@@ -19,10 +19,8 @@ final class AppModel {
   }
 
   enum BannerKind: Equatable {
-    case connecting
     case offlineCached
     case refreshFailed
-    case expired
   }
 
   struct Banner: Equatable {
@@ -161,11 +159,8 @@ final class AppModel {
       guard phase != .connecting else { return }
     }
     phase = .connecting
-    banner = Banner(
-      kind: .connecting,
-      text: "Continue in the browser.",
-      symbolName: "safari"
-    )
+    banner = nil
+    expiredMessage = nil
     do {
       let attempt = try makeAuthorizationAttempt()
       let callback = try await authenticator.authenticate(
@@ -234,11 +229,8 @@ final class AppModel {
   func useDifferentAccount() async {
     guard case .confirmingAccount = phase else { return }
     phase = .connecting
-    banner = Banner(
-      kind: .connecting,
-      text: "Continue in the browser.",
-      symbolName: "safari"
-    )
+    banner = nil
+    expiredMessage = nil
     await account.logout()
     summary = nil
     fetchedAt = nil
@@ -507,10 +499,10 @@ final class AppModel {
 
   private func applyExpired() {
     applySignedOut()
-    expiredMessage = "Session expired. Connect Account to continue."
+    expiredMessage = "Session expired. Connect again."
   }
 
-  /// Connect Account with nothing said about why: no session, or one the person ended. There is
+  /// Connect with GitHub with nothing said about why: no session, or one the person ended. There is
   /// no account left to read, so the standing background-refresh ask goes with it.
   private func applySignedOut() {
     summary = nil

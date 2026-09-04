@@ -148,7 +148,6 @@ struct SubscriptionDetailView: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 
   private func identity(_ content: SubscriptionDetailContent) -> some View {
@@ -199,7 +198,6 @@ struct SubscriptionDetailView: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {

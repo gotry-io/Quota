@@ -172,7 +172,7 @@ extension AuthorizationError {
   public static let unexpectedBrowserResponseMessage =
     "The browser returned an unexpected response. Try again."
   public static let expiredSignInMessage = "The sign-in expired before it finished. Try again."
-  public static let genericConnectFailureMessage = "Could not connect this account. Try again."
+  public static let genericConnectFailureMessage = "Couldn't connect. Try again."
 
   /// Copy a Connect Account failure can show. Cancel is handled before this is read.
   public var userFacingMessage: String {

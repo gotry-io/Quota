@@ -108,7 +108,6 @@ struct OverviewView: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 }
 
@@ -149,7 +148,6 @@ struct TodayUsageCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
     .accessibilityIdentifier("overview.today")
   }
 

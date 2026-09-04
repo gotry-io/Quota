@@ -55,7 +55,6 @@ struct AccountDevicesCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
@@ -85,10 +84,11 @@ struct AccountDevicesCard: View {
     activity: DeviceActivity,
     now: Date
   ) -> String {
-    let platform = switch device.platform {
-    case .macos: "macOS"
-    case .unknown: "Unknown"
-    }
+    let platform =
+      switch device.platform {
+      case .macos: "macOS"
+      case .unknown: "Unknown"
+      }
     return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
   }
 }
@@ -120,6 +120,5 @@ struct OverviewDevicesSummary: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
   }
 }

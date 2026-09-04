@@ -18,7 +18,6 @@ struct StatusBanner: View {
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface(showsStroke: true)
     .accessibilityElement(children: .combine)
     .accessibilityLabel(text)
   }

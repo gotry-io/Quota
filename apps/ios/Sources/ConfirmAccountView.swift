@@ -5,27 +5,22 @@ struct ConfirmAccountView: View {
   let label: String
 
   var body: some View {
-    ScrollView {
-      VStack(spacing: 0) {
-        Spacer(minLength: 32)
-
+    GeometryReader { proxy in
+      ScrollView {
         VStack(spacing: 24) {
           mark
 
-          VStack(spacing: 10) {
-            Text("Use this GitHub account?")
-              .font(.title2.weight(.semibold))
-              .foregroundStyle(.primary)
-              .multilineTextAlignment(.center)
-              .fixedSize(horizontal: false, vertical: true)
-              .accessibilityAddTraits(.isHeader)
+          Text("Use this GitHub account?")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(Color(uiColor: .label))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
 
-            (Text("Connected as ") + Text(label).bold() + Text("."))
-              .font(.body)
-              .foregroundStyle(Color(uiColor: .label))
-              .multilineTextAlignment(.center)
-              .fixedSize(horizontal: false, vertical: true)
-          }
+          Text(connectedAs)
+            .font(.body)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
 
           Button {
             model.confirmAccount()
@@ -33,10 +28,9 @@ struct ConfirmAccountView: View {
             Text("Continue")
               .font(.headline)
               .frame(maxWidth: .infinity)
-              .frame(minHeight: QuotaTheme.minimumTouchTarget - 12)
-              .padding(.vertical, 6)
+              .frame(minHeight: 50)
           }
-          .quotaProminentButtonStyle()
+          .buttonStyle(.glassProminent)
           .accessibilityLabel("Continue")
           .accessibilityHint("Use this GitHub account on this iPhone.")
           .accessibilityIdentifier("confirm.continue")
@@ -45,39 +39,44 @@ struct ConfirmAccountView: View {
             Task { await model.useDifferentAccount() }
           } label: {
             Text("Use a different account")
-              .font(.body.weight(.semibold))
               .frame(maxWidth: .infinity)
               .frame(minHeight: QuotaTheme.minimumTouchTarget)
           }
-          .foregroundStyle(.primary)
+          .buttonStyle(.bordered)
           .accessibilityLabel("Use a different account")
           .accessibilityHint("Signs out and opens GitHub so you can pick another account.")
           .accessibilityIdentifier("confirm.switch")
         }
-        .padding(20)
-        .frame(maxWidth: 420)
-        .quotaSurface()
-
-        Spacer(minLength: 48)
+        .frame(maxWidth: 320)
+        .padding()
+        .frame(minHeight: proxy.size.height)
+        .frame(maxWidth: .infinity)
       }
-      .frame(maxWidth: QuotaTheme.contentMaxWidth)
-      .padding(.horizontal, QuotaTheme.contentGutter)
-      .frame(maxWidth: .infinity)
     }
+    .safeAreaPadding()
+    .background(Color(uiColor: .systemBackground))
     .accessibilityIdentifier("confirm.root")
-    .navigationBarTitleDisplayMode(.inline)
+  }
+
+  private var connectedAs: AttributedString {
+    var prefix = AttributedString("Connected as ")
+    prefix.foregroundColor = UIColor.label
+    var name = AttributedString(label)
+    name.inlinePresentationIntent = .stronglyEmphasized
+    name.foregroundColor = UIColor.label
+    var suffix = AttributedString(".")
+    suffix.foregroundColor = UIColor.label
+    prefix.append(name)
+    prefix.append(suffix)
+    return prefix
   }
 
   private var mark: some View {
-    ZStack {
-      Circle()
-        .fill(QuotaTheme.emerald.opacity(0.16))
-        .frame(width: 72, height: 72)
-      Image(systemName: "person.crop.circle.badge.checkmark")
-        .font(.system(size: 30, weight: .semibold))
-        .foregroundStyle(QuotaTheme.emerald)
-        .accessibilityHidden(true)
-    }
-    .accessibilityLabel("Quota")
+    Image(systemName: "gauge.with.dots.needle.33percent")
+      .font(.system(size: 28, weight: .semibold))
+      .foregroundStyle(QuotaTheme.emerald)
+      .frame(width: 56, height: 56)
+      .accessibilityLabel("Quota")
+      .accessibilityAddTraits(.isImage)
   }
 }

@@ -17,7 +17,6 @@ struct SettingsView: View {
       privacySection
       accountSection
     }
-    .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")

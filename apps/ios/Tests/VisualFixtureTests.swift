@@ -21,7 +21,11 @@ struct VisualFixtureParserTests {
   @Test(
     arguments: [
       ("signed-out", VisualFixture.signedOut),
+      ("connecting", VisualFixture.connecting),
+      ("connect-error", VisualFixture.connectError),
+      ("expired", VisualFixture.expired),
       ("confirm-account", VisualFixture.confirmAccount),
+      ("loading", VisualFixture.loading),
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
@@ -48,6 +52,42 @@ struct VisualFixtureParserTests {
     }
 
     @Test
+    func connectingShowsDisabledProgressState() {
+      let model = AppModel.visualFixture(.connecting, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .connecting)
+      #expect(model.banner == nil)
+      #expect(model.expiredMessage == nil)
+    }
+
+    @Test
+    func connectErrorShowsTheGenericFailureLine() {
+      let model = AppModel.visualFixture(.connectError, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedOut)
+      #expect(model.banner?.text == "Couldn't connect. Try again.")
+      #expect(model.expiredMessage == nil)
+    }
+
+    @Test
+    func expiredShowsTheReconnectLine() {
+      let model = AppModel.visualFixture(.expired, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedOut)
+      #expect(model.banner == nil)
+      #expect(model.expiredMessage == "Session expired. Connect again.")
+    }
+
+    @Test
+    func loadingShowsLaunchingWithNoSurfaceState() {
+      let model = AppModel.visualFixture(.loading, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .launching)
+      #expect(model.summary == nil)
+      #expect(model.banner == nil)
+    }
+
+    @Test
     func confirmAccountShowsTheConnectedGitHubLabel() {
       let model = AppModel.visualFixture(.confirmAccount, now: VisualFixture.referenceDate)
       #expect(model.skipsRestore)
@@ -69,7 +109,8 @@ struct VisualFixtureParserTests {
       #expect(providers == [.codex, .claude, .grok])
       #expect(model.providerCards.count == 3)
 
-      let codex = try #require(model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
+      let codex = try #require(
+        model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
       #expect(codex.sources.count == 2)
       #expect(model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
       let readings = SubscriptionDetailContent.make(
@@ -105,7 +146,9 @@ struct VisualFixtureParserTests {
         return
       }
       #expect(!days.isEmpty)
-      #expect(days.contains { $0.date == UsageActivityCalendar.utcDay(from: VisualFixture.referenceDate) })
+      #expect(
+        days.contains { $0.date == UsageActivityCalendar.utcDay(from: VisualFixture.referenceDate) }
+      )
 
       // Fixtures must never carry session material.
       #expect(model.summary?.account.accountID.hasPrefix("account_visual_") == true)

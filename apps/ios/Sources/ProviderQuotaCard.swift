@@ -21,7 +21,6 @@ struct ProviderQuotaCard: View {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
-    .quotaSurface()
   }
 
   private func observationBlock(_ snapshot: QuotaSnapshot, index: Int) -> some View {
@@ -132,7 +131,8 @@ struct QuotaWindowBlock: View {
         .font(.footnote.monospacedDigit())
         .foregroundStyle(.tertiary)
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityLabel(Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+        .accessibilityLabel(
+          Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
     case .copy(let text):
       Text(text)
         .font(.footnote)
