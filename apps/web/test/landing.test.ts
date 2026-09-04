@@ -39,6 +39,8 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /brew install gotry-io\/tap\/quotabar/);
   assert.match(header, /Continue with GitHub/);
   assert.match(header, /id="header-account"/);
+  assert.match(header, /Settings/);
+  assert.match(header, /Sign out/);
   assert.doesNotMatch(header, /ThemeToggle/);
   assert.match(layout, /footer-controls/);
   assert.match(layout, /ThemeToggle/);
@@ -115,10 +117,15 @@ test("no surface explains itself in implementation words", () => {
 
 test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.ok(overview.indexOf('id="quota-title"') < overview.indexOf('id="today-title"'));
-  assert.match(accountLayout, /<h1 id="dashboard-title">Quota<\/h1>/);
+  assert.match(accountLayout, /id="dashboard-title"/);
+  assert.match(header, /AccountNav/);
+  assert.match(header, /githubAvatarUrl/);
   assert.match(accountNav, /aria-label="Account"/);
   assert.match(overview, /providerDisplayName\(subscription\.provider\)/);
   assert.match(overview, /id="today-title"/);
+  assert.match(overview, /today-strip/);
+  assert.match(overview, /devices-strip/);
+  assert.doesNotMatch(overview, /Installations/);
   assert.match(usage, /id="token-total"/);
   assert.match(usage, /id="cost-total"/);
   assert.match(devices, /id="device-list"/);

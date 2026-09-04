@@ -67,7 +67,9 @@ for (const appearance of appearances) {
     test(`overview ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
+      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
@@ -77,6 +79,8 @@ for (const appearance of appearances) {
       await expect(page.getByText("84%").first()).toBeVisible();
       await expect(page.getByText("53%").first()).toBeVisible();
       await expect(page.getByText("27%").first()).toBeVisible();
+      await expect(page.locator("a.today-strip")).toBeVisible();
+      await expect(page.locator("a.devices-strip")).toBeVisible();
       await shot(page, `web-overview-${appearance}-desktop.png`);
     });
 
@@ -103,6 +107,7 @@ for (const appearance of appearances) {
     test(`overview ${appearance} mobile`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
+      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();

@@ -1,5 +1,6 @@
 <script lang="ts">
 import { isBalanceOnly, remainingPercent, showsPercentMeter } from "@gotry-io/quota-model";
+import { meterTone } from "$lib/account-overview";
 import { formatQuotaRemaining, NO_RESET_TIME_COPY, resetCopy, showsNoResetTime } from "$lib/format";
 
 type WindowItem = {
@@ -31,16 +32,17 @@ let {
       {@const balanceOnly = isBalanceOnly(window)}
       {@const remaining = remainingPercent(window.used_percent)}
       {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}
+      {@const tone = meterTone(remaining)}
       <div class="quota-window-card">
         <div class="quota-window-heading">
           <span>{balanceOnly ? "Balance" : window.title}</span>
+          {#if showsPercentMeter(window)}
+            <div class="quota-track meter-{tone}">
+              <span style:width={`${remaining}%`} aria-hidden="true"></span>
+            </div>
+          {/if}
           <strong>{formatQuotaRemaining(window, provider)}</strong>
         </div>
-        {#if showsPercentMeter(window)}
-          <div class="quota-track">
-            <span style:width={`${remaining}%`} aria-hidden="true"></span>
-          </div>
-        {/if}
         {#if reset}
           <p class="quota-window-meta">{reset}</p>
         {:else if !window.resets_at && showsNoResetTime(window)}

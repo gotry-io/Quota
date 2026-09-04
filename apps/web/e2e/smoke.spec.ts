@@ -106,15 +106,28 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   await mockV6(page);
   await page.goto("/my");
 
-  const accountNav = page.getByRole("navigation", { name: "Account" });
+  const header = page.getByRole("banner");
+  const accountNav = header.getByRole("navigation", { name: "Account" });
   await expect(accountNav).toBeVisible();
   await expect(accountNav.getByRole("link", { name: "Overview" })).toHaveAttribute(
     "aria-current",
     "page",
   );
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(page.getByText(/Updated .* · \d+ devices? reporting/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   await expect(page.locator(".quota-card")).toContainText("Plus");
+  await expect(page.locator("a.today-strip")).toHaveAttribute("href", "/my/usage?period=today");
+  await expect(page.locator("a.devices-strip")).toBeVisible();
+  await expect(page.locator("a.devices-strip")).toHaveAttribute("href", "/my/devices");
+
+  const accountMenu = page.locator("#header-account-menu");
+  await accountMenu.locator("summary").click();
+  await expect(accountMenu.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(accountMenu.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await accountMenu.locator("summary").click();
 
   await accountNav.getByRole("link", { name: "Usage" }).click();
   await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();

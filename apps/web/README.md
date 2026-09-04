@@ -37,17 +37,20 @@ Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than
 worker. Install Chromium with
 `pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
-`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four nav routes: `/my`
-(overview), `/my/usage`, `/my/devices`, and `/my/settings`. Unsigned visits to any of them — and to
-`/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session; Quota Web
-publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under it stay a
-redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview cards link to
-`/my/subscriptions/<sel>` for that subscription's windows, reset countdown, and per-device readings.
-Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
-a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
-`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
-all require an exact same-origin request, and the destructive ones a session authenticated within
-ten minutes.
+`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
+(overview), `/my/usage`, `/my/devices`, and `/my/settings`. When the session is on `/my`, the site
+header carries that nav (Overview / Usage / Devices / Settings) and an account menu with the GitHub
+avatar, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name) and a status
+line from the Account summary (`Updated <age> · <n> devices reporting`). Unsigned visits to any of
+them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session;
+Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
+it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
+quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
+`/my/usage?period=today`, and a Devices summary line to `/my/devices`. Sign-in is a plain navigation
+to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a signed-out
+visitor returns to the page they asked for. Sign-out posts to `/api/auth/logout` and Delete Account
+is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
+request, and the destructive ones a session authenticated within ten minutes.
 
 The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
 bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
@@ -68,9 +71,9 @@ or Not reporting from the newer of the two. It is read-only, and a quiet Device 
 rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
-`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`, and
-`screenshots/` need a matching `!/filename` (or `!/dir/*`) negation in `apps/relay/wrangler.jsonc`;
-`test/static-seo.test.ts` checks this.
+`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`,
+`screenshots/`, and `providers/` need a matching `!/filename` (or `!/dir/*`) negation in
+`apps/relay/wrangler.jsonc`; `test/static-seo.test.ts` checks this.
 
 Public pages `/download`, `/support`, `/privacy`, and `/terms` are SvelteKit routes. Support,
 Privacy, and Terms copy lives in `src/content/*.md` and is rendered by `src/lib/markdown.ts`

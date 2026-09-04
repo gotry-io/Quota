@@ -45,12 +45,16 @@ The site has these routes:
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
    [`docs/security.md`](../../docs/security.md).
-5. `/my` is the signed-in account shell. An in-page `<nav aria-label="Account">` names four
-   routes; the current item is `aria-current="page"`. Below 620 px that nav scrolls horizontally
-   and does not wrap. Each route is `noindex, nofollow`.
-   - `/my` — overview: remaining-quota cards (each a link to `/my/subscriptions/<sel>`),
-     today's Tokens and API-equivalent cost, and a Devices summary (count plus one verdict
-     line per Device).
+5. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
+   with four routes when the viewer is signed in and the path is under `/my`; the current item
+   is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
+   `/my` page has one `h1` (the page name) and a status line from the Account summary:
+   `Updated <age> · <n> devices reporting`, using the shared freshness copy. Each route is
+   `noindex, nofollow`.
+   - `/my` — overview: remaining quota. A Subscriptions grid (each card a link to
+     `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and the 30-day
+     top model, linking `/my/usage?period=today`), and a one-line Devices summary linking
+     `/my/devices`. Overview does not repeat a cost block or an Installations list.
    - `/my/subscriptions/<sel>` — one subscription: provider display name, masked account
      label, plan badge, and the shared freshness line; each window with remaining quota, a
      meter, and the reset countdown (`resets_at` re-read every 60 seconds); per-device
@@ -67,20 +71,24 @@ The site has these routes:
    Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
    `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
    `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
-   as QuotaBar Overview, in a denser web layout. Quota cards share `.quota-grid`: two columns on
+   as QuotaBar Overview, in a denser web layout. The card head is the provider mark
+   (`/providers/*.svg`, or a first-letter color block), provider name, plan badge, and masked
+   account; each window is a row of name, remaining-percent meter, percent, and `Resets in 45m`;
+   the foot is `Studio Mac · 1m ago`. Quota cards share `.quota-grid`: two columns on
    desktop and one column below 620 px. Cursor's Other Models percentage and included-usage
    dollar amount are separate provider meters: compact Quota cards show only the percentage; the
-   subscription detail page shows both. Empty quota states span the full row. Selecting an
-   Activity day loads that day's Usage under the grid. The header
-   shows the GitHub username; the name opens `/my`, and its menu contains only **Sign out**.
-   Session cookies stay HttpOnly. SvelteKit renders the header from `WebDocumentPort.getViewer`
-   on the first HTML byte. The `/my` document is a signed-in shell and does not carry Account
-   data: one client store holds the summary, activity (keyed by `from|to`), and per-day detail,
-   loads `GET /api/v6/account/summary` with the browser's IANA timezone, then prefetches a year
-   of activity without blocking first paint. Fresh reads are reused for 60 seconds
-   (stale-while-revalidate); switching tabs does not refetch. Unsigned visits to `/my` and its
-   sub-routes are a server redirect to `/`. The shipped `/app` bookmark is a single redirect to
-   `/my`. Account data is never published without a session.
+   subscription detail page shows both. Empty quota states span the full row and show the Mac
+   setup sentence once. Selecting an Activity day loads that day's Usage under the grid. The
+   header account menu shows the GitHub avatar (`https://github.com/<login>.png?size=64`, or a
+   first-letter mark when the viewer has no login) and login; the menu contains **Settings** and
+   **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
+   `WebDocumentPort.getViewer` on the first HTML byte. The `/my` document is a signed-in shell
+   and does not carry Account data: one client store holds the summary, activity (keyed by
+   `from|to`), and per-day detail, loads `GET /api/v6/account/summary` with the browser's IANA
+   timezone, then prefetches a year of activity without blocking first paint. Fresh reads are
+   reused for 60 seconds (stale-while-revalidate); switching tabs does not refetch. Unsigned
+   visits to `/my` and its sub-routes are a server redirect to `/`. The shipped `/app` bookmark
+   is a single redirect to `/my`. Account data is never published without a session.
 
 The document `<head>` is per-route. `/` publishes the public title, description, and canonical URL
 `https://quota.gotry.io/`. `/my` is `noindex, nofollow` and has no canonical URL.
@@ -120,8 +128,17 @@ choosing System removes it. Do not render three permanent footer buttons.
 - Display headings: `ui-rounded`, `SF Pro Rounded`, then the system stack.
 - The hero uses a responsive 52–84 px display size with compact leading.
 - Body copy stays between 16 and 21 px with generous line height.
+- Account-shell type uses `--fs-h1` (32 px desktop / 28 px below 620 px), `--fs-h2` (20 px),
+  `--fs-body` (15 px), and `--fs-caption` (13 px) from `src/app.css`.
 - Monospace is reserved for values whose literal representation matters, such as authorization
   codes. Do not use it as a decorative product motif.
+
+### Meter thresholds
+
+Remaining-percent meters use `--meter-good` at 40 and above, `--meter-warn` from 15 through 39,
+and `--meter-critical` below 15, in both appearances — the same bands as QuotaBar's
+`QuotaUsageTone`. Color never carries status alone: the percent
+label stays next to the bar.
 
 ### Shape and spacing
 
@@ -169,7 +186,10 @@ and a 42 px target.
 ## Account dashboard
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
-Account nav. The overview leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
+Account nav in the site header. The overview leads with remaining quota: subscription cards, then a
+Today strip (tokens, API-equivalent cost, 30-day top model), then a Devices summary line
+(`2 devices · all reporting` or `1 of 2 reporting`, plus the oldest Device's verdict). It does not
+repeat a cost block or an Installations list. Under Usage, totals lead with tokens and API-equivalent
 cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
 partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
@@ -203,13 +223,13 @@ agent tree is a second read:
 `GET /api/v6/account/usage/activity?from=D&to=D&detail=agents`. Loading uses a skeleton; a failed
 Relay response uses the same retry notice as the rest of the dashboard. An empty `agents` list
 reads **No Usage on this day.** A 401 starts GitHub sign-in. The dashboard does not repeat the
-GitHub username in the page heading.
+GitHub username in the page heading; the header account menu is the identity.
 
 Quota cards show one subscription, not one upload: an account collected on several Macs is one card
-carrying the reading that still describes it, with the reporting device and the shared freshness
-line below it and the other reporting devices named on a second line. That line is the whole
-sentence — a reading that aged out reads **Not current — last reading 2d ago** rather than as a
-current number — so the card needs no separate status pill.
+carrying the reading that still describes it, with the reporting device and age on the foot
+(`Studio Mac · 1m ago`). A reading that aged out names why — **Not current — last reading 2d ago**
+— rather than as a current number, so the card needs no separate status pill. Other reporting
+devices stay on the subscription detail page.
 
 The subscription detail page is `/my/subscriptions/<sel>`. It names the provider from the catalog,
 the masked account label, the plan, and the shared freshness line, then each window with remaining

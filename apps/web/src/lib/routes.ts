@@ -9,6 +9,22 @@ export function subscriptionPath(sel: string): string {
   return `/my/subscriptions/${encodeURIComponent(sel)}`;
 }
 
+export function isAccountShellPath(pathname: string): boolean {
+  return pathname === DASHBOARD_PATH || pathname.startsWith(`${DASHBOARD_PATH}/`);
+}
+
+export function isSubscriptionPath(pathname: string): boolean {
+  return pathname.startsWith(`${DASHBOARD_PATH}/subscriptions/`);
+}
+
+export function accountPageTitle(pathname: string): string {
+  if (pathname === DASHBOARD_PATH) return "Overview";
+  if (pathname === USAGE_PATH) return "Usage";
+  if (pathname === DEVICES_PATH) return "Devices";
+  if (pathname === SETTINGS_PATH) return "Settings";
+  return "Account";
+}
+
 /** Relay's GitHub sign-in. Following it is the whole flow; the browser never fetches it. */
 export const SIGN_IN_PATH = "/api/auth/github/start";
 

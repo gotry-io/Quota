@@ -90,9 +90,9 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
   <div class="dashboard-section-heading">
     <div>
       <p class="eyebrow">Subscription</p>
-      <h2 id="subscription-title">
+      <h1 id="subscription-title">
         {subscription ? providerDisplayName(subscription.provider) : "Subscription"}
-      </h2>
+      </h1>
       {#if subscription?.snapshot.account.label}
         <p class="subscription-label">{subscription.snapshot.account.label}</p>
       {/if}

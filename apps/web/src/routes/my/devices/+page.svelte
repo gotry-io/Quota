@@ -3,8 +3,8 @@ import type { AccountDeviceRead } from "@gotry-io/quota-protocol";
 import { platformDisplayName } from "@gotry-io/quota-protocol";
 import { page } from "$app/state";
 import { deleteDevice } from "$lib/account-client";
-import { getAccountStore } from "$lib/account-store.svelte.ts";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
+import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import { deviceActivity } from "$lib/device-activity";
@@ -33,16 +33,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<section class="dashboard-section" aria-labelledby="devices-title">
-  <div class="dashboard-section-heading">
-    <div>
-      <p class="eyebrow">Installations</p>
-      <h2 id="devices-title">Devices</h2>
-    </div>
-    <span id="device-count" class="count-pill"
-      >{store.summary ? store.summary.devices.length : ""}</span
-    >
-  </div>
+<section class="dashboard-section" aria-labelledby="dashboard-title">
   {#if store.loadError}
     <RetryNotice
       message={store.loadError.message}
