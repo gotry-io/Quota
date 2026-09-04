@@ -311,11 +311,11 @@ or a report.
   providers that sync to an account, because a local-only collector there would force QuotaBar's
   enum to diverge again.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
-  client, account session refresh/revoke, the last-good Account summary cache, and the
-  Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios` owns SwiftUI,
-  `ASWebAuthenticationSession`, App Group snapshot publish/clear, and the WidgetKit extension; its
-  views do not call `URLSession` or Security or decode JSON. `QuotaWidgets` depends only on
-  `QuotaWidgetData` and `QuotaPresentation`, and must not import `QuotaWire`, `QuotaRelay`,
+  client, account session refresh/revoke, the last-good Account summary cache, the activity
+  read (not cached), and the Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios`
+  owns SwiftUI, `ASWebAuthenticationSession`, App Group snapshot publish/clear, and the WidgetKit
+  extension; its views do not call `URLSession` or Security or decode JSON. `QuotaWidgets` depends
+  only on `QuotaWidgetData` and `QuotaPresentation`, and must not import `QuotaWire`, `QuotaRelay`,
   `QuotaAccount`, or Security, or use `URLSession` or Keychain.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.

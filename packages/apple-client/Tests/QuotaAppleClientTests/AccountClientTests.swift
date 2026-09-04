@@ -343,4 +343,92 @@ struct AccountClientTests {
     try store.clear()
     #expect(try store.load() == nil)
   }
+
+  @Test
+  func activity401RetriesOnceAfterRefreshAndDoesNotWriteCache() async throws {
+    let cached = CachedAccountSummary(
+      summary: try WireCodec.decode(
+        AccountSummary.self,
+        from: try Fixtures.accountSummaryJSON()
+      ),
+      fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+    )
+    let activity = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let transport = ScriptedTransport([
+      .init(status: 401, body: try Fixtures.errorBody(code: "unauthorized")),
+      .init(status: 200, body: try Fixtures.refreshResponse()),
+      .init(status: 200, body: activity),
+    ])
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session())
+    let cache = MemoryAccountSummaryStore(value: cached)
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    let result = await client.fetchUsageActivity(
+      from: "2026-08-10",
+      to: "2026-08-10",
+      detail: .agents
+    )
+    guard case .activity(let response) = result else {
+      Issue.record("expected activity, got \(result)")
+      return
+    }
+    #expect(response.days.map(\.date) == ["2026-08-10"])
+    #expect(transport.tokenPosts == 1)
+    #expect(try sessions.load()?.accessToken == Fixtures.rotatedAccess)
+    #expect(try sessions.load()?.refreshToken == Fixtures.rotatedRefresh)
+    #expect(try cache.load()?.fetchedAt == cached.fetchedAt)
+    #expect(try cache.load()?.summary.account.accountID == "account_01")
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/api/v6/account/usage/activity",
+        "/oauth/v2/token",
+        "/api/v6/account/usage/activity",
+      ])
+    #expect(transport.recordedIfNoneMatch == [nil, nil, nil])
+    let activityQuery = URLComponents(
+      url: transport.recordedURLs[0], resolvingAgainstBaseURL: false
+    )?.queryItems ?? []
+    #expect(activityQuery.map(\.name) == ["from", "to", "detail"])
+    #expect(activityQuery.last?.value == "agents")
+  }
+
+  @Test
+  func activity401RefreshFailureDoesNotWriteCache() async throws {
+    let cached = CachedAccountSummary(
+      summary: try WireCodec.decode(
+        AccountSummary.self,
+        from: try Fixtures.accountSummaryJSON()
+      ),
+      fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+    )
+    let transport = ScriptedTransport([
+      .init(status: 401, body: try Fixtures.errorBody(code: "unauthorized")),
+      .init(status: 400, body: try Fixtures.errorBody(code: "invalid_grant")),
+    ])
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session())
+    let cache = MemoryAccountSummaryStore(value: cached)
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    let result = await client.fetchUsageActivity(from: "2026-08-10", to: "2026-08-10")
+    #expect(result == .failure(.sessionExpired))
+    #expect(try sessions.load() == nil)
+    #expect(try cache.load() == nil)
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/api/v6/account/usage/activity",
+        "/oauth/v2/token",
+      ])
+  }
 }
