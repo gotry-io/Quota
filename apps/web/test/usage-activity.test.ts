@@ -7,9 +7,14 @@ import type { UsageActivityDay, UsageCostOutcome } from "@gotry-io/quota-protoco
 import {
   ACTIVITY_TOOLTIP_MARGIN,
   ACTIVITY_WEEKDAY_LABELS,
+  activityRoverFromKey,
   buildUsageActivityModel,
+  formatActivityDate,
   formatActivityTooltip,
+  nextActivityDate,
   placeActivityTooltip,
+  usageActivityDayFromQuery,
+  usageActivityDayHref,
 } from "../src/lib/usage-activity.ts";
 
 function totals(input: number, output: number, messages = 1) {
@@ -178,18 +183,72 @@ test("keeps an in-page tooltip inside the viewport without overflowing", () => {
   assert.equal(below.top, 24 + 8);
 });
 
-test("activity markup uses a day-button group and a custom tooltip, not a native title", () => {
+test("activity markup uses a roving day-button group and a custom tooltip, not a native title", () => {
   const source = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "../src/lib/components/UsageActivity.svelte"),
     "utf8",
   );
   assert.match(source, /role="group"/);
+  assert.match(source, /aria-roledescription="grid"/);
   assert.doesNotMatch(source, /role="grid"/);
+  assert.match(source, /tabindex=\{day\.date === roverDate \? 0 : -1\}/);
+  assert.match(source, /aria-pressed=\{day\.date === selectedDate\}/);
   assert.match(source, /class="usage-activity-tooltip"/);
   assert.match(source, /aria-label=\{day\.tooltip\}/);
   assert.doesNotMatch(source, /\btitle=/);
-  assert.match(source, /if \(found\) showTooltip/);
+  assert.match(source, /if \(found\) \{/);
+  assert.match(source, /showTooltip\(found\.day, found\.button\)/);
   assert.match(source, /else hideTooltip\(\)/);
+});
+
+test("moves the active day by one day, one week, thirty days, and the week edges", () => {
+  const model = buildUsageActivityModel([], { from: "2026-01-01", to: "2026-03-15" }, "2026-03-15");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "next-day"), "2026-01-16");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "previous-day"), "2026-01-14");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "next-week"), "2026-01-22");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "previous-week"), "2026-01-08");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "page-forward"), "2026-02-14");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "page-back"), "2026-01-01");
+  assert.equal(nextActivityDate(model.days, "2026-01-01", "previous-day"), "2026-01-01");
+  assert.equal(nextActivityDate(model.days, "2026-03-15", "next-day"), "2026-03-15");
+  assert.equal(new Date("2026-01-15T00:00:00Z").getUTCDay(), 4);
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "row-start"), "2026-01-11");
+  assert.equal(nextActivityDate(model.days, "2026-01-15", "row-end"), "2026-01-17");
+});
+
+test("maps grid keys onto rover actions", () => {
+  assert.equal(activityRoverFromKey("ArrowLeft"), "previous-day");
+  assert.equal(activityRoverFromKey("ArrowRight"), "next-day");
+  assert.equal(activityRoverFromKey("ArrowUp"), "previous-week");
+  assert.equal(activityRoverFromKey("ArrowDown"), "next-week");
+  assert.equal(activityRoverFromKey("Home"), "row-start");
+  assert.equal(activityRoverFromKey("End"), "row-end");
+  assert.equal(activityRoverFromKey("PageUp"), "page-back");
+  assert.equal(activityRoverFromKey("PageDown"), "page-forward");
+  assert.equal(activityRoverFromKey("Enter"), "select");
+  assert.equal(activityRoverFromKey(" "), "select");
+  assert.equal(activityRoverFromKey("Tab"), null);
+});
+
+test("keeps ?day= in the URL when the date is in the activity range", () => {
+  const range = { from: "2026-01-01", to: "2026-03-15" };
+  assert.equal(usageActivityDayFromQuery("2026-01-15", range), "2026-01-15");
+  assert.equal(usageActivityDayFromQuery("2025-12-31", range), null);
+  assert.equal(usageActivityDayFromQuery("2026-02-31", range), null);
+  assert.equal(usageActivityDayFromQuery("nope", range), null);
+  assert.equal(usageActivityDayFromQuery(null, range), null);
+  assert.equal(formatActivityDate("2026-01-15"), "January 15, 2026");
+  assert.equal(
+    usageActivityDayHref(new URL("https://quota.gotry.io/my/usage?period=today"), "2026-01-15"),
+    "/my/usage?period=today&day=2026-01-15",
+  );
+  assert.equal(
+    usageActivityDayHref(
+      new URL("https://quota.gotry.io/my/usage?period=today&day=2026-01-15"),
+      null,
+    ),
+    "/my/usage?period=today",
+  );
 });
 
 test("tooltip states tokens, estimated cost, and unpriced or partial meaning", () => {

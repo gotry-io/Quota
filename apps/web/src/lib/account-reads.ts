@@ -50,8 +50,13 @@ export function accountActivityRange(today: Date): { from: string; to: string } 
   return { from: from.toISOString().slice(0, 10), to };
 }
 
-export function accountActivityPath(range: { from: string; to: string }): string {
-  return `/api/v6/account/usage/activity?${new URLSearchParams(range).toString()}`;
+export function accountActivityPath(
+  range: { from: string; to: string },
+  detail?: "agents",
+): string {
+  const params = new URLSearchParams(range);
+  if (detail !== undefined) params.set("detail", detail);
+  return `/api/v6/account/usage/activity?${params.toString()}`;
 }
 
 /** The summary path, carrying the calendar this browser keeps. */

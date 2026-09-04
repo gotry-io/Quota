@@ -1,22 +1,75 @@
 <script lang="ts">
-import type { UsageActivityDayRead } from "@gotry-io/quota-protocol";
+import type { UsageActivityDayRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
+import {
+  type AccountError,
+  accountNoticeActionLabel,
+  accountNoticeRetry,
+} from "$lib/account-errors";
+import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import RetryNotice from "$lib/components/RetryNotice.svelte";
+import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
+import { costBasisLabel, formatCost, formatCount } from "$lib/format";
 import {
   ACTIVITY_WEEKDAY_LABELS,
   type ActivityRange,
+  activityRoverFromKey,
   buildUsageActivityModel,
+  formatActivityDate,
+  nextActivityDate,
   placeActivityTooltip,
 } from "$lib/usage-activity";
 
 let {
   days,
   range,
+  selectedDate = null,
+  detail = null,
+  detailError = null,
+  detailLoading = false,
+  onSelectDate,
+  onClose,
+  onRetryDetail,
 }: {
   days: UsageActivityDayRead[];
   range: ActivityRange;
+  selectedDate?: string | null;
+  detail?: UsageActivityDayRead | null;
+  detailError?: AccountError | null;
+  detailLoading?: boolean;
+  onSelectDate: (date: string) => void;
+  onClose: () => void;
+  onRetryDetail: () => void;
 } = $props();
 
 const model = $derived(buildUsageActivityModel(days, range, range.to));
+const selected = $derived(
+  selectedDate
+    ? (model.days.find((item) => item.date === selectedDate && !item.outside) ?? null)
+    : null,
+);
+const selectedCost = $derived(
+  selected?.cost ?? { amount_microusd: null, status: "unavailable", basis: "none" },
+);
+const detailAgents = $derived(detail?.agents ?? []);
+const detailPeriod = $derived.by((): UsagePeriodRead | null => {
+  if (!detail || detailAgents.length === 0) return null;
+  return {
+    totals: detail.totals,
+    cost: detail.cost,
+    partial: false,
+    agents: detailAgents,
+  };
+});
 
+let roverOverride = $state<string | null>(null);
+const roverDate = $derived.by(() => {
+  const selectable = model.days.filter((day) => !day.outside).map((day) => day.date);
+  if (roverOverride !== null && selectable.includes(roverOverride)) return roverOverride;
+  if (selectedDate && selectable.includes(selectedDate)) return selectedDate;
+  const today = model.days.find((day) => day.today);
+  return today?.date ?? selectable.at(-1) ?? null;
+});
+let weeksEl = $state<HTMLDivElement | null>(null);
 let tooltipText = $state<string | null>(null);
 let tooltipAnchor = $state<HTMLElement | null>(null);
 let tooltipEl = $state<HTMLDivElement | null>(null);
@@ -65,7 +118,41 @@ function hideIfLeftGroup(event: PointerEvent | FocusEvent): void {
 
 function onFocusIn(event: FocusEvent): void {
   const found = dayFromTarget(event.target);
-  if (found) showTooltip(found.day, found.button);
+  if (found) {
+    roverOverride = found.day.date;
+    showTooltip(found.day, found.button);
+  }
+}
+
+function focusDay(date: string): void {
+  roverOverride = date;
+  const button = weeksEl?.querySelector(`button.usage-activity-cell[data-date="${date}"]`);
+  if (!(button instanceof HTMLButtonElement)) return;
+  button.focus();
+  const day = model.days.find((item) => item.date === date);
+  if (day) showTooltip(day, button);
+}
+
+function onKeyDown(event: KeyboardEvent): void {
+  if (!(event.target instanceof HTMLButtonElement)) return;
+  if (!event.target.classList.contains("usage-activity-cell")) return;
+  const date = event.target.dataset.date;
+  if (!date) return;
+  const action = activityRoverFromKey(event.key);
+  if (action === null) return;
+  event.preventDefault();
+  if (action === "select") {
+    onSelectDate(date);
+    return;
+  }
+  const next = nextActivityDate(model.days, date, action);
+  if (next !== date) focusDay(next);
+}
+
+function closePanel(): void {
+  const date = selectedDate;
+  if (date) focusDay(date);
+  onClose();
 }
 
 $effect(() => {
@@ -117,8 +204,10 @@ $effect(() => {
             {/each}
           </div>
           <div
+            bind:this={weeksEl}
             class="usage-activity-weeks"
             role="group"
+            aria-roledescription="grid"
             aria-label="Usage activity by day"
             onpointerover={onPointerOver}
             onpointerout={hideIfLeftGroup}
@@ -134,7 +223,11 @@ $effect(() => {
                   class:activity-today={day.today}
                   type="button"
                   data-date={day.date}
+                  tabindex={day.date === roverDate ? 0 : -1}
+                  aria-pressed={day.date === selectedDate}
                   aria-label={day.tooltip}
+                  onclick={() => onSelectDate(day.date)}
+                  onkeydown={onKeyDown}
                 ></button>
               {/if}
             {/each}
@@ -152,6 +245,49 @@ $effect(() => {
       <span>More</span>
     </div>
   </div>
+  {#if selected}
+    <section class="usage-activity-detail" aria-labelledby="usage-activity-day-title">
+      <div class="usage-activity-detail-header">
+        <div>
+          <h3 id="usage-activity-day-title">{formatActivityDate(selected.date)}</h3>
+          <p class="usage-activity-detail-meta">UTC</p>
+        </div>
+        <button class="text-button usage-activity-detail-close" type="button" onclick={closePanel}
+          >Close</button
+        >
+      </div>
+      <div class="usage-activity-detail-stats">
+        <article>
+          <span>Tokens</span>
+          <strong>{formatCount(selected.tokens)}</strong>
+          <small
+            >{`${formatCount(selected.input_tokens)} in · ${formatCount(selected.output_tokens)} out · ${formatCount(selected.requests)} requests`}</small
+          >
+        </article>
+        <article>
+          <span>API-equivalent cost</span>
+          <strong>{formatCost(selectedCost)}</strong>
+          <small>{costBasisLabel(selectedCost)}</small>
+        </article>
+      </div>
+      {#if selected.partial}
+        <p class="usage-day-note">Some hours on this day were scanned incompletely.</p>
+      {/if}
+      {#if detailLoading}
+        <LoadingBlock lines={3} label="Loading this day's Usage" />
+      {:else if detailError}
+        <RetryNotice
+          message={detailError.message}
+          actionLabel={accountNoticeActionLabel(detailError)}
+          onRetry={accountNoticeRetry(detailError, onRetryDetail)}
+        />
+      {:else if detailPeriod}
+        <UsageBreakdown period={detailPeriod} id="usage-day-breakdown" />
+      {:else}
+        <p class="empty-state">No Usage on this day.</p>
+      {/if}
+    </section>
+  {/if}
   {#if tooltipText}
     <div
       bind:this={tooltipEl}

@@ -44,12 +44,15 @@ export async function signOut(): Promise<void> {
   window.location.assign("/");
 }
 
-export async function fetchAccountActivity(range: {
-  from: string;
-  to: string;
-}): Promise<AccountActivityResult> {
+export async function fetchAccountActivity(
+  range: {
+    from: string;
+    to: string;
+  },
+  detail?: "agents",
+): Promise<AccountActivityResult> {
   try {
-    const response = await fetch(accountActivityPath(range), jsonRequest);
+    const response = await fetch(accountActivityPath(range, detail), jsonRequest);
     if (!response.ok) return classifyAccountError(response);
     return parseAccountActivityResponse(response.status, await response.json());
   } catch {

@@ -127,3 +127,18 @@ export const accountActivity = {
     },
   ],
 };
+
+export function accountActivityDay(date: string) {
+  return {
+    protocol_version: 6,
+    days: [
+      {
+        date,
+        totals: structuredClone(today.totals),
+        cost: structuredClone(today.cost),
+        partial: false,
+        agents: structuredClone(today.agents),
+      },
+    ],
+  };
+}
