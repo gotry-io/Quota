@@ -38,22 +38,16 @@ export function costBasisLabel(cost: CostView): string {
   return cost.status === "complete" ? `${basis} · complete` : `${basis} · priced subset only`;
 }
 
-/** A future instant, such as when a window refills. Past instants use the freshness copy below. */
-export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(WEB_LOCALE, { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(value),
-  );
-}
-
 /**
- * How old a reading is, in the words every Quota client uses.
+ * How old a reading is, and when a window refills, in the words every Quota client uses.
  *
  * One rule, one voice: the website, QuotaBar, and the iOS app all state age relative to now
  * rather than as a calendar date, because an absolute instant makes the reader do the
- * subtraction before they learn the only thing they wanted to know.
+ * subtraction before they learn the only thing they wanted to know. A future refill is the
+ * exception: it is a countdown or a local date, never an age.
  * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
- * thresholds, phrases, and when the no-reset phrase prints; this file and
- * `packages/apple-shared` both answer it.
+ * thresholds, phrases, when the no-reset phrase prints, and how a future refill is named; this
+ * file and `packages/apple-shared` both answer it.
  */
 export const NO_RESET_TIME_COPY = "No reset time reported";
 export const NOT_CHECKED_COPY = "Not checked";
@@ -123,6 +117,66 @@ export function observationFreshnessCopy(status: string, observedAt: string, now
 export function lastReadingCopy(instant: string | null, now?: Date): string {
   if (instant === null) return NO_READINGS_COPY;
   return `last reading ${relativeAge(instant, now)}`;
+}
+
+/**
+ * The line under a window that still has a future refill, or `null` once that instant has passed.
+ *
+ * English is fixed; `timeZone` is the IANA zone the reader is in. Minutes round up, and a
+ * duration under a minute still reads as `Resets in 1m`.
+ */
+export function resetCopy(
+  resetsAt: string | number | Date,
+  now: Date = new Date(),
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string | null {
+  const resetDate = new Date(resetsAt);
+  const seconds = (resetDate.getTime() - now.getTime()) / 1000;
+  if (!(seconds > 0)) return null;
+  const wholeMinutes = Math.max(1, Math.ceil(seconds / 60));
+  if (wholeMinutes < 60) {
+    return `Resets in ${wholeMinutes}m`;
+  }
+  if (seconds < 86_400) {
+    let hours = Math.floor(seconds / 3_600);
+    let minutes = Math.ceil((seconds - hours * 3_600) / 60);
+    if (minutes === 60) {
+      hours += 1;
+      minutes = 0;
+    }
+    if (minutes === 0) return `Resets in ${hours}h`;
+    return `Resets in ${hours}h ${minutes}m`;
+  }
+  const parts = zonedDateParts(resetDate, timeZone);
+  if (seconds < 604_800) {
+    return `Resets ${parts.weekday} ${parts.hour}:${parts.minute}`;
+  }
+  return `Resets ${parts.month} ${parts.day}`;
+}
+
+function zonedDateParts(
+  date: Date,
+  timeZone: string,
+): { weekday: string; month: string; day: string; hour: string; minute: string } {
+  const values = new Map<string, string>();
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") values.set(part.type, part.value);
+  }
+  return {
+    weekday: values.get("weekday") ?? "",
+    month: values.get("month") ?? "",
+    day: values.get("day") ?? "",
+    hour: (values.get("hour") ?? "00").padStart(2, "0"),
+    minute: (values.get("minute") ?? "00").padStart(2, "0"),
+  };
 }
 
 function formatPercent(value: number): string {

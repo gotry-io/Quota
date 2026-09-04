@@ -11,6 +11,7 @@ import {
   lastReadingCopy,
   observationFreshnessCopy,
   relativeAge,
+  resetCopy,
   showsNoResetTime,
   updatedCopy,
   usageModelDisplayName,
@@ -39,12 +40,33 @@ const fixture = JSON.parse(
     expected: boolean;
   }[];
   device: { name: string; age_seconds: number | null; expected: string }[];
+  reset: {
+    name: string;
+    seconds_until: number;
+    now?: string;
+    resets_at?: string;
+    expected: string | null;
+  }[];
 };
 
 const now = new Date("2026-08-25T12:00:00Z");
 
 function instant(ageSeconds: number): string {
   return new Date(now.getTime() - ageSeconds * 1000).toISOString();
+}
+
+/** Map an RFC 3339 offset to an IANA zone `Intl` can format. `Etc/GMT` signs are inverted. */
+function timeZoneFromRfc3339(value: string): string {
+  if (value.endsWith("Z")) return "UTC";
+  const match = value.match(/([+-])(\d{2}):(\d{2})$/);
+  if (match === null) throw new Error(`reset fixture timestamp has no offset: ${value}`);
+  if (match[3] !== "00") {
+    throw new Error(`reset fixture timestamps use whole-hour offsets: ${value}`);
+  }
+  const hours = Number(match[2]);
+  if (hours === 0) return "UTC";
+  const inverted = match[1] === "-" ? "+" : "-";
+  return `Etc/GMT${inverted}${hours}`;
 }
 
 test("named freshness phrases match the shared fixture", () => {
@@ -77,6 +99,22 @@ test("device lines match the shared fixture", () => {
   for (const testCase of fixture.device) {
     const value = testCase.age_seconds === null ? null : instant(testCase.age_seconds);
     assert.equal(lastReadingCopy(value, now), testCase.expected, testCase.name);
+  }
+});
+
+test("reset copy matches the shared fixture", () => {
+  assert.ok(fixture.reset.length > 1);
+  for (const testCase of fixture.reset) {
+    if (testCase.now !== undefined && testCase.resets_at !== undefined) {
+      assert.equal(
+        resetCopy(testCase.resets_at, new Date(testCase.now), timeZoneFromRfc3339(testCase.now)),
+        testCase.expected,
+        testCase.name,
+      );
+      continue;
+    }
+    const resetsAt = new Date(now.getTime() + testCase.seconds_until * 1000);
+    assert.equal(resetCopy(resetsAt, now, "UTC"), testCase.expected, testCase.name);
   }
 });
 

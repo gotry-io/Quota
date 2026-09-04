@@ -47,6 +47,32 @@ struct FreshnessCopyConformanceTests {
     }
   }
 
+  @Test func resetCopyMatchesTheSharedFixture() throws {
+    let cases = try FreshnessCopyFixture.resetCases()
+    #expect(cases.count > 1)
+    let fallbackNow = now
+    for testCase in cases {
+      let now: Date
+      let resetsAt: Date
+      if let fixtureNow = testCase.now, let fixtureResetsAt = testCase.resetsAt {
+        now = fixtureNow
+        resetsAt = fixtureResetsAt
+      } else {
+        now = fallbackNow
+        resetsAt = fallbackNow.addingTimeInterval(TimeInterval(testCase.secondsUntil))
+      }
+      var calendar = Calendar(identifier: .gregorian)
+      calendar.timeZone = testCase.timeZone
+      let observed = FreshnessCopy.resetCopy(
+        resetsAt: resetsAt,
+        now: now,
+        timeZone: testCase.timeZone,
+        calendar: calendar
+      )
+      #expect(observed == testCase.expected, "\(testCase.name)")
+    }
+  }
+
   @Test func missingResetDisplayMatchesTheSharedFixture() throws {
     let cases = try FreshnessCopyFixture.missingResetCases()
     #expect(cases.count > 1)
@@ -110,6 +136,15 @@ enum FreshnessCopyFixture {
     let expected: Bool
   }
 
+  struct ResetCase {
+    let name: String
+    let secondsUntil: Int
+    let now: Date?
+    let resetsAt: Date?
+    let timeZone: TimeZone
+    let expected: String?
+  }
+
   static func phrases() throws -> [String: String] {
     try root()["phrases"] as! [String: String]
   }
@@ -126,6 +161,22 @@ enum FreshnessCopyFixture {
     }
   }
 
+  static func resetCases() throws -> [ResetCase] {
+    let entries = try root()["reset"] as! [[String: Any]]
+    return entries.map { entry in
+      let nowText = entry["now"] as? String
+      let resetsText = entry["resets_at"] as? String
+      return ResetCase(
+        name: entry["name"] as! String,
+        secondsUntil: (entry["seconds_until"] as! NSNumber).intValue,
+        now: nowText.map(parseRFC3339),
+        resetsAt: resetsText.map(parseRFC3339),
+        timeZone: nowText.map(timeZoneFromRFC3339) ?? TimeZone(secondsFromGMT: 0)!,
+        expected: entry["expected"] as? String
+      )
+    }
+  }
+
   static func missingResetCases() throws -> [MissingResetCase] {
     let entries = try root()["missing_reset"] as! [[String: Any]]
     return entries.map {
@@ -136,6 +187,36 @@ enum FreshnessCopyFixture {
         expected: $0["expected"] as! Bool
       )
     }
+  }
+
+  private static func parseRFC3339(_ value: String) -> Date {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+    if let date = formatter.date(from: value) {
+      return date
+    }
+    formatter.formatOptions = [.withInternetDateTime]
+    guard let date = formatter.date(from: value) else {
+      fatalError("reset fixture timestamp is not RFC 3339: \(value)")
+    }
+    return date
+  }
+
+  private static func timeZoneFromRFC3339(_ value: String) -> TimeZone {
+    if value.hasSuffix("Z") {
+      return TimeZone(secondsFromGMT: 0)!
+    }
+    let suffix = String(value.suffix(6))
+    guard suffix.count == 6,
+      let signChar = suffix.first,
+      signChar == "+" || signChar == "-",
+      let hours = Int(suffix.dropFirst().prefix(2)),
+      let minutes = Int(suffix.suffix(2))
+    else {
+      fatalError("reset fixture timestamp has no offset: \(value)")
+    }
+    let sign = signChar == "-" ? -1 : 1
+    return TimeZone(secondsFromGMT: sign * (hours * 3_600 + minutes * 60))!
   }
 
   private static func root() throws -> [String: Any] {
