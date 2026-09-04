@@ -53,6 +53,9 @@ The site has four surfaces:
    `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
    without a session.
 
+The document `<head>` is per-route. `/` publishes the public title, description, and canonical URL
+`https://quota.gotry.io/`. `/my` is `noindex, nofollow` and has no canonical URL.
+
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
 

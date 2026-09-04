@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /my
+Disallow: /app
+Disallow: /api
+Disallow: /oauth
+Sitemap: https://quota.gotry.io/sitemap.xml

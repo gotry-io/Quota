@@ -14,6 +14,21 @@ async function copyBrew(): Promise<void> {
 }
 </script>
 
+<svelte:head>
+  <title>Quota — Know what you have left</title>
+  <meta
+    name="description"
+    content="Quota keeps remaining coding-agent quota and privacy-preserving Usage together. Install QuotaBar on macOS from a .dmg or Homebrew."
+  />
+  <link rel="canonical" href="https://quota.gotry.io/" />
+  <meta property="og:title" content="Quota — Know what you have left" />
+  <meta
+    property="og:description"
+    content="See remaining quota for Codex, Claude, Grok, Cursor, and API keys in the menu bar."
+  />
+  <meta property="og:url" content="https://quota.gotry.io/" />
+</svelte:head>
+
 <div id="landing-view">
   <section class="hero" aria-labelledby="hero-title">
     <div class="hero-copy">

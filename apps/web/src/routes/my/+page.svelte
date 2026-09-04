@@ -153,6 +153,11 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
 }
 </script>
 
+<svelte:head>
+  <title>Account · Quota</title>
+  <meta name="robots" content="noindex, nofollow" />
+</svelte:head>
+
 <section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title">
   <div class="dashboard-heading">
     <div>
