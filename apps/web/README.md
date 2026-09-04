@@ -16,15 +16,26 @@ Managed production publishes through the Relay deploy path (`pnpm deploy:cloudfl
 `deploy-cloudflare.yml`). There is no separate website-only Cloudflare project: website and Relay
 API ship together on `quota.gotry.io`.
 
+## Development
+
 ```bash
 pnpm dev:web
 QUOTA_DEV_VIEWER=octocat pnpm dev:web   # signed-in header QA only; Usage APIs still 401
 pnpm --filter @gotry-io/quota-web check
+pnpm --filter @gotry-io/quota-web test          # existing node:test files, then Vitest
+pnpm --filter @gotry-io/quota-web test:unit     # Vitest component tests (src/**/*.test.ts)
+pnpm --filter @gotry-io/quota-web test:e2e      # Playwright smoke and axe against vite dev
 pnpm --filter @gotry-io/quota-web build
 ```
 
 `pnpm dev:web` is fast HMR and is not a real GitHub login. `pnpm dev:relay` is the composed
 Worker. Browser GitHub login on localhost is not available.
+
+`test` keeps the eight existing `node --test` files and then runs Vitest. `test:unit` is Vitest
+alone. `test:e2e` starts `vite dev` with `QUOTA_DEV_VIEWER=octocat` so `/my` is a signed-in shell;
+Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than through a service
+worker. Install Chromium with
+`pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
 `/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
 Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in

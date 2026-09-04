@@ -10,8 +10,12 @@ let menu = $state<HTMLDetailsElement | null>(null);
 let preference = $state<ThemePreference>("system");
 
 function storedPreference(): ThemePreference {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === "light" || stored === "dark" ? stored : "system";
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : "system";
+  } catch {
+    return "system";
+  }
 }
 
 function resolvedTheme(value: ThemePreference): Theme {
@@ -34,8 +38,12 @@ function applyAppearance(value: ThemePreference): void {
 
 function choose(value: ThemePreference): void {
   preference = value;
-  if (value === "system") localStorage.removeItem(THEME_STORAGE_KEY);
-  else localStorage.setItem(THEME_STORAGE_KEY, value);
+  try {
+    if (value === "system") localStorage.removeItem(THEME_STORAGE_KEY);
+    else localStorage.setItem(THEME_STORAGE_KEY, value);
+  } catch {
+    // Private browsing and some test environments expose no storage.
+  }
   applyAppearance(value);
   menu?.removeAttribute("open");
 }

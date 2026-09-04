@@ -68,7 +68,7 @@ Tokens are defined in `src/app.css` and must remain the source used by the imple
 | Deep ink | `#090909` | `#ffffff` | Primary-action hover |
 | Charcoal | `#525252` | `#c4c4c4` | Secondary labels and navigation |
 | Body | `#737373` | `#a3a3a3` | Supporting prose |
-| Muted | `#a3a3a3` | `#737373` | Tertiary metadata |
+| Muted | `#6b6b6b` | `#8f8f8f` | Tertiary metadata; 4.5:1 or better on the canvas in both themes |
 | Emerald / mint | `#087456` / `#82ddb8` | `#82ddb8` | Brand and healthy/complete meaning |
 | Brand surface | `#f2f8f5` | `#10231c` | Quiet highlighted regions |
 | Canvas | `#ffffff` | `#111111` | Page and cards |
