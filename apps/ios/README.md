@@ -61,6 +61,7 @@ pnpm generate:ios
 pnpm check:ios
 pnpm test:ios
 pnpm build:ios
+pnpm version:bump:ios patch   # or minor | major | explicit semver
 open apps/ios/Quota.xcodeproj
 ```
 
@@ -68,9 +69,12 @@ open apps/ios/Quota.xcodeproj
 Xcode project. Do not add a third-party package manager. The app has no Sparkle, notification,
 analytics, or App Store upload workflow.
 
-`pnpm test:ios` runs `swift test` for `packages/apple-client` and, when an iPhone 17 Pro simulator is
-available, the Quota iOS unit tests. `pnpm build:ios` builds for the generic iOS Simulator. These
-commands are not part of root `pnpm test` or `pnpm build`.
+`pnpm test:ios` runs `swift test` for `packages/apple-client` and the Quota iOS unit tests on an
+available iPhone simulator (`QUOTA_IOS_SIMULATOR` overrides the name). `pnpm build:ios` builds for
+the generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm build`.
+
+`pnpm version:bump:ios` updates `MARKETING_VERSION` in `project.yml` and regenerates the Xcode
+project. Pass `--no-commit` to skip the commit.
 
 ### DEBUG visual fixtures
 
