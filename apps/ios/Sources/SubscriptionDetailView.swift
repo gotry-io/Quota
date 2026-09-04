@@ -59,13 +59,21 @@ struct SubscriptionDetailContent: Equatable {
   var displayedStrings: [String] {
     var strings = [providerName, accountLabel, freshness]
     if let plan { strings.append(plan) }
-    strings.append(contentsOf: windows.map { QuotaFormat.windowTitle($0) })
-    strings.append(contentsOf: windows.map { QuotaFormat.remaining($0) })
-    for row in sources {
-      strings.append(row.displayName)
-      strings.append(row.freshness)
-      if let remaining = row.remaining { strings.append(remaining) }
-      if row.isReporting { strings.append("Reporting") }
+    if windows.isEmpty {
+      strings.append("No quota windows yet.")
+    } else {
+      strings.append(contentsOf: windows.map { QuotaFormat.windowTitle($0) })
+      strings.append(contentsOf: windows.map { QuotaFormat.remaining($0) })
+    }
+    if sources.isEmpty {
+      strings.append("No device readings yet.")
+    } else {
+      for row in sources {
+        strings.append(row.displayName)
+        strings.append(row.freshness)
+        if let remaining = row.remaining { strings.append(remaining) }
+        if row.isReporting { strings.append("Reporting") }
+      }
     }
     return strings
   }
@@ -105,39 +113,41 @@ struct SubscriptionDetailView: View {
       subscription: subscription,
       devices: devices
     )
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        windowsCard(content)
-        if !content.sources.isEmpty {
-          sourcesCard(content)
-        }
-      }
-      .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
-      .padding(.horizontal, QuotaTheme.contentGutter)
-      .padding(.vertical, 16)
-      .frame(maxWidth: .infinity)
+    List {
+      identitySection(content)
+      quotaSection(content)
+      readingsSection(content)
     }
+    .listStyle(.insetGrouped)
+    .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("subscription.detail")
     .navigationTitle(content.providerName)
     .navigationBarTitleDisplayMode(.large)
   }
 
-  private func windowsCard(_ content: SubscriptionDetailContent) -> some View {
-    VStack(alignment: .leading, spacing: 16) {
-      identity(content)
+  private func identitySection(_ content: SubscriptionDetailContent) -> some View {
+    Section {
+      LabeledContent("Account", value: content.accountLabel)
+      if let plan = content.plan {
+        LabeledContent("Plan", value: plan)
+      }
+    } footer: {
       Text(content.freshness)
         .font(.footnote.monospacedDigit())
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(Color(uiColor: .label))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(content.freshness)
+    }
+  }
 
+  @ViewBuilder
+  private func quotaSection(_ content: SubscriptionDetailContent) -> some View {
+    Section("Quota") {
       if content.windows.isEmpty {
-        Text("No quota windows reported.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+        Text("No quota windows yet.")
+          .foregroundStyle(Color(uiColor: .label))
       } else {
-        ForEach(Array(content.windows.enumerated()), id: \.element.id) { index, window in
-          if index > 0 { Divider() }
+        ForEach(content.windows) { window in
           QuotaWindowBlock(
             window: window,
             usesLiveCountdown: true,
@@ -146,84 +156,50 @@ struct SubscriptionDetailView: View {
         }
       }
     }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func identity(_ content: SubscriptionDetailContent) -> some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        accountLabel(content.accountLabel)
-        Spacer(minLength: 8)
-        if let plan = content.plan { planCapsule(plan) }
-      }
-      VStack(alignment: .leading, spacing: 6) {
-        accountLabel(content.accountLabel)
-        if let plan = content.plan { planCapsule(plan) }
+  @ViewBuilder
+  private func readingsSection(_ content: SubscriptionDetailContent) -> some View {
+    Section("Readings") {
+      if content.sources.isEmpty {
+        Text("No device readings yet.")
+          .foregroundStyle(Color(uiColor: .label))
+      } else {
+        ForEach(Array(content.sources.enumerated()), id: \.offset) { _, row in
+          sourceRow(row)
+        }
       }
     }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(
-      content.plan.map { "Account: \(content.accountLabel). Plan: \($0)" }
-        ?? "Account: \(content.accountLabel)"
-    )
-  }
-
-  private func accountLabel(_ label: String) -> some View {
-    Text(label)
-      .font(.subheadline.weight(.medium))
-      .fixedSize(horizontal: false, vertical: true)
-  }
-
-  private func planCapsule(_ plan: String) -> some View {
-    Text(plan)
-      .font(.caption.weight(.semibold))
-      .layoutPriority(1)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 3)
-      .background(QuotaTheme.meterTrack, in: Capsule())
-      .accessibilityHidden(true)
-      .allowsHitTesting(false)
-  }
-
-  private func sourcesCard(_ content: SubscriptionDetailContent) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Readings")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      ForEach(Array(content.sources.enumerated()), id: \.offset) { index, row in
-        if index > 0 { Divider() }
-        sourceRow(row)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      VStack(alignment: .leading, spacing: 5) {
         Text(row.displayName)
           .font(.subheadline.weight(.medium))
-        Spacer(minLength: 8)
-        if row.isReporting {
-          Text("Reporting")
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.trailing)
+          .foregroundStyle(Color(uiColor: .label))
+          .fixedSize(horizontal: false, vertical: true)
+        if let remaining = row.remaining {
+          Text(remaining)
+            .font(.body.monospacedDigit().weight(.medium))
+            .foregroundStyle(Color(uiColor: .label))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
         }
+        Text(row.freshness)
+          .font(.footnote.monospacedDigit())
+          .foregroundStyle(Color(uiColor: .label))
+          .fixedSize(horizontal: false, vertical: true)
       }
-      if let remaining = row.remaining {
-        Text(remaining)
-          .font(.body.monospacedDigit().weight(.medium))
-          .lineLimit(1)
-          .minimumScaleFactor(0.75)
+      Spacer(minLength: 8)
+      if row.isReporting {
+        Text("Reporting")
+          .font(.footnote.weight(.medium))
+          .foregroundStyle(.primary)
+          .multilineTextAlignment(.trailing)
       }
-      Text(row.freshness)
-        .font(.footnote.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
     }
+    .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(sourceAccessibility(row))
     .accessibilityIdentifier(row.isReporting ? "subscription.reporting" : "subscription.source")

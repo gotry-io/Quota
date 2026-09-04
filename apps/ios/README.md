@@ -97,14 +97,15 @@ project. Pass `--no-commit` to skip the commit.
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
-`usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota card for
-`subscription-detail`, the Mac setup card for `no-devices`, the Connect with GitHub control for
-`signed-out`, connecting / connect-error / expired / loading fixtures, the inline GitHub account
-confirmation for `confirm-account`, and Settings for the compact hub plus Notifications,
-Appearance, and About destinations, and runs an accessibility audit on each. Connect's audit does
-not skip contrast. Log Out and Delete Account sit on the Settings hub. Delete Account starts on
-the website. Settings destinations run the full app-owned accessibility audit with no unnamed
-clipping skip.
+`usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota row for
+`subscription-detail`, the compact Mac setup Section for `no-devices`, Devices content and empty
+states, the cached-error status Label, the Connect with GitHub control for `signed-out`, connecting
+/ connect-error / expired / loading fixtures, the inline GitHub account confirmation for
+`confirm-account`, and Settings for the compact hub plus Notifications, Appearance, and About
+destinations, and runs an accessibility audit on each. Connect (no contrast skip), Overview,
+subscription detail, Devices, and the Settings destinations run the full app-owned audit with no
+unnamed clipping skip. Log Out and Delete Account sit on the Settings hub. Delete Account starts on
+the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh

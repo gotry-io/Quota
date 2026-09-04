@@ -126,9 +126,9 @@ struct ConnectAccountView: View {
   @ViewBuilder
   private var statusLine: some View {
     if let expired = model.expiredMessage {
-      statusLabel(text: expired, symbolName: "lock.slash")
+      StatusMessage(symbolName: "lock.slash", text: expired)
     } else if let banner = model.banner {
-      statusLabel(text: banner.text, symbolName: banner.symbolName)
+      StatusMessage(symbolName: banner.symbolName, text: banner.text)
     }
   }
 

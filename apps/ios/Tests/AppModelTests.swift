@@ -116,7 +116,7 @@ struct AppModelTests {
     #expect(model.phase == .signedIn)
     #expect(model.summary?.account.displayLabel == "octocat")
     #expect(model.banner?.kind == .offlineCached)
-    #expect(model.banner?.text.contains("saved account data") == true)
+    #expect(model.banner?.text == AppModel.Banner.cachedText)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 0)
     #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T15:00:00Z"))
@@ -135,8 +135,8 @@ struct AppModelTests {
     #expect(model.phase == .signedIn)
     #expect(model.summary == nil)
     #expect(model.banner?.kind == .refreshFailed)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
-    #expect(model.banner?.text.contains("saved account data") != true)
+    #expect(model.banner?.text == AppModel.Banner.failedText)
+    #expect(model.banner?.text.contains("saved") != true)
     #expect(publisher.clearCount == 1)
     #expect(publisher.publishCount == 0)
   }
@@ -175,7 +175,7 @@ struct AppModelTests {
     #expect(model.summary == nil)
     #expect(model.fetchedAt == nil)
     #expect(model.fromCache == false)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
+    #expect(model.banner?.text == AppModel.Banner.failedText)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
   }
@@ -199,7 +199,7 @@ struct AppModelTests {
     await model.restore()
     #expect(model.phase == .signedIn)
     #expect(model.summary == nil)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
+    #expect(model.banner?.text == AppModel.Banner.failedText)
     #expect(publisher.publishCount == 0)
     #expect(publisher.clearCount == 1)
   }

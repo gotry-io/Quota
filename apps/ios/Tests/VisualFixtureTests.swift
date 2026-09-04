@@ -204,7 +204,7 @@ struct VisualFixtureParserTests {
       #expect(model.fromCache)
       #expect(model.summary != nil)
       #expect(model.banner?.kind == .offlineCached)
-      #expect(model.banner?.text == "Showing saved account data. Could not refresh.")
+      #expect(model.banner?.text == AppModel.Banner.cachedText)
       #expect(model.providerCards.map(\.provider) == [.codex, .claude, .grok])
     }
 

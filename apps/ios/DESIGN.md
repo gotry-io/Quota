@@ -118,55 +118,65 @@ Connect failures use a specific sentence when one is known, otherwise the defaul
 ### Overview
 
 Shown when an `active` session exists. Content comes from the last complete Account summary, then from a
-refresh of Today.
+refresh of Today. An inset-grouped `List`. Pull to refresh runs one Today fetch. A fetch in flight
+ignores additional refresh requests.
 
 Header:
 
-- Title is the account display label, or **Account** when the label is absent.
+- Title is the account display label, or **Account** when the label is absent. The body does not
+  repeat that label.
 
 Body, in order:
 
-1. Banner, when needed.
-2. Account context: display label plus the shared freshness line (`Updated 15m ago`). Standard
-   Dynamic Type keeps a single-line horizontal row; accessibility sizes stack label and age
-   vertically with full wrapping (no one-line ellipsis). VoiceOver reads the full label and the
-   same line.
-3. Provider quota cards in catalog order, one card per subscription. Each observation shows
-   provider name, optional account label and plan, remaining value as the strongest number, one
-   meter per percent window, and reset time. The whole card opens subscription detail. A reading
-   that is not current names why in place of, or ahead of, that reset time, because the reset it
-   names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
-   refresh** for a state its device reported, and **Not current** for one that aged past its
-   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or
-   "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use
-   `71%`, and balance-only windows use **Balance** plus the unit amount.
-4. Devices: when `summary.devices` is empty, the Mac setup card. When it has devices, a compact
-   summary of display names and **Active** / **Idle** / **Not reporting** verdicts. The full list
-   lives on the Devices tab.
-5. Today: tokens and API-equivalent cost as the headline — the same one QuotaBar and the website
-   show — then input and output as supporting detail. Complete cost is `$X.XX`, partial is
-   `≥ $X.XX`, unavailable is **— unpriced**.
-
-Pull to refresh runs one Today fetch. A fetch in flight ignores additional refresh requests.
+1. Status row, when a refresh or cached-data message exists: a plain `StatusMessage` Label on a
+   standard list-row background. Cached: **Showing saved data. Couldn't refresh.** No cache:
+   **Couldn't refresh. Pull to try again.** Keep provider-state and freshness vocabulary from the
+   shared formatters unchanged.
+2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
+   name, masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
+   List row background is the only content container. Remaining is the strongest number, with one
+   meter per percent window and reset copy. A reading that is not current names why in place of, or
+   ahead of, that reset time, because the reset it names may already have passed: **Sign-in
+   needed**, **Unavailable**, **Unsupported**, or **Can’t refresh** for a state its device
+   reported, and **Not current** for one that aged past its `valid_until`. Widgets apply the same
+   rule at the instant they draw. Remaining has no "left" or "remaining" suffix. Budget windows
+   with an amount use `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use
+   **Balance** plus the unit amount. Empty windows: **No quota windows yet.** The canonical
+   **Updated** age is the quota Section footer; it wraps and is spoken in full.
+3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
+   `gauge.with.dots.needle.33percent`, description **Set up QuotaBar on a Mac to start reporting.**
+4. Today, before setup or device support: Tokens, API-equivalent cost, Input, and Output, with
+   monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
+   Empty: **No usage today.**
+5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
+   Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
 then provider/window, then support ages). Do not copy Nowdex assets or layout chrome.
 
 ### Subscription detail
 
-Opened from an Overview quota card, and from `io.gotry.quota:/subscriptions/<selection_id>` when
-that id matches a current subscription. An unmatched selection stays on Overview.
+Opened from an Overview quota row, and from `io.gotry.quota:/subscriptions/<selection_id>` when
+that id matches a current subscription. An unmatched selection stays on Overview. The system back
+button is the only way back; there is no second close control.
 
-The title is the provider display name. The body is the masked account label and plan, the shared
-freshness line, each window's remaining value, meter, and reset countdown, then one row per
-reporting device.
+The title is the provider display name. An inset-grouped `List`:
+
+- Identity: `LabeledContent` rows **Account** and, when present, **Plan** as plain text. Canonical
+  freshness is the Section footer.
+- Quota: one `QuotaWindowBlock` per window as native rows. Remaining is the strongest text. Empty:
+  **No quota windows yet.**
+- Readings: one native row per source. Leading column is display name, primary remaining, then
+  freshness; trailing text is **Reporting** only on the selected source. Empty: **No device
+  readings yet.**
 
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
 
 Each device row is that device's display name (or **Device** when the name is missing), the primary
-remaining figure from that source, and freshness. The source whose reading is the one on the card
-is marked **Reporting**. The page never shows a device id, fingerprint, or subscription key.
+remaining figure from that source, and freshness. The page never shows a device id, fingerprint,
+subscription key, or a custom surface. There is no independent loading or error state on this
+pushed view; it renders the selected last-good subscription.
 
 ### Widget overview
 
@@ -255,11 +265,20 @@ this day.**; a populated tree reuses the period's agent groups.
 
 ### Devices
 
-The Account's collection devices: display name, an **Active** / **Idle** / **Not reporting**
-verdict, and one line of platform plus the age that verdict came from. Never infer failure from
-sleep, shutdown, or a closed app, and never show raw Device IDs or request a remote Device's
-credentials. Empty state shows the Mac setup card rather than hiding the section. A trailing
-**Manage devices on the web** link opens `https://quota.gotry.io/my`.
+An inset-grouped `List` of the Account's collection devices. Do not repeat **Devices** inside the
+body. Each row is display name, an **Active** / **Idle** / **Not reporting** verdict, platform, and
+the last-reading age that verdict came from. Use text as well as any symbol; color cannot carry the
+verdict. VoiceOver speaks name, verdict, platform, and age. Never infer failure from sleep,
+shutdown, or a closed app, and never show raw Device IDs or request a remote Device's credentials.
+
+A top-trailing system toolbar `Link` uses the `arrow.up.right` symbol. Visible and accessibility
+label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my`. The toolbar supplies
+its own Liquid Glass.
+
+Empty state is `ContentUnavailableView`: title **No Macs connected**, image `desktopcomputer`,
+description **Install QuotaBar on a Mac signed in with this GitHub account.**, action **Download
+QuotaBar**. No QR code or custom surface. Root loading covers summary loading. Device status is
+last-good account content.
 
 ### Settings
 
@@ -320,10 +339,11 @@ glass card. Links are standard Form links.
 
 ### Mac setup
 
-Shown on Overview and Devices when `summary.devices` is empty. Title **Set up a Mac**. One sentence:
-**Quota shows what QuotaBar on your Mac reports. Install it on a Mac signed in with the same GitHub
-account.** A `Link` to `https://quota.gotry.io/download` and a QR code generated locally with
-CoreImage `CIQRCodeGenerator` for that same URL. No network.
+Shown when `summary.devices` is empty. Title **Set up QuotaBar**. Detail: **Install QuotaBar on a
+Mac signed in with this GitHub account.** Destination is `https://quota.gotry.io/download`. On
+Overview the action is a standard `Link` row **Download for Mac**. On the Devices empty state it is
+the `ContentUnavailableView` action **Download QuotaBar**. Neither receives glass inside a List.
+There is no QR code and no raw URL text.
 
 ### Deep links
 
@@ -375,15 +395,15 @@ Rules:
 | State | Presentation |
 | --- | --- |
 | Loading, no cache | Centered progress and **Loading account…**. No surface. |
-| Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
-| Empty Today | **No Usage for Today.** |
+| Empty quota | **No quota yet** with **Set up QuotaBar on a Mac to start reporting.** |
+| Empty Today | **No usage today.** |
 | Empty Usage period | **No Usage in this period.** |
 | Loading activity | Skeleton in the Activity card |
 | Activity failed | **Could not load activity.** with **Retry** |
 | Empty activity day | **No Usage on this day.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
-| Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
-| Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
+| Offline or failed refresh, cache present | Last-good content plus **Showing saved data. Couldn't refresh.** |
+| Offline or failed refresh, no cache | Empty Overview plus **Couldn't refresh. Pull to try again.** |
 | Expired session | Connect with GitHub plus **Session expired. Connect again.** |
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Connect with GitHub plus one plain status Label. Default **Couldn't connect. Try again.** |
@@ -393,15 +413,18 @@ Rules:
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
 | Widget placeholder | Redacted remaining / provider skeleton |
 
-A banner always includes a symbol and a sentence. Color never carries status alone.
+A status line is a plain wrapping `StatusMessage` Label with a symbol and a sentence. Color never
+carries status alone. There is no status card or glass.
 
 ## Layout and type
 
-Signed-in tabs use the system grouped background supplied by List/Form. There is no root background
-modifier and no ambient wash. Settings is a compact hub Form; Notifications, Appearance, and About
-are pushed destination Forms with the same system background. Semantic text styles (`largeTitle` /
-`title2` for remaining values, `headline` for provider names, `subheadline` and `footnote` for
-support). Connect content is a 320-point column.
+Signed-in tabs use the system grouped background supplied by List/Form. Overview, subscription
+detail, and Devices are inset-grouped Lists. There is no root background modifier and no ambient
+wash. Settings is a compact hub Form; Notifications, Appearance, and About are pushed destination
+Forms with the same system background. Semantic text styles (`largeTitle` / `title2` for remaining
+values, `headline` for provider names, `subheadline` and `footnote` for support). Connect content is
+a 320-point column. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no padding, corner,
+stroke, shadow, material, or glass of their own.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt). Dynamic
 Type may wrap every label, including the Connect footnote; do not clip remaining values.
@@ -423,7 +446,9 @@ provider and support, and no custom card chrome beyond the system widget contain
   connecting, the value is **Connecting** and the control does not respond to interaction.
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
-- The account context line is the shared freshness phrase, read in full.
+- The Overview quota Section footer is the shared freshness phrase, read in full.
+- Each Devices row is one VoiceOver element that speaks name, verdict, platform, and age.
+- Overview subscription rows keep the hint **Opens subscription details**.
 - The Usage heatmap is one adjustable element. It speaks the selected UTC date, tokens, and cost;
   cells are not their own VoiceOver nodes.
 - Widget entries combine provider, remaining, why the reading is not current, reset, and updated
@@ -443,20 +468,23 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Visual QA
 
 Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
-connect error, expired session, the inline GitHub account confirmation, loading, signed-in content,
-empty quota/Today, Usage at 30 Days with the Activity heatmap, a single-day sheet, no-devices Mac
-setup, cached content with a refresh banner, the four tabs, Settings hub (Notifications and
-Appearance links, Log Out, Delete Account), Settings › Notifications, Settings › Appearance,
-Settings › About, subscription detail (windows, countdown, Reporting row), and each widget family
-in placeholder, content, and no-data states. Check iPhone, light and dark, standard and
-accessibility text sizes, VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic
-fixtures may contain display labels only; they must never contain access tokens, refresh tokens, or
-production data.
+connect error, expired session, the inline GitHub account confirmation, loading, signed-in
+Overview (quota first, Today second, system NavigationLink chevron, no device-summary
+duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
+URL, cached content with a plain status Label, subscription detail (Account, Plan, Quota, Readings),
+Devices content and empty, Usage at 30 Days with the Activity heatmap, a single-day sheet, the four
+tabs, Settings hub (Notifications and Appearance links, Log Out, Delete Account), Settings ›
+Notifications, Settings › Appearance, Settings › About, and each widget family in placeholder,
+content, and no-data states. Check iPhone, light and dark, standard and accessibility text sizes,
+VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display
+labels only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `connecting`, `connect-error`,
-`expired`, `connect-refresh-failed`, `loading`, `confirm-account`, `no-devices`, `usage-content`,
-`usage-activity`, `subscription-detail`, `settings-main`, `settings-notifications`,
-`settings-appearance`, and `settings-about` fixture screenshots to `dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `overview-content`, `overview-cached-error`,
+`overview-no-devices`, `connect-signed-out`, `connect-connecting`, `connect-error`,
+`connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`, `usage-content`,
+`usage-activity`, `subscription-detail`, `devices-content`, `devices-empty`, `settings-main`,
+`settings-notifications`, `settings-appearance`, and `settings-about` fixture screenshots to
+`dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -486,9 +514,9 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
-| `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
-| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |
-| `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |
+| `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
+| `empty` | Signed-in Overview with empty quota and **No usage today.** Usage of every period is **No Usage in this period.** |
+| `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
 access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time

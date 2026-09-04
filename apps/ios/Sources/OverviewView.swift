@@ -3,55 +3,26 @@ import SwiftUI
 
 struct OverviewView: View {
   @Bindable var model: AppModel
-  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   var body: some View {
-    let providerCards = model.providerCards
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        if let banner = model.banner {
-          StatusBanner(symbolName: banner.symbolName, text: banner.text)
+    List {
+      if let banner = model.banner {
+        Section {
+          StatusMessage(symbolName: banner.symbolName, text: banner.text)
+            .accessibilityIdentifier("overview.status")
         }
-
-        accountContext
-
-        if providerCards.isEmpty {
-          emptyCard(
-            title: "No quota reported yet.",
-            detail: "Collection happens on a Mac running QuotaBar that is signed into this Account."
-          )
-        } else {
-          ForEach(providerCards) { card in
-            ForEach(card.subscriptions) { subscription in
-              NavigationLink(value: subscription.key) {
-                ProviderQuotaCard(
-                  model: ProviderQuotaCardModel(
-                    provider: card.provider,
-                    subscriptions: [subscription]
-                  )
-                )
-              }
-              .buttonStyle(.plain)
-              .contentShape(Rectangle())
-              .accessibilityHint("Opens subscription details")
-              .accessibilityIdentifier("overview.subscription")
-            }
-          }
-        }
-
-        if let devices = model.summary?.devices, !devices.isEmpty {
-          OverviewDevicesSummary(devices: devices)
-        } else if model.summary?.devices.isEmpty == true {
-          MacSetupGuideCard()
-        }
-
-        TodayUsageCard(summary: model.summary)
       }
-      .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
-      .padding(.horizontal, QuotaTheme.contentGutter)
-      .padding(.vertical, 16)
-      .frame(maxWidth: .infinity)
+
+      quotaSection
+
+      TodayUsageSection(summary: model.summary)
+
+      if model.summary?.devices.isEmpty == true {
+        MacSetupGuideSection()
+      }
     }
+    .listStyle(.insetGrouped)
+    .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("overview.root")
     .refreshable {
       await model.refresh()
@@ -61,126 +32,103 @@ struct OverviewView: View {
   }
 
   @ViewBuilder
-  private var accountContext: some View {
-    if let fetchedAt = model.fetchedAt {
-      Group {
-        if dynamicTypeSize.isAccessibilitySize {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(model.accountLabel)
-              .font(.subheadline.weight(.medium))
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            Text(QuotaFormat.updated(fetchedAt))
-              .font(.footnote.monospacedDigit())
-              .foregroundStyle(.tertiary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(model.accountLabel)
-              .font(.subheadline.weight(.medium))
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(QuotaFormat.updated(fetchedAt))
-              .font(.footnote.monospacedDigit())
-              .foregroundStyle(.tertiary)
-              .lineLimit(1)
-              .minimumScaleFactor(0.8)
+  private var quotaSection: some View {
+    let providerCards = model.providerCards
+    Section {
+      if providerCards.isEmpty {
+        ContentUnavailableView {
+          Label("No quota yet", systemImage: "gauge.with.dots.needle.33percent")
+            .foregroundStyle(Color(uiColor: .label))
+        } description: {
+          Text("Set up QuotaBar on a Mac to start reporting.")
+            .foregroundStyle(Color(uiColor: .label))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, minHeight: 180)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+      } else {
+        ForEach(providerCards) { card in
+          ForEach(Array(card.subscriptions.enumerated()), id: \.element.id) {
+            index,
+            subscription in
+            NavigationLink(value: subscription.key) {
+              ProviderQuotaRow(
+                provider: card.provider,
+                snapshot: subscription.snapshot,
+                accountIndex: index
+              )
+              .foregroundStyle(Color(uiColor: .label))
+            }
+            .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityHint("Opens subscription details")
+            .accessibilityIdentifier("overview.subscription")
           }
         }
       }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("\(model.accountLabel), \(QuotaFormat.updated(fetchedAt))")
-      .accessibilityAddTraits(.isStaticText)
+    } footer: {
+      if let fetchedAt = model.fetchedAt {
+        Text(QuotaFormat.updated(fetchedAt))
+          .font(.footnote.monospacedDigit())
+          .foregroundStyle(Color(uiColor: .label))
+          .fixedSize(horizontal: false, vertical: true)
+      }
     }
-  }
-
-  private func emptyCard(title: String, detail: String) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(title)
-        .font(.headline)
-      Text(detail)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
-struct TodayUsageCard: View {
+struct TodayUsageSection: View {
   let summary: AccountSummary?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Today")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      if let usage = summary?.usage.today,
-        usage.totals.messages > 0 || usage.totals.inputTokens > 0
-          || usage.totals.outputTokens > 0
-      {
-        // Tokens and cost are the headline on every Quota surface; the input/output split is
-        // detail that supports them.
-        metric(
-          label: "Tokens", value: QuotaFormat.compactCount(usage.totals.totalTokens),
-          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens")
-        metric(
-          label: "API-equivalent cost",
-          value: QuotaFormat.cost(usage.cost),
-          accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))"
-        )
-        Divider()
-        detail(
-          label: "Input", value: QuotaFormat.compactCount(usage.totals.inputTokens),
-          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens")
-        detail(
-          label: "Output", value: QuotaFormat.compactCount(usage.totals.outputTokens),
-          accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens")
-      } else {
-        Text("No Usage for Today.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      }
+    Section("Today") {
+      todayContent
     }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityIdentifier("overview.today")
   }
 
-  private func metric(label: String, value: String, accessibility: String) -> some View {
-    HStack(alignment: .firstTextBaseline) {
-      Text(label)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .layoutPriority(0)
-      Spacer(minLength: 12)
+  @ViewBuilder
+  private var todayContent: some View {
+    if let usage = summary?.usage.today,
+      usage.totals.messages > 0 || usage.totals.inputTokens > 0
+        || usage.totals.outputTokens > 0
+    {
+      todayRow(
+        label: "Tokens",
+        value: QuotaFormat.compactCount(usage.totals.totalTokens),
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens"
+      )
+      todayRow(
+        label: "API-equivalent cost",
+        value: QuotaFormat.cost(usage.cost),
+        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))"
+      )
+      todayRow(
+        label: "Input",
+        value: QuotaFormat.compactCount(usage.totals.inputTokens),
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens"
+      )
+      todayRow(
+        label: "Output",
+        value: QuotaFormat.compactCount(usage.totals.outputTokens),
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens"
+      )
+    } else {
+      Text("No usage today.")
+        .font(.body)
+        .foregroundStyle(.primary)
+    }
+  }
+
+  private func todayRow(label: String, value: String, accessibility: String) -> some View {
+    LabeledContent {
       Text(value)
         .font(.body.monospacedDigit().weight(.medium))
         .lineLimit(1)
         .minimumScaleFactor(0.75)
-        .layoutPriority(1)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(accessibility)
-  }
-
-  private func detail(label: String, value: String, accessibility: String) -> some View {
-    HStack(alignment: .firstTextBaseline) {
+    } label: {
       Text(label)
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .layoutPriority(0)
-      Spacer(minLength: 12)
-      Text(value)
-        .font(.footnote.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-        .layoutPriority(1)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibility)
