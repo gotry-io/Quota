@@ -10,6 +10,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case content
   case cachedError = "cached-error"
   case empty
+  case noDevices = "no-devices"
 
   /// Parse `--visual-fixture <name>` from process arguments. Returns nil when absent or unknown.
   static func parse(arguments: [String]) -> VisualFixture? {
@@ -58,7 +59,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil
-      case .empty:
+      case .empty, .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
         model.fetchedAt = now.addingTimeInterval(-60)

@@ -5,24 +5,60 @@ struct RootView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    NavigationStack {
-      Group {
-        switch model.phase {
-        case .launching:
-          ProgressView("Loading account…")
-            .accessibilityLabel("Loading account")
-        case .signedOut, .connecting:
+    Group {
+      switch model.phase {
+      case .launching:
+        ProgressView("Loading account…")
+          .accessibilityLabel("Loading account")
+      case .signedOut, .connecting:
+        NavigationStack {
           ConnectAccountView(model: model)
-        case .signedIn where model.summary == nil && model.isRefreshing:
-          ProgressView("Loading account…")
-            .accessibilityLabel("Loading account")
-        case .signedIn:
-          OverviewView(model: model)
         }
+      case .signedIn where model.summary == nil && model.isRefreshing:
+        ProgressView("Loading account…")
+          .accessibilityLabel("Loading account")
+      case .signedIn:
+        signedInTabs
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background { QuotaAmbientBackdrop() }
-      .animation(reduceMotion ? .easeInOut(duration: 0.15) : .default, value: model.phase)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background { QuotaAmbientBackdrop() }
+    .animation(reduceMotion ? .easeInOut(duration: 0.15) : .default, value: model.phase)
+  }
+
+  private var signedInTabs: some View {
+    TabView(selection: $model.selectedTab) {
+      NavigationStack {
+        OverviewView(model: model)
+      }
+      .tabItem {
+        Label(AppTab.overview.title, systemImage: AppTab.overview.systemImage)
+      }
+      .tag(AppTab.overview)
+
+      NavigationStack {
+        UsagePlaceholderView()
+      }
+      .tabItem {
+        Label(AppTab.usage.title, systemImage: AppTab.usage.systemImage)
+      }
+      .tag(AppTab.usage)
+
+      NavigationStack {
+        DevicesView(model: model)
+      }
+      .tabItem {
+        Label(AppTab.devices.title, systemImage: AppTab.devices.systemImage)
+      }
+      .tag(AppTab.devices)
+
+      NavigationStack {
+        SettingsPlaceholderView(model: model)
+      }
+      .tabItem {
+        Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage)
+      }
+      .tag(AppTab.settings)
     }
   }
 }

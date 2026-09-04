@@ -42,6 +42,9 @@ final class AppModel {
   var isRefreshing = false
   var banner: Banner?
   var expiredMessage: String?
+  var selectedTab: AppTab = .overview
+  /// Selection id from a subscription deep link. Detail presentation arrives in a later slice.
+  var pendingSubscriptionSelection: String?
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -172,6 +175,15 @@ final class AppModel {
     applySignedOut()
   }
 
+  func openDeepLink(_ url: URL) {
+    selectedTab = .overview
+    if case .subscription(let id) = DeepLink.parse(url) {
+      pendingSubscriptionSelection = id
+    } else {
+      pendingSubscriptionSelection = nil
+    }
+  }
+
   private func apply(_ result: AccountRefreshResult) {
     summary = result.summary
     fetchedAt = result.fetchedAt
@@ -239,6 +251,8 @@ final class AppModel {
     banner = nil
     expiredMessage = nil
     phase = .signedOut
+    selectedTab = .overview
+    pendingSubscriptionSelection = nil
     backgroundRefresh.cancelPendingRefresh()
     clearWidget()
   }

@@ -24,9 +24,9 @@ Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 Quota iOS is not a collection Device. It does not configure Providers, collect local logs, upload
-snapshots or Usage, or add `ios` to `PlatformSchema`. Overview lists the collection Devices with
-their platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
-credentials for them. See
+snapshots or Usage, or add `ios` to `PlatformSchema`. The Devices tab lists the collection Devices
+with their platform and how recently each one spoke — Active, Idle, or Not reporting — without
+requesting credentials for them. See
 [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
@@ -75,8 +75,9 @@ generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm 
 ### UI tests
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
-`overview.root` / `overview.today` for `content` and the Connect Account control for `signed-out`,
-and runs an iOS 17+ accessibility audit on each.
+`overview.root` / `overview.today` for `content`, the Mac setup card for `no-devices`, and the
+Connect Account control for `signed-out`, and runs an iOS 17+ accessibility audit on each. Log Out
+is on the Settings tab.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
@@ -94,7 +95,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | content | cached-error | empty
+# Values: signed-out | content | cached-error | empty | no-devices
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

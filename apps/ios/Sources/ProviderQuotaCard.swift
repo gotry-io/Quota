@@ -70,6 +70,8 @@ struct ProviderQuotaCard: View {
       .padding(.horizontal, 8)
       .padding(.vertical, 3)
       .background(QuotaTheme.meterTrack, in: Capsule())
+      .accessibilityHidden(true)
+      .allowsHitTesting(false)
   }
 }
 
@@ -96,6 +98,7 @@ struct QuotaWindowBlock: View {
         ProgressView(value: window.remainingPercent, total: 100)
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)
+          .allowsHitTesting(false)
       }
 
       if let support = supportLine {

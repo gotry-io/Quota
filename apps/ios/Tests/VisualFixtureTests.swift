@@ -24,6 +24,7 @@ struct VisualFixtureParserTests {
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
+      ("no-devices", VisualFixture.noDevices),
     ]
   )
   func parseRecognizesEachFixture(raw: String, expected: VisualFixture) {
@@ -120,6 +121,17 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.subscriptions.isEmpty == true)
       #expect(model.summary?.usage.today.totals.messages == 0)
       #expect(model.summary?.usage.today.totals.inputTokens == 0)
+      #expect(model.banner == nil)
+    }
+
+    @Test
+    func noDevicesIsSignedInWithoutDevicesOrSubscriptions() {
+      let model = AppModel.visualFixture(.noDevices, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedIn)
+      #expect(model.summary?.devices.isEmpty == true)
+      #expect(model.summary?.subscriptions.isEmpty == true)
+      #expect(model.providerCards.isEmpty)
       #expect(model.banner == nil)
     }
   }
