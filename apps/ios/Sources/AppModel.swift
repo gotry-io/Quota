@@ -44,8 +44,10 @@ final class AppModel {
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
-  /// Selection id from a subscription deep link. Detail presentation arrives in a later slice.
+  /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
+  /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
+  var overviewPath: [String] = []
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -110,6 +112,7 @@ final class AppModel {
       if let cached {
         publishWidget(summary: cached.summary, fetchedAt: cached.fetchedAt)
       }
+      resolvePendingSubscriptionSelection()
       await refresh()
     } else {
       applySignedOut()
@@ -183,9 +186,32 @@ final class AppModel {
     selectedTab = .overview
     if case .subscription(let id) = DeepLink.parse(url) {
       pendingSubscriptionSelection = id
+      resolvePendingSubscriptionSelection()
     } else {
       pendingSubscriptionSelection = nil
+      overviewPath = []
     }
+  }
+
+  /// When a summary exists, match `pendingSubscriptionSelection` against each subscription's
+  /// salted selection id. A hit pushes that row; a miss stays on Overview and clears pending.
+  /// No summary yet keeps the pending id so a later restore or refresh can answer it.
+  func resolvePendingSubscriptionSelection() {
+    guard let pending = pendingSubscriptionSelection else { return }
+    guard let summary else { return }
+    guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
+    pendingSubscriptionSelection = nil
+    if let match = summary.subscriptions.first(where: {
+      WidgetSnapshotProjection.selectionID(for: $0, salt: salt) == pending
+    }) {
+      overviewPath = [match.key]
+    } else {
+      overviewPath = []
+    }
+  }
+
+  func subscription(forKey key: String) -> QuotaSubscription? {
+    summary?.subscriptions.first { $0.key == key }
   }
 
   private func apply(_ result: AccountRefreshResult) {
@@ -216,6 +242,20 @@ final class AppModel {
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
+    }
+    if phase == .signedIn {
+      resolvePendingSubscriptionSelection()
+      pruneOverviewPath()
+    }
+  }
+
+  private func pruneOverviewPath() {
+    guard let summary else {
+      overviewPath = []
+      return
+    }
+    overviewPath.removeAll { key in
+      !summary.subscriptions.contains { $0.key == key }
     }
   }
 
@@ -257,6 +297,7 @@ final class AppModel {
     phase = .signedOut
     selectedTab = .overview
     pendingSubscriptionSelection = nil
+    overviewPath = []
     backgroundRefresh.cancelPendingRefresh()
     try? selectionSaltStore.clear()
     clearWidget()

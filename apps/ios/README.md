@@ -75,7 +75,8 @@ generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm 
 ### UI tests
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
-`overview.root` / `overview.today` for `content`, the Mac setup card for `no-devices`, and the
+`overview.root` / `overview.today` for `content`, opens the first quota card for
+`subscription-detail`, the Mac setup card for `no-devices`, and the
 Connect Account control for `signed-out`, and runs an iOS 17+ accessibility audit on each. Log Out
 is on the Settings tab.
 

@@ -74,33 +74,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
   @MainActor
   enum VisualFixtureContent {
     static func summary(at date: Date) -> AccountSummary {
-      let deviceID = "device_visual_fixture_01"
+      let studioID = "device_visual_fixture_01"
+      let kitchenID = "device_visual_fixture_02"
       let subscriptions = [
-        subscription(
-          provider: .codex,
-          deviceID: deviceID,
-          fingerprint: "visual_codex",
-          label: "pe***@example.com",
-          plan: "Plus",
-          windows: [
-            window(
-              id: "five_hour",
-              title: "5 Hours",
-              usedPercent: 32,
-              resetsAt: date.addingTimeInterval(2_700)
-            ),
-            window(
-              id: "weekly",
-              title: "Weekly",
-              usedPercent: 16,
-              resetsAt: date.addingTimeInterval(4 * 86_400)
-            ),
-          ],
-          observedAt: date.addingTimeInterval(-90),
-        ),
+        codexSubscription(studioID: studioID, kitchenID: kitchenID, at: date),
         subscription(
           provider: .claude,
-          deviceID: deviceID,
+          deviceID: studioID,
           fingerprint: "visual_claude",
           label: "Team workspace",
           plan: "Max",
@@ -116,7 +96,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         subscription(
           provider: .grok,
-          deviceID: deviceID,
+          deviceID: studioID,
           fingerprint: "visual_grok",
           label: nil,
           plan: "SuperGrok",
@@ -140,12 +120,19 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         devices: [
           AccountDevice(
-            id: deviceID,
+            id: studioID,
             displayName: "Studio Mac",
             platform: .macos,
             lastSeenAt: date.addingTimeInterval(-45),
             lastObservedAt: date.addingTimeInterval(-90)
-          )
+          ),
+          AccountDevice(
+            id: kitchenID,
+            displayName: "Kitchen Mac",
+            platform: .macos,
+            lastSeenAt: date.addingTimeInterval(-300),
+            lastObservedAt: date.addingTimeInterval(-360)
+          ),
         ],
         subscriptions: subscriptions,
         usage: usage(),
@@ -237,6 +224,77 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    /// Codex reports from two Macs so subscription detail can show per-device readings.
+    /// Studio Mac is the selected source (newer); Kitchen Mac is the other reading.
+    private static func codexSubscription(
+      studioID: String,
+      kitchenID: String,
+      at date: Date
+    ) -> QuotaSubscription {
+      let studioObserved = date.addingTimeInterval(-90)
+      let kitchenObserved = date.addingTimeInterval(-360)
+      let studio = QuotaSnapshot(
+        provider: .codex,
+        account: QuotaAccount(
+          fingerprint: "visual_codex",
+          label: "pe***@example.com",
+          plan: "Plus",
+          fingerprintScope: .global
+        ),
+        windows: [
+          window(
+            id: "five_hour",
+            title: "5 Hours",
+            usedPercent: 32,
+            resetsAt: date.addingTimeInterval(2_700)
+          ),
+          window(
+            id: "weekly",
+            title: "Weekly",
+            usedPercent: 16,
+            resetsAt: date.addingTimeInterval(4 * 86_400)
+          ),
+        ],
+        status: .available,
+        observedAt: studioObserved
+      )
+      let kitchen = QuotaSnapshot(
+        provider: .codex,
+        account: QuotaAccount(
+          fingerprint: "visual_codex",
+          label: "pe***@example.com",
+          plan: "Plus",
+          fingerprintScope: .global
+        ),
+        windows: [
+          window(
+            id: "five_hour",
+            title: "5 Hours",
+            usedPercent: 41,
+            resetsAt: date.addingTimeInterval(2_100)
+          ),
+          window(
+            id: "weekly",
+            title: "Weekly",
+            usedPercent: 22,
+            resetsAt: date.addingTimeInterval(4 * 86_400)
+          ),
+        ],
+        status: .available,
+        observedAt: kitchenObserved
+      )
+      return QuotaSubscription(
+        key: "codex|visual_codex|global|",
+        provider: .codex,
+        snapshot: studio,
+        sources: [
+          QuotaSubscriptionSource(
+            deviceID: kitchenID, observedAt: kitchenObserved, snapshot: kitchen),
+          QuotaSubscriptionSource(deviceID: studioID, observedAt: studioObserved, snapshot: studio),
+        ]
+      )
+    }
+
     private static func subscription(
       provider: ProviderID,
       deviceID: String,
@@ -290,7 +348,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     /// Pass an explicit `now` (e.g. `VisualFixture.referenceDate` in tests, `Date()` at launch).
     static func visualFixture(
       _ fixture: VisualFixture,
-      now: Date
+      now: Date,
+      selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore()
     ) -> AppModel {
       let model = AppModel(
         account: AccountClient(
@@ -300,9 +359,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
           now: { now }
         ),
         authenticator: FixtureBlockedAuthenticator(),
-        widgetPublisher: NoOpWidgetSnapshotPublisher()
+        widgetPublisher: NoOpWidgetSnapshotPublisher(),
+        selectionSaltStore: selectionSaltStore
       )
       fixture.apply(to: model, now: now)
+      model.resolvePendingSubscriptionSelection()
       return model
     }
   }

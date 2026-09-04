@@ -28,8 +28,16 @@ struct RootView: View {
 
   private var signedInTabs: some View {
     TabView(selection: $model.selectedTab) {
-      NavigationStack {
+      NavigationStack(path: $model.overviewPath) {
         OverviewView(model: model)
+          .navigationDestination(for: String.self) { key in
+            if let subscription = model.subscription(forKey: key) {
+              SubscriptionDetailView(
+                subscription: subscription,
+                devices: model.summary?.devices ?? []
+              )
+            }
+          }
       }
       .tabItem {
         Label(AppTab.overview.title, systemImage: AppTab.overview.systemImage)

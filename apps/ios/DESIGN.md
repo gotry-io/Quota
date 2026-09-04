@@ -77,14 +77,15 @@ Body, in order:
    Dynamic Type keeps a single-line horizontal row; accessibility sizes stack label and age
    vertically with full wrapping (no one-line ellipsis). VoiceOver reads the full label and the
    same line.
-3. Provider quota cards in catalog order. Each observation shows provider name, optional account
-   label and plan, remaining value as the strongest number, one meter per percent window, and reset
-   time. A reading that is not current names why in place of, or ahead of, that reset time, because
-   the reset it names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**,
-   or **Can’t refresh** for a state its device reported, and **Not current** for one that aged past
-   its `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or "remaining"
-   suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
-   balance-only windows use **Balance** plus the unit amount.
+3. Provider quota cards in catalog order, one card per subscription. Each observation shows
+   provider name, optional account label and plan, remaining value as the strongest number, one
+   meter per percent window, and reset time. The whole card opens subscription detail. A reading
+   that is not current names why in place of, or ahead of, that reset time, because the reset it
+   names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
+   refresh** for a state its device reported, and **Not current** for one that aged past its
+   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or
+   "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use
+   `71%`, and balance-only windows use **Balance** plus the unit amount.
 4. Devices: when `summary.devices` is empty, the Mac setup card. When it has devices, a compact
    summary of display names and **Active** / **Idle** / **Not reporting** verdicts. The full list
    lives on the Devices tab.
@@ -96,6 +97,22 @@ Pull to refresh runs one Today fetch. A fetch in flight ignores additional refre
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
 then provider/window, then support ages). Do not copy Nowdex assets or layout chrome.
+
+### Subscription detail
+
+Opened from an Overview quota card, and from `io.gotry.quota:/subscriptions/<selection_id>` when
+that id matches a current subscription. An unmatched selection stays on Overview.
+
+The title is the provider display name. The body is the masked account label and plan, the shared
+freshness line, each window's remaining value, meter, and reset countdown, then one row per
+reporting device.
+
+A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
+later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
+
+Each device row is that device's display name (or **Device** when the name is missing), the primary
+remaining figure from that source, and freshness. The source whose reading is the one on the card
+is marked **Reporting**. The page never shows a device id, fingerprint, or subscription key.
 
 ### Widget overview
 
@@ -156,8 +173,9 @@ CoreImage `CIQRCodeGenerator` for that same URL. No network.
 ### Deep links
 
 `io.gotry.quota:/overview` opens Overview. `io.gotry.quota:/subscriptions/<selection_id>` records the
-selection and opens Overview; subscription detail arrives in a later slice. `selection_id` is twelve
-lowercase hex digits after percent-decoding. Any other URL returns to Overview.
+selection, opens Overview, and pushes the matching subscription detail when the Account summary can
+name it. An unmatched or unknown id stays on Overview. `selection_id` is twelve lowercase hex digits
+after percent-decoding. Any other URL returns to Overview.
 
 ## Liquid Glass (main app)
 
@@ -232,13 +250,14 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Visual QA
 
 Inspect Connect Account, loading, signed-in content, empty quota/Today, no-devices Mac setup, cached
-content with a refresh banner, expired session, the four tabs, and each widget family in
-placeholder, content, and no-data states. Check iPhone, light and dark, standard and accessibility
-text sizes, VoiceOver labels, and Reduce Motion. Synthetic fixtures may contain display labels only;
-they must never contain access tokens, refresh tokens, or production data.
+content with a refresh banner, expired session, the four tabs, subscription detail (windows,
+countdown, Reporting row), and each widget family in placeholder, content, and no-data states.
+Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver labels, and Reduce
+Motion. Synthetic fixtures may contain display labels only; they must never contain access tokens,
+refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, and `no-devices` fixture
-screenshots to `dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, and
+`subscription-detail` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -255,7 +274,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect Account, no session restore |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No Usage for Today.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |

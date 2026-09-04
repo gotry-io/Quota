@@ -22,7 +22,20 @@ struct OverviewView: View {
           )
         } else {
           ForEach(providerCards) { card in
-            ProviderQuotaCard(model: card)
+            ForEach(card.subscriptions) { subscription in
+              NavigationLink(value: subscription.key) {
+                ProviderQuotaCard(
+                  model: ProviderQuotaCardModel(
+                    provider: card.provider,
+                    subscriptions: [subscription]
+                  )
+                )
+              }
+              .buttonStyle(.plain)
+              .contentShape(Rectangle())
+              .accessibilityHint("Opens subscription details")
+              .accessibilityIdentifier("overview.subscription")
+            }
           }
         }
 

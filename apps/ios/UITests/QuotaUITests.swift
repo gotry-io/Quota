@@ -26,6 +26,20 @@ final class QuotaUITests: XCTestCase {
     attachScreenshot(app, name: "overview-content")
     try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
 
+    let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
+    XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
+    card.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      "subscription.detail"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 5),
+      "Reporting"
+    )
+    attachScreenshot(app, name: "subscription-detail")
+    try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
+
     app.tabBars.buttons["Settings"].tap()
     XCTAssertTrue(
       app.buttons["Log Out"].waitForExistence(timeout: 5),
@@ -80,9 +94,8 @@ final class QuotaUITests: XCTestCase {
   /// Connect, and card copy on Overview — although the rendered text is black on a light
   /// surface (see the attached screenshots). `.hitRegion` on Overview: iOS 26 system TabView
   /// exposes ~28pt tab icons; system control, not ours. `.dynamicType` on Overview: the masked
-  /// account label still reports partial support at accessibility sizes; the Overview card is
-  /// rebuilt in WP 3.5 and that check returns with it. Clipping, element description,
-  /// and trait checks run on both fixtures.
+  /// account label still reports partial support at accessibility sizes. Clipping, element
+  /// description, and trait checks run on both fixtures.
   private func audit(_ app: XCUIApplication, skipping: XCUIAccessibilityAuditType = []) throws {
     if #available(iOS 17.0, *) {
       var types = XCUIAccessibilityAuditType.all

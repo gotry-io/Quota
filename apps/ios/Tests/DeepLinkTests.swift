@@ -76,18 +76,63 @@ struct DeepLinkTests {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       model.selectedTab = .devices
       model.pendingSubscriptionSelection = "0123456789ab"
+      model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/overview")!)
       #expect(model.selectedTab == .overview)
       #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath.isEmpty)
     }
 
     @Test
-    func subscriptionLinkKeepsTheIdAndShowsOverview() {
+    func subscriptionLinkPushesTheMatchingDetail() throws {
+      let salt = Data(repeating: 0x5a, count: 32)
+      let now = VisualFixture.referenceDate
+      let model = AppModel.visualFixture(
+        .content,
+        now: now,
+        selectionSaltStore: InMemorySelectionSaltStore(salt: salt)
+      )
+      let subscription = try #require(
+        model.summary?.subscriptions.first { $0.snapshot.provider == .codex }
+      )
+      let id = WidgetSnapshotProjection.selectionID(for: subscription, salt: salt)
+      model.selectedTab = .usage
+      model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/\(id)")!)
+      #expect(model.selectedTab == .overview)
+      #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath == [subscription.key])
+    }
+
+    @Test
+    func unknownSubscriptionIdStaysOnOverviewAndClearsPending() {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       model.selectedTab = .usage
+      model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/0123456789ab")!)
       #expect(model.selectedTab == .overview)
-      #expect(model.pendingSubscriptionSelection == "0123456789ab")
+      #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath.isEmpty)
+    }
+
+    @Test
+    func subscriptionLinkWaitsForSummaryThenResolves() throws {
+      let salt = Data(repeating: 0x5a, count: 32)
+      let store = InMemorySelectionSaltStore(salt: salt)
+      let now = VisualFixture.referenceDate
+      let model = AppModel.visualFixture(.signedOut, now: now, selectionSaltStore: store)
+      let content = AppModel.visualFixture(.content, now: now, selectionSaltStore: store)
+      let subscription = try #require(
+        content.summary?.subscriptions.first { $0.snapshot.provider == .codex }
+      )
+      let id = WidgetSnapshotProjection.selectionID(for: subscription, salt: salt)
+      model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/\(id)")!)
+      #expect(model.pendingSubscriptionSelection == id)
+      #expect(model.overviewPath.isEmpty)
+
+      VisualFixture.content.apply(to: model, now: now)
+      model.resolvePendingSubscriptionSelection()
+      #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath == [subscription.key])
     }
 
     @Test
@@ -95,20 +140,24 @@ struct DeepLinkTests {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       model.selectedTab = .settings
       model.pendingSubscriptionSelection = "0123456789ab"
+      model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/oauth/callback")!)
       #expect(model.selectedTab == .overview)
       #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath.isEmpty)
     }
 
     @Test
-    func logoutClearsTabAndPendingSelection() async {
+    func logoutClearsTabPendingSelectionAndDetailPath() async {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       model.selectedTab = .settings
       model.pendingSubscriptionSelection = "0123456789ab"
+      model.overviewPath = ["codex|visual_codex|global|"]
       await model.logout()
       #expect(model.phase == .signedOut)
       #expect(model.selectedTab == .overview)
       #expect(model.pendingSubscriptionSelection == nil)
+      #expect(model.overviewPath.isEmpty)
     }
   }
 #endif
