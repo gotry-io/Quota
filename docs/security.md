@@ -113,7 +113,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
   the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
   app target alone performs OAuth, holds the session, and calls Relay; the extension has no network,
-  Keychain, Security, or account modules.
+  Keychain, Security, or account modules. The widget snapshot may carry a locally salted
+  `selection_id`; the 32-byte salt lives in the app-private Keychain with
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and never in the App Group, so the App Group
+  file sees only the irreversible id. Logout deletes the salt so prior deep links and widget Intent
+  configuration fall back to Overview.
 - A collection or viewer login issues one access/refresh family, and what it may do is the scopes
   on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Access tokens are
   short-lived, a replayed refresh revokes its whole token family, and only HMACs of server session
