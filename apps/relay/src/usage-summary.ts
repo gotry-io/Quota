@@ -89,6 +89,8 @@ export function buildAccountUsage(input: AccountUsageInput): AccountUsage {
 export function buildActivityDays(input: {
   rows: readonly StoredUsageDailyRow[];
   catalog: PricingCatalog;
+  /** When set, each day carries the same agent tree a period does. */
+  modelCatalog?: ModelCatalog;
 }): UsageActivityDay[] {
   const facts = input.rows.map(usageRow);
   const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
@@ -107,6 +109,9 @@ export function buildActivityDays(input: {
           totals: summaryTotals(facts, indexes),
           cost: boundedFoldPreparedUsageCosts(prepared, indexes),
           partial: indexes.some((index) => (input.rows[index]?.partial_hours ?? 0) > 0),
+          ...(input.modelCatalog
+            ? { agents: buildAgentTree(facts, prepared, indexes, input.modelCatalog) }
+            : {}),
         }),
       ),
   );

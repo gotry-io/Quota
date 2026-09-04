@@ -521,6 +521,156 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(400);
   });
 
+  it("adds a day's agent tree only for a single UTC day asked with detail=agents", async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_activity_detail', 'subject_activity_detail', ?1, ?1)",
+      ).bind(now.toISOString()),
+      env.DB.prepare(
+        `INSERT INTO devices (
+           id, account_id, installation_id_hash, generation, created_at, last_login_at
+         ) VALUES ('device_activity_detail', 'account_activity_detail', 'installation_activity_detail', 1, ?1, ?1)`,
+      ).bind(now.toISOString()),
+      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
+        deviceID: "device_activity_detail",
+        date: "2026-08-10",
+      }),
+      usageDailyInsert("claude_code", "anthropic_direct", "claude-opus-4-6", {
+        deviceID: "device_activity_detail",
+        date: "2026-08-10",
+      }),
+    ]);
+    const app = appFor("account_activity_detail");
+    const dayPath =
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10";
+    type ActivityAgent = {
+      agent: string;
+      providers: Array<{
+        provider: string;
+        models: Array<{ model: string; totals: { messages: number; total_tokens: number } }>;
+      }>;
+    };
+    type ActivityDay = {
+      date: string;
+      totals: { messages: number; total_tokens: number };
+      cost: { status: string };
+      partial: boolean;
+      agents?: ActivityAgent[];
+    };
+    type ActivityBody = { days: ActivityDay[] };
+
+    const plainResponse = await app.request(dayPath);
+    expect(plainResponse.status).toBe(200);
+    const plain = (await plainResponse.json()) as ActivityBody;
+    expect(plain.days).toHaveLength(1);
+    expect(Object.hasOwn(plain.days[0] ?? {}, "agents")).toBe(false);
+
+    const detailedResponse = await app.request(`${dayPath}&detail=agents`);
+    expect(detailedResponse.status).toBe(200);
+    const detailed = (await detailedResponse.json()) as ActivityBody;
+    expect(detailed.days).toHaveLength(1);
+    const day = detailed.days[0];
+    expect(day?.date).toBe("2026-08-10");
+    expect(day?.totals).toEqual(plain.days[0]?.totals);
+    expect(day?.cost).toEqual(plain.days[0]?.cost);
+    expect(day?.partial).toBe(plain.days[0]?.partial);
+    const leafMessages = (day?.agents ?? []).reduce(
+      (total, agent) =>
+        total +
+        agent.providers.reduce(
+          (providerTotal, provider) =>
+            providerTotal +
+            provider.models.reduce((modelTotal, model) => modelTotal + model.totals.messages, 0),
+          0,
+        ),
+      0,
+    );
+    expect(leafMessages).toBe(day?.totals.messages);
+
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-01&to=2026-08-10&detail=agents",
+        )
+      ).status,
+    ).toBe(400);
+    expect((await app.request(`${dayPath}&detail=models`)).status).toBe(400);
+  });
+
+  it("keys the activity ETag on Usage and not on a quota snapshot", async () => {
+    await seedDevice("activity_etag");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("activity_etag", 1);
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T10:00:00Z", 1)]),
+      now.toISOString(),
+    );
+
+    const statements: string[] = [];
+    const app = appFor("account_activity_etag", now, recordingD1(statements));
+    const path =
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10";
+    const first = await app.request(path);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("ETag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+    expect(statements.join("\n")).not.toMatch(/quota_snapshots/);
+    expect(statements.join("\n")).not.toMatch(/last_seen_at/);
+
+    await env.DB.prepare(
+      `INSERT INTO quota_snapshots (
+         device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at
+       ) VALUES ('device_activity_etag', 'codex', 'fingerprint_activity_etag', ?1, ?2, ?1)`,
+    )
+      .bind(now.toISOString(), JSON.stringify(quotaSnapshotJson()))
+      .run();
+    const afterSnapshot = await app.request(path, { headers: { "If-None-Match": etag ?? "" } });
+    expect(afterSnapshot.status).toBe(304);
+    expect(afterSnapshot.headers.get("ETag")).toBe(etag);
+
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T11:00:00Z", 2)]),
+      now.toISOString(),
+    );
+    const afterUsage = await app.request(path, { headers: { "If-None-Match": etag ?? "" } });
+    expect(afterUsage.status).toBe(200);
+    expect(afterUsage.headers.get("ETag")).not.toBe(etag);
+  });
+
+  it("turns the activity ETag over when daily retention cuts the asked range", async () => {
+    await seedDevice("activity_retention");
+    const from = utcDaysBefore(800);
+    const to = utcDaysBefore(790);
+    const path = `https://quota.gotry.io/api/v6/account/usage/activity?from=${from}&to=${to}`;
+    const first = await appFor("account_activity_retention").request(path);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("ETag");
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    const nextDay = new Date(now.getTime() + 86_400_000);
+    const later = await appFor("account_activity_retention", nextDay).request(path, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(later.status).toBe(200);
+    expect(later.headers.get("ETag")).not.toBe(etag);
+  });
+
+  it("turns the activity ETag over when the Usage fold version changes", async () => {
+    await seedDevice("activity_fold");
+    const path =
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10";
+    const first = await appFor("account_activity_fold").request(path);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("ETag");
+    const bumped = await appFor("account_activity_fold", now, env.DB, {
+      usageFoldVersion: 2,
+    }).request(path, { headers: { "If-None-Match": etag ?? "" } });
+    expect(bumped.status).toBe(200);
+    expect(bumped.headers.get("ETag")).not.toBe(etag);
+  });
+
   it("bounds a high-cardinality period without losing what it totals", async () => {
     const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
     await env.DB.batch([
@@ -1506,16 +1656,39 @@ function usageDailyInsert(
 }
 
 /** An app answering as the signed-in owner of one account. */
-function appFor(accountId: string, readAt: Date = now) {
-  const state = new D1AccountState(env.DB);
+function appFor(
+  accountId: string,
+  readAt: Date = now,
+  database: D1Database = env.DB,
+  extras: { usageFoldVersion?: number } = {},
+) {
+  const state = new D1AccountState(database);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
     state,
-    usageState: new D1UsageState(env.DB),
+    usageState: new D1UsageState(database),
     accountService: new AccountService(state, hasher, secret),
     webSessions: new SignedInWebSessionStub(accountId, readAt),
     hasher,
     now: () => readAt,
+    ...extras,
+  });
+}
+
+function recordingD1(statements: string[]): D1Database {
+  return new Proxy(env.DB, {
+    get(target, property, receiver) {
+      if (property === "prepare") {
+        return (sql: string) => {
+          statements.push(sql);
+          return target.prepare(sql);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function"
+        ? (value as (...args: never[]) => unknown).bind(target)
+        : value;
+    },
   });
 }
 
