@@ -40,7 +40,7 @@ TabView
   Usage
   Devices
   Settings
-Widget overview (small, medium, circular, rectangular)
+Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
 ### Connect Account
@@ -106,10 +106,19 @@ Families:
 
 | Family | Content |
 | --- | --- |
-| systemSmall | Primary (most constrained) item: remaining, provider, window, reset/updated age |
+| systemSmall | Primary (most constrained, or the configured subscription) item: remaining, provider, window, reset/updated age |
 | systemMedium | Up to two most constrained items, compact Today tokens and cost, and **Updated** age |
+| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown |
 | accessoryCircular | Percent windows use an `accessoryCircular` Gauge ring; balance-only shows the amount |
 | accessoryRectangular | Primary remaining, provider · window, optional reset age |
+| accessoryInline | `<Provider> <remaining>%` |
+
+Widgets are configurable through `AppIntentConfiguration`. The parameter is an optional
+subscription (`nil` is **Automatic**: the most constrained subscription in the snapshot). Each
+`AppEntity` id is the item's `selection_id`; its display name is `providerDisplayName · windowTitle`
+from that snapshot item and never an account label. Candidates come from the App Group snapshot.
+A configured `selection_id` the snapshot no longer carries falls back to Automatic; small and
+medium still draw the ranked items and never show an error.
 
 Shared rules:
 
@@ -120,10 +129,12 @@ Shared rules:
 - Use `containerBackground(for: .widget)`. Do not call `glassEffect`. On iOS 26 the system owns
   widget Liquid Glass, accented, and vibrant rendering inside that container; on iOS 17–25 the
   system material fallback applies.
-- When a window's reset instant is at or before the entry date, the widget prints no Resets line,
-  matching the shared reset copy.
+- A future reset under 24 hours uses `Text(timerInterval:countsDown:)` so the system ticks seconds
+  without a new timeline entry. Otherwise the line is static `FreshnessCopy.resetCopy`. A reset
+  instant at or before the entry date prints no Resets line.
 - Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
-  widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole.
+  widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole; a
+  large row is a `Link` to that row's subscription.
 - Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
   safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
   extension never fetches. The app republishes the snapshot on a foreground refresh and on a

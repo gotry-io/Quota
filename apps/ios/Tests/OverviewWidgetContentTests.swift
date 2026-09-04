@@ -41,44 +41,112 @@ struct OverviewWidgetContentTests {
 
   @Test
   func primaryItemAndMediumItemsPreferMostConstrainedOrder() {
-    let first = WidgetQuotaItem(
-      selectionID: "aaaaaaaaaaaa",
-      providerID: "codex",
-      providerDisplayName: "Codex",
-      windowTitle: "5h",
-      remainingPercent: 20,
-      hasLimit: true
-    )
-    let second = WidgetQuotaItem(
-      selectionID: "bbbbbbbbbbbb",
-      providerID: "claude",
-      providerDisplayName: "Claude",
-      windowTitle: "Weekly",
-      remainingPercent: 40,
-      hasLimit: true
-    )
-    let third = WidgetQuotaItem(
-      selectionID: "cccccccccccc",
-      providerID: "grok",
-      providerDisplayName: "Grok",
-      windowTitle: "Weekly",
-      remainingPercent: 80,
-      hasLimit: true
-    )
-    let snapshot = WidgetSnapshot(
-      fetchedAt: date("2026-08-14T16:00:00Z"),
-      items: [first, second, third],
-      today: WidgetTodayUsage(
-        inputTokens: 1_200,
-        outputTokens: 340,
-        cost: WidgetCost(status: .complete, amountMicrousd: "3138")
-      )
-    )
+    let snapshot = rankedSnapshot()
 
     #expect(OverviewWidgetContent.primaryItem(from: snapshot)?.providerID == "codex")
-    #expect(OverviewWidgetContent.mediumItems(from: snapshot).map(\.providerID) == ["codex", "claude"])
+    #expect(
+      OverviewWidgetContent.mediumItems(from: snapshot).map(\.providerID) == ["codex", "claude"]
+    )
     #expect(OverviewWidgetContent.primaryItem(from: nil) == nil)
     #expect(OverviewWidgetContent.mediumItems(from: nil).isEmpty)
+  }
+
+  @Test
+  func selectKeepsRankedItemsForAutomatic() {
+    let items = rankedSnapshot().items
+    let selected = OverviewWidgetContent.select(items: items, configuredSelectionID: nil)
+    #expect(selected.map(\.selectionID) == items.map(\.selectionID))
+    #expect(OverviewWidgetContent.primaryItem(from: rankedSnapshot())?.selectionID == "aaaaaaaaaaaa")
+  }
+
+  @Test
+  func selectReturnsWindowsOfTheConfiguredSubscription() {
+    let items = rankedSnapshot().items
+    let selected = OverviewWidgetContent.select(
+      items: items,
+      configuredSelectionID: "bbbbbbbbbbbb"
+    )
+    #expect(selected.map(\.selectionID) == ["bbbbbbbbbbbb"])
+    #expect(
+      OverviewWidgetContent.primaryItem(
+        from: rankedSnapshot(),
+        configuredSelectionID: "bbbbbbbbbbbb"
+      )?.providerID == "claude"
+    )
+    #expect(
+      OverviewWidgetContent.mediumItems(
+        from: rankedSnapshot(),
+        configuredSelectionID: "bbbbbbbbbbbb"
+      ).map(\.providerID) == ["claude"]
+    )
+  }
+
+  @Test
+  func selectFallsBackToAutomaticWhenConfiguredIdIsMissing() {
+    let snapshot = rankedSnapshot()
+    let selected = OverviewWidgetContent.select(
+      items: snapshot.items,
+      configuredSelectionID: "ffffffffffff"
+    )
+    #expect(selected.map(\.selectionID) == snapshot.items.map(\.selectionID))
+    #expect(
+      OverviewWidgetContent.primaryItem(
+        from: snapshot,
+        configuredSelectionID: "ffffffffffff"
+      )?.providerID == "codex"
+    )
+    #expect(
+      OverviewWidgetContent.mediumItems(
+        from: snapshot,
+        configuredSelectionID: "ffffffffffff"
+      ).map(\.providerID) == ["codex", "claude"]
+    )
+  }
+
+  @Test
+  func largeItemsCapAtSixAndFollowConfiguration() {
+    let items = (0..<8).map { index in
+      WidgetQuotaItem(
+        selectionID: String(repeating: String(format: "%x", index), count: 12),
+        providerID: "codex",
+        providerDisplayName: "Codex",
+        windowTitle: "W\(index)",
+        remainingPercent: Double(index * 10),
+        hasLimit: true
+      )
+    }
+    let snapshot = WidgetSnapshot(
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      items: items,
+      today: WidgetTodayUsage(
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: WidgetCost(status: .unavailable)
+      )
+    )
+    #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 6)
+    #expect(OverviewWidgetContent.largeItems(from: snapshot).map(\.windowTitle) == [
+      "W0", "W1", "W2", "W3", "W4", "W5",
+    ])
+    let configuredID = items[7].selectionID
+    #expect(
+      OverviewWidgetContent.largeItems(
+        from: snapshot,
+        configuredSelectionID: configuredID
+      ).map(\.windowTitle) == ["W7"]
+    )
+  }
+
+  @Test
+  func widgetURLUsesSubscriptionForASingleItemAndOverviewForSeveral() {
+    let first = rankedSnapshot().items[0]
+    let second = rankedSnapshot().items[1]
+    #expect(
+      OverviewWidgetContent.widgetURL(for: [first])
+        == OverviewWidgetContent.subscriptionURL(for: first)
+    )
+    #expect(OverviewWidgetContent.widgetURL(for: [first, second]) == OverviewWidgetContent.overviewURL)
+    #expect(OverviewWidgetContent.widgetURL(for: []) == OverviewWidgetContent.overviewURL)
   }
 
   @Test
@@ -98,6 +166,7 @@ struct OverviewWidgetContentTests {
       OverviewWidgetContent.remainingAccessibility(for: percentItem)
         == "Weekly, 71% · $3.75 remaining"
     )
+    #expect(OverviewWidgetContent.inlineLabel(for: percentItem) == "Codex 71%")
 
     let balanceItem = WidgetQuotaItem(
       selectionID: "fedcba987654",
@@ -111,6 +180,7 @@ struct OverviewWidgetContentTests {
     )
     #expect(OverviewWidgetContent.remainingLabel(for: balanceItem) == "$12.50")
     #expect(OverviewWidgetContent.isBalanceOnly(balanceItem))
+    #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "OpenRouter 100%")
 
     let cost = WidgetCost(status: .partial, amountMicrousd: "50239770")
     #expect(OverviewWidgetContent.costLabel(for: cost).hasPrefix("≥"))
@@ -137,6 +207,45 @@ struct OverviewWidgetContentTests {
   }
 
   @Test
+  func liveCountdownIsOnlyForAFutureResetUnderADay() {
+    let now = date("2026-08-14T16:00:00Z")
+    #expect(
+      OverviewWidgetContent.usesLiveResetCountdown(
+        resetsAt: now.addingTimeInterval(3_600),
+        now: now
+      )
+    )
+    #expect(
+      OverviewWidgetContent.usesLiveResetCountdown(
+        resetsAt: now.addingTimeInterval(86_399),
+        now: now
+      )
+    )
+    #expect(
+      !OverviewWidgetContent.usesLiveResetCountdown(
+        resetsAt: now.addingTimeInterval(86_400),
+        now: now
+      )
+    )
+    #expect(!OverviewWidgetContent.usesLiveResetCountdown(resetsAt: now, now: now))
+    #expect(
+      !OverviewWidgetContent.usesLiveResetCountdown(
+        resetsAt: now.addingTimeInterval(-1),
+        now: now
+      )
+    )
+    let utc = TimeZone(secondsFromGMT: 0)!
+    #expect(
+      FreshnessCopy.resetCopy(
+        resetsAt: now.addingTimeInterval(200_000),
+        now: now,
+        timeZone: utc
+      ) != nil
+    )
+    #expect(FreshnessCopy.resetCopy(resetsAt: now, now: now) == nil)
+  }
+
+  @Test
   func aPastResetPrintsNoResetsLine() {
     let now = date("2026-08-14T16:00:00Z")
     let atInstant = now
@@ -144,7 +253,7 @@ struct OverviewWidgetContentTests {
     #expect(FreshnessCopy.resetCopy(resetsAt: atInstant, now: now) == nil)
     #expect(FreshnessCopy.resetCopy(resetsAt: past, now: now) == nil)
     let item = WidgetQuotaItem(
-      selectionID: "ccfc96629357",
+      selectionID: "0123456789ab",
       providerID: "codex",
       providerDisplayName: "Codex",
       windowTitle: "Weekly",
@@ -173,6 +282,95 @@ struct OverviewWidgetContentTests {
         == URL(string: "io.gotry.quota:/subscriptions/ccfc96629357")
     )
     #expect(OverviewWidgetContent.overviewURL == URL(string: "io.gotry.quota:/overview")!)
+  }
+
+  @Test
+  func entityQueryReadsCandidatesFromAnInjectedSnapshot() async throws {
+    let snapshot = rankedSnapshot()
+    let query = SubscriptionEntityQuery(loadSnapshot: { snapshot })
+    let suggested = try await query.suggestedEntities()
+    #expect(suggested.map(\.id) == ["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"])
+    #expect(suggested.map(\.displayName) == ["Codex · 5h", "Claude · Weekly", "Grok · Weekly"])
+    #expect(suggested.allSatisfy { !$0.displayName.contains("octocat") })
+
+    let found = try await query.entities(for: ["bbbbbbbbbbbb", "missingid0000"])
+    #expect(found.map(\.id) == ["bbbbbbbbbbbb"])
+    #expect(found.first?.displayName == "Claude · Weekly")
+
+    #expect(await query.defaultResult() == nil)
+  }
+
+  @Test
+  func entityQueryDedupesSelectionIdsAndReturnsEmptyWithoutASnapshot() async throws {
+    let first = WidgetQuotaItem(
+      selectionID: "aaaaaaaaaaaa",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "5 Hours",
+      remainingPercent: 20,
+      hasLimit: true
+    )
+    let secondWindow = WidgetQuotaItem(
+      selectionID: "aaaaaaaaaaaa",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "Weekly",
+      remainingPercent: 40,
+      hasLimit: true
+    )
+    let snapshot = WidgetSnapshot(
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      items: [first, secondWindow],
+      today: WidgetTodayUsage(
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: WidgetCost(status: .unavailable)
+      )
+    )
+    let query = SubscriptionEntityQuery(loadSnapshot: { snapshot })
+    let suggested = try await query.suggestedEntities()
+    #expect(suggested.map(\.id) == ["aaaaaaaaaaaa"])
+    #expect(suggested.first?.displayName == "Codex · 5 Hours")
+
+    let empty = SubscriptionEntityQuery(loadSnapshot: { nil })
+    #expect(try await empty.suggestedEntities().isEmpty)
+    #expect(try await empty.entities(for: ["aaaaaaaaaaaa"]).isEmpty)
+  }
+
+  private func rankedSnapshot() -> WidgetSnapshot {
+    let first = WidgetQuotaItem(
+      selectionID: "aaaaaaaaaaaa",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "5h",
+      remainingPercent: 20,
+      hasLimit: true
+    )
+    let second = WidgetQuotaItem(
+      selectionID: "bbbbbbbbbbbb",
+      providerID: "claude",
+      providerDisplayName: "Claude",
+      windowTitle: "Weekly",
+      remainingPercent: 40,
+      hasLimit: true
+    )
+    let third = WidgetQuotaItem(
+      selectionID: "cccccccccccc",
+      providerID: "grok",
+      providerDisplayName: "Grok",
+      windowTitle: "Weekly",
+      remainingPercent: 80,
+      hasLimit: true
+    )
+    return WidgetSnapshot(
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      items: [first, second, third],
+      today: WidgetTodayUsage(
+        inputTokens: 1_200,
+        outputTokens: 340,
+        cost: WidgetCost(status: .complete, amountMicrousd: "3138")
+      )
+    )
   }
 
   private func makeSnapshot() -> WidgetSnapshot {

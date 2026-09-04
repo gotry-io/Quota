@@ -3,13 +3,24 @@ import QuotaWidgetData
 import SwiftUI
 import WidgetKit
 
+/// Live ticking countdown under 24h; otherwise the shared static reset line; nothing once past.
+func overviewResetText(resetsAt: Date, now: Date) -> Text? {
+  if OverviewWidgetContent.usesLiveResetCountdown(resetsAt: resetsAt, now: now) {
+    return Text("Resets ") + Text(timerInterval: now...resetsAt, countsDown: true)
+  }
+  return FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now).map(Text.init)
+}
+
 struct OverviewSmallView: View {
   var entry: OverviewEntry
 
   var body: some View {
     if entry.isPlaceholder {
       placeholder
-    } else if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot) {
+    } else if let item = OverviewWidgetContent.primaryItem(
+      from: entry.snapshot,
+      configuredSelectionID: entry.configuredSelectionID
+    ) {
       Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
         VStack(alignment: .leading, spacing: 4) {
           Text(OverviewWidgetContent.remainingLabel(for: item))
@@ -80,21 +91,27 @@ struct OverviewSmallView: View {
   }
 
   private func supportLine(item: WidgetQuotaItem, fetchedAt: Date?) -> Text {
-    var parts: [String] = []
+    var result: Text?
+    func append(_ text: Text) {
+      if let current = result {
+        result = current + Text(" · ") + text
+      } else {
+        result = text
+      }
+    }
     // A reading that is not current says so even when it still carries a reset time,
     // because the reset it names may already have passed.
     if let state = item.stateLabel(now: entry.date) {
-      parts.append(state)
+      append(Text(state))
     }
-    if let resetsAt = item.resetsAt,
-      let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+    if let resetsAt = item.resetsAt, let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
     {
-      parts.append(reset)
+      append(reset)
     }
     if let fetchedAt {
-      parts.append(OverviewWidgetContent.updated(fetchedAt: fetchedAt, now: entry.date))
+      append(Text(OverviewWidgetContent.updated(fetchedAt: fetchedAt, now: entry.date)))
     }
-    return Text(parts.isEmpty ? " " : parts.joined(separator: " · "))
+    return result ?? Text(" ")
   }
 }
 
@@ -110,8 +127,14 @@ struct OverviewMediumView: View {
     } else if let snapshot = entry.snapshot, !snapshot.items.isEmpty {
       VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .top, spacing: 12) {
-          ForEach(Array(OverviewWidgetContent.mediumItems(from: snapshot).enumerated()), id: \.offset)
-          { _, item in
+          ForEach(
+            Array(
+              OverviewWidgetContent.mediumItems(
+                from: snapshot,
+                configuredSelectionID: entry.configuredSelectionID
+              ).enumerated()),
+            id: \.offset
+          ) { _, item in
             Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
               itemColumn(item: item)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,10 +167,10 @@ struct OverviewMediumView: View {
         .foregroundStyle(.tertiary)
         .lineLimit(1)
       if let resetsAt = item.resetsAt,
-        let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+        let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
       {
-        Text(reset)
-          .font(.caption2)
+        reset
+          .font(.caption2.monospacedDigit())
           .foregroundStyle(.tertiary)
           .lineLimit(1)
           .minimumScaleFactor(0.85)
@@ -184,9 +207,9 @@ struct OverviewMediumView: View {
           .minimumScaleFactor(0.8)
       }
       Text(OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: entry.date))
-      .font(.caption2.monospacedDigit())
-      .foregroundStyle(.tertiary)
-      .lineLimit(1)
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
@@ -195,11 +218,101 @@ struct OverviewMediumView: View {
   }
 }
 
+struct OverviewLargeView: View {
+  var entry: OverviewEntry
+
+  var body: some View {
+    if entry.isPlaceholder {
+      placeholder
+    } else if let snapshot = entry.snapshot, !snapshot.items.isEmpty {
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(
+          Array(
+            OverviewWidgetContent.largeItems(
+              from: snapshot,
+              configuredSelectionID: entry.configuredSelectionID
+            ).enumerated()),
+          id: \.offset
+        ) { _, item in
+          Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+            row(item: item)
+          }
+        }
+        Spacer(minLength: 0)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    } else {
+      OverviewSmallView(entry: entry)
+    }
+  }
+
+  private func row(item: WidgetQuotaItem) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text("\(item.providerDisplayName) · \(item.windowTitle)")
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+        Spacer(minLength: 4)
+        Text(OverviewWidgetContent.remainingLabel(for: item))
+          .font(.headline.monospacedDigit().weight(.semibold))
+          .foregroundStyle(.primary)
+          .widgetAccentable()
+          .lineLimit(1)
+          .minimumScaleFactor(0.65)
+      }
+      if !OverviewWidgetContent.isBalanceOnly(item) {
+        ProgressView(value: item.remainingPercent, total: 100)
+          .accessibilityHidden(true)
+      }
+      if let resetsAt = item.resetsAt,
+        let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
+      {
+        reset
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(
+      OverviewWidgetContent.itemAccessibility(
+        item: item,
+        fetchedAt: entry.snapshot?.fetchedAt,
+        now: entry.date
+      )
+    )
+  }
+
+  private var placeholder: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      ForEach(0..<3, id: \.self) { _ in
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Provider · Window")
+            .font(.subheadline)
+            .redacted(reason: .placeholder)
+          Text("--%")
+            .font(.headline.monospacedDigit())
+            .redacted(reason: .placeholder)
+        }
+      }
+      Spacer(minLength: 0)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    .accessibilityLabel("Quota overview placeholder")
+  }
+}
+
 struct OverviewCircularView: View {
   var entry: OverviewEntry
 
   var body: some View {
-    if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot), !entry.isPlaceholder {
+    if let item = OverviewWidgetContent.primaryItem(
+      from: entry.snapshot,
+      configuredSelectionID: entry.configuredSelectionID
+    ), !entry.isPlaceholder {
       Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
         Group {
           if OverviewWidgetContent.isBalanceOnly(item) {
@@ -260,7 +373,10 @@ struct OverviewRectangularView: View {
   var entry: OverviewEntry
 
   var body: some View {
-    if let item = OverviewWidgetContent.primaryItem(from: entry.snapshot), !entry.isPlaceholder {
+    if let item = OverviewWidgetContent.primaryItem(
+      from: entry.snapshot,
+      configuredSelectionID: entry.configuredSelectionID
+    ), !entry.isPlaceholder {
       Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
         VStack(alignment: .leading, spacing: 2) {
           Text(OverviewWidgetContent.remainingLabel(for: item))
@@ -274,10 +390,10 @@ struct OverviewRectangularView: View {
             .lineLimit(1)
             .minimumScaleFactor(0.85)
           if let resetsAt = item.resetsAt,
-            let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+            let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
           {
-            Text(reset)
-              .font(.caption2)
+            reset
+              .font(.caption2.monospacedDigit())
               .foregroundStyle(.tertiary)
               .lineLimit(1)
               .minimumScaleFactor(0.85)
@@ -306,6 +422,33 @@ struct OverviewRectangularView: View {
       .accessibilityLabel(
         entry.isPlaceholder ? "Quota overview placeholder" : "Quota overview, no data yet"
       )
+    }
+  }
+}
+
+struct OverviewInlineView: View {
+  var entry: OverviewEntry
+
+  var body: some View {
+    if let item = OverviewWidgetContent.primaryItem(
+      from: entry.snapshot,
+      configuredSelectionID: entry.configuredSelectionID
+    ), !entry.isPlaceholder {
+      Text(OverviewWidgetContent.inlineLabel(for: item))
+        .widgetAccentable()
+        .accessibilityLabel(
+          OverviewWidgetContent.itemAccessibility(
+            item: item,
+            fetchedAt: entry.snapshot?.fetchedAt,
+            now: entry.date
+          )
+        )
+        .widgetURL(OverviewWidgetContent.subscriptionURL(for: item))
+    } else {
+      Text(entry.isPlaceholder ? "Quota --%" : "Quota —")
+        .accessibilityLabel(
+          entry.isPlaceholder ? "Quota overview placeholder" : "Quota overview, no data yet"
+        )
     }
   }
 }
@@ -346,6 +489,33 @@ private enum OverviewWidgetPreviewFixtures {
         unit: .usd,
         hasLimit: false
       ),
+      WidgetQuotaItem(
+        selectionID: "dddddddddddd",
+        providerID: "grok",
+        providerDisplayName: "Grok",
+        windowTitle: "Weekly",
+        remainingPercent: 81,
+        hasLimit: true,
+        resetsAt: now.addingTimeInterval(200_000)
+      ),
+      WidgetQuotaItem(
+        selectionID: "eeeeeeeeeeee",
+        providerID: "gemini",
+        providerDisplayName: "Gemini",
+        windowTitle: "Daily",
+        remainingPercent: 44,
+        hasLimit: true,
+        resetsAt: now.addingTimeInterval(3_600)
+      ),
+      WidgetQuotaItem(
+        selectionID: "ffffffffffff",
+        providerID: "cursor",
+        providerDisplayName: "Cursor",
+        windowTitle: "Monthly",
+        remainingPercent: 22,
+        hasLimit: true,
+        resetsAt: now.addingTimeInterval(86_400 * 10)
+      ),
     ],
     today: WidgetTodayUsage(
       inputTokens: 142_050,
@@ -354,8 +524,17 @@ private enum OverviewWidgetPreviewFixtures {
     )
   )
 
-  static func entry(snapshot: WidgetSnapshot?, isPlaceholder: Bool = false) -> OverviewEntry {
-    OverviewEntry(date: now, snapshot: snapshot, isPlaceholder: isPlaceholder)
+  static func entry(
+    snapshot: WidgetSnapshot?,
+    isPlaceholder: Bool = false,
+    configuredSelectionID: String? = nil
+  ) -> OverviewEntry {
+    OverviewEntry(
+      date: now,
+      snapshot: snapshot,
+      isPlaceholder: isPlaceholder,
+      configuredSelectionID: configuredSelectionID
+    )
   }
 }
 
@@ -383,6 +562,18 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
 }
 
+#Preview("Large content", as: .systemLarge) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: OverviewWidgetPreviewFixtures.contentSnapshot)
+}
+
+#Preview("Large no data", as: .systemLarge) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil)
+}
+
 #Preview("Circular content", as: .accessoryCircular) {
   OverviewWidget()
 } timeline: {
@@ -402,6 +593,18 @@ private enum OverviewWidgetPreviewFixtures {
 }
 
 #Preview("Rectangular no data", as: .accessoryRectangular) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil)
+}
+
+#Preview("Inline content", as: .accessoryInline) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: OverviewWidgetPreviewFixtures.contentSnapshot)
+}
+
+#Preview("Inline no data", as: .accessoryInline) {
   OverviewWidget()
 } timeline: {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
