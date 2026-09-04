@@ -14,6 +14,10 @@ struct RootView: View {
         NavigationStack {
           ConnectAccountView(model: model)
         }
+      case .confirmingAccount(let label):
+        NavigationStack {
+          ConfirmAccountView(model: model, label: label)
+        }
       case .signedIn where model.summary == nil && model.isRefreshing:
         ProgressView("Loading account…")
           .accessibilityLabel("Loading account")

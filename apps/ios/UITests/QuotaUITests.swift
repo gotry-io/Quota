@@ -103,6 +103,19 @@ final class QuotaUITests: XCTestCase {
     try audit(app, skipping: .contrast)
   }
 
+  func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
+    let app = launch(fixture: "confirm-account")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["confirm.root"].waitForExistence(timeout: 10),
+      "confirm.root"
+    )
+    XCTAssertTrue(app.staticTexts["Use this GitHub account?"].exists, "title")
+    XCTAssertTrue(app.buttons["Continue"].exists, "Continue")
+    XCTAssertTrue(app.buttons["Use a different account"].exists, "Use a different account")
+    attachScreenshot(app, name: "confirm-account")
+    try audit(app, skipping: .contrast)
+  }
+
   private func launch(fixture: String) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments = ["--visual-fixture", fixture]

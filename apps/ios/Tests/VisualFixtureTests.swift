@@ -21,6 +21,7 @@ struct VisualFixtureParserTests {
   @Test(
     arguments: [
       ("signed-out", VisualFixture.signedOut),
+      ("confirm-account", VisualFixture.confirmAccount),
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
@@ -44,6 +45,15 @@ struct VisualFixtureParserTests {
       #expect(model.banner == nil)
       #expect(model.expiredMessage == nil)
       #expect(model.activityChart == .idle)
+    }
+
+    @Test
+    func confirmAccountShowsTheConnectedGitHubLabel() {
+      let model = AppModel.visualFixture(.confirmAccount, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .confirmingAccount(label: "octocat"))
+      #expect(model.summary?.account.displayLabel == "octocat")
+      #expect(model.banner == nil)
     }
 
     @Test

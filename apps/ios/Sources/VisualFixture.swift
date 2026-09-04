@@ -7,6 +7,7 @@ import QuotaWire
 /// Parser is always available for unit tests; UI state application is DEBUG-only.
 enum VisualFixture: String, CaseIterable, Sendable {
   case signedOut = "signed-out"
+  case confirmAccount = "confirm-account"
   case content
   case cachedError = "cached-error"
   case empty
@@ -35,6 +36,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.phase = .signedOut
         model.summary = nil
         model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .confirmAccount:
+        let summary = VisualFixtureContent.summary(at: now)
+        model.phase = .confirmingAccount(label: summary.account.displayLabel ?? "octocat")
+        model.summary = summary
+        model.fetchedAt = now.addingTimeInterval(-90)
         model.fromCache = false
         model.isRefreshing = false
         model.banner = nil
@@ -558,7 +568,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
       switch fixture {
       case .content, .cachedError:
         days = VisualFixtureContent.activityDays(ending: now)
-      case .signedOut, .empty, .noDevices:
+      case .signedOut, .confirmAccount, .empty, .noDevices:
         days = []
       }
       let model = AppModel(
@@ -625,7 +635,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
 
   @MainActor
   private final class FixtureBlockedAuthenticator: BrowserSessionAuthenticating {
-    func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+    func authenticate(
+      url: URL,
+      callbackScheme: String,
+      prefersEphemeralWebBrowserSession: Bool
+    ) async throws -> URL {
       throw AuthorizationError.cancelled
     }
 

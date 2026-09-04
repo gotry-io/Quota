@@ -332,11 +332,17 @@ struct AppModelTests {
     await model.connectAccount()
     #expect(authenticator.lastURL == attempt.authorizationURL)
     #expect(authenticator.lastCallbackScheme == QuotaIOSOAuth.callbackScheme)
-    #expect(model.phase == .signedIn)
+    #expect(authenticator.lastPrefersEphemeral == false)
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
     #expect(model.summary?.account.displayLabel == "octocat")
     #expect(model.fromCache == false)
-    #expect(publisher.publishCount == 1)
+    #expect(publisher.publishCount == 0)
     #expect(publisher.clearCount == 0)
+
+    model.confirmAccount()
+    #expect(model.phase == .signedIn)
+    #expect(publisher.publishCount == 1)
+    #expect(scheduler.scheduleCount == 1)
 
     await model.logout()
     #expect(model.phase == .signedOut)
@@ -396,22 +402,117 @@ struct AppModelTests {
         == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
   }
+
+  @Test
+  func useDifferentAccountRevokesThenReauthenticatesEphemerally() async throws {
+    let attempt = AuthorizationAttempt(
+      authorizationURL: URL(
+        string:
+          "https://quota.gotry.io/oauth/v2/authorize?response_type=code&client_id=quota-ios&redirect_uri=io.gotry.quota:/oauth/callback&state=client-state-123456789&code_challenge=challenge&code_challenge_method=S256"
+      )!,
+      state: "client-state-123456789",
+      verifier: String(repeating: "a", count: 43),
+      challenge: "challenge"
+    )
+    let callback = URL(
+      string: "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+    )!
+    let authenticator = ScriptedAuthenticator(results: [.success(callback), .success(callback)])
+    let transport = ScriptedHTTPTransport([
+      .init(status: 200, body: try tokenResponse()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 204, body: Data()),
+      .init(status: 200, body: try tokenResponse()),
+      .init(status: 200, body: try mutatedSummaryLabel("othercat")),
+    ])
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { attempt }
+    )
+
+    await model.connectAccount()
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
+    #expect(authenticator.prefersEphemeralHistory == [false])
+
+    await model.useDifferentAccount()
+    #expect(authenticator.prefersEphemeralHistory == [false, true])
+    #expect(model.phase == .confirmingAccount(label: "othercat"))
+    #expect(try await account.hasSession())
+  }
+
+  @Test
+  func connectAccountFailureCopyNamesTheCause() async {
+    let attempt = AuthorizationAttempt(
+      authorizationURL: URL(string: "https://quota.gotry.io/oauth/v2/authorize")!,
+      state: "client-state-123456789",
+      verifier: String(repeating: "a", count: 43),
+      challenge: "challenge"
+    )
+
+    func model(throwing error: Error) -> AppModel {
+      AppModel(
+        account: AccountClient(
+          relay: RelayClient(transport: ScriptedHTTPTransport([])),
+          sessionStore: MemoryAccountSessionStore(),
+          summaryStore: MemoryAccountSummaryStore(),
+          now: { Fixtures.date("2026-08-14T16:00:00Z") }
+        ),
+        authenticator: ScriptedAuthenticator(result: .failure(error)),
+        makeAuthorizationAttempt: { attempt }
+      )
+    }
+
+    let unexpected = model(throwing: AuthorizationError.stateMismatch)
+    await unexpected.connectAccount()
+    #expect(unexpected.phase == .signedOut)
+    #expect(unexpected.banner?.text == AuthorizationError.unexpectedBrowserResponseMessage)
+
+    let unreachable = model(throwing: AccountClientError.relay(.unavailable))
+    await unreachable.connectAccount()
+    #expect(unreachable.banner?.text == "Could not reach quota.gotry.io.")
+
+    let expired = model(throwing: AccountClientError.relay(.invalidGrant))
+    await expired.connectAccount()
+    #expect(expired.banner?.text == AuthorizationError.expiredSignInMessage)
+  }
 }
 
 @MainActor
 final class ScriptedAuthenticator: BrowserSessionAuthenticating {
-  var result: Result<URL, Error>
+  private var results: [Result<URL, Error>]
   var lastURL: URL?
   var lastCallbackScheme: String?
+  var lastPrefersEphemeral: Bool?
+  var prefersEphemeralHistory: [Bool] = []
 
   init(result: Result<URL, Error>) {
-    self.result = result
+    self.results = [result]
   }
 
-  func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+  init(results: [Result<URL, Error>]) {
+    self.results = results
+  }
+
+  func authenticate(
+    url: URL,
+    callbackScheme: String,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws -> URL {
     lastURL = url
     lastCallbackScheme = callbackScheme
-    return try result.get()
+    lastPrefersEphemeral = prefersEphemeralWebBrowserSession
+    prefersEphemeralHistory.append(prefersEphemeralWebBrowserSession)
+    guard !results.isEmpty else {
+      throw AuthorizationError.cancelled
+    }
+    return try results.removeFirst().get()
   }
 
   var lastPresentURL: URL?

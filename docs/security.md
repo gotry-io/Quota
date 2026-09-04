@@ -109,7 +109,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - The `quota-ios` client's authority is scoped by
   [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
   [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in
-  the app target, the session is one Keychain item with
+  the app target. Connect Account shares Safari cookies (`prefersEphemeralWebBrowserSession =
+  false`) so GitHub can finish Relay's browser round trip; the GitHub login state is the system
+  browser's, not an in-app cookie jar, which is why the app confirms the Account `display_label`
+  before keeping the session and why switching accounts uses an ephemeral sheet. The Quota
+  session is one Keychain item with
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, UserDefaults holds UI preferences only, and the
   client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
   summary, its fetch time, and its ETag in protected storage, is offered back only for the Account

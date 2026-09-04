@@ -57,12 +57,33 @@ Shown when no Keychain account session exists, including after logout and after 
 - Quiet note that this device does not collect or upload local usage.
 - Optional status line after an expired session: **Session expired. Connect Account to continue.**
 
-Connect Account starts `ASWebAuthenticationSession` for the Relay authorize URL. The system sheet
-owns cancel. The app never embeds a web view.
+Connect Account starts `ASWebAuthenticationSession` for the Relay authorize URL with
+`prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
+an account already signed in in Safari; the session lives in the system browser, not in the app.
+The system sheet owns cancel. The app never embeds a web view.
+
+After Relay issues a session and the first Account refresh names `summary.account.displayLabel`,
+the app does not open the signed-in tabs. It shows a full-screen confirmation:
+
+- Title **Use this GitHub account?**
+- Body **Connected as `<label>`.** with the label in bold.
+- Primary **Continue** — enters the signed-in tabs.
+- Secondary **Use a different account** — revokes the session just opened and starts Connect
+  Account again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a login page.
+  That second success confirms the same way.
 
 Layout is a calm centered instrument: compact Quota mark, value proposition, privacy note, and the
 primary action inside one semantic surface. Status banners (connecting, failure, expired) sit
 inside that panel. Hit targets stay at least 44pt.
+
+Connect Account failures use a specific sentence, not a generic retry:
+
+| Cause | Copy |
+| --- | --- |
+| Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
+| Network (`unavailable` / timeout) | **Could not reach quota.gotry.io.** |
+| Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
+| Anything else | **Could not connect this account. Try again.** |
 
 ### Overview
 
@@ -313,6 +334,7 @@ Rules:
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
 | Expired session | Connect Account with **Session expired. Connect Account to continue.** |
 | Connect running | Connect Account with **Continue in the browser.** |
+| Confirm GitHub account | Full-screen **Use this GitHub account?** with **Continue** and **Use a different account** |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
 | Widget placeholder | Redacted remaining / provider skeleton |
 
@@ -352,7 +374,7 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect Account, loading, signed-in content, empty quota/Today, Usage at 30 Days with the
+Inspect Connect Account, the GitHub account confirmation, loading, signed-in content, empty quota/Today, Usage at 30 Days with the
 Activity heatmap, a single-day sheet, no-devices Mac setup, cached content with a refresh banner,
 expired session, the four tabs, Settings (Notifications switch, Log Out, Appearance), subscription
 detail (windows, countdown, Reporting row), and each widget family in placeholder, content, and
@@ -360,9 +382,9 @@ no-data states. Check iPhone, light and dark, standard and accessibility text si
 labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
 contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, `usage-content`,
-`usage-activity`, `subscription-detail`, and `settings` fixture screenshots to
-`dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `confirm-account`,
+`no-devices`, `usage-content`, `usage-activity`, `subscription-detail`, and `settings` fixture
+screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -370,6 +392,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 ```text
 --visual-fixture signed-out
+--visual-fixture confirm-account
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
@@ -379,6 +402,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect Account, no session restore |
+| `confirm-account` | Full-screen **Use this GitHub account?** for **octocat**, with **Continue** and **Use a different account** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |

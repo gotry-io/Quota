@@ -237,7 +237,13 @@ The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKC
 exact redirect `io.gotry.quota:/oauth/callback`. Its exchange rejects installation identity and
 Device fields and returns only an account session: it is not a collection Device, is absent from
 `PlatformSchema`, and never receives write authority. Quota iOS consumes that session through
-`packages/apple-client` and fetches `GET /api/v6/account/summary`. The app process alone holds OAuth
+`packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect Account presents
+`ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
+false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
+stays in the system browser, not in the app. Because GitHub may silently reuse that Safari
+account, the app confirms **Use this GitHub account?** against the Account `display_label` before
+opening signed-in tabs, and **Use a different account** revokes the session just opened and
+repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
 `group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may

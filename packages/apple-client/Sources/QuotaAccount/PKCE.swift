@@ -168,6 +168,23 @@ public enum AuthorizationError: Error, Equatable, Sendable {
   case cancelled
 }
 
+extension AuthorizationError {
+  public static let unexpectedBrowserResponseMessage =
+    "The browser returned an unexpected response. Try again."
+  public static let expiredSignInMessage = "The sign-in expired before it finished. Try again."
+  public static let genericConnectFailureMessage = "Could not connect this account. Try again."
+
+  /// Copy a Connect Account failure can show. Cancel is handled before this is read.
+  public var userFacingMessage: String {
+    switch self {
+    case .stateMismatch, .callbackMismatch, .missingAuthorizationCode, .unexpectedCallbackToken:
+      Self.unexpectedBrowserResponseMessage
+    case .cancelled, .entropyUnavailable, .invalidPKCE, .invalidState, .invalidOrigin:
+      Self.genericConnectFailureMessage
+    }
+  }
+}
+
 enum RelayOrigin {
   static let authorizeURL = URL(string: "https://quota.gotry.io/oauth/v2/authorize")!
 }

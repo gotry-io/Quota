@@ -1,0 +1,62 @@
+import { withPrivateNoStore } from "../web-document-ssr.ts";
+
+/** Why a browser sign-in page could not finish. Never a token or cookie value. */
+export type BrowserSignInFailureReason =
+  | "no_session"
+  | "expired"
+  | "rate_limited"
+  | "invalid_request";
+
+const reasonCopy: Record<BrowserSignInFailureReason, string> = {
+  no_session: "This browser isn't signed in to Quota.",
+  expired: "This sign-in took too long and expired.",
+  rate_limited: "Too many sign-in attempts. Wait a moment and try again.",
+  invalid_request: "This sign-in request couldn't be completed.",
+};
+
+export function acceptsHtml(accept: string | undefined): boolean {
+  return (accept ?? "").includes("text/html");
+}
+
+/**
+ * A page a person in `ASWebAuthenticationSession` can read. JSON clients keep the original
+ * status and body: only an Accept that names `text/html` gets this 200.
+ */
+export function browserSignInErrorPage(reason: BrowserSignInFailureReason): Response {
+  const explanation = reasonCopy[reason];
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign-in didn't finish</title>
+  </head>
+  <body data-reason="${reason}">
+    <h1>Sign-in didn't finish</h1>
+    <p>${explanation}</p>
+    <p>Return to Quota and try again.</p>
+  </body>
+</html>
+`;
+  return withPrivateNoStore(
+    new Response(html, {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    }),
+  );
+}
+
+/** Prefer the HTML page when the caller asked for HTML; otherwise the JSON error stands. */
+export function htmlOrJsonSignInError(
+  accept: string | undefined,
+  json: Response,
+  reason: BrowserSignInFailureReason,
+): Response {
+  if (!acceptsHtml(accept)) return json;
+  const page = browserSignInErrorPage(reason);
+  const retryAfter = json.headers.get("Retry-After");
+  if (!retryAfter) return page;
+  const headers = new Headers(page.headers);
+  headers.set("Retry-After", retryAfter);
+  return new Response(page.body, { status: page.status, statusText: page.statusText, headers });
+}

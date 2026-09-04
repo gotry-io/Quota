@@ -99,8 +99,9 @@ project. Pass `--no-commit` to skip the commit.
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
 `usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota card for
 `subscription-detail`, the Mac setup card for `no-devices`, the Connect Account control for
-`signed-out`, and Settings for the Notifications switch and Log Out, and runs an iOS 17+
-accessibility audit on each. Log Out is on the Settings tab. Delete Account starts on the website.
+`signed-out`, the GitHub account confirmation for `confirm-account`, and Settings for the
+Notifications switch and Log Out, and runs an iOS 17+ accessibility audit on each. Log Out is on
+the Settings tab. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
@@ -118,7 +119,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | content | cached-error | empty | no-devices
+# Values: signed-out | confirm-account | content | cached-error | empty | no-devices
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

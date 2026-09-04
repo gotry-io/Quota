@@ -42,6 +42,7 @@
 		56843F72991FA3E7410AE3B2 /* IOSAlertStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */; };
 		5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4CAD6B32A3936603EB853755 /* QuotaAccount */; };
 		5B2E98397B6D7F825BDB3411 /* QuotaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B4F64D1FE4D0DD3024D71E /* QuotaWidgetsBundle.swift */; };
+		5D8D1FD4F1902E5A3AA78E66 /* ConfirmAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */; };
 		6741F9EB068AECB4CBDAA5C7 /* SubscriptionDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */; };
 		6E9C3E458700AEF0C9CD5A5E /* OverviewWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA569843A5C8221A5E1B37F7 /* OverviewWidget.swift */; };
 		732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = C682F581162B4E54B44C4621 /* QuotaAlerts */; };
@@ -146,6 +147,7 @@
 		408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSResetReminderScheduler.swift; sourceTree = "<group>"; };
 		461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetViews.swift; sourceTree = "<group>"; };
+		4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmAccountView.swift; sourceTree = "<group>"; };
 		48F33ED7365409E390FC7F4D /* AlertSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertSink.swift; sourceTree = "<group>"; };
 		4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetContent.swift; sourceTree = "<group>"; };
 		50438DF74EFAC847E8BA5A01 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 				50438DF74EFAC847E8BA5A01 /* AppModel.swift */,
 				A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */,
 				582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */,
+				4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */,
 				032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */,
 				C44BCCD3B333361960497D05 /* DeepLink.swift */,
 				608229F3060A24633515D297 /* DevicesView.swift */,
@@ -610,6 +613,7 @@
 				E7D6D0B08F4795420BC6713F /* AppModel.swift in Sources */,
 				D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */,
 				BCC41879989EFE8E246E42F1 /* BrowserAuthenticator.swift in Sources */,
+				5D8D1FD4F1902E5A3AA78E66 /* ConfirmAccountView.swift in Sources */,
 				8E2336FC11600A345D6A4817 /* ConnectAccountView.swift in Sources */,
 				238018D9FF5AA75CA17A215B /* DeepLink.swift in Sources */,
 				27A95B7A56ED447AAABCC64D /* DevicesView.swift in Sources */,

@@ -327,3 +327,21 @@ public actor AccountClient {
     }
   }
 }
+
+extension AccountClientError {
+  /// Copy a Connect Account failure can show. Cancel is handled before this is read.
+  public var userFacingMessage: String {
+    switch self {
+    case .callbackMismatch, .stateMismatch, .missingAuthorizationCode, .unexpectedCallbackToken:
+      AuthorizationError.unexpectedBrowserResponseMessage
+    case .relay(.unavailable), .relay(.timeout):
+      "Could not reach quota.gotry.io."
+    case .relay(.invalidGrant), .relay(.unauthorized), .sessionExpired:
+      AuthorizationError.expiredSignInMessage
+    case .relay(.rejected(code: _, status: let status)) where (400...499).contains(status):
+      AuthorizationError.expiredSignInMessage
+    default:
+      AuthorizationError.genericConnectFailureMessage
+    }
+  }
+}

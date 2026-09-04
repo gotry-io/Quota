@@ -14,6 +14,7 @@ final class AppModel {
     case launching
     case signedOut
     case connecting
+    case confirmingAccount(label: String)
     case signedIn
   }
 
@@ -155,8 +156,10 @@ final class AppModel {
     }
   }
 
-  func connectAccount() async {
-    guard phase != .connecting else { return }
+  func connectAccount(switchingAccount: Bool = false) async {
+    if !switchingAccount {
+      guard phase != .connecting else { return }
+    }
     phase = .connecting
     banner = Banner(
       kind: .connecting,
@@ -167,29 +170,81 @@ final class AppModel {
       let attempt = try makeAuthorizationAttempt()
       let callback = try await authenticator.authenticate(
         url: attempt.authorizationURL,
-        callbackScheme: QuotaIOSOAuth.callbackScheme
+        callbackScheme: QuotaIOSOAuth.callbackScheme,
+        prefersEphemeralWebBrowserSession: switchingAccount
       )
       _ = try await account.completeLogin(callback: callback, expected: attempt)
       expiredMessage = nil
-      phase = .signedIn
       banner = nil
       await refresh()
+      guard phase != .signedOut else { return }
+      let label = PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
+      banner = nil
+      phase = .confirmingAccount(label: label)
     } catch is CancellationError {
-      phase = .signedOut
-      banner = nil
+      applySignedOut()
     } catch AuthorizationError.cancelled, AccountClientError.cancelled {
-      phase = .signedOut
-      banner = nil
+      applySignedOut()
     } catch AccountClientError.sessionExpired {
       applyExpired()
-    } catch {
-      phase = .signedOut
+    } catch let error as AccountClientError {
+      applySignedOut()
       banner = Banner(
         kind: .refreshFailed,
-        text: "Could not connect this account. Try again.",
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    } catch let error as AuthorizationError {
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    } catch {
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.genericConnectFailureMessage,
         symbolName: "exclamationmark.triangle"
       )
     }
+  }
+
+  /// Keep the session this device just opened.
+  func confirmAccount() {
+    guard case .confirmingAccount = phase else { return }
+    expiredMessage = nil
+    phase = .signedIn
+    if let summary, let fetchedAt {
+      banner = nil
+      publishWidget(summary: summary, fetchedAt: fetchedAt)
+      evaluateAlerts(summary: summary)
+    } else {
+      banner = failureBanner(hasCachedSummary: false, offline: false)
+      clearWidget()
+    }
+    backgroundRefresh.scheduleNextRefresh()
+    resolvePendingSubscriptionSelection()
+    pruneOverviewPath()
+  }
+
+  /// Revoke the session just opened and sign in again in an ephemeral browser session so GitHub
+  /// cannot reuse the Safari account.
+  func useDifferentAccount() async {
+    guard case .confirmingAccount = phase else { return }
+    phase = .connecting
+    banner = Banner(
+      kind: .connecting,
+      text: "Continue in the browser.",
+      symbolName: "safari"
+    )
+    await account.logout()
+    summary = nil
+    fetchedAt = nil
+    fromCache = false
+    clearWidget()
+    await connectAccount(switchingAccount: true)
   }
 
   /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
@@ -369,14 +424,25 @@ final class AppModel {
     activityDaySheet = sheet
   }
 
+  private var holdsUnconfirmedSession: Bool {
+    switch phase {
+    case .connecting, .confirmingAccount: true
+    default: false
+    }
+  }
+
   private func apply(_ result: AccountRefreshResult) {
     summary = result.summary
     fetchedAt = result.fetchedAt
     fromCache = result.fromCache
+    let awaitingConfirmation = holdsUnconfirmedSession
     switch result.error {
     case .none:
       banner = nil
       expiredMessage = nil
+      if awaitingConfirmation {
+        break
+      }
       phase = .signedIn
       if let summary = result.summary, let fetchedAt = result.fetchedAt {
         publishWidget(summary: summary, fetchedAt: fetchedAt)
@@ -391,10 +457,12 @@ final class AppModel {
       // someone who deliberately logged out invents a failure that did not happen.
       applySignedOut()
     case .relay(.unavailable), .relay(.timeout):
+      if awaitingConfirmation { break }
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
     case .some:
+      if awaitingConfirmation { break }
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
