@@ -65,8 +65,8 @@ open apps/ios/Quota.xcodeproj
 ```
 
 `pnpm generate:ios` runs the installed XcodeGen against `project.yml` and refreshes the checked-in
-Xcode project. Do not add a third-party package manager. The app has no Sparkle, notification,
-analytics, or App Store upload workflow.
+Xcode project. Do not add a third-party package manager. The app has no Sparkle, analytics, or App
+Store upload workflow. Delete Account starts on the website.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and, when an iPhone 17 Pro simulator is
 available, the Quota scheme tests (`QuotaTests` and `QuotaUITests`). `pnpm build:ios` builds for the
@@ -76,9 +76,9 @@ generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm 
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
 `overview.root` / `overview.today` for `content`, opens the first quota card for
-`subscription-detail`, the Mac setup card for `no-devices`, and the
-Connect Account control for `signed-out`, and runs an iOS 17+ accessibility audit on each. Log Out
-is on the Settings tab.
+`subscription-detail`, the Mac setup card for `no-devices`, the Connect Account control for
+`signed-out`, and Settings for the Notifications switch and Log Out, and runs an iOS 17+
+accessibility audit on each. Log Out is on the Settings tab. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh

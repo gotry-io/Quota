@@ -197,6 +197,16 @@ final class AppModel {
     applySignedOut()
   }
 
+  /// Opens the website Delete Account flow in `ASWebAuthenticationSession` with shared cookies.
+  /// The sheet ending — including cancel — returns here so Settings can prompt to sign out.
+  func presentDeleteAccount() async {
+    try? await authenticator.present(
+      url: QuotaWebLinks.deleteAccountStart,
+      callbackScheme: nil,
+      prefersEphemeralWebBrowserSession: false
+    )
+  }
+
   func openDeepLink(_ url: URL) {
     selectedTab = .overview
     if case .subscription(let id) = DeepLink.parse(url) {

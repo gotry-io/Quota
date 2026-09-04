@@ -13,7 +13,8 @@ emerald accent. It is not a compressed website and not the QuotaBar menu panel.
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect Account and Log Out are the only account actions.
+2. Connect Account and Log Out are the only account actions this device performs. Delete Account
+   starts on the website after a fresh GitHub sign-in.
 3. Last-good Account data stays visible across transient failures. A banner states that in words,
    not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
@@ -162,8 +163,36 @@ credentials. Empty state shows the Mac setup card rather than hiding the section
 
 ### Settings
 
-Placeholder rows for **Notifications**, **Appearance**, and **About**. Trailing **Log Out** uses a
-native confirmation: remote Account data remains; this device forgets the session.
+A native `Form` of grouped rows. Every control is a standard Form toggle, picker, link, or button.
+
+**Notifications.** A master switch, **Reset reminders**, and one group per subscription (catalog
+`display_name` as the header, masked account label as a row) with two remaining-percent pickers.
+Choices are **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first defaults to **20**; the second
+defaults to **10** and may be **Off**, which stores a single threshold. Stored values stay
+descending and unique, and the second picker only offers values below the first. Turning the master
+switch on asks `UNUserNotificationCenter` for alerts and sound. A refusal puts the switch back off
+and shows **Allow notifications for Quota in Settings.** with **Open Settings**, which opens
+`UIApplication.openSettingsURLString`. Opening the page re-reads the system permission; a later
+grant in Settings does not turn the switch on by itself. Rules are stored in `UserDefaults` under
+`alerts.*`. The group footer is **Quota reminds you when a refresh brings new data.** Quota does
+not promise real-time.
+
+**Appearance.** **System**, **Light**, or **Dark**, stored as `appearance` in `UserDefaults`. The
+window uses `.preferredColorScheme`. System is the default and leaves the scheme unset.
+
+**About.** Version is `CFBundleShortVersionString (CFBundleVersion)`. Links to
+`https://quota.gotry.io` and the GitHub repository. **Licenses: MIT**.
+
+**Privacy & Support.** Links to `https://quota.gotry.io/privacy` and
+`https://quota.gotry.io/support`.
+
+**Account.** **Manage devices on the web** opens `https://quota.gotry.io/my/devices`. **Delete
+Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
+`ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
+`https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount`. The
+callback scheme is nil: the sheet ending returns to the app. Quota then prompts **If you deleted
+the Account, sign out here too.** **Log Out** keeps the native confirmation: remote Account data
+remains; this device forgets the session.
 
 ### Mac setup
 
@@ -232,8 +261,8 @@ the strongest remaining figure readable (`minimumScaleFactor` is preferred over 
 primary value).
 
 The accent is adaptive emerald (`#087456` light, `#82ddb8` dark). Ink, body, and mute follow
-`Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out
-confirmation and unrecoverable failure copy.
+`Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
+confirmations, and unrecoverable failure copy.
 
 Widgets stay denser: `title2` / `title3` / `headline` for remaining, `subheadline` / `caption` for
 provider and support, and no custom card chrome beyond the system widget container.
@@ -252,14 +281,15 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Visual QA
 
 Inspect Connect Account, loading, signed-in content, empty quota/Today, no-devices Mac setup, cached
-content with a refresh banner, expired session, the four tabs, subscription detail (windows,
-countdown, Reporting row), and each widget family in placeholder, content, and no-data states.
+content with a refresh banner, expired session, the four tabs, Settings (Notifications switch, Log
+Out, Appearance), subscription detail (windows, countdown, Reporting row), and each widget family in
+placeholder, content, and no-data states.
 Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver labels, and Reduce
 Motion. Synthetic fixtures may contain display labels only; they must never contain access tokens,
 refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, and
-`subscription-detail` fixture screenshots to `dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`,
+`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 

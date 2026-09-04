@@ -56,6 +56,7 @@ targets:
       - package: QuotaAppleShared
         product: QuotaAlerts
       - sdk: BackgroundTasks.framework
+      - sdk: UserNotifications.framework
       - target: QuotaWidgets
         embed: true
     scheme:

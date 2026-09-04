@@ -42,7 +42,17 @@ final class QuotaUITests: XCTestCase {
 
     app.tabBars.buttons["Settings"].tap()
     XCTAssertTrue(
-      app.buttons["Log Out"].waitForExistence(timeout: 5),
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 5),
+      "settings.root"
+    )
+    XCTAssertTrue(
+      app.switches["Notifications"].waitForExistence(timeout: 5),
+      "Notifications"
+    )
+    attachScreenshot(app, name: "settings")
+    try audit(app, skipping: [.contrast, .dynamicType, .hitRegion], ignoringUnnamedClipping: true)
+    XCTAssertTrue(
+      revealSettingsLogOut(app).waitForExistence(timeout: 5),
       "Log Out on Settings"
     )
   }
@@ -87,6 +97,19 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.tabBars.buttons[name].exists, "\(name) tab")
   }
 
+  /// Account sits below the per-subscription threshold groups, so Form may not
+  /// materialize Log Out until the page is scrolled.
+  private func revealSettingsLogOut(_ app: XCUIApplication) -> XCUIElement {
+    let byID = app.descendants(matching: .any)["settings.logout"]
+    let byLabel = app.descendants(matching: .any)["Log Out"]
+    for _ in 0..<8 {
+      if byID.exists { return byID }
+      if byLabel.exists { return byLabel }
+      app.swipeUp()
+    }
+    return byID.exists ? byID : byLabel
+  }
+
   /// Every issue is reported with the element it names, so a failure says what to fix.
   ///
   /// Two checks are skipped where the system, not this app, decides the answer. `.contrast`:
@@ -95,12 +118,24 @@ final class QuotaUITests: XCTestCase {
   /// surface (see the attached screenshots). `.hitRegion` on Overview: iOS 26 system TabView
   /// exposes ~28pt tab icons; system control, not ours. `.dynamicType` on Overview: the masked
   /// account label still reports partial support at accessibility sizes. Clipping, element
-  /// description, and trait checks run on both fixtures.
-  private func audit(_ app: XCUIApplication, skipping: XCUIAccessibilityAuditType = []) throws {
+  /// description, and trait checks run on both fixtures. An unnamed "Text clipped" on
+  /// Settings is the glass tab bar covering a Form row the audit cannot name.
+  private func audit(
+    _ app: XCUIApplication,
+    skipping: XCUIAccessibilityAuditType = [],
+    ignoringUnnamedClipping: Bool = false
+  ) throws {
     if #available(iOS 17.0, *) {
       var types = XCUIAccessibilityAuditType.all
       types.remove(skipping)
       try app.performAccessibilityAudit(for: types) { issue in
+        // Only the Settings Form asks for this: its last rows sit under the glass tab bar and
+        // the audit reports the clip without naming an element. Every other page must name one.
+        if ignoringUnnamedClipping, issue.element == nil,
+          issue.compactDescription.localizedCaseInsensitiveContains("Text clipped")
+        {
+          return true
+        }
         let element = issue.element.map { "\($0)" } ?? "no element"
         XCTFail("\(issue.compactDescription) — \(element)")
         return true

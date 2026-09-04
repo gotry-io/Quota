@@ -61,7 +61,7 @@ struct RootView: View {
       .tag(AppTab.devices)
 
       NavigationStack {
-        SettingsPlaceholderView(model: model)
+        SettingsView(model: model)
       }
       .tabItem {
         Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage)

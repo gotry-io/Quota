@@ -8,13 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		092F9DDC6D4E80C799CBF568 /* RecordingBackgroundRefreshScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C93FF0EFBA23DF68838B83A2 /* RecordingBackgroundRefreshScheduler.swift */; };
+		09A1841A9BD857FCA1F9DD70 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */; };
 		1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */; };
+		1BF91029C380326E580E55B5 /* SettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABB86F5D4DA736C025E43BF /* SettingsModel.swift */; };
 		20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 383D78AB5F09A4248D36752A /* BackgroundTasks.framework */; };
 		238018D9FF5AA75CA17A215B /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44BCCD3B333361960497D05 /* DeepLink.swift */; };
 		27A95B7A56ED447AAABCC64D /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608229F3060A24633515D297 /* DevicesView.swift */; };
-		2900FF60940B88849A9EF764 /* SettingsPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1C356A519BB02AC3A4895F5 /* SettingsPlaceholderView.swift */; };
 		2B6BF7BCF5EB68FCB2B6D100 /* QuotaRelay in Frameworks */ = {isa = PBXBuildFile; productRef = 22D5DB49A51494FAAAFCD9E6 /* QuotaRelay */; };
 		36AA8F7A68FF6D773AB89793 /* OverviewWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */; };
+		3B3F69BA9D98CCF7A1E2D0CF /* SettingsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */; };
 		3CA35579C61CEBEA2255B6EE /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = FFC79886986AE5BCDBF34729 /* QuotaPresentation */; };
 		3E8AB3B8286BBEE5235C6720 /* OverviewWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */; };
 		3F8F9830CD84E331EAFC6FFC /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC5478A05E6828597AB9A50C /* Theme.swift */; };
@@ -23,6 +25,7 @@
 		4656473090590B41CD1FB908 /* BackgroundRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6AEB03C55BFF99F77BD429 /* BackgroundRefreshTests.swift */; };
 		4694AB9ADAE0941DA5E1C6E1 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */; };
 		476F9FC23E13F2FDDE7AC5E5 /* RecordingWidgetSnapshotPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7817116D076AF5E867D37B90 /* RecordingWidgetSnapshotPublisher.swift */; };
+		52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */; };
 		533F79CF7F3865C7299BAE41 /* IOSAlertRulesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82B4DB61764DEFFBCBBA024 /* IOSAlertRulesStore.swift */; };
 		56843F72991FA3E7410AE3B2 /* IOSAlertStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */; };
 		5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4CAD6B32A3936603EB853755 /* QuotaAccount */; };
@@ -115,6 +118,7 @@
 		1DF31866210B6905C77A5CF7 /* QuotaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuotaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionSalt.swift; sourceTree = "<group>"; };
 		383D78AB5F09A4248D36752A /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetViews.swift; sourceTree = "<group>"; };
 		48F33ED7365409E390FC7F4D /* AlertSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertSink.swift; sourceTree = "<group>"; };
 		4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetContent.swift; sourceTree = "<group>"; };
@@ -122,10 +126,13 @@
 		54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionDetailView.swift; sourceTree = "<group>"; };
 		582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAuthenticator.swift; sourceTree = "<group>"; };
 		592AE2441A525DB2921A5FA2 /* StatusBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBanner.swift; sourceTree = "<group>"; };
+		59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModelTests.swift; sourceTree = "<group>"; };
 		5BB4429F2CF9B875171CFCFC /* UsagePlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePlaceholderView.swift; sourceTree = "<group>"; };
 		608229F3060A24633515D297 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
+		6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		64B7535F6DB6CD1DDED5BA92 /* WidgetSnapshotProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjection.swift; sourceTree = "<group>"; };
 		68BADB08B02924BB2206691D /* VisualFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualFixture.swift; sourceTree = "<group>"; };
+		6ABB86F5D4DA736C025E43BF /* SettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModel.swift; sourceTree = "<group>"; };
 		6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualFixtureTests.swift; sourceTree = "<group>"; };
 		70DAD0FC0DCFE3F2F7AFA0D8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		715109BDC79F55A51B6113F8 /* ProviderQuotaCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderQuotaCard.swift; sourceTree = "<group>"; };
@@ -154,7 +161,6 @@
 		DBD50F87A92F84B0E86A5FEF /* Quota.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Quota.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC3CB5A3738E2091BBC468F4 /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
 		DC5478A05E6828597AB9A50C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		E1C356A519BB02AC3A4895F5 /* SettingsPlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPlaceholderView.swift; sourceTree = "<group>"; };
 		EC67366D6301AC5644D841EB /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		F6B54F7C252C278A3CF53123 /* WidgetSnapshotPublishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublishing.swift; sourceTree = "<group>"; };
 		F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAlertStateStore.swift; sourceTree = "<group>"; };
@@ -174,6 +180,7 @@
 				FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */,
 				732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */,
 				20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */,
+				52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -220,7 +227,8 @@
 				BAF12711B0EE040379EE3695 /* QuotaApp.swift */,
 				A5FCDA22B62B0D142212AA65 /* RootView.swift */,
 				33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */,
-				E1C356A519BB02AC3A4895F5 /* SettingsPlaceholderView.swift */,
+				6ABB86F5D4DA736C025E43BF /* SettingsModel.swift */,
+				6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */,
 				592AE2441A525DB2921A5FA2 /* StatusBanner.swift */,
 				54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */,
 				DC5478A05E6828597AB9A50C /* Theme.swift */,
@@ -261,6 +269,7 @@
 				C93FF0EFBA23DF68838B83A2 /* RecordingBackgroundRefreshScheduler.swift */,
 				7817116D076AF5E867D37B90 /* RecordingWidgetSnapshotPublisher.swift */,
 				7D03510598748E5459598E60 /* SelectionSaltTests.swift */,
+				59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */,
 				74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */,
 				6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */,
 				0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */,
@@ -288,6 +297,7 @@
 			children = (
 				383D78AB5F09A4248D36752A /* BackgroundTasks.framework */,
 				9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */,
+				408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */,
 				D20ECC9117266738C855DB30 /* WidgetKit.framework */,
 			);
 			name = Frameworks;
@@ -498,6 +508,7 @@
 				092F9DDC6D4E80C799CBF568 /* RecordingBackgroundRefreshScheduler.swift in Sources */,
 				476F9FC23E13F2FDDE7AC5E5 /* RecordingWidgetSnapshotPublisher.swift in Sources */,
 				C73D21E934BE3DB1C3B3B16C /* SelectionSaltTests.swift in Sources */,
+				3B3F69BA9D98CCF7A1E2D0CF /* SettingsModelTests.swift in Sources */,
 				6741F9EB068AECB4CBDAA5C7 /* SubscriptionDetailTests.swift in Sources */,
 				1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */,
 				B3F133C0994AE8E197DD658A /* WidgetSnapshotProjectionTests.swift in Sources */,
@@ -526,7 +537,8 @@
 				A372DB0655F086AD434D9CBE /* QuotaApp.swift in Sources */,
 				CF0106D41F578E1909080626 /* RootView.swift in Sources */,
 				E83E20523B31256BDC034CAE /* SelectionSalt.swift in Sources */,
-				2900FF60940B88849A9EF764 /* SettingsPlaceholderView.swift in Sources */,
+				1BF91029C380326E580E55B5 /* SettingsModel.swift in Sources */,
+				09A1841A9BD857FCA1F9DD70 /* SettingsView.swift in Sources */,
 				CC18EA3EC0F6816AA0F2E3A9 /* StatusBanner.swift in Sources */,
 				DAF943A875E436921237F021 /* SubscriptionDetailView.swift in Sources */,
 				3F8F9830CD84E331EAFC6FFC /* Theme.swift in Sources */,

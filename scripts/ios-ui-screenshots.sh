@@ -65,7 +65,7 @@ if (!fs.existsSync(manifestPath)) {
   process.exit(1);
 }
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const wanted = ["overview-content", "overview-no-devices", "connect-signed-out", "subscription-detail"];
+const wanted = ["overview-content", "overview-no-devices", "connect-signed-out", "subscription-detail", "settings"];
 const found = new Map();
 for (const test of manifest) {
   for (const attachment of test.attachments || []) {
