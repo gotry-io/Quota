@@ -186,8 +186,8 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
   `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
   apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
-- Web change: run its type check and production build; inspect desktop and mobile rendering when
-  browser tooling is available.
+- Web change: run its type check, existing and component tests, e2e smoke, and production build;
+  inspect desktop and mobile rendering when browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets
   dry-run build.
 - Cross-cutting change: run the full root format, check, test, and build sequence.
