@@ -86,8 +86,10 @@ struct OverviewSmallView: View {
     if let state = item.stateLabel(now: entry.date) {
       parts.append(state)
     }
-    if let resetsAt = item.resetsAt {
-      parts.append("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
+    if let resetsAt = item.resetsAt,
+      let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+    {
+      parts.append(reset)
     }
     if let fetchedAt {
       parts.append(OverviewWidgetContent.updated(fetchedAt: fetchedAt, now: entry.date))
@@ -141,8 +143,10 @@ struct OverviewMediumView: View {
         .font(.caption2)
         .foregroundStyle(.tertiary)
         .lineLimit(1)
-      if let resetsAt = item.resetsAt {
-        Text("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
+      if let resetsAt = item.resetsAt,
+        let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+      {
+        Text(reset)
           .font(.caption2)
           .foregroundStyle(.tertiary)
           .lineLimit(1)
@@ -269,8 +273,10 @@ struct OverviewRectangularView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .minimumScaleFactor(0.85)
-          if let resetsAt = item.resetsAt {
-            Text("Resets \(OverviewWidgetContent.resetAge(resetsAt: resetsAt, now: entry.date))")
+          if let resetsAt = item.resetsAt,
+            let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: entry.date)
+          {
+            Text(reset)
               .font(.caption2)
               .foregroundStyle(.tertiary)
               .lineLimit(1)

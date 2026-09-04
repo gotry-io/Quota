@@ -25,7 +25,7 @@ Core rules:
 
 ## Shared product vocabulary
 
-Freshness copy, the one no-reset phrase, provider display names, quota window titles, and Devices copy follow
+Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
 and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
@@ -113,14 +113,15 @@ Families:
 
 Shared rules:
 
-- Format with `RemainingQuotaFormat`, `CompactCountFormat`, `UsageCostFormat`, and
-  `CompactAgeFormat`. Digits are monospaced. Semantic text styles and colors only.
+- Format with `RemainingQuotaFormat`, `CompactCountFormat`, `UsageCostFormat`,
+  `CompactAgeFormat`, and `FreshnessCopy`. Digits are monospaced. Semantic text styles and colors
+  only.
 - Mark the strongest remaining value with `widgetAccentable()`.
 - Use `containerBackground(for: .widget)`. Do not call `glassEffect`. On iOS 26 the system owns
   widget Liquid Glass, accented, and vibrant rendering inside that container; on iOS 17–25 the
   system material fallback applies.
-- When a window's reset instant is at or before the entry date, reset age copy is **now** (never
-  `0s`).
+- When a window's reset instant is at or before the entry date, the widget prints no Resets line,
+  matching the shared reset copy.
 - Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
   widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole.
 - Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show

@@ -16,9 +16,6 @@ enum OverviewWidgetContent {
     URL(string: "io.gotry.quota:/subscriptions/\(item.selectionID)")!
   }
 
-  /// Copy used when a reset instant is at or before `now` (avoids a misleading "0s").
-  static let resetDueCopy = "now"
-
   static func loadSnapshot(
     containerURL: URL? = FileManager.default.containerURL(
       forSecurityApplicationGroupIdentifier: appGroupIdentifier
@@ -79,14 +76,6 @@ enum OverviewWidgetContent {
     FreshnessCopy.updated(since: fetchedAt, now: now)
   }
 
-  /// Relative time until reset, or `resetDueCopy` once the reset instant has passed.
-  static func resetAge(resetsAt: Date, now: Date = Date()) -> String {
-    if resetsAt <= now {
-      return resetDueCopy
-    }
-    return CompactAgeFormat.string(since: now, now: resetsAt)
-  }
-
   static func todayTokensLabel(input: Int, output: Int) -> String {
     "\(CompactCountFormat.compact(input)) in · \(CompactCountFormat.compact(output)) out"
   }
@@ -121,8 +110,10 @@ enum OverviewWidgetContent {
     if let state = item.stateLabel(now: now) {
       parts.append(state)
     }
-    if let resetsAt = item.resetsAt {
-      parts.append("Resets \(resetAge(resetsAt: resetsAt, now: now))")
+    if let resetsAt = item.resetsAt,
+      let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
+    {
+      parts.append(reset)
     }
     if let fetchedAt {
       parts.append(updated(fetchedAt: fetchedAt, now: now))

@@ -116,15 +116,15 @@ struct QuotaWindowBlock: View {
   /// A reading that is not current says so even when it still carries a reset time,
   /// because the reset it names may already have passed.
   private var supportLine: String? {
-    let reset = window.resetsAt.map { "Resets \(QuotaFormat.resetTime($0))" }
+    let reset = window.resetsAt.flatMap { QuotaFormat.resetTime($0) }
     guard let stateLabel else { return reset }
     return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
 
   private var accessibilityText: String {
     var parts = [QuotaFormat.remainingAccessibility(window)]
-    if let resets = window.resetsAt {
-      parts.append("Resets \(QuotaFormat.resetTime(resets))")
+    if let reset = window.resetsAt.flatMap({ QuotaFormat.resetTime($0) }) {
+      parts.append(reset)
     }
     if let stateLabel {
       parts.append(stateLabel)

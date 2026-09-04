@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWidgetData
 import Testing
 
@@ -132,18 +133,28 @@ struct OverviewWidgetContentTests {
     let fetched = date("2026-08-14T15:45:00Z")
     let resets = date("2026-08-14T18:00:00Z")
     #expect(OverviewWidgetContent.updated(fetchedAt: fetched, now: now) == "Updated 15m ago")
-    #expect(OverviewWidgetContent.resetAge(resetsAt: resets, now: now) == "2h")
+    #expect(FreshnessCopy.resetCopy(resetsAt: resets, now: now) == "Resets in 2h")
   }
 
   @Test
-  func resetAgeReturnsNowCopyAfterResetInstant() {
+  func aPastResetPrintsNoResetsLine() {
     let now = date("2026-08-14T16:00:00Z")
     let atInstant = now
     let past = date("2026-08-14T15:59:00Z")
-    #expect(OverviewWidgetContent.resetAge(resetsAt: atInstant, now: now) == "now")
-    #expect(OverviewWidgetContent.resetAge(resetsAt: past, now: now) == "now")
-    #expect(OverviewWidgetContent.resetAge(resetsAt: past, now: now) != "0s")
-    #expect(OverviewWidgetContent.resetDueCopy == "now")
+    #expect(FreshnessCopy.resetCopy(resetsAt: atInstant, now: now) == nil)
+    #expect(FreshnessCopy.resetCopy(resetsAt: past, now: now) == nil)
+    let item = WidgetQuotaItem(
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "Weekly",
+      remainingPercent: 71,
+      hasLimit: true,
+      resetsAt: past
+    )
+    #expect(
+      !OverviewWidgetContent.itemAccessibility(item: item, fetchedAt: nil, now: now)
+        .contains("Resets")
+    )
   }
 
   @Test
