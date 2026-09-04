@@ -38,9 +38,9 @@ export function deviceActivity(
   return { label: "Not reporting", tone: "unavailable", since };
 }
 
-/** mac vs iPhone glyph. QuotaBar writes `macos`; a tolerant read may still name iOS. */
-export function platformIconKind(platform: string): "mac" | "iphone" {
-  return platform === "ios" || platform === "iphone" ? "iphone" : "mac";
+/** macOS glyph, or a generic device for every other platform value. */
+export function platformIconKind(platform: string): "mac" | "generic" {
+  return platform === "macos" ? "mac" : "generic";
 }
 
 /** Last-seen descending. A Device that has never called sorts last. */

@@ -90,7 +90,7 @@ for (const appearance of appearances) {
       await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
       await expect(page.locator("#token-total")).toHaveText("11.4M");
       await expect(page.locator("#cost-total")).toHaveText("$8.50");
-      await expect(page.locator("#request-total")).toBeVisible();
+      await expect(page.locator("#message-total")).toBeVisible();
       await expect(page.locator(".usage-columns")).toBeVisible();
       await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();

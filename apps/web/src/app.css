@@ -356,6 +356,7 @@ footer a:hover,
 
 .preview-shot {
   display: flex;
+  flex-direction: column;
   margin: 0;
   min-width: 0;
   height: 100%;
@@ -365,14 +366,46 @@ footer a:hover,
   background: var(--canvas);
 }
 
-.preview-shot picture,
 .preview-shot img {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
   height: 100%;
+  min-height: 0;
   max-width: 100%;
   object-fit: cover;
   object-position: top center;
+}
+
+.preview-shot .shot-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .preview-shot .shot-light {
+    display: none;
+  }
+
+  html:not([data-theme]) .preview-shot .shot-dark {
+    display: block;
+  }
+}
+
+html[data-theme="dark"] .preview-shot .shot-light {
+  display: none;
+}
+
+html[data-theme="dark"] .preview-shot .shot-dark {
+  display: block;
+}
+
+.preview-caption {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--hairline);
+  color: var(--body);
+  font-size: 12px;
+  text-align: center;
 }
 
 .preview-web img {
@@ -509,7 +542,7 @@ h1 {
 .hero h1 {
   max-width: 44rem;
   margin-bottom: 20px;
-  font-size: clamp(28px, 3.6vw, 40px);
+  font-size: clamp(36px, 5vw, 56px);
   font-weight: 500;
   line-height: 1.15;
   letter-spacing: -0.03em;
@@ -523,10 +556,23 @@ h1 {
   line-height: 1.55;
 }
 
+.hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.hero-meta {
+  margin: 0;
+  color: var(--body);
+  font-size: 14px;
 }
 
 .button {
@@ -2013,6 +2059,13 @@ th {
   text-align: right;
 }
 
+.device-card-list {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }
@@ -2099,24 +2152,13 @@ tbody tr:last-child td {
 
 @media (prefers-reduced-motion: no-preference) {
   .loading-block-line {
-    background: linear-gradient(
-      90deg,
-      var(--surface-soft) 0%,
-      var(--hairline) 45%,
-      var(--surface-soft) 90%
-    );
-    background-size: 200% 100%;
-    animation: loading-block-shimmer 1.4s ease-in-out infinite;
+    animation: loading-block-pulse 1.4s ease-in-out infinite;
   }
 }
 
-@keyframes loading-block-shimmer {
-  from {
-    background-position: 100% 0;
-  }
-
-  to {
-    background-position: -100% 0;
+@keyframes loading-block-pulse {
+  50% {
+    opacity: 0.55;
   }
 }
 
@@ -2130,7 +2172,7 @@ button:focus-visible {
 }
 
 @media (min-width: 841px) {
-  .preview-shot picture {
+  .preview-shot img {
     flex: 1 1 auto;
     min-height: 0;
   }
@@ -2214,7 +2256,17 @@ button:focus-visible {
   }
 
   .hero-preview {
-    height: 200px;
+    display: flex;
+    min-width: 0;
+    height: auto;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: thin;
+    gap: 12px;
+  }
+
+  .preview-web {
+    order: -1;
   }
 
   .hero-preview,
@@ -2222,6 +2274,63 @@ button:focus-visible {
   .preview-shot img {
     width: 100%;
     max-width: 100%;
+  }
+
+  .preview-shot {
+    flex: 0 0 min(88vw, 360px);
+    width: min(88vw, 360px);
+    min-width: 280px;
+    height: min(72vw, 420px);
+    scroll-snap-align: start;
+  }
+
+  .device-table-wrap {
+    display: none;
+  }
+
+  .device-card-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .device-card {
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    background: var(--canvas);
+  }
+
+  .device-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .device-card dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .device-card dl > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .device-card dt {
+    color: var(--body);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .device-card dd {
+    margin: 0;
+    text-align: right;
   }
 
   .privacy-callout {
@@ -2233,7 +2342,7 @@ button:focus-visible {
   }
 
   .hero h1 {
-    font-size: 28px;
+    font-size: clamp(36px, 5vw, 56px);
   }
 
   .hero-actions .button,

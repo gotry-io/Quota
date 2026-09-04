@@ -11,10 +11,11 @@ import { deviceActivity, sortDevicesByLastSeen } from "$lib/device-activity";
 import { relativeAge } from "$lib/format";
 
 const store = getAccountStore();
+const now = $derived(store.now);
 const devices = $derived(store.summary ? sortDevicesByLastSeen(store.summary.devices) : []);
 
 function instantCopy(value: string | null): string {
-  return value ? relativeAge(value) : "—";
+  return value ? relativeAge(value, now) : "—";
 }
 
 async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<void> {
@@ -55,7 +56,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
       {#if devices.length === 0}
         <p class="empty-state">No devices yet. Sign in from QuotaBar to add this Mac.</p>
       {:else}
-        <div class="table-wrap">
+        <div class="table-wrap device-table-wrap">
           <table class="device-table">
             <caption class="visually-hidden">Devices</caption>
             <thead>
@@ -63,20 +64,18 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
                 <th scope="col">Name</th>
                 <th scope="col">Platform</th>
                 <th scope="col">Status</th>
-                <th scope="col">Last seen</th>
-                <th scope="col">Newest reading</th>
+                <th scope="col">Last contact</th>
                 <th scope="col"><span class="visually-hidden">Delete</span></th>
               </tr>
             </thead>
             <tbody>
               {#each devices as device (device.id)}
-                {@const activity = deviceActivity(device)}
+                {@const activity = deviceActivity(device, now)}
                 <tr>
                   <th scope="row">{device.display_name}</th>
                   <td><PlatformIcon platform={device.platform} /></td>
                   <td><span class="status-pill status-{activity.tone}">{activity.label}</span></td>
-                  <td>{instantCopy(device.last_seen_at)}</td>
-                  <td>{instantCopy(device.last_observed_at)}</td>
+                  <td>{instantCopy(activity.since)}</td>
                   <td>
                     <button
                       class="text-button danger-button"
@@ -90,6 +89,33 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
             </tbody>
           </table>
         </div>
+        <ul class="device-card-list">
+          {#each devices as device (device.id)}
+            {@const activity = deviceActivity(device, now)}
+            <li class="device-card">
+              <div class="device-card-head">
+                <strong>{device.display_name}</strong>
+                <PlatformIcon platform={device.platform} />
+              </div>
+              <dl>
+                <div>
+                  <dt>Status</dt>
+                  <dd><span class="status-pill status-{activity.tone}">{activity.label}</span></dd>
+                </div>
+                <div>
+                  <dt>Last contact</dt>
+                  <dd>{instantCopy(activity.since)}</dd>
+                </div>
+              </dl>
+              <button
+                class="text-button danger-button"
+                type="button"
+                aria-label="Delete {device.display_name} and data"
+                onclick={(event) => void onDeleteDevice(device, event)}>Delete</button
+              >
+            </li>
+          {/each}
+        </ul>
       {/if}
     </div>
   {/if}

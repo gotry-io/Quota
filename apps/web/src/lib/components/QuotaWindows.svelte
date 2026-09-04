@@ -4,7 +4,7 @@ import { meterTone } from "$lib/account-overview";
 import { formatQuotaRemaining, NO_RESET_TIME_COPY, resetCopy, showsNoResetTime } from "$lib/format";
 
 type WindowItem = {
-  id?: string | undefined;
+  id: string;
   title: string;
   used_percent: number;
   remaining_value?: number | undefined;
@@ -28,7 +28,7 @@ let {
   {#if windows.length === 0}
     <p class="empty-state">No quota windows reported.</p>
   {:else}
-    {#each windows as window (window.title)}
+    {#each windows as window (window.id)}
       {@const balanceOnly = isBalanceOnly(window)}
       {@const remaining = remainingPercent(window.used_percent)}
       {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}

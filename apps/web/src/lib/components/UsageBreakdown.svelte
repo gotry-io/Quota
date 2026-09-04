@@ -73,7 +73,7 @@ function toggleGroup(agent: string, provider: string): void {
                     type="button"
                     aria-expanded={open}
                     onclick={() => toggleGroup(agent.agent, provider.provider)}
-                    >Show {extra} more</button
+                    >{open ? "Show fewer" : `Show ${extra} more`}</button
                   >
                 </td>
               </tr>

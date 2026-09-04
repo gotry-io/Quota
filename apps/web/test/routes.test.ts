@@ -7,6 +7,8 @@ import {
   DASHBOARD_PATH,
   DEVICES_PATH,
   isAccountShellPath,
+  isDevicesPath,
+  isSettingsPath,
   isSubscriptionPath,
   isUsagePath,
   planDisplayName,
@@ -39,6 +41,8 @@ test("names the account sub-routes and hashes a selector into the subscription p
   assert.equal(isSubscriptionPath("/my"), false);
   assert.equal(isUsagePath("/my/usage"), true);
   assert.equal(isUsagePath("/my"), false);
+  assert.equal(isDevicesPath("/my/devices"), true);
+  assert.equal(isSettingsPath("/my/settings"), true);
   assert.equal(accountPageTitle("/my"), "Overview");
   assert.equal(accountPageTitle("/my/usage"), "Usage");
   assert.equal(accountPageTitle("/my/devices"), "Devices");

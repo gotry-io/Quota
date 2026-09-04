@@ -1,7 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import { signOut } from "$lib/account-client";
-import { githubAvatarUrl, githubLoginFromLabel, viewerInitial } from "$lib/account-overview";
+import { viewerInitial } from "$lib/account-overview";
 import AccountNav from "$lib/components/AccountNav.svelte";
 import { isAccountShellPath, SETTINGS_PATH, signInHref } from "$lib/routes";
 import type { WebDocumentViewer } from "$lib/server/document-port";
@@ -10,10 +10,8 @@ let { viewer }: { viewer: WebDocumentViewer | null } = $props();
 
 let menu = $state<HTMLDetailsElement | null>(null);
 let error = $state<string | null>(null);
-let avatarFailed = $state(false);
 
 const onAccountShell = $derived(viewer !== null && isAccountShellPath(page.url.pathname));
-const login = $derived(githubLoginFromLabel(viewer?.displayLabel));
 const initial = $derived(viewerInitial(viewer?.displayLabel));
 
 $effect(() => {
@@ -61,25 +59,12 @@ async function onLogout(event: SubmitEvent): Promise<void> {
       hidden={viewer !== null}
       data-sveltekit-reload
     >
-      Continue with GitHub
+      Sign in with GitHub
     </a>
     <div id="header-account" class="header-account" hidden={viewer === null}>
       <details id="header-account-menu" class="account-menu" bind:this={menu}>
         <summary class="account-menu-trigger" aria-label="{viewer?.displayLabel ?? 'Account'} menu">
-          {#if login && !avatarFailed}
-            <img
-              class="account-avatar"
-              src={githubAvatarUrl(login)}
-              alt=""
-              width="24"
-              height="24"
-              onerror={() => {
-                avatarFailed = true;
-              }}
-            />
-          {:else}
-            <span class="account-avatar-fallback" aria-hidden="true">{initial}</span>
-          {/if}
+          <span class="account-avatar-fallback" aria-hidden="true">{initial}</span>
           <span id="header-account-name" class="header-account-name"
             >{viewer?.displayLabel ?? "Account"}</span
           >

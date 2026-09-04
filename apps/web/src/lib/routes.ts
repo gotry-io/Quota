@@ -21,6 +21,14 @@ export function isUsagePath(pathname: string): boolean {
   return pathname === USAGE_PATH;
 }
 
+export function isDevicesPath(pathname: string): boolean {
+  return pathname === DEVICES_PATH;
+}
+
+export function isSettingsPath(pathname: string): boolean {
+  return pathname === SETTINGS_PATH;
+}
+
 export function accountPageTitle(pathname: string): string {
   if (pathname === DASHBOARD_PATH) return "Overview";
   if (pathname === USAGE_PATH) return "Usage";

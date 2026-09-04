@@ -9,6 +9,6 @@ it("names macOS for macos and Unknown for anything else", () => {
   expect(screen.getByRole("img", { name: "macOS" })).toBeTruthy();
   mac.unmount();
 
-  render(PlatformIcon, { platform: "ios" });
+  render(PlatformIcon, { platform: "linux" });
   expect(screen.getByRole("img", { name: "Unknown" })).toBeTruthy();
 });

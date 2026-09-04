@@ -48,9 +48,9 @@ test("sorts devices by last-seen, newest first, and never-seen last", () => {
   );
 });
 
-test("platform icons treat ios as iPhone and everything else as mac", () => {
+test("platform icons treat only macos as mac and everything else as generic", () => {
   assert.equal(platformIconKind("macos"), "mac");
-  assert.equal(platformIconKind("ios"), "iphone");
-  assert.equal(platformIconKind("iphone"), "iphone");
-  assert.equal(platformIconKind("linux"), "mac");
+  assert.equal(platformIconKind("ios"), "generic");
+  assert.equal(platformIconKind("iphone"), "generic");
+  assert.equal(platformIconKind("linux"), "generic");
 });

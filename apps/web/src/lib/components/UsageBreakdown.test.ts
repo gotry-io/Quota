@@ -116,10 +116,17 @@ it("folds models past five and expands them", () => {
   const more = screen.getByRole("button", { name: "Show 2 more" });
   expect(more.getAttribute("aria-expanded")).toBe("false");
 
+  more.focus();
   fireEvent.click(more);
   expect(screen.getByRole("rowheader", { name: "m6" })).toBeTruthy();
   expect(screen.getByRole("rowheader", { name: "m7" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Show 2 more" }).getAttribute("aria-expanded")).toBe(
-    "true",
-  );
+  const fewer = screen.getByRole("button", { name: "Show fewer" });
+  expect(fewer.getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(fewer);
+
+  fireEvent.click(fewer);
+  expect(screen.queryByRole("rowheader", { name: "m6" })).toBeNull();
+  const collapsed = screen.getByRole("button", { name: "Show 2 more" });
+  expect(collapsed.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(collapsed);
 });

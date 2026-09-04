@@ -4,12 +4,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   accountStatusLine,
   devicesSummaryLine,
-  githubLoginFromLabel,
   meterTone,
   meterToneForUsedPercent,
   providerMarkHue,
   subscriptionCardMeta,
   topUsageModel,
+  usageStatusLine,
 } from "./account-overview.ts";
 
 afterEach(() => {
@@ -70,14 +70,7 @@ it("hashes a provider id to a stable hue", () => {
   expect(providerMarkHue("codex")).toBeLessThan(360);
 });
 
-it("treats GitHub logins as avatar keys and rejects fallback labels", () => {
-  expect(githubLoginFromLabel("octocat")).toBe("octocat");
-  expect(githubLoginFromLabel("Account")).toBeNull();
-  expect(githubLoginFromLabel("GitHub account")).toBeNull();
-  expect(githubLoginFromLabel("Ada Lovelace")).toBeNull();
-});
-
-it("picks the 30-day model with the most tokens", () => {
+it("picks the model with the most tokens in a period", () => {
   const period: UsagePeriodRead = {
     ...emptyPeriod,
     agents: [
@@ -97,29 +90,45 @@ it("picks the 30-day model with the most tokens", () => {
   expect(topUsageModel(null)).toBe("—");
 });
 
-it("names account freshness and how many devices are reporting", () => {
+function deviceRow(
+  id: string,
+  displayName: string,
+  lastSeenAt: string | null,
+  lastObservedAt: string | null = lastSeenAt,
+) {
+  return {
+    id,
+    display_name: displayName,
+    platform: "macos" as const,
+    last_seen_at: lastSeenAt,
+    last_observed_at: lastObservedAt,
+  };
+}
+
+it("names latest quota freshness from subscriptions, not device heartbeats", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-12T09:40:00Z"));
   const summary = {
     protocol_version: 6,
     account: { account_id: "a", display_label: "octocat", created_at: "2026-01-01T00:00:00Z" },
     devices: [
+      deviceRow("device_1", "Studio Mac", "2026-08-12T09:39:00Z", "2026-08-12T01:00:00Z"),
+      deviceRow("device_2", "Kitchen Mac", "2026-08-12T02:00:00Z"),
+    ],
+    subscriptions: [
       {
-        id: "device_1",
-        display_name: "Studio Mac",
-        platform: "macos",
-        last_seen_at: "2026-08-12T09:31:00Z",
-        last_observed_at: "2026-08-12T09:30:00Z",
-      },
-      {
-        id: "device_2",
-        display_name: "Kitchen Mac",
-        platform: "macos",
-        last_seen_at: "2026-08-12T02:00:00Z",
-        last_observed_at: "2026-08-12T02:00:00Z",
+        key: "codex|a|global|",
+        provider: "codex",
+        snapshot: {
+          provider: "codex",
+          account: { fingerprint: "a", fingerprint_scope: "global" },
+          windows: [{ id: "weekly", title: "Weekly", used_percent: 10 }],
+          status: "available",
+          observed_at: "2026-08-12T01:00:00Z",
+        },
+        sources: [],
       },
     ],
-    subscriptions: [],
     usage: {
       today: emptyPeriod,
       last_7_days: emptyPeriod,
@@ -130,10 +139,35 @@ it("names account freshness and how many devices are reporting", () => {
     model_catalog_revision: "m",
   } as AccountSummaryRead;
 
-  expect(accountStatusLine(summary)).toBe("Updated 9m ago · 2 devices reporting");
+  expect(accountStatusLine(summary)).toBe("Latest quota updated 8h ago · 2 devices reporting");
   expect(devicesSummaryLine(summary.devices)).toBe(
     "2 devices · all reporting · Kitchen Mac · Idle",
   );
   expect(devicesSummaryLine([])).toBe("No devices yet");
   expect(subscriptionCardMeta("Studio Mac", "2026-08-12T09:39:00Z")).toBe("Studio Mac · 1m ago");
+  expect(usageStatusLine("30 Days", false)).toBe("30 Days");
+  expect(usageStatusLine("Today", true)).toBe("Today · some hours incomplete");
+});
+
+it("selects a never-reporting device as the worst in either input order", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T09:40:00Z"));
+  const silent = deviceRow("silent", "Silent Mac", null, null);
+  const studio = deviceRow("studio", "Studio Mac", "2026-08-12T09:31:00Z");
+  expect(devicesSummaryLine([silent, studio])).toBe(
+    "1 of 2 reporting · Silent Mac · Not reporting",
+  );
+  expect(devicesSummaryLine([studio, silent])).toBe(
+    "1 of 2 reporting · Silent Mac · Not reporting",
+  );
+});
+
+it("turns Active into Idle as the shared clock advances", () => {
+  const studio = deviceRow("studio", "Studio Mac", "2026-08-12T09:31:00Z");
+  expect(devicesSummaryLine([studio], new Date("2026-08-12T09:40:00Z"))).toBe(
+    "1 device · all reporting · Studio Mac · Active",
+  );
+  expect(devicesSummaryLine([studio], new Date("2026-08-12T10:02:00Z"))).toBe(
+    "1 device · all reporting · Studio Mac · Idle",
+  );
 });

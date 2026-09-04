@@ -1,9 +1,14 @@
 <script lang="ts">
-import { onMount } from "svelte";
 import { page } from "$app/state";
-import { accountStatusLine } from "$lib/account-overview";
+import { accountStatusLine, devicesSummaryLine } from "$lib/account-overview";
 import { createAccountStore, setAccountStore } from "$lib/account-store.svelte.ts";
-import { accountPageTitle, isSubscriptionPath, isUsagePath } from "$lib/routes";
+import {
+  accountPageTitle,
+  isDevicesPath,
+  isSettingsPath,
+  isSubscriptionPath,
+  isUsagePath,
+} from "$lib/routes";
 
 let { children } = $props();
 
@@ -17,12 +22,22 @@ const showHeading = $derived(
 const headingId = $derived(
   isSubscriptionPath(page.url.pathname) ? "subscription-title" : "dashboard-title",
 );
-const status = $derived(store.summary ? accountStatusLine(store.summary) : null);
+const now = $derived(store.now);
+const status = $derived.by(() => {
+  if (!store.summary) return null;
+  const path = page.url.pathname;
+  if (isUsagePath(path) || isSettingsPath(path) || isSubscriptionPath(path)) return null;
+  if (isDevicesPath(path)) return devicesSummaryLine(store.summary.devices, now);
+  return accountStatusLine(store.summary, now);
+});
 
-onMount(() => {
-  void store.ensureSummary().then(() => {
-    void store.ensureActivity(store.activityRange);
-  });
+$effect(() => {
+  void page.url.pathname;
+  void store.ensureSummary();
+});
+
+$effect(() => {
+  return store.startClock();
 });
 </script>
 

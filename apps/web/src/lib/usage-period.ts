@@ -32,6 +32,19 @@ export function usagePeriodKey(query: UsagePeriodQuery): UsagePeriodKey {
   return QUERY_TO_KEY[query];
 }
 
+export function usagePeriodLabel(query: UsagePeriodQuery): string {
+  switch (query) {
+    case "today":
+      return "Today";
+    case "7d":
+      return "7 Days";
+    case "30d":
+      return "30 Days";
+    case "all":
+      return "Up to 2 years";
+  }
+}
+
 export function usagePeriodHref(url: URL, query: UsagePeriodQuery): string {
   const next = new URL(url);
   next.searchParams.set("period", query);

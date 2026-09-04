@@ -5,7 +5,7 @@ import type {
   UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
 import { deviceActivity } from "./device-activity.ts";
-import { relativeAge, updatedCopy, usageModelDisplayName } from "./format.ts";
+import { relativeAge, usageModelDisplayName } from "./format.ts";
 
 export type MeterTone = "good" | "warn" | "critical";
 
@@ -35,18 +35,6 @@ export function providerMarkHue(providerId: string): number {
   return (hash >>> 0) % 360;
 }
 
-export function githubLoginFromLabel(label: string | undefined): string | null {
-  if (!label) return null;
-  const trimmed = label.trim();
-  if (trimmed === "Account" || trimmed === "GitHub account") return null;
-  if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(trimmed)) return null;
-  return trimmed;
-}
-
-export function githubAvatarUrl(login: string): string {
-  return `https://github.com/${encodeURIComponent(login)}.png?size=64`;
-}
-
 export function viewerInitial(label: string | undefined): string {
   const trimmed = label?.trim() ?? "";
   const first = trimmed.charAt(0);
@@ -71,22 +59,15 @@ export function topUsageModel(period: UsagePeriodRead | null | undefined): strin
   return usageModelDisplayName(best.name);
 }
 
-function newestInstant(summary: AccountSummaryRead): string | null {
+function newestSubscriptionObservedAt(summary: AccountSummaryRead): string | null {
   let newest: string | null = null;
   let newestMs = Number.NEGATIVE_INFINITY;
-  const consider = (value: string | null | undefined): void => {
-    if (!value) return;
+  for (const subscription of summary.subscriptions) {
+    const value = subscription.snapshot.observed_at;
     const ms = Date.parse(value);
-    if (!Number.isFinite(ms) || ms <= newestMs) return;
+    if (!Number.isFinite(ms) || ms <= newestMs) continue;
     newestMs = ms;
     newest = value;
-  };
-  for (const subscription of summary.subscriptions) {
-    consider(subscription.snapshot.observed_at);
-  }
-  for (const device of summary.devices) {
-    consider(device.last_seen_at);
-    consider(device.last_observed_at);
   }
   return newest;
 }
@@ -96,25 +77,44 @@ function reportingCount(devices: readonly DeviceRow[], now?: Date): number {
 }
 
 export function accountStatusLine(summary: AccountSummaryRead, now?: Date): string {
-  const age = updatedCopy(newestInstant(summary), now);
+  const observed = newestSubscriptionObservedAt(summary);
+  const quota = observed
+    ? `Latest quota updated ${relativeAge(observed, now)}`
+    : "Latest quota not checked";
   const reporting = reportingCount(summary.devices, now);
   const noun = reporting === 1 ? "device" : "devices";
-  return `${age} · ${reporting} ${noun} reporting`;
+  return `${quota} · ${reporting} ${noun} reporting`;
+}
+
+export function usageStatusLine(periodLabel: string, partial: boolean): string {
+  return partial ? `${periodLabel} · some hours incomplete` : periodLabel;
+}
+
+function activitySeverity(label: string): number {
+  if (label === "Not reporting") return 2;
+  if (label === "Idle") return 1;
+  return 0;
 }
 
 function oldestDevice(
   devices: readonly DeviceRow[],
   now?: Date,
 ): { display_name: string; label: string } | null {
-  let oldest: { display_name: string; label: string; sinceMs: number } | null = null;
+  let worst: { display_name: string; label: string; severity: number; sinceMs: number } | null =
+    null;
   for (const device of devices) {
     const activity = deviceActivity(device, now);
-    const sinceMs = activity.since ? Date.parse(activity.since) : Number.POSITIVE_INFINITY;
-    if (oldest === null || sinceMs < oldest.sinceMs) {
-      oldest = { display_name: device.display_name, label: activity.label, sinceMs };
+    const severity = activitySeverity(activity.label);
+    const sinceMs = activity.since ? Date.parse(activity.since) : Number.NEGATIVE_INFINITY;
+    if (
+      worst === null ||
+      severity > worst.severity ||
+      (severity === worst.severity && sinceMs < worst.sinceMs)
+    ) {
+      worst = { display_name: device.display_name, label: activity.label, severity, sinceMs };
     }
   }
-  return oldest;
+  return worst;
 }
 
 export function devicesSummaryLine(devices: readonly DeviceRow[], now?: Date): string {

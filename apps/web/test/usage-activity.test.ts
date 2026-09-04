@@ -90,7 +90,7 @@ test("takes each day's totals, cost, and scan verdict as Relay folded them", () 
   assert.equal(first?.tokens, 200);
   assert.equal(first?.input_tokens, 150);
   assert.equal(first?.output_tokens, 50);
-  assert.equal(first?.requests, 1);
+  assert.equal(first?.messages, 1);
   assert.equal(first?.partial, true);
   assert.equal(first?.cost?.status, "partial");
   assert.equal(first?.cost?.amount_microusd, "400000");

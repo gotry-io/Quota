@@ -36,7 +36,7 @@ function isFresh(fetchedAt: number | null, maxAgeMs: number): boolean {
 }
 
 export function createAccountStore() {
-  const activityRange = accountActivityRange(new Date());
+  let nowMs = $state(Date.now());
   let summary = $state<AccountSummaryRead | null>(null);
   let summaryStatus = $state<AccountLoadStatus>("idle");
   let summaryFetchedAt = $state<number | null>(null);
@@ -194,7 +194,25 @@ export function createAccountStore() {
     summaryStatus = "error";
   }
 
+  function startClock(): () => void {
+    nowMs = Date.now();
+    const id = setInterval(() => {
+      nowMs = Date.now();
+    }, 60_000);
+    const onVisibility = (): void => {
+      if (document.visibilityState === "visible") nowMs = Date.now();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }
+
   return {
+    get now() {
+      return new Date(nowMs);
+    },
     get summary() {
       return summary;
     },
@@ -211,7 +229,7 @@ export function createAccountStore() {
       return subscriptionSelectors;
     },
     get activityRange() {
-      return activityRange;
+      return accountActivityRange(new Date());
     },
     get activity() {
       return activity;
@@ -224,6 +242,7 @@ export function createAccountStore() {
     ensureDay,
     refresh,
     setError,
+    startClock,
   };
 }
 

@@ -39,17 +39,18 @@ worker. Install Chromium with
 
 `/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
 (overview), `/my/usage`, `/my/devices`, and `/my/settings`. When the session is on `/my`, the site
-header carries that nav (Overview / Usage / Devices / Settings) and an account menu with the GitHub
-avatar, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name) and a status
-line from the Account summary (`Updated <age> · <n> devices reporting`). Unsigned visits to any of
+header carries that nav (Overview / Usage / Devices / Settings) and an account menu with a
+first-letter mark, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name).
+Overview's status line is `Latest quota updated <age> · <n> devices reporting`; Usage shows the
+selected period and partial state; Devices uses the Devices summary. Unsigned visits to any of
 them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session;
 Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
 it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
 quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
 `/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
-same row as the page name, totals Tokens / API-equivalent cost / Requests, and a two-column tree +
-Activity layout at 1024 px. Devices is a last-seen table with platform icons. Settings groups
-Appearance, Notifications, Account, and Legal. Sign-in is a plain navigation
+same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
+Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
+below 620 px. Settings groups Appearance, Account, and Legal. Sign-in is a plain navigation
 to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a signed-out
 visitor returns to the page they asked for. Sign-out posts to `/api/auth/logout` and Delete Account
 is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
@@ -61,10 +62,11 @@ the trailing windows start and end — and a document request has no clock, so r
 server would answer in UTC and be thrown away by every browser keeping another calendar. The client
 makes it once, sending its own IANA timezone as `tz`. One account store
 (`src/lib/account-store.svelte.ts`) holds the summary, activity keyed by `from|to`, and per-day
-detail. The `/my` layout calls `ensureSummary()` on mount and then `ensureActivity()` for the
-default 365-day range without blocking first paint. Each tab reads that store: a second visit is a
-cache hit (60 s stale-while-revalidate, in-flight dedup), not a new request. Switching the Usage
-period recomputes from the summary and does not refetch.
+detail. The `/my` layout calls `ensureSummary()` on account navigations without blocking first
+paint. Usage calls `ensureActivity()` when that route is entered; the activity range is computed
+at access time and the cache key changes at the UTC day boundary. Each tab reads that store: a
+second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup), not a new
+request. Switching the Usage period recomputes from the summary and does not refetch.
 
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
 Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from

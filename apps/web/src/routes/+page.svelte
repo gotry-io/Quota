@@ -11,16 +11,16 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
 </script>
 
 <svelte:head>
-  <title>Quota — See what's left on every coding-agent plan</title>
+  <title>Quota — See what's left across your coding-agent plans</title>
   <meta
     name="description"
-    content="See what's left on every coding-agent plan — Codex, Claude, Grok, Cursor — in your Mac menu bar, on the web, and on iPhone."
+    content="QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals to the web."
   />
   <link rel="canonical" href="https://quota.gotry.io/" />
-  <meta property="og:title" content="Quota — See what's left on every coding-agent plan" />
+  <meta property="og:title" content="Quota — See what's left across your coding-agent plans" />
   <meta
     property="og:description"
-    content="See remaining quota for Codex, Claude, Grok, Cursor, and API keys in the menu bar, on the web, and on iPhone."
+    content="QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals to the web."
   />
   <meta property="og:url" content="https://quota.gotry.io/" />
 </svelte:head>
@@ -28,66 +28,71 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
 <div id="landing-view">
   <section class="hero" aria-labelledby="hero-title">
     <div class="hero-copy">
-      <h1 id="hero-title">
-        See what's left on every coding-agent plan — Codex, Claude, Grok, Cursor — in your Mac menu
-        bar, on the web, and on iPhone.
-      </h1>
-      <div class="hero-actions">
-        <a class="button button-primary" href={dmgUrl}>Download for macOS</a>
-        <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
-          >Sign in with GitHub</a
-        >
+      <h1 id="hero-title">See what's left across your coding-agent plans.</h1>
+      <p class="hero-summary">
+        QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals
+        to the web.
+      </p>
+      <div class="hero-cta">
+        <div class="hero-actions">
+          <a class="button button-primary" href={dmgUrl}>Download for macOS</a>
+          <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
+            >Sign in with GitHub</a
+          >
+        </div>
+        <p class="hero-meta">Free &amp; open source · MIT · macOS 14+</p>
       </div>
     </div>
 
     <div class="hero-preview">
       <figure class="preview-shot preview-quotabar">
-        <picture>
-          <source
-            srcset="/screenshots/quotabar-overview-dark.png"
-            media="(prefers-color-scheme: dark)"
-            width="640"
-            height="960"
-          />
-          <img
-            src="/screenshots/quotabar-overview-light.png"
-            width="640"
-            height="960"
-            alt="QuotaBar menu bar showing remaining Codex Plus, Claude Code Max, and Grok SuperGrok quota"
-          />
-        </picture>
+        <img
+          class="shot-light"
+          src="/screenshots/quotabar-overview-light.png"
+          width="640"
+          height="960"
+          alt="QuotaBar menu bar showing remaining Codex Plus, Claude Code Max, and Grok SuperGrok quota"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/quotabar-overview-dark.png"
+          width="640"
+          height="960"
+          alt=""
+        />
       </figure>
       <figure class="preview-shot preview-web">
-        <picture>
-          <source
-            srcset="/screenshots/web-overview-dark-desktop.png"
-            media="(prefers-color-scheme: dark)"
-            width="1440"
-            height="900"
-          />
-          <img
-            src="/screenshots/web-overview-light-desktop.png"
-            width="1440"
-            height="900"
-            alt="Quota account overview with remaining-quota cards for Codex, Claude Code, and Grok"
-          />
-        </picture>
+        <img
+          class="shot-light"
+          src="/screenshots/web-overview-light-desktop.png"
+          width="1440"
+          height="900"
+          alt="Quota account overview with remaining-quota cards for Codex, Claude Code, and Grok"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/web-overview-dark-desktop.png"
+          width="1440"
+          height="900"
+          alt=""
+        />
       </figure>
       <figure class="preview-shot preview-ios">
-        <picture>
-          <source
-            srcset="/screenshots/ios-overview-dark.png"
-            media="(prefers-color-scheme: dark)"
-            width="1206"
-            height="2622"
-          />
-          <img
-            src="/screenshots/ios-overview-light.png"
-            width="1206"
-            height="2622"
-            alt="Quota for iPhone overview showing remaining quota on Codex, Claude Code, and Grok"
-          />
-        </picture>
+        <img
+          class="shot-light"
+          src="/screenshots/ios-overview-light.png"
+          width="1206"
+          height="2622"
+          alt="Quota for iPhone overview showing remaining quota on Codex, Claude Code, and Grok"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/ios-overview-dark.png"
+          width="1206"
+          height="2622"
+          alt=""
+        />
+        <figcaption class="preview-caption">Preview</figcaption>
       </figure>
     </div>
   </section>
@@ -106,8 +111,8 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
         <p>QuotaBar reads provider sessions and agent logs on your Mac. Credentials never upload.</p>
       </article>
       <article>
-        <h3>Web &amp; iPhone show the same numbers</h3>
-        <p>Sign in to see remaining quota, Usage, and Devices in the browser and on iPhone.</p>
+        <h3>The web shows the same numbers</h3>
+        <p>Sign in to see remaining quota, Usage, and Devices in the browser.</p>
       </article>
     </div>
   </section>
@@ -174,6 +179,9 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
         <h3>Quota</h3>
         <p class="platform-badge">{ios.label}</p>
         <p>{ios.summary}</p>
+        {#if ios.url && ios.actionLabel}
+          <a class="button button-secondary" href={ios.url}>{ios.actionLabel}</a>
+        {/if}
       </article>
     </div>
   </section>

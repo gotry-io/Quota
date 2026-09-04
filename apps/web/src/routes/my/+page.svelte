@@ -13,8 +13,9 @@ import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } fro
 import { DEVICES_PATH, planDisplayName, subscriptionPath, USAGE_PATH } from "$lib/routes";
 
 const store = getAccountStore();
+const now = $derived(store.now);
 let today = $derived(store.summary?.usage.today ?? null);
-let topModel = $derived(topUsageModel(store.summary?.usage.last_30_days));
+let topModel = $derived(topUsageModel(today));
 let deviceNames = $derived(
   new Map(store.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
 );
@@ -32,12 +33,12 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
 
 function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): string {
   const snapshot = subscription.snapshot;
-  const quotaStatus = observedSnapshotStatus(snapshot);
+  const quotaStatus = observedSnapshotStatus(snapshot, now);
   const device = reportingDevice(subscription);
   if (quotaStatus === "available") {
-    return subscriptionCardMeta(device, snapshot.observed_at);
+    return subscriptionCardMeta(device, snapshot.observed_at, now);
   }
-  return `${device} · ${observationFreshnessCopy(quotaStatus, snapshot.observed_at)}`;
+  return `${device} · ${observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}`;
 }
 </script>
 
@@ -81,7 +82,7 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
                   <span class="status-pill">{plan}</span>
                 {/if}
               </div>
-              <QuotaWindows windows={snapshot.windows} provider={subscription.provider} />
+              <QuotaWindows windows={snapshot.windows} provider={subscription.provider} {now} />
               <p class="quota-card-meta">{cardMeta(subscription)}</p>
             {/snippet}
             {#if sel}
@@ -119,7 +120,6 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
       <article>
         <span>Top model</span>
         <strong>{topModel}</strong>
-        <small>30 Days</small>
       </article>
     </a>
   {/if}
@@ -127,6 +127,6 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
 
 {#if store.summary && (store.summary.devices.length > 0 || store.summary.subscriptions.length > 0)}
   <section class="overview-section overview-devices">
-    <a class="devices-strip" href={DEVICES_PATH}>{devicesSummaryLine(store.summary.devices)}</a>
+    <a class="devices-strip" href={DEVICES_PATH}>{devicesSummaryLine(store.summary.devices, now)}</a>
   </section>
 {/if}

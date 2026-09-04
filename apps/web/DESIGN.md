@@ -29,8 +29,10 @@ provider or agent name table of its own.
 
 The site has these routes:
 
-1. `/` is the public landing: a hero (value sentence, **Download for macOS**, **Sign in with
-   GitHub**, and three product screenshots), How it works, Providers & agents, Privacy, and
+1. `/` is the public landing: a hero (`See what's left across your coding-agent plans.`, a
+   supporting sentence that QuotaBar reads locally and Relay syncs remaining quota and Usage
+   totals, **Download for macOS**, **Sign in with GitHub**, `Free & open source · MIT · macOS
+   14+`, and three product screenshots), How it works, Providers & agents, Privacy, and
    Platforms. Homebrew is the compact install in the Platforms macOS card: a Homebrew label, a
    short tap note, the `brew install gotry-io/tap/quotabar` command, and a Copy control with
    brief Copied feedback. GitHub sign-in is in the hero and the site header. The appearance
@@ -41,7 +43,9 @@ The site has these routes:
    link.
 3. `/support` answers FAQ from `src/content/support.md`: where data comes from, why iPhone has no
    data until a Mac running QuotaBar has signed in, how to copy a diagnostic report, and how to
-   delete an account from `/my`.
+   delete an account from `/my`. Notifications live at `/support#notifications`: remaining-quota
+   alerts and reset reminders are configured and evaluated in QuotaBar on the Mac; the website
+   does not send notifications.
 4. `/privacy` and `/terms` render `src/content/privacy.md` and `src/content/terms.md`. Both are
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
@@ -49,11 +53,13 @@ The site has these routes:
 5. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
    with four routes when the viewer is signed in and the path is under `/my`; the current item
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
-   `/my` page has one `h1` (the page name) and a status line from the Account summary:
-   `Updated <age> · <n> devices reporting`, using the shared freshness copy. Each route is
+   `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
+   <age> · <n> devices reporting`, from the newest subscription `observed_at` plus how many
+   devices are reporting. Usage's status line is the selected period and whether that period is
+   partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
    - `/my` — overview: remaining quota. A Subscriptions grid (each card a link to
-     `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and the 30-day
+     `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and today's
      top model, linking `/my/usage?period=today`), and a one-line Devices summary linking
      `/my/devices`. Overview does not repeat a cost block or an Installations list.
    - `/my/subscriptions/<sel>` — one subscription, visually the same card as Overview: provider
@@ -66,19 +72,19 @@ The site has these routes:
      to `/my`.
    - `/my/usage` — period tabs (**Today**, **7 Days**, **30 Days**, **Up to 2 years**) on the
      same row as the page `h1`. Totals are three cells: Tokens, API-equivalent cost, and
-     Requests (`totals.messages`). At 1024 px and above, the agent → provider → model tree sits
+     Messages (`totals.messages`). At 1024 px and above, the agent → provider → model tree sits
      on the left and Activity (heatmap plus day-detail panel) on the right; below 1024 px those
      stack. The graph is one tab stop (roving tabindex). Choosing a day opens its details under
      the grid and writes `?day=YYYY-MM-DD`. The selected period is `?period=today|7d|30d|all`.
    - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
-     (mac or iPhone), Active / Idle / Not reporting (semantic color plus the label), Last seen,
-     Newest reading, and Delete (danger color, existing confirmation). Empty state is the Mac
-     setup card.
-   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Notifications
-     (`Quota reminds you on your Mac and iPhone when a refresh brings new data. The web does not
-     send notifications.` plus a Support link); Account (GitHub login, Sign out, Delete Account).
-     `?delete=account` scrolls to the delete region and focuses its heading. Legal links Privacy,
-     Terms, and Support.
+     (macOS, or a generic device for any other value), Active / Idle / Not reporting (semantic
+     color plus the label), Last contact, and Delete (danger color, existing confirmation).
+     Below 620 px each row is a labeled two-column card with Status and Last contact. Empty
+     state is the Mac setup card.
+   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Account
+     (GitHub login and Delete Account). `?delete=account` scrolls to the delete region and
+     focuses its heading. Legal links Privacy, Terms, and Support. Sign out stays in the
+     header account menu.
    Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
    `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
    `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
@@ -90,14 +96,16 @@ The site has these routes:
    dollar amount are separate provider meters: compact Quota cards show only the percentage; the
    subscription detail page shows both. Empty quota states span the full row and show the Mac
    setup sentence once. Selecting an Activity day loads that day's Usage under the grid. The
-   header account menu shows the GitHub avatar (`https://github.com/<login>.png?size=64`, or a
-   first-letter mark when the viewer has no login) and login; the menu contains **Settings** and
+   header account menu shows a first-letter mark and login; the menu contains **Settings** and
    **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. The `/my` document is a signed-in shell
    and does not carry Account data: one client store holds the summary, activity (keyed by
-   `from|to`), and per-day detail, loads `GET /api/v6/account/summary` with the browser's IANA
-   timezone, then prefetches a year of activity without blocking first paint. Fresh reads are
-   reused for 60 seconds (stale-while-revalidate); switching tabs does not refetch. Unsigned
+   `from|to`), and per-day detail, and loads `GET /api/v6/account/summary` with the browser's IANA
+   timezone. The account shell re-runs `ensureSummary()` on account navigations without blocking
+   first paint or replacing cached data with a skeleton. Usage loads and revalidates activity
+   when that route is entered; the activity range is computed at access time and the cache key
+   changes at the UTC day boundary. Fresh reads are reused for 60 seconds
+   (stale-while-revalidate); an immediate tab switch does not refetch. Unsigned
    visits to `/my` and its sub-routes are a server redirect to `/`. The shipped `/app` bookmark
    is a single redirect to `/my`. Account data is never published without a session.
 
@@ -138,7 +146,7 @@ choosing System removes it. Do not render three permanent footer buttons.
 
 - Body and controls: `Inter`, then the native sans-serif stack.
 - Display headings: `ui-rounded`, `SF Pro Rounded`, then the system stack.
-- The hero uses a responsive 52–84 px display size with compact leading.
+- The hero uses a responsive `clamp(36px, 5vw, 56px)` display size with compact leading.
 - Body copy stays between 16 and 21 px with generous line height.
 - Account-shell type uses `--fs-h1` (32 px desktop / 28 px below 620 px), `--fs-h2` (20 px),
   `--fs-body` (15 px), and `--fs-caption` (13 px) from `src/app.css`.
@@ -164,16 +172,20 @@ label stays next to the bar.
 
 The landing is six blocks, in this order. It does not use slogan sections.
 
-1. **Hero.** The `h1` is “See what's left on every coding-agent plan — Codex, Claude, Grok,
-   Cursor — in your Mac menu bar, on the web, and on iPhone.” Dual CTAs: **Download for macOS**
-   (the live GitHub Releases `.dmg`) and **Sign in with GitHub** (`/api/auth/github/start`).
-   The product preview is three real screenshots, not a hand-coded mock: QuotaBar overview,
-   the account overview (desktop capture), and Quota for iPhone overview, each with a light
-   and dark asset selected by `prefers-color-scheme`. Images declare `width` and `height`. The
-   shots show remaining quota — provider, plan, window, percent, meter, reset, and freshness —
-   and do not lead with a monthly spend figure.
-2. **How it works.** Three steps: Install QuotaBar; it reads your providers locally; web and
-   iPhone show the same numbers.
+1. **Hero.** The `h1` is “See what's left across your coding-agent plans.” One supporting
+   sentence: “QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and
+   Usage totals to the web.” Dual CTAs: **Download for macOS** (the live GitHub Releases `.dmg`)
+   and **Sign in with GitHub** (`/api/auth/github/start`), with `Free & open source · MIT ·
+   macOS 14+` beside them. The product preview is three real screenshots, not a hand-coded
+   mock: QuotaBar overview, the account overview (desktop capture), and Quota for iPhone
+   overview labelled **Preview**. Each shot has a light and dark asset switched from
+   `html[data-theme]`, using `prefers-color-scheme` only when there is no explicit theme.
+   Images declare `width` and `height`. Below 620 px the preview is a featured Web image plus a
+   horizontal snap gallery; each image is at least 280 px wide. The shots show remaining quota
+   — provider, plan, window, percent, meter, reset, and freshness — and do not lead with a
+   monthly spend figure.
+2. **How it works.** Three steps: Install QuotaBar; it reads your providers locally; the web
+   shows the same numbers.
 3. **Providers & agents.** A grid names every catalog provider (with its mark) and every
    billing agent. Those names come from `packages/provider/catalog.json` and
    `agentDisplayName`, not from a page-local table.
@@ -185,9 +197,10 @@ The landing is six blocks, in this order. It does not use slogan sections.
    command is monospace; Copy announces a short Copied state through `aria-live`. Narrow
    viewports stack or scroll the command safely without overflowing the page. Web is Sign in
    with GitHub. iPhone status is `IOS_AVAILABILITY` in `src/lib/platforms.ts`
-   (`coming-soon` | `testflight` | `app-store`, default `coming-soon`). The card shows that
-   label as a badge. Do not present an App Store or TestFlight destination until that constant
-   names a live one; do not present a dead store link.
+   (`coming-soon` | `testflight` | `app-store`, default `coming-soon`). Copy is `iPhone app
+   coming soon` while that default holds. The type may carry optional `url` and `actionLabel`;
+   render **Join TestFlight** or **View in App Store** only when `url` is set. Do not present a
+   dead store link.
 6. **Footer.** `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
    and Account, and the appearance toggle in a controls group. The toggle keeps a visible
    focus ring and a 42 px target.
@@ -196,11 +209,11 @@ The landing is six blocks, in this order. It does not use slogan sections.
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
 Account nav in the site header. The overview leads with remaining quota: subscription cards, then a
-Today strip (tokens, API-equivalent cost, 30-day top model), then a Devices summary line
-(`2 devices · all reporting` or `1 of 2 reporting`, plus the oldest Device's verdict). It does not
+Today strip (tokens, API-equivalent cost, today's top model), then a Devices summary line
+(`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's verdict). It does not
 repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as the
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
-show — and Requests from `totals.messages`. The input/output split stays under the token figure.
+show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
 partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
 **30 Days**, and **Up to 2 years** (`all`); **30 Days** is the default. The selected tab is
@@ -228,7 +241,7 @@ not overflow.
 Choosing a day — click, Enter, or Space — opens an inline details panel under the Activity card,
 not a modal, and writes `?day=YYYY-MM-DD` so a refresh keeps it. Close removes the query and
 returns focus to that day's cell. The dashboard owns selected, loading, error, and data state. The
-panel shows that day's UTC date, tokens, input/output, requests, estimated cost and its basis, and
+panel shows that day's UTC date, tokens, input/output, messages, estimated cost and its basis, and
 whether any hour behind it was scanned incompletely, from the activity range it already holds. The
 agent tree is a second read:
 `GET /api/v6/account/usage/activity?from=D&to=D&detail=agents`. Loading uses a skeleton; a failed
@@ -251,20 +264,21 @@ reading's primary remaining figure, and freshness; the selected source is labell
 Nothing on the page prints a device id, fingerprint, or subscription key. A selector that matches
 no current row reads **This subscription is no longer reported.** **← Overview** returns to `/my`.
 
-The Devices table is sorted by last-seen, newest first. Each row is display name, a mac or iPhone
-platform icon, an **Active** / **Idle** / **Not reporting** pill (semantic color plus the label),
-Last seen, Newest reading, and Delete. Never a claim that a sleeping or closed app failed, never
-raw Device IDs, and never a request that the viewing browser fix another Device's provider
-credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed.
-Empty Devices is the Mac setup card. Settings is a grouped form: Appearance; Notifications (Quota
-reminds you on Mac and iPhone; the web does not send notifications; link `/support`); Account
-(GitHub login, Sign out, Delete Account, with `?delete=account` focusing the delete heading);
-Legal (Privacy, Terms, Support).
+The Devices table is sorted by last-seen, newest first. Each row is display name, a macOS platform
+icon (or a generic device for any other value), an **Active** / **Idle** / **Not reporting** pill
+(semantic color plus the label), Last contact, and Delete. Below 620 px each row is a labeled
+two-column card. Never a claim that a sleeping or closed app failed, never raw Device IDs, and
+never a request that the viewing browser fix another Device's provider credentials. Deletion copy
+must say that both the Device and its Quota/Usage data are removed. Empty Devices is the Mac setup
+card. Settings is a grouped form: Appearance; Account (GitHub login and Delete Account, with
+`?delete=account` focusing the delete heading); Legal (Privacy, Terms, Support). Sign out stays in
+the header account menu. Notification rules are documented at `/support#notifications`.
 
 Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
 column headers, and one `<tbody>` per agent. Group title rows (`<th scope="rowgroup">`) name the
 agent, then each inference provider. Model rows follow; the `other` fold bucket reads **Other**.
-Each provider shows five models and a **Show N more** control (`aria-expanded`) for the rest. A
+Each provider shows five models and a **Show N more** / **Show fewer** control (`aria-expanded`)
+for the rest. A
 period with no agents reads **No Usage in this period.** Empty and loading states use a skeleton
 (`aria-busy`); a failed Relay response is **Your session ended. Sign in again.** (401), **Sign in
 again to confirm this change.** or **You don't have permission to do that.** (403), or **Quota
@@ -276,9 +290,10 @@ couldn't load this. Retry.** — at most one next action.
 - At 840 px, two-column hero and architecture layouts become one column.
 - At 620 px, the page gutter reduces, header navigation hides nonessential links, the Account
   nav scrolls horizontally without wrapping, actions become full width where useful, summary
-  and quota grids stack to one column, and data tables remain horizontally scrollable. The
-  Activity graph scrolls horizontally inside its card; weekday labels stay readable. The header
-  account session control and the footer appearance toggle stay visible.
+  and quota grids stack to one column, the landing preview becomes a featured Web image plus a
+  horizontal snap gallery with images at least 280 px wide, and Devices rows become two-column
+  cards. The Activity graph scrolls horizontally inside its card; weekday labels stay readable.
+  The header account session control and the footer appearance toggle stay visible.
 - The layout must work from 320 px upward without clipped actions or horizontal page scrolling.
 
 ## Accessibility and motion

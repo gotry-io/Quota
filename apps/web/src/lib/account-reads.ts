@@ -43,9 +43,9 @@ export function clearStoredSummary(): void {
   cachedSummary = null;
 }
 
-/** The chart's range, in dates, ending on the day the browser is having. */
+/** The chart's range, in UTC dates, ending on the UTC day of `today`. */
 export function accountActivityRange(today: Date): { from: string; to: string } {
-  const to = localDate(today);
+  const to = today.toISOString().slice(0, 10);
   const from = new Date(Date.parse(`${to}T00:00:00Z`) - (ACTIVITY_DAYS - 1) * 86_400_000);
   return { from: from.toISOString().slice(0, 10), to };
 }
@@ -74,12 +74,4 @@ export function parseAccountActivityResponse(status: number, body: unknown): Acc
   }
   const parsed = AccountUsageActivityResponseReadSchema.safeParse(body);
   return parsed.success ? { status: "ok", activity: parsed.data } : classifyAccountError(null);
-}
-
-function localDate(instant: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(instant);
 }

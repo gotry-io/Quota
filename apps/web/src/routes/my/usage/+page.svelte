@@ -3,33 +3,35 @@ import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
-import { accountStatusLine } from "$lib/account-overview";
+import { usageStatusLine } from "$lib/account-overview";
 import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsagePeriodTabs from "$lib/components/UsagePeriodTabs.svelte";
-import { costBasisLabel, formatCost, formatCount } from "$lib/format";
+import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
 import {
   type UsagePeriodQuery,
   usagePeriodFromQuery,
   usagePeriodHref,
   usagePeriodKey,
+  usagePeriodLabel,
 } from "$lib/usage-period";
 
 const store = getAccountStore();
 const activityRange = store.activityRange;
 const rangeKey = activityRangeKey(activityRange);
-const status = $derived(store.summary ? accountStatusLine(store.summary) : null);
-
 const selectedQuery = $derived(usagePeriodFromQuery(page.url.searchParams.get("period")));
 const selectedDay = $derived(
   usageActivityDayFromQuery(page.url.searchParams.get("day"), activityRange),
 );
 let period = $derived<UsagePeriodRead | null>(
   store.summary ? store.summary.usage[usagePeriodKey(selectedQuery)] : null,
+);
+const status = $derived(
+  period ? usageStatusLine(usagePeriodLabel(selectedQuery), period.partial) : null,
 );
 const activityEntry = $derived(store.activity[rangeKey]);
 const activityDays = $derived(activityEntry?.data ?? null);
@@ -43,6 +45,10 @@ const detailLoading = $derived(
       detailEntry.status === "idle" ||
       detailEntry.status === "loading"),
 );
+
+$effect(() => {
+  void store.ensureActivity(activityRange);
+});
 
 $effect(() => {
   const date = selectedDay;
@@ -109,8 +115,8 @@ function writeDay(day: string | null): void {
       <small id="cost-basis">{costBasisLabel(period.cost)}</small>
     </article>
     <article>
-      <span>Requests</span>
-      <strong id="request-total">{formatCount(period.totals.messages)}</strong>
+      <span>Messages</span>
+      <strong id="message-total">{formatCount(period.totals.messages)}</strong>
     </article>
   </div>
 
@@ -123,7 +129,7 @@ function writeDay(day: string | null): void {
       <div class="usage-panel-heading">
         <h2 id="usage-activity-title">Activity</h2>
         <span id="usage-activity-status" class="count-pill" aria-live="polite">
-          {activityRange.from} – {activityRange.to}
+          {formatUtcDateRange(activityRange.from, activityRange.to)}
         </span>
       </div>
       {#if activityDays}

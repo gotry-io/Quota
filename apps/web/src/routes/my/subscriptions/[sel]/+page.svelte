@@ -11,5 +11,6 @@ const store = getAccountStore();
   summary={store.summary}
   loadError={store.loadError}
   subscriptionSelectors={store.subscriptionSelectors}
+  now={store.now}
   onRetry={() => void store.refresh()}
 />

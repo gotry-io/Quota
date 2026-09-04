@@ -9,6 +9,7 @@ import { activityRangeKey, createAccountStore } from "./account-store.svelte.ts"
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   clearStoredSummary();
 });
 
@@ -156,6 +157,11 @@ it("hashes subscription selectors in parallel and caches them", async () => {
 });
 
 it("keeps stale summary visible while a revalidation runs", async () => {
+  let now = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => {
+    now += 1;
+    return now;
+  });
   const payload = acceptedSummary();
   mockFetch(() => jsonResponse(payload));
   const store = createAccountStore();
@@ -169,9 +175,13 @@ it("keeps stale summary visible while a revalidation runs", async () => {
   await returned;
   expect(store.summary).not.toBeNull();
   expect(calls).toHaveLength(1);
+  expect(store.summaryFetchedAt).toBe(fetchedAt);
 
   gate.resolve(jsonResponse(payload));
-  await vi.waitFor(() => expect(store.summaryFetchedAt).not.toBe(fetchedAt));
+  for (let i = 0; i < 20 && store.summaryFetchedAt === fetchedAt; i += 1) {
+    await Promise.resolve();
+  }
+  expect(store.summaryFetchedAt).not.toBe(fetchedAt);
 });
 
 it("keeps the last summary on 401 and other errors", async () => {
@@ -191,6 +201,46 @@ it("keeps the last summary on 401 and other errors", async () => {
   await store.refresh();
   expect(store.summary).not.toBeNull();
   expect(store.loadError?.status).toBe("unavailable");
+});
+
+it("does not refetch a fresh summary, then revalidates after 60 seconds", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T09:40:00Z"));
+  const payload = acceptedSummary();
+  mockFetch(() => jsonResponse(payload));
+  const store = createAccountStore();
+  await store.ensureSummary();
+
+  const { calls } = mockFetch(() => jsonResponse(payload));
+  await store.ensureSummary();
+  expect(calls).toHaveLength(0);
+
+  vi.advanceTimersByTime(60_000);
+  await store.ensureSummary();
+  expect(calls).toHaveLength(1);
+});
+
+it("switches the activity cache key at the UTC day boundary", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T23:59:00Z"));
+  const payload = acceptedSummary();
+  const { calls } = mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    return jsonResponse(activityBody());
+  });
+
+  const store = createAccountStore();
+  const first = store.activityRange;
+  await store.ensureActivity(first);
+  expect(activityRangeKey(first)).toBe("2025-08-13|2026-08-12");
+  expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(1);
+
+  vi.setSystemTime(new Date("2026-08-13T00:01:00Z"));
+  const second = store.activityRange;
+  expect(activityRangeKey(second)).toBe("2025-08-14|2026-08-13");
+  expect(activityRangeKey(second)).not.toBe(activityRangeKey(first));
+  await store.ensureActivity(second);
+  expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(2);
 });
 
 it("stores activity by range and day detail by date", async () => {

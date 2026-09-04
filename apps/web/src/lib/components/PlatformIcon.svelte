@@ -8,27 +8,7 @@ const kind = $derived(platformIconKind(platform));
 const label = $derived(platformDisplayName(platform));
 </script>
 
-{#if kind === "iphone"}
-  <svg class="platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
-    <rect
-      x="7.25"
-      y="2.25"
-      width="9.5"
-      height="19.5"
-      rx="2.2"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-    />
-    <path
-      d="M10 19.4h4"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      stroke-linecap="round"
-    />
-  </svg>
-{:else}
+{#if kind === "mac"}
   <svg class="platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
     <rect
       x="3.25"
@@ -47,5 +27,19 @@ const label = $derived(platformDisplayName(platform));
       stroke-width="1.6"
       stroke-linecap="round"
     />
+  </svg>
+{:else}
+  <svg class="platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+    <rect
+      x="5.25"
+      y="5.25"
+      width="13.5"
+      height="13.5"
+      rx="2.4"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+    />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" />
   </svg>
 {/if}

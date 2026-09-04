@@ -23,23 +23,15 @@ let {
   loadError,
   subscriptionSelectors,
   onRetry,
+  now = new Date(),
 }: {
   sel: string;
   summary: AccountSummaryRead | null;
   loadError: AccountError | null;
   subscriptionSelectors: Record<string, string>;
   onRetry: () => void;
+  now?: Date;
 } = $props();
-
-let nowMs = $state(Date.now());
-const now = $derived(new Date(nowMs));
-
-$effect(() => {
-  const timer = setInterval(() => {
-    nowMs = Date.now();
-  }, 60_000);
-  return () => clearInterval(timer);
-});
 
 const subscription = $derived(
   summary?.subscriptions.find((item) => subscriptionSelectors[item.key] === sel),
