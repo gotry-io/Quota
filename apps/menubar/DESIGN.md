@@ -36,9 +36,16 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 - The exact phrases and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`.
   `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
   so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
-- **A window with no reported refill instant reads “No reset time reported.”** One phrase; a future
-  reset instant still prints as a date or a countdown, because that is not an age. A percent window
-  that is still full omits the line: there is no refill to wait for.
+- **A future reset is a countdown or a local date, never an age.** All of it is relative to the
+  reader’s time zone, and the English is fixed: it does not follow the device locale. Under an
+  hour: **Resets in 42m** (minutes round up; anything under a minute is still **Resets in 1m**).
+  From one hour to a day: **Resets in 3h 12m**, or **Resets in 3h** when the minutes are zero. From
+  a day to a week: **Resets Tue 14:00** (weekday abbreviation and 24-hour `HH:mm`). A week or more:
+  **Resets Sep 12** (month abbreviation and day). A reset that has already passed prints no Resets
+  line; the reading is **Not current**, or the status word the source reported. The `reset` array in
+  the same fixture is the shared statement of these thresholds.
+- **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
+  window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
   the only place a provider is named for a person. No surface keeps a second table and none derives
   a name from an identifier.
@@ -285,8 +292,7 @@ Each quota observation shows:
 - percent-only windows as `71%`;
 - balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time as quiet metadata. Reset copy uses weekday and time within six days, otherwise month
-  and day; it does not imply the window period.
+- reset time as quiet metadata, in the shared reset copy; it does not imply the window period.
 
 An Overview row spends no line on which source answered or how old its reading is. A reading that
 no longer describes live quota says so in tone — muted value, meter at reduced opacity — and the
