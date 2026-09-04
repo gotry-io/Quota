@@ -62,8 +62,19 @@ its platform, when it was last seen, and when its newest reading was taken, labe
 or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
 rather than broken.
 
-New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, and `schema/`
-need a matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
+New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `schema/`, and
+`screenshots/` need a matching `!/filename` (or `!/screenshots/*`) negation in
+`apps/relay/wrangler.jsonc`.
+
+Product-preview PNGs live in `static/screenshots/`. They are synthetic: account `octocat`, mailbox
+`pe***@example.com`, device `Studio Mac`. They are not live captures.
+
+Regenerate the web shots with `pnpm --filter @gotry-io/quota-web screenshots` (`SCREENSHOTS=1`; not
+part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that hosts
+`VisualTestConfiguration` (`--route overview --fixture content --appearance light|dark`) in a
+320×480 `NSHostingView`, writes PNG @2x via `bitmapImageRepForCachingDisplay` to
+`quotabar-overview-{light,dark}.png`, then is deleted. Compress each PNG below 300 KB (`pngquant` or
+`sips`).
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).

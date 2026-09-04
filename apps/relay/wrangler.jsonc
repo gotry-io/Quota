@@ -22,7 +22,8 @@
       "!/schema/*",
       "!/logo.svg",
       "!/logo-monochrome.svg",
-      "!/og.png"
+      "!/og.png",
+      "!/screenshots/*"
     ]
   },
   "observability": {
