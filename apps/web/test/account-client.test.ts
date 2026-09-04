@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { fetchAccountSummary } from "../src/lib/account-client.ts";
+import { classifyAccountError } from "../src/lib/account-errors.ts";
 import {
   ACTIVITY_DAYS,
   accountActivityPath,
   accountActivityRange,
   accountSummaryPath,
+  clearStoredSummary,
 } from "../src/lib/account-reads.ts";
+import { SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
 
 test("asks for the summary in the calendar this browser keeps", () => {
   const url = new URL(accountSummaryPath("Asia/Singapore"), "https://quota.gotry.io");
@@ -26,4 +33,89 @@ test("asks the activity chart for a year ending today", () => {
   assert.equal(url.searchParams.get("from"), range.from);
   assert.equal(url.searchParams.get("to"), range.to);
   assert.equal([...url.searchParams.keys()].sort().join(","), "from,to");
+});
+
+test("classifies 401 as a session that ended", () => {
+  const error = classifyAccountError(new Response(null, { status: 401 }));
+  assert.equal(error.status, "session_ended");
+  assert.equal(error.message, "Your session ended. Sign in again.");
+  assert.equal(error.action?.type, "sign_in");
+  if (error.action?.type === "sign_in") {
+    assert.equal(error.action.href, signInHref());
+  }
+});
+
+test("classifies a destructive 403 as recent authentication", () => {
+  const error = classifyAccountError(new Response(null, { status: 403 }), {
+    destructive: true,
+    currentPath: "/my",
+  });
+  assert.equal(error.status, "recent_auth_required");
+  assert.equal(error.message, "Sign in again to confirm this change.");
+  assert.equal(error.action?.type, "sign_in");
+  if (error.action?.type === "sign_in") {
+    assert.equal(error.action.href, `${SIGN_IN_PATH}?return_to=${encodeURIComponent("/my")}`);
+  }
+});
+
+test("classifies a non-destructive 403 as forbidden", () => {
+  const error = classifyAccountError(new Response(null, { status: 403 }));
+  assert.equal(error.status, "forbidden");
+  assert.equal(error.message, "You don't have permission to do that.");
+  assert.equal(error.action, null);
+});
+
+test("classifies 500 as unavailable", () => {
+  const error = classifyAccountError(new Response(null, { status: 500 }));
+  assert.equal(error.status, "unavailable");
+  assert.equal(error.message, "Quota couldn't load this. Retry.");
+  assert.equal(error.action?.type, "retry");
+});
+
+function acceptedSummaryPayload(): unknown {
+  const fixture = JSON.parse(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../packages/protocol/fixtures/wire-conformance.json",
+      ),
+      "utf8",
+    ),
+  ) as { contracts: { account_summary: { accepted: boolean; payload: unknown }[] } };
+  const accepted = fixture.contracts.account_summary.find((item) => item.accepted);
+  assert.ok(accepted, "wire-conformance.json has no accepted account_summary");
+  return accepted.payload;
+}
+
+test("offers the last ETag back and returns the cached summary on 304", async () => {
+  clearStoredSummary();
+  const payload = acceptedSummaryPayload();
+  const requests: Array<Headers> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input, init) => {
+    const headers = new Headers(init?.headers);
+    requests.push(headers);
+    if (headers.get("If-None-Match") === '"etag-1"') {
+      return new Response(null, { status: 304, headers: { ETag: '"etag-1"' } });
+    }
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ETag: '"etag-1"' },
+    });
+  }) as typeof fetch;
+  try {
+    const first = await fetchAccountSummary();
+    const second = await fetchAccountSummary();
+    assert.equal(first.status, "ok");
+    assert.equal(second.status, "ok");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.get("If-None-Match"), null);
+    assert.equal(requests[1]?.get("If-None-Match"), '"etag-1"');
+    if (first.status === "ok" && second.status === "ok") {
+      assert.equal(second.summary, first.summary);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearStoredSummary();
+  }
 });

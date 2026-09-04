@@ -12,14 +12,16 @@ import {
   providerDisplayName,
 } from "@gotry-io/quota-protocol";
 import {
+  type AccountError,
   accountActivityRange,
-  beginWebLogin,
   deleteAccount,
   deleteDevice,
   fetchAccountActivity,
   fetchAccountSummary,
 } from "$lib/account-client";
+import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
+import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import {
   costBasisLabel,
@@ -30,7 +32,7 @@ import {
 } from "$lib/format";
 import { deviceActivity } from "$lib/device-activity";
 import { observedSnapshotStatus } from "@gotry-io/quota-model";
-import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
+import { planDisplayName } from "$lib/routes";
 
 const periodNames = [
   { key: "today", label: "Today" },
@@ -41,8 +43,8 @@ const periodNames = [
 
 let summary = $state<AccountSummaryRead | null>(null);
 let activityDays = $state<UsageActivityDayRead[] | null>(null);
-let loadError = $state<string | null>(null);
-let activityMessage = $state("Loading Usage activity…");
+let loadError = $state<AccountError | null>(null);
+let activityError = $state<AccountError | null>(null);
 let selectedPeriod = $state<(typeof periodNames)[number]["key"]>("last_30_days");
 
 const activityRange = accountActivityRange(new Date());
@@ -77,23 +79,30 @@ async function loadActivity(): Promise<void> {
   const result = await fetchAccountActivity(activityRange);
   if (result.status === "ok") {
     activityDays = result.activity.days;
+    activityError = null;
     return;
   }
-  activityMessage = "Usage activity is unavailable.";
+  activityError = result;
 }
 
 function applySummaryResult(result: Awaited<ReturnType<typeof fetchAccountSummary>>): void {
-  if (result.status === "unauthorized") {
-    window.location.replace("/");
+  if (result.status === "ok") {
+    summary = result.summary;
+    loadError = null;
     return;
   }
-  if (result.status === "error") {
-    loadError = "Quota could not load this account. Refresh to try again.";
-    activityMessage = "Usage activity is unavailable.";
-    return;
+  loadError = result;
+}
+
+function noticeRetry(error: AccountError, retry: () => void): (() => void) | undefined {
+  if (error.action?.type === "sign_in") {
+    const href = error.action.href;
+    return () => {
+      window.location.assign(href);
+    };
   }
-  summary = result.summary;
-  loadError = null;
+  if (error.action?.type === "retry") return retry;
+  return undefined;
 }
 
 async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<void> {
@@ -103,13 +112,9 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
   const button = event.currentTarget;
   if (button instanceof HTMLButtonElement) button.disabled = true;
   const outcome = await deleteDevice(device.id);
-  if (outcome === "reauth") {
-    beginWebLogin(DASHBOARD_PATH);
-    return;
-  }
-  if (outcome === "error") {
+  if (outcome !== "ok") {
     if (button instanceof HTMLButtonElement) button.disabled = false;
-    loadError = "Quota could not delete this device. Recent authentication may be required.";
+    loadError = outcome;
     return;
   }
   await loadSummary();
@@ -122,13 +127,9 @@ async function onDeleteAccount(event: Event): Promise<void> {
   const button = event.currentTarget;
   if (button instanceof HTMLButtonElement) button.disabled = true;
   const outcome = await deleteAccount();
-  if (outcome === "reauth") {
-    beginWebLogin(DASHBOARD_PATH);
-    return;
-  }
-  if (outcome === "error") {
+  if (outcome !== "ok") {
     if (button instanceof HTMLButtonElement) button.disabled = false;
-    loadError = "Quota could not delete this Account. Recent authentication may be required.";
+    loadError = outcome;
     return;
   }
   window.location.assign("/");
@@ -166,7 +167,15 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
     </div>
   </div>
   {#if loadError}
-    <div id="account-error" class="notice" role="alert">{loadError}</div>
+    <RetryNotice
+      id="account-error"
+      message={loadError.message}
+      actionLabel={loadError.action?.type === "sign_in" ? "Sign in" : "Retry"}
+      onRetry={noticeRetry(loadError, () => {
+        void loadSummary();
+        void loadActivity();
+      })}
+    />
   {/if}
   <section class="dashboard-section" aria-labelledby="quota-title">
     <div class="dashboard-section-heading">
@@ -292,9 +301,17 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
     </div>
     {#if activityDays}
       <UsageActivity days={activityDays} range={activityRange} />
+    {:else if activityError}
+      <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
+        <RetryNotice
+          message={activityError.message}
+          actionLabel={activityError.action?.type === "sign_in" ? "Sign in" : "Retry"}
+          onRetry={noticeRetry(activityError, () => void loadActivity())}
+        />
+      </div>
     {:else}
       <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
-        {activityMessage}
+        <LoadingBlock lines={4} label="Loading Usage activity" />
       </div>
     {/if}
   </section>
