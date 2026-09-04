@@ -1273,6 +1273,7 @@ footer {
 }
 
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--hairline);
   border-radius: 12px;
@@ -1513,6 +1514,29 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
+.usage-tree .usage-group-agent th {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-soft);
+}
+
+.usage-tree .usage-group-provider th {
+  color: var(--charcoal);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.usage-tree tbody th[scope="row"] {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.usage-show-more {
+  min-height: 42px;
+}
+
 .notice,
 .empty-state {
   padding: 16px;
@@ -1719,6 +1743,11 @@ button:focus-visible {
 
   .brew-row code {
     flex: 1 1 100%;
+  }
+
+  .table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
   }
 }
 

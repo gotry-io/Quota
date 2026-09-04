@@ -14,6 +14,7 @@ import {
   resetCopy,
   showsNoResetTime,
   updatedCopy,
+  usageModelDisplayName,
 } from "../src/lib/format.ts";
 
 /**
@@ -126,6 +127,11 @@ test("missing reset display matches the shared fixture", () => {
       testCase.name,
     );
   }
+});
+
+test("names the overflow model leaf Other", () => {
+  assert.equal(usageModelDisplayName("other"), "Other");
+  assert.equal(usageModelDisplayName("gpt-5"), "gpt-5");
 });
 
 test("classifies wallet windows as balance-only and metered windows as percent meters", () => {

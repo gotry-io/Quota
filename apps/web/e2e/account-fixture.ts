@@ -103,6 +103,18 @@ export const accountSummary = structuredClone(accepted.payload) as AccountSummar
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
 
+const thirtyDayProvider = accountSummary.usage.last_30_days.agents[0]?.providers[0];
+const thirtyDaySeed = thirtyDayProvider?.models[0];
+if (!thirtyDayProvider || !thirtyDaySeed) {
+  throw new Error("wire-conformance.json account_summary is missing a 30-day model leaf");
+}
+for (let n = 2; n <= 6; n += 1) {
+  thirtyDayProvider.models.push({
+    ...structuredClone(thirtyDaySeed),
+    model: `gpt-fold-${n}`,
+  });
+}
+
 const today = accountSummary.usage.today;
 export const accountActivity = {
   protocol_version: 6,

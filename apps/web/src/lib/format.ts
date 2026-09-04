@@ -3,6 +3,7 @@
  * shown a member this build has never heard of. See ADR 0023.
  */
 type CostView = { amount_microusd: string | null; status: string; basis: string };
+import { USAGE_OTHER_MODEL } from "@gotry-io/quota-protocol";
 import {
   isBalanceOnly,
   remainingPercent,
@@ -23,6 +24,11 @@ export function formatCost(cost: CostView): string {
   const cents = (BigInt(cost.amount_microusd) + 5_000n) / 10_000n;
   const amount = `${new Intl.NumberFormat(WEB_LOCALE).format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;
   return `${cost.status === "partial" ? "≥ " : ""}$${amount}`;
+}
+
+/** The overflow leaf a period folds leftover models into. */
+export function usageModelDisplayName(model: string): string {
+  return model === USAGE_OTHER_MODEL ? "Other" : model;
 }
 
 /** How the cost was arrived at, and whether every item in it could be priced. */
