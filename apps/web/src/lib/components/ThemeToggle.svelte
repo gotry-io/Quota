@@ -6,6 +6,14 @@ type ThemePreference = "system" | Theme;
 
 const options = ["system", "light", "dark"] as const satisfies readonly ThemePreference[];
 
+let {
+  id = "theme-toggle",
+  menuPlacement = "up",
+}: {
+  id?: string;
+  menuPlacement?: "up" | "down";
+} = $props();
+
 let menu = $state<HTMLDetailsElement | null>(null);
 let preference = $state<ThemePreference>("system");
 
@@ -60,9 +68,13 @@ $effect(() => {
 });
 </script>
 
-<details class="appearance-menu" bind:this={menu}>
+<details
+  class="appearance-menu"
+  class:appearance-menu-down={menuPlacement === "down"}
+  bind:this={menu}
+>
   <summary
-    id="theme-toggle"
+    {id}
     class="theme-toggle"
     aria-label={`Appearance: ${label(preference)}`}
     title={`Appearance: ${label(preference)}`}

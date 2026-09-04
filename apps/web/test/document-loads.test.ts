@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { isRedirect } from "@sveltejs/kit";
-import { load as loadMy } from "../src/routes/my/+page.server.ts";
+import { load as loadMy } from "../src/routes/my/+layout.server.ts";
 
 function myEvent(viewer: { displayLabel: string } | null) {
   return { locals: { viewer } } as Parameters<typeof loadMy>[0];

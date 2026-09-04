@@ -65,3 +65,21 @@ export function classifyAccountError(
     action: { type: "retry" },
   };
 }
+
+export function accountNoticeActionLabel(error: AccountError): string {
+  return error.action?.type === "sign_in" ? "Sign in" : "Retry";
+}
+
+export function accountNoticeRetry(
+  error: AccountError,
+  retry: () => void,
+): (() => void) | undefined {
+  if (error.action?.type === "sign_in") {
+    const href = error.action.href;
+    return () => {
+      window.location.assign(href);
+    };
+  }
+  if (error.action?.type === "retry") return retry;
+  return undefined;
+}

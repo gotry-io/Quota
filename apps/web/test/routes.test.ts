@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { KNOWN_PLANS } from "../src/lib/plan-display.generated.ts";
-import { DASHBOARD_PATH, planDisplayName, SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
+import {
+  DASHBOARD_PATH,
+  DEVICES_PATH,
+  planDisplayName,
+  SETTINGS_PATH,
+  SIGN_IN_PATH,
+  signInHref,
+  subscriptionPath,
+  USAGE_PATH,
+} from "../src/lib/routes.ts";
 import { formatQuotaRemaining } from "../src/lib/format.ts";
 
 test("sends a signed-out visitor to Relay, and back to the page they wanted", () => {
@@ -12,6 +21,13 @@ test("sends a signed-out visitor to Relay, and back to the page they wanted", ()
     signInHref("/my?device=device_1"),
     "/api/auth/github/start?return_to=%2Fmy%3Fdevice%3Ddevice_1",
   );
+});
+
+test("names the account sub-routes and hashes a selector into the subscription path", () => {
+  assert.equal(USAGE_PATH, "/my/usage");
+  assert.equal(DEVICES_PATH, "/my/devices");
+  assert.equal(SETTINGS_PATH, "/my/settings");
+  assert.equal(subscriptionPath("ccfc96629357"), "/my/subscriptions/ccfc96629357");
 });
 
 test("matches QuotaBar plan capitalization", () => {

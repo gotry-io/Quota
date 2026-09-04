@@ -12,7 +12,12 @@ const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
 const styles = readFileSync(join(root, "../src/app.css"), "utf8");
-const dashboard = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
+const overview = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
+const usage = readFileSync(join(root, "../src/routes/my/usage/+page.svelte"), "utf8");
+const devices = readFileSync(join(root, "../src/routes/my/devices/+page.svelte"), "utf8");
+const settings = readFileSync(join(root, "../src/routes/my/settings/+page.svelte"), "utf8");
+const accountLayout = readFileSync(join(root, "../src/routes/my/+layout.svelte"), "utf8");
+const accountNav = readFileSync(join(root, "../src/lib/components/AccountNav.svelte"), "utf8");
 
 test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /Know what you have left/);
@@ -32,7 +37,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(layout, /footer-controls/);
   assert.match(layout, /ThemeToggle/);
   assert.match(layout, /© \{year\} GoTry IO · MIT/);
-  assert.match(theme, /id="theme-toggle"/);
+  assert.match(theme, /id = "theme-toggle"/);
   assert.match(theme, /quota-theme/);
   assert.match(theme, /\["system", "light", "dark"\]/);
   assert.match(theme, /localStorage\.removeItem/);
@@ -51,7 +56,7 @@ test("the hero shows remaining quota, with its reset and how fresh it is", () =>
 });
 
 test("no surface explains itself in implementation words", () => {
-  for (const source of [landing, dashboard]) {
+  for (const source of [landing, overview, usage, devices, settings, accountLayout, accountNav]) {
     assert.doesNotMatch(source, /coverage/i);
     assert.doesNotMatch(source, /UTC-hour/i);
     assert.doesNotMatch(source, /fingerprint/i);
@@ -61,9 +66,13 @@ test("no surface explains itself in implementation words", () => {
 });
 
 test("the dashboard leads with subscriptions and one usage headline", () => {
-  assert.ok(dashboard.indexOf('id="quota-title"') < dashboard.indexOf('id="usage-title"'));
-  assert.match(dashboard, /<h1 id="dashboard-title">Quota<\/h1>/);
-  assert.match(dashboard, /id="token-total"/);
-  assert.match(dashboard, /id="cost-total"/);
-  assert.match(dashboard, /providerDisplayName\(subscription\.provider\)/);
+  assert.ok(overview.indexOf('id="quota-title"') < overview.indexOf('id="today-title"'));
+  assert.match(accountLayout, /<h1 id="dashboard-title">Quota<\/h1>/);
+  assert.match(accountNav, /aria-label="Account"/);
+  assert.match(overview, /providerDisplayName\(subscription\.provider\)/);
+  assert.match(overview, /id="today-title"/);
+  assert.match(usage, /id="token-total"/);
+  assert.match(usage, /id="cost-total"/);
+  assert.match(devices, /id="device-list"/);
+  assert.match(settings, /searchParams\.get\("delete"\) !== "account"/);
 });

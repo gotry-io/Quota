@@ -31,16 +31,18 @@ pnpm --filter @gotry-io/quota-web build
 `pnpm dev:web` is fast HMR and is not a real GitHub login. `pnpm dev:relay` is the composed
 Worker. Browser GitHub login on localhost is not available.
 
-`test` keeps the eight existing `node --test` files and then runs Vitest. `test:unit` is Vitest
+`test` keeps the existing `node --test` files and then runs Vitest. `test:unit` is Vitest
 alone. `test:e2e` starts `vite dev` with `QUOTA_DEV_VIEWER=octocat` so `/my` is a signed-in shell;
 Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than through a service
 worker. Install Chromium with
 `pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
-`/my` is the GitHub-backed account dashboard. Unsigned `/my` visits are a server redirect home.
-Every page requires a session; Quota Web publishes no account data anonymously. `/app` shipped in
-0.0.4, so it and anything under it stay a redirect to `/my`; new links and OAuth callbacks name
-`/my` directly.
+`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
+(overview), `/my/usage`, `/my/devices`, and `/my/settings`. Unsigned visits to any of them are a
+server redirect home. Every page requires a session; Quota Web publishes no account data
+anonymously. `/app` shipped in 0.0.4, so it and anything under it stay a redirect to `/my`; new
+links and OAuth callbacks name `/my` directly. Subscription cards on overview link to
+`/my/subscriptions/<sel>`; that detail page is not in this package yet.
 Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
 a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
 `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
