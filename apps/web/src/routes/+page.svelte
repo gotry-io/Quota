@@ -1,17 +1,8 @@
 <script lang="ts">
+import InstallOptions from "$lib/components/InstallOptions.svelte";
+import { AGENT_DISPLAY_NAMES, PROVIDER_DISPLAY_NAMES } from "$lib/providers.ts";
+
 const brewCommand = "brew install gotry-io/tap/quotabar";
-
-let copied = $state(false);
-let copiedReset: ReturnType<typeof setTimeout> | undefined;
-
-async function copyBrew(): Promise<void> {
-  await navigator.clipboard.writeText(brewCommand);
-  copied = true;
-  clearTimeout(copiedReset);
-  copiedReset = setTimeout(() => {
-    copied = false;
-  }, 1600);
-}
 </script>
 
 <div id="landing-view">
@@ -20,82 +11,96 @@ async function copyBrew(): Promise<void> {
       <p class="eyebrow">macOS menu bar · Your devices</p>
       <h1 id="hero-title">Know what you have left.</h1>
       <p class="hero-summary">
-        QuotaBar shows remaining Codex, Claude, Grok, Cursor, and API-key quota from the menu bar.
-        Usage stays on your machines unless you sync an account.
+        QuotaBar shows remaining quota for eight providers from the menu bar, and keeps Usage on
+        your Mac unless you sync an account.
       </p>
-      <div class="hero-actions">
-        <a
-          class="button button-primary"
-          href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
-          >Download QuotaBar .dmg</a
-        >
+      <InstallOptions>
         <a class="button button-secondary" href="#product">See how it works</a>
-      </div>
-      <div class="install-panel">
-        <div class="install-copy">
-          <p class="install-label">Homebrew</p>
-          <p class="install-note">Install or update QuotaBar from the tap.</p>
-        </div>
-        <div class="brew-row">
-          <code id="brew-install">{brewCommand}</code>
-          <button
-            class="button button-secondary install-copy-button"
-            type="button"
-            onclick={() => void copyBrew()}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <span class="visually-hidden" aria-live="polite">{copied ? "Copied" : ""}</span>
-        </div>
-      </div>
+      </InstallOptions>
       <p class="release-note">Apple Silicon · Open source · GitHub is the only sign-in</p>
     </div>
 
-    <figure class="product-preview account-preview">
-      <figcaption class="visually-hidden">Quota remaining-quota preview</figcaption>
-      <div class="preview-header">
-        <div>
-          <p class="preview-title">Quota</p>
-          <p class="provider-meta">What is left, on every machine you sign in from</p>
-        </div>
+    <div class="hero-preview">
+      <figure class="preview-shot preview-quotabar">
+        <picture>
+          <source
+            srcset="/screenshots/quotabar-overview-dark.png"
+            media="(prefers-color-scheme: dark)"
+            width="640"
+            height="960"
+          />
+          <img
+            src="/screenshots/quotabar-overview-light.png"
+            width="640"
+            height="960"
+            alt="QuotaBar menu bar showing remaining Codex Plus, Claude Code Max, and Grok SuperGrok quota"
+          />
+        </picture>
+      </figure>
+      <figure class="preview-shot preview-web">
+        <picture>
+          <source
+            srcset="/screenshots/web-overview-dark-desktop.png"
+            media="(min-width: 841px) and (prefers-color-scheme: dark)"
+            width="1440"
+            height="900"
+          />
+          <source
+            srcset="/screenshots/web-overview-light-desktop.png"
+            media="(min-width: 841px)"
+            width="1440"
+            height="900"
+          />
+          <source
+            srcset="/screenshots/web-overview-dark-mobile.png"
+            media="(prefers-color-scheme: dark)"
+            width="390"
+            height="844"
+          />
+          <img
+            src="/screenshots/web-overview-light-mobile.png"
+            width="390"
+            height="844"
+            alt="Quota account overview with remaining-quota cards for Codex, Claude Code, and Grok, and Studio Mac and Kitchen Mac"
+          />
+        </picture>
+      </figure>
+    </div>
+  </section>
+
+  <section class="works-with" aria-labelledby="works-with-title">
+    <div class="section-heading">
+      <p class="eyebrow">Providers · Agents</p>
+      <h2 id="works-with-title">Works with the providers and agents you already use.</h2>
+    </div>
+    <div class="works-with-grid">
+      <div>
+        <h3>Works with</h3>
+        <ul class="name-list">
+          {#each PROVIDER_DISPLAY_NAMES as name (name)}
+            <li>{name}</li>
+          {/each}
+        </ul>
       </div>
-      <div class="provider-list">
-        <div class="provider-row">
-          <div class="provider-title-line">
-            <span>Codex</span>
-            <span class="source-tag">Pro</span>
-          </div>
-          <div class="quota-window">
-            <p class="quota-window-heading"><span>5 hour</span><strong>68%</strong></p>
-            <div class="quota-track"><span style="width: 68%"></span></div>
-            <p class="reset-time">Resets Thu 4:03 PM · Updated 3m ago</p>
-          </div>
-        </div>
-        <div class="provider-row">
-          <div class="provider-title-line">
-            <span>Claude Code</span>
-            <span class="source-tag">Max</span>
-          </div>
-          <div class="quota-window">
-            <p class="quota-window-heading"><span>Weekly</span><strong>31%</strong></p>
-            <div class="quota-track"><span style="width: 31%"></span></div>
-            <p class="reset-time">Resets Sat 9:00 AM · Updated 3m ago</p>
-          </div>
-        </div>
-        <div class="provider-row">
-          <div class="provider-title-line">
-            <span>OpenRouter</span>
-          </div>
-          <div class="quota-window">
-            <p class="quota-window-heading"><span>Balance</span><strong>$12.50</strong></p>
-            <p class="reset-time">No reset time reported · Updated 3m ago</p>
-          </div>
-        </div>
+      <div>
+        <h3>Usage from</h3>
+        <ul class="name-list">
+          {#each AGENT_DISPLAY_NAMES as name (name)}
+            <li>{name}</li>
+          {/each}
+        </ul>
       </div>
-      <div class="preview-footer">
-        <span>Today · $4.18 · 1.2M tokens</span>
-      </div>
-    </figure>
+    </div>
+  </section>
+
+  <section class="privacy-callout" aria-labelledby="privacy-title">
+    <p class="eyebrow">Privacy</p>
+    <h2 id="privacy-title" class="visually-hidden">What never leaves your Mac</h2>
+    <p>
+      Provider credentials, prompts, and local paths never leave your Mac. Quota uploads remaining
+      quota and privacy-preserving Usage totals only. <a class="text-link" href="/privacy">Privacy</a
+      >
+    </p>
   </section>
 
   <section class="principles" id="product" aria-labelledby="product-title">
@@ -108,8 +113,9 @@ async function copyBrew(): Promise<void> {
         <span class="index">01</span>
         <h3>Local collection</h3>
         <p>
-          Install QuotaBar from the .dmg or <code>{brewCommand}</code>. It reads provider sessions
-          and agent logs locally. Credentials, prompts, paths, and raw events never upload.
+          Install QuotaBar from the .dmg or <code>{brewCommand}</code>. It reads eight provider
+          sessions and six agents' logs locally. Credentials, prompts, paths, and raw events never
+          upload.
         </p>
       </article>
       <article>
@@ -117,7 +123,7 @@ async function copyBrew(): Promise<void> {
         <h3>One account</h3>
         <p>
           Sign in once per installation and see every active or signed-out device, with account
-          totals and device breakdowns.
+          totals and device breakdowns. Quota for iPhone: coming soon.
         </p>
       </article>
       <article>
@@ -136,7 +142,7 @@ async function copyBrew(): Promise<void> {
       <p class="eyebrow">Direct by design</p>
       <h2 id="architecture-title">Account to device. Nothing in between.</h2>
       <p>
-        QuotaBar reads your provider sessions and agent logs on your Mac and uploads only the
+        QuotaBar reads eight provider sessions and six agents' logs on your Mac and uploads only the
         numbers: what quota is left and how many tokens you spent. Your account stores those
         totals—never provider credentials, prompts, paths, or raw logs.
       </p>
@@ -144,7 +150,7 @@ async function copyBrew(): Promise<void> {
     </div>
     <div class="flow" role="img" aria-label="Quota data flow">
       <div class="flow-node">
-        <span class="diagram-tag">Local</span><strong>Five coding agents</strong><span
+        <span class="diagram-tag">Local</span><strong>Eight providers · six agents</strong><span
           >Quota and Usage remain readable offline</span
         >
       </div>

@@ -67,7 +67,8 @@ New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`
 `apps/relay/wrangler.jsonc`.
 
 Product-preview PNGs live in `static/screenshots/`. They are synthetic: account `octocat`, mailbox
-`pe***@example.com`, device `Studio Mac`. They are not live captures.
+`pe***@example.com`, devices `Studio Mac` (active) and `Kitchen Mac` (idle), subscriptions
+Codex Plus / Claude Code Max / Grok SuperGrok. They are not live captures.
 
 Regenerate the web shots with `pnpm --filter @gotry-io/quota-web screenshots` (`SCREENSHOTS=1`; not
 part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that hosts

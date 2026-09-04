@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { accountActivity, accountActivityDay, accountSummary } from "./account-fixture.ts";
 
 async function mockV6(page: Page): Promise<void> {
@@ -125,6 +125,34 @@ test("axe reports no serious or critical violations on /", async ({ page }) => {
   const results = await new AxeBuilder({ page }).analyze();
   expect(seriousOrCritical(results.violations)).toEqual([]);
 });
+
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+] as const) {
+  test(`landing does not overflow horizontally at ${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Know what you have left." })).toBeVisible();
+    await expect(page.locator(".hero-preview img").first()).toBeVisible();
+    await page.evaluate(async () => {
+      await Promise.all(
+        [...document.images].map((image) =>
+          image.complete
+            ? undefined
+            : new Promise<void>((resolve) => {
+                image.addEventListener("load", () => resolve(), { once: true });
+                image.addEventListener("error", () => resolve(), { once: true });
+              }),
+        ),
+      );
+    });
+    const fits = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    );
+    expect(fits).toBe(true);
+  });
+}
 
 for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const) {
   test(`axe reports no serious or critical violations on ${path}`, async ({ page }) => {
