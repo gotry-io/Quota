@@ -15,6 +15,7 @@
 		1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */; };
 		19A03C89EA9BBC0BEC3C9228 /* UsageActivityChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B533B5705609CA55289004F3 /* UsageActivityChartTests.swift */; };
 		1BF91029C380326E580E55B5 /* SettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABB86F5D4DA736C025E43BF /* SettingsModel.swift */; };
+		1CB16E3799DE7514335396FB /* SettingsNotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 385D217111F48BCCA8EEBDFB /* SettingsNotificationsView.swift */; };
 		20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 383D78AB5F09A4248D36752A /* BackgroundTasks.framework */; };
 		238018D9FF5AA75CA17A215B /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44BCCD3B333361960497D05 /* DeepLink.swift */; };
 		26F1FE0BB72DDBE5CB26E07B /* UsageDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 702E2FF470823A83AC8FDBEF /* UsageDisplay.swift */; };
@@ -35,6 +36,7 @@
 		47B560DDAD359CE7E6437DF9 /* UsageActivityChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = B83FF236D780793577FA7ED1 /* UsageActivityChart.swift */; };
 		4F43C059E55874822A81800F /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20ECC9117266738C855DB30 /* WidgetKit.framework */; };
 		4F8AF68FAF8C3318E846BE20 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22EA5EC387AF4FF520BED534 /* UsageView.swift */; };
+		4FD2BE656E69ED29AA0D4B0D /* SettingsAppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4399D77F34E72CF73E1C64 /* SettingsAppearanceView.swift */; };
 		52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */; };
 		533F79CF7F3865C7299BAE41 /* IOSAlertRulesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82B4DB61764DEFFBCBBA024 /* IOSAlertRulesStore.swift */; };
 		53C98348A47113D409B79CBD /* ActivityLoading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB6890AA6B3532E0089CAE0 /* ActivityLoading.swift */; };
@@ -43,6 +45,7 @@
 		5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4CAD6B32A3936603EB853755 /* QuotaAccount */; };
 		5B2E98397B6D7F825BDB3411 /* QuotaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B4F64D1FE4D0DD3024D71E /* QuotaWidgetsBundle.swift */; };
 		5D8D1FD4F1902E5A3AA78E66 /* ConfirmAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */; };
+		5F8702B6B81077F94BCD8015 /* SettingsAboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */; };
 		6741F9EB068AECB4CBDAA5C7 /* SubscriptionDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */; };
 		6E9C3E458700AEF0C9CD5A5E /* OverviewWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA569843A5C8221A5E1B37F7 /* OverviewWidget.swift */; };
 		732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = C682F581162B4E54B44C4621 /* QuotaAlerts */; };
@@ -144,6 +147,8 @@
 		22EA5EC387AF4FF520BED534 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
 		33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionSalt.swift; sourceTree = "<group>"; };
 		383D78AB5F09A4248D36752A /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		385D217111F48BCCA8EEBDFB /* SettingsNotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNotificationsView.swift; sourceTree = "<group>"; };
+		3E4399D77F34E72CF73E1C64 /* SettingsAppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAppearanceView.swift; sourceTree = "<group>"; };
 		408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSResetReminderScheduler.swift; sourceTree = "<group>"; };
 		461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetViews.swift; sourceTree = "<group>"; };
@@ -164,6 +169,7 @@
 		702E2FF470823A83AC8FDBEF /* UsageDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDisplay.swift; sourceTree = "<group>"; };
 		70DAD0FC0DCFE3F2F7AFA0D8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		715109BDC79F55A51B6113F8 /* ProviderQuotaCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderQuotaCard.swift; sourceTree = "<group>"; };
+		73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAboutView.swift; sourceTree = "<group>"; };
 		74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionDetailTests.swift; sourceTree = "<group>"; };
 		74B4F64D1FE4D0DD3024D71E /* QuotaWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaWidgetsBundle.swift; sourceTree = "<group>"; };
 		7720D7A0D2140F21A4DBAB8F /* QuotaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuotaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -276,7 +282,10 @@
 				A5FCDA22B62B0D142212AA65 /* RootView.swift */,
 				9D250348840DC439E58D5B60 /* SelectedUsagePeriod.swift */,
 				33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */,
+				73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */,
+				3E4399D77F34E72CF73E1C64 /* SettingsAppearanceView.swift */,
 				6ABB86F5D4DA736C025E43BF /* SettingsModel.swift */,
+				385D217111F48BCCA8EEBDFB /* SettingsNotificationsView.swift */,
 				6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */,
 				592AE2441A525DB2921A5FA2 /* StatusBanner.swift */,
 				54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */,
@@ -631,7 +640,10 @@
 				CF0106D41F578E1909080626 /* RootView.swift in Sources */,
 				107D14A056BAA9DD0F41DC66 /* SelectedUsagePeriod.swift in Sources */,
 				E83E20523B31256BDC034CAE /* SelectionSalt.swift in Sources */,
+				5F8702B6B81077F94BCD8015 /* SettingsAboutView.swift in Sources */,
+				4FD2BE656E69ED29AA0D4B0D /* SettingsAppearanceView.swift in Sources */,
 				1BF91029C380326E580E55B5 /* SettingsModel.swift in Sources */,
+				1CB16E3799DE7514335396FB /* SettingsNotificationsView.swift in Sources */,
 				09A1841A9BD857FCA1F9DD70 /* SettingsView.swift in Sources */,
 				CC18EA3EC0F6816AA0F2E3A9 /* StatusBanner.swift in Sources */,
 				DAF943A875E436921237F021 /* SubscriptionDetailView.swift in Sources */,

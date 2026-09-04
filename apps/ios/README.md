@@ -99,10 +99,12 @@ project. Pass `--no-commit` to skip the commit.
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
 `usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota card for
 `subscription-detail`, the Mac setup card for `no-devices`, the Connect with GitHub control for
-`signed-out`, connecting / connect-error / expired / loading fixtures, the GitHub account
-inline GitHub account confirmation for `confirm-account`, and Settings for the Notifications switch and Log Out,
-and runs an accessibility audit on each. Connect's audit does not skip contrast. Log Out is on the
-Settings tab. Delete Account starts on the website.
+`signed-out`, connecting / connect-error / expired / loading fixtures, the inline GitHub account
+confirmation for `confirm-account`, and Settings for the compact hub plus Notifications,
+Appearance, and About destinations, and runs an accessibility audit on each. Connect's audit does
+not skip contrast. Log Out and Delete Account sit on the Settings hub. Delete Account starts on
+the website. Settings destinations run the full app-owned accessibility audit with no unnamed
+clipping skip.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh

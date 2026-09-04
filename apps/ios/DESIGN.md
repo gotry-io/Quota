@@ -61,6 +61,7 @@ Shown when no Keychain account session exists, including after logout and after 
   disabled. Minimum hit height 50pt. `buttonStyle(.glassProminent)` and the emerald tint.
 - Footnote: **This iPhone only reads data reported by QuotaBar.**
 - No product title, value-proposition paragraph, card, banner container, or raw URL.
+- The longer product and privacy explanation lives on Settings › About, not on Connect.
 - Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
   - expired: **Session expired. Connect again.**
   - connect failure default: **Couldn't connect. Try again.**
@@ -245,36 +246,60 @@ credentials. Empty state shows the Mac setup card rather than hiding the section
 
 ### Settings
 
-A native `Form` of grouped rows. Every control is a standard Form toggle, picker, link, or button.
+A native `Form` hub with the system content background. Notification thresholds, appearance, and
+About are pushed destinations that share `SettingsModel`. Account actions sit on this hub so they
+are reachable without scrolling through alert groups. Every control is a standard Form toggle,
+picker, link, or button. Settings has no custom loading state.
 
-**Notifications.** A master switch, **Reset reminders**, and one group per subscription (catalog
-`display_name` as the header, masked account label as a row) with two remaining-percent pickers.
-Choices are **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first defaults to **20**; the second
-defaults to **10** and may be **Off**, which stores a single threshold. Stored values stay
-descending and unique, and the second picker only offers values below the first. Turning the master
-switch on asks `UNUserNotificationCenter` for alerts and sound. A refusal puts the switch back off
-and shows **Allow notifications for Quota in Settings.** with **Open Settings**, which opens
-`UIApplication.openSettingsURLString`. Opening the page re-reads the system permission; a later
-grant in Settings does not turn the switch on by itself. Rules are stored in `UserDefaults` under
-`alerts.*`. The group footer is **Quota reminds you when a refresh brings new data.** Quota does
-not promise real-time.
+**Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
+value **System**, **Light**, or **Dark** trailing.
 
-**Appearance.** **System**, **Light**, or **Dark**, stored as `appearance` in `UserDefaults`. The
-window uses `.preferredColorScheme`. System is the default and leaves the scheme unset.
+**Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
+(`https://quota.gotry.io/support`). NavigationLink **About**.
 
-**About.** Version is `CFBundleShortVersionString (CFBundleVersion)`. Links to
-`https://quota.gotry.io` and the GitHub repository. **Licenses: MIT**.
-
-**Privacy & Support.** Links to `https://quota.gotry.io/privacy` and
-`https://quota.gotry.io/support`.
-
-**Account.** **Manage devices on the web** opens `https://quota.gotry.io/my/devices`. **Delete
+**Account.** Link **Manage Devices on Web** (`https://quota.gotry.io/my/devices`). **Delete
 Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
 `ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
 `https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount`. The
 callback scheme is nil: the sheet ending returns to the app. Quota then prompts **If you deleted
 the Account, sign out here too.** **Log Out** keeps the native confirmation: remote Account data
 remains; this device forgets the session.
+
+#### Notifications
+
+Navigation title **Notifications**. Native Form. Toggle **Enable Notifications**. Toggle **Reset
+Reminders**. Footer: **Alerts are checked when Quota refreshes.** Quota does not promise real-time.
+
+Turning Enable Notifications on asks `UNUserNotificationCenter` for alerts and sound. A refusal
+puts the switch back off and shows **Allow notifications for Quota in Settings.** with **Open
+Settings**, which opens `UIApplication.openSettingsURLString`. Opening the destination re-reads
+the system permission; a later grant in Settings does not turn the switch on by itself. A
+permission-refresh failure leaves the toggle off and uses the denied-state rows. Rules are stored
+in `UserDefaults` under `alerts.*`.
+
+One Section per subscription (catalog `display_name` as the header, masked account label as a row)
+with two remaining-percent pickers **Alert at** and **Then at**. Choices are **5 / 10 / 15 / 20 /
+25 / 30 / 40 / 50**. The first defaults to **20**; the second defaults to **10** and may be **Off**,
+which stores a single threshold. Stored values stay descending and unique, and the second picker
+only offers values below the first. If there are no subscriptions, **No quota alerts are available
+yet.** appears below the master controls.
+
+#### Appearance
+
+Navigation title **Appearance**. A native inline Picker with **System**, **Light**, and **Dark**.
+Stored as `appearance` in `UserDefaults`. The window uses `.preferredColorScheme`. System is the
+default and leaves the scheme unset. No custom preview panel or glass.
+
+#### About
+
+Navigation title **About**. The Quota app mark as plain content, then:
+
+- **Quota shows remaining quota and usage reported by QuotaBar on your Mac.**
+- **This iPhone does not collect or upload local usage.**
+
+Native rows **Version** (`CFBundleShortVersionString (CFBundleVersion)`), **Website**
+(`https://quota.gotry.io`), **GitHub** (the repository), and **License** with value **MIT**. No
+glass card. Links are standard Form links.
 
 ### Mac setup
 
@@ -346,6 +371,8 @@ Rules:
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Connect with GitHub plus one plain status Label. Default **Couldn't connect. Try again.** |
 | Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
+| Notification permission denied | **Allow notifications for Quota in Settings.** with **Open Settings** |
+| No quota alerts | **No quota alerts are available yet.** below the Notifications master controls |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
 | Widget placeholder | Redacted remaining / provider skeleton |
 
@@ -354,9 +381,10 @@ A banner always includes a symbol and a sentence. Color never carries status alo
 ## Layout and type
 
 Signed-in tabs use the system grouped background supplied by List/Form. There is no root background
-modifier and no ambient wash. Semantic text styles (`largeTitle` / `title2` for remaining values,
-`headline` for provider names, `subheadline` and `footnote` for support). Connect content is a
-320-point column.
+modifier and no ambient wash. Settings is a compact hub Form; Notifications, Appearance, and About
+are pushed destination Forms with the same system background. Semantic text styles (`largeTitle` /
+`title2` for remaining values, `headline` for provider names, `subheadline` and `footnote` for
+support). Connect content is a 320-point column.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt). Dynamic
 Type may wrap every label, including the Connect footnote; do not clip remaining values.
@@ -388,14 +416,20 @@ provider and support, and no custom card chrome beyond the system widget contain
   state. Disabled `.glassProminent` Connecting… contrast is system glass, documented on that
   control. Confirm is inline on the signed-out screen and runs the full accessibility audit with
   no skip.
+- Settings account actions sit on the hub, not below per-subscription alert groups. Settings
+  destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
+  System exceptions, scoped in the UI test: unnamed tab-bar Liquid Glass contrast, grouped Form
+  header/footer StaticText contrast, and partial Dynamic Type on system section-header text.
+  Connect (no tab bar) still runs contrast.
 
 ## Visual QA
 
 Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, loading, signed-in content,
 empty quota/Today, Usage at 30 Days with the Activity heatmap, a single-day sheet, no-devices Mac
-setup, cached content with a refresh banner, the four tabs, Settings (Notifications switch, Log
-Out, Appearance), subscription detail (windows, countdown, Reporting row), and each widget family
+setup, cached content with a refresh banner, the four tabs, Settings hub (Notifications and
+Appearance links, Log Out, Delete Account), Settings › Notifications, Settings › Appearance,
+Settings › About, subscription detail (windows, countdown, Reporting row), and each widget family
 in placeholder, content, and no-data states. Check iPhone, light and dark, standard and
 accessibility text sizes, VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic
 fixtures may contain display labels only; they must never contain access tokens, refresh tokens, or
@@ -403,7 +437,8 @@ production data.
 
 `scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `connecting`, `connect-error`,
 `expired`, `loading`, `confirm-account`, `no-devices`, `usage-content`, `usage-activity`,
-`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
+`subscription-detail`, `settings-main`, `settings-notifications`, `settings-appearance`, and
+`settings-about` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
