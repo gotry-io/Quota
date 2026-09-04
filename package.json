@@ -23,6 +23,7 @@
     "generate:plan-display": "node --experimental-strip-types scripts/generate-plan-display.mjs",
     "check:plan-display": "node --experimental-strip-types scripts/generate-plan-display.mjs --check",
     "version:bump:menubar": "node scripts/bump-version.mjs menubar",
+    "version:bump:ios": "node scripts/bump-version.mjs ios",
     "format": "biome format --write . && cargo fmt --all",
     "format:check": "pnpm format:check:js && pnpm format:check:rust",
     "format:check:js": "biome format .",
