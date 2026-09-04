@@ -17,6 +17,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case cachedError = "cached-error"
   case empty
   case noDevices = "no-devices"
+  case activityLoading = "activity-loading"
+  case activityFailed = "activity-failed"
+  case activityDayEmpty = "activity-day-empty"
+  case activityDayFailed = "activity-day-failed"
 
   /// Parse `--visual-fixture <name>` from process arguments. Returns nil when absent or unknown.
   static func parse(arguments: [String]) -> VisualFixture? {
@@ -133,7 +137,50 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.activityChart = .loaded([])
+      case .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed:
+        applySignedInContent(to: model, now: now)
+        model.selectedTab = .usage
+        switch self {
+        case .activityLoading:
+          model.activityChart = .loading
+        case .activityFailed:
+          model.activityChart = .failed
+        case .activityDayEmpty:
+          let date = UsageActivityCalendar.addDays(
+            -3,
+            to: UsageActivityCalendar.utcDay(from: now)
+          )
+          model.activityDaySheet = ActivityDaySheetState(
+            date: date,
+            headline: UsageActivityChart.emptyDay(date: date),
+            agents: .empty
+          )
+        case .activityDayFailed:
+          let date = UsageActivityCalendar.utcDay(from: now)
+          let headline =
+            VisualFixtureContent.activityDays(ending: now).first { $0.date == date }
+            ?? UsageActivityChart.emptyDay(date: date)
+          model.activityDaySheet = ActivityDaySheetState(
+            date: date,
+            headline: headline,
+            agents: .failed
+          )
+        default:
+          break
+        }
       }
+    }
+
+    @MainActor
+    private func applySignedInContent(to model: AppModel, now: Date) {
+      model.phase = .signedIn
+      model.summary = VisualFixtureContent.summary(at: now)
+      model.fetchedAt = now.addingTimeInterval(-90)
+      model.fromCache = false
+      model.isRefreshing = false
+      model.banner = nil
+      model.expiredMessage = nil
+      model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
     }
   }
 
@@ -620,7 +667,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     ) -> AppModel {
       let days: [UsageActivityDay]
       switch fixture {
-      case .content, .cachedError:
+      case .content, .cachedError, .activityLoading, .activityFailed, .activityDayEmpty,
+        .activityDayFailed:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
         .loading, .empty, .noDevices:

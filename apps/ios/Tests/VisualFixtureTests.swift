@@ -31,6 +31,10 @@ struct VisualFixtureParserTests {
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
       ("no-devices", VisualFixture.noDevices),
+      ("activity-loading", VisualFixture.activityLoading),
+      ("activity-failed", VisualFixture.activityFailed),
+      ("activity-day-empty", VisualFixture.activityDayEmpty),
+      ("activity-day-failed", VisualFixture.activityDayFailed),
     ]
   )
   func parseRecognizesEachFixture(raw: String, expected: VisualFixture) {
@@ -221,6 +225,43 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
       #expect(model.banner == nil)
       #expect(model.activityChart == .loaded([]))
+    }
+
+    @Test
+    func activityLoadingKeepsPeriodTotalsAndShowsTheSkeletonPhase() {
+      let model = AppModel.visualFixture(.activityLoading, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedIn)
+      #expect(model.selectedTab == .usage)
+      #expect(model.activityChart == .loading)
+      #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
+      #expect(model.activityDaySheet == nil)
+    }
+
+    @Test
+    func activityFailedKeepsPeriodTotalsAndShowsRetryPhase() {
+      let model = AppModel.visualFixture(.activityFailed, now: VisualFixture.referenceDate)
+      #expect(model.phase == .signedIn)
+      #expect(model.selectedTab == .usage)
+      #expect(model.activityChart == .failed)
+      #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
+    }
+
+    @Test
+    func activityDayEmptyPresentsASheetWithNoAgents() {
+      let model = AppModel.visualFixture(.activityDayEmpty, now: VisualFixture.referenceDate)
+      #expect(model.selectedTab == .usage)
+      #expect(model.activityDaySheet?.agents == .empty)
+      #expect(model.activityDaySheet?.headline.agents == nil)
+      #expect(model.activityDaySheet?.headline.totals.totalTokens == 0)
+    }
+
+    @Test
+    func activityDayFailedPresentsASheetWithRetryPhase() {
+      let model = AppModel.visualFixture(.activityDayFailed, now: VisualFixture.referenceDate)
+      #expect(model.selectedTab == .usage)
+      #expect(model.activityDaySheet?.agents == .failed)
+      #expect(model.activityDaySheet?.date == "2026-08-14")
     }
 
     @Test

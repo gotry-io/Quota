@@ -131,6 +131,100 @@ struct UsageActivityChartTests {
     #expect(spoken?.contains("tokens") == true)
     #expect(spoken?.contains("complete") == true)
   }
+
+  @Test
+  func emptyActivityIsZeroReportedTokensAcrossTheRange() {
+    #expect(UsageActivityChart.hasReportedActivity([]) == false)
+    #expect(
+      UsageActivityChart.hasReportedActivity([
+        day("2026-08-14", input: 0, output: 0),
+        day("2026-08-13", input: 0, output: 0),
+      ]) == false
+    )
+    #expect(
+      UsageActivityChart.hasReportedActivity([
+        day("2026-08-14", input: 0, output: 0),
+        day("2026-08-13", input: 1, output: 0),
+      ])
+    )
+  }
+
+  @Test
+  func defaultSelectedDatePrefersTodayThenTheLastInRangeDay() {
+    let withToday = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+    #expect(withToday.defaultSelectedDate == "2026-01-16")
+
+    let withoutToday = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-20"
+    )
+    #expect(withoutToday.defaultSelectedDate == "2026-01-16")
+  }
+
+  @Test
+  func adjacentSelectionStopsAtTheFirstAndLastInRangeDay() {
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+
+    #expect(chart.adjacentSelectableDay(from: "2026-01-15", increment: true)?.date == "2026-01-16")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-16", increment: true)?.date == "2026-01-16")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-16", increment: false)?.date == "2026-01-15")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-15", increment: false)?.date == "2026-01-15")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-11", increment: true)?.date == "2026-01-16")
+  }
+
+  @Test
+  func spatialSelectionMapsToTheNearestInRangeDayAndIgnoresPaddingCells() {
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+    let cellSize = 14.0
+    let cellGap = 4.0
+    let stride = cellSize + cellGap
+
+    // One Sunday-first week: in-range Thursday (index 4) and Friday (index 5).
+    let thursday = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 4 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let friday = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 5 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let sundayPadding = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let betweenThuFri = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 4.6 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+
+    #expect(thursday?.date == "2026-01-15")
+    #expect(friday?.date == "2026-01-16")
+    #expect(sundayPadding?.date == "2026-01-15")
+    #expect(betweenThuFri?.date == "2026-01-16")
+    #expect(chart.selectableDay(on: "2026-01-11") == nil)
+    #expect(chart.selectableDay(on: "2026-01-15")?.outside == false)
+  }
 }
 
 private func date(_ value: String) -> Date {

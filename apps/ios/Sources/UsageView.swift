@@ -6,39 +6,32 @@ struct UsageView: View {
   @State private var expandedProviderIDs: Set<String> = []
 
   var body: some View {
-    VStack(spacing: 12) {
-      periodPicker
-        .padding(.horizontal, QuotaTheme.contentGutter)
-        .padding(.top, 8)
+    List {
+      Section {
+        periodPicker
+      }
 
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 16) {
-          if let usage = model.summary?.usage {
-            let period = model.selectedUsagePeriod.period(in: usage)
-            let sections = UsageBreakdown.sections(in: period)
-            if sections.isEmpty {
-              emptyCard
-            } else {
-              UsageHeadlineCard(period: period)
-            }
-            UsageActivityCard(model: model)
-            ForEach(sections) { section in
-              UsageAgentCard(
-                section: section,
-                expandedProviderIDs: $expandedProviderIDs
-              )
-            }
-          } else {
-            emptyCard
-            UsageActivityCard(model: model)
-          }
+      if let usage = model.summary?.usage {
+        let period = model.selectedUsagePeriod.period(in: usage)
+        let sections = UsageBreakdown.sections(in: period)
+        UsageTotalsSection(period: period)
+        if sections.isEmpty {
+          emptyPeriod
         }
-        .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
-        .padding(.horizontal, QuotaTheme.contentGutter)
-        .padding(.bottom, 16)
-        .frame(maxWidth: .infinity)
+        if model.selectedTab == .usage {
+          UsageActivitySection(model: model)
+          UsageAgentListSections(
+            sections: sections,
+            expandedProviderIDs: $expandedProviderIDs
+          )
+        }
+      } else if model.selectedTab == .usage {
+        emptyPeriod
+        UsageActivitySection(model: model)
       }
     }
+    .listStyle(.insetGrouped)
+    .contentMargins(.bottom, 88, for: .scrollContent)
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
       await model.loadActivity()
@@ -60,33 +53,37 @@ struct UsageView: View {
       }
     }
     .pickerStyle(.segmented)
+    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     .frame(minHeight: QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("usage.period")
   }
 
-  private var emptyCard: some View {
-    Text("No Usage in this period.")
-      .font(.subheadline)
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-      .padding(16)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityIdentifier("usage.empty")
+  private var emptyPeriod: some View {
+    Section {
+      ContentUnavailableView {
+        Label("No usage", systemImage: "chart.bar")
+      } description: {
+        Text("No usage was reported for this period.")
+      }
+      .foregroundStyle(.primary)
+      .frame(maxWidth: .infinity)
+    }
+    .accessibilityIdentifier("usage.empty")
   }
 }
 
-struct UsageHeadlineCard: View {
+struct UsageTotalsSection: View {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
   let partial: Bool
   var partialCopy: String = "Some hours in this period were scanned incompletely."
-  var basisCopy: String? = nil
   var identifier: String = "usage.headline"
 
-  init(period: UsagePeriod) {
+  init(period: UsagePeriod, identifier: String = "usage.headline") {
     totals = period.totals
     cost = period.cost
     partial = period.partial
+    self.identifier = identifier
   }
 
   init(
@@ -94,144 +91,115 @@ struct UsageHeadlineCard: View {
     cost: UsageCostOutcome,
     partial: Bool,
     partialCopy: String = "Some hours in this period were scanned incompletely.",
-    basisCopy: String? = nil,
     identifier: String = "usage.headline"
   ) {
     self.totals = totals
     self.cost = cost
     self.partial = partial
     self.partialCopy = partialCopy
-    self.basisCopy = basisCopy
     self.identifier = identifier
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      tokensMetric
-      metric(
-        label: "API-equivalent cost",
-        value: QuotaFormat.cost(cost),
-        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
-      )
-      if let basisCopy {
-        Text(basisCopy)
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityLabel("Cost basis, \(basisCopy)")
-      }
-      if partial {
-        Text(partialCopy)
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityIdentifier(identifier)
-  }
-
-  private var tokensMetric: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(alignment: .firstTextBaseline) {
-        Text("Tokens")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .layoutPriority(0)
-          .fixedSize(horizontal: false, vertical: true)
-        Spacer(minLength: 12)
+    Section {
+      LabeledContent("Tokens") {
         Text(QuotaFormat.compactCount(totals.totalTokens))
           .font(.body.monospacedDigit().weight(.medium))
-          .fixedSize(horizontal: false, vertical: true)
-          .layoutPriority(1)
+          .foregroundStyle(.primary)
       }
-      Text(
-        "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
       )
-      .font(.footnote.monospacedDigit())
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-      .frame(maxWidth: .infinity, alignment: .trailing)
+      .accessibilityIdentifier(identifier)
+
+      LabeledContent("API-equivalent cost") {
+        Text(QuotaFormat.cost(cost))
+          .font(.body.monospacedDigit().weight(.medium))
+          .foregroundStyle(.primary)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
+      )
+
+      VStack(alignment: .leading, spacing: 4) {
+        Text(
+          "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
+        )
+        .font(.footnote)
+        Text(QuotaFormat.costBasis(cost))
+          .font(.footnote)
+        if partial {
+          Text(partialCopy)
+            .font(.footnote)
+        }
+      }
+      .foregroundStyle(.primary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel(footerAccessibilityLabel)
     }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(
-      "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
-    )
   }
 
-  private func metric(label: String, value: String, accessibility: String) -> some View {
-    HStack(alignment: .firstTextBaseline) {
-      Text(label)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .layoutPriority(0)
-        .fixedSize(horizontal: false, vertical: true)
-      Spacer(minLength: 12)
-      Text(value)
-        .font(.body.monospacedDigit().weight(.medium))
-        .fixedSize(horizontal: false, vertical: true)
-        .layoutPriority(1)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(accessibility)
+  private var footerAccessibilityLabel: String {
+    "\(QuotaFormat.accessibleCount(totals.inputTokens)) in · \(QuotaFormat.accessibleCount(totals.outputTokens)) out. Cost basis, \(QuotaFormat.costBasis(cost))"
+      + (partial ? ". \(partialCopy)" : "")
   }
 }
 
-struct UsageAgentCard: View {
-  let section: UsageBreakdown.AgentSection
+struct UsageAgentListSections: View {
+  let sections: [UsageBreakdown.AgentSection]
   @Binding var expandedProviderIDs: Set<String>
+  var modelIdentifier: String = "usage.model"
+  var showMoreIdentifier: String = "usage.show-more"
+  var showFewerIdentifier: String = "usage.show-fewer"
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(section.displayName)
-        .font(.headline)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
-      ForEach(Array(section.providers.enumerated()), id: \.element.id) { index, provider in
-        if index > 0 { Divider() }
-        providerBlock(provider)
+    ForEach(sections) { section in
+      Section(section.displayName) {
+        ForEach(section.providers) { provider in
+          providerRows(provider, agentID: section.id)
+        }
       }
     }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func providerBlock(_ provider: UsageBreakdown.ProviderSection) -> some View {
-    let key = provider.expansionKey(agentID: section.id)
+  @ViewBuilder
+  private func providerRows(
+    _ provider: UsageBreakdown.ProviderSection,
+    agentID: String
+  ) -> some View {
+    let key = provider.expansionKey(agentID: agentID)
     let expanded = expandedProviderIDs.contains(key)
     let visible = provider.visibleModels(expanded: expanded)
     let hidden = provider.hiddenCount(expanded: expanded)
-    return VStack(alignment: .leading, spacing: 8) {
-      Text(provider.displayName)
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
 
-      ForEach(visible) { row in
-        modelRow(row)
-      }
+    Text(provider.displayName)
+      .font(.subheadline)
+      .foregroundStyle(.primary)
+      .accessibilityAddTraits(.isHeader)
 
-      if hidden > 0 {
-        Button {
+    ForEach(visible) { row in
+      modelRow(row)
+    }
+
+    if provider.foldsModels {
+      Button(expanded ? "Show fewer" : "Show \(hidden) more") {
+        if expanded {
+          expandedProviderIDs.remove(key)
+        } else {
           expandedProviderIDs.insert(key)
-        } label: {
-          Text("Show \(hidden) more")
-            .font(.subheadline.weight(.medium))
-            .frame(
-              maxWidth: .infinity,
-              minHeight: QuotaTheme.minimumTouchTarget,
-              alignment: .leading
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(QuotaTheme.emerald)
-        .accessibilityLabel("Show \(hidden) more \(provider.displayName) models")
-        .accessibilityIdentifier("usage.show-more")
       }
+      .tint(.primary)
+      .accessibilityLabel(
+        expanded
+          ? "Show fewer \(provider.displayName) models"
+          : "Show \(hidden) more \(provider.displayName) models"
+      )
+      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+      .accessibilityIdentifier(expanded ? showFewerIdentifier : showMoreIdentifier)
     }
   }
 
@@ -241,18 +209,16 @@ struct UsageAgentCard: View {
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(row.displayName)
         .font(.subheadline)
-        .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 8)
       Text("\(tokens) · \(cost)")
         .font(.subheadline.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
         .multilineTextAlignment(.trailing)
-        .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(
       "\(row.displayName), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost))"
     )
-    .accessibilityIdentifier("usage.model")
+    .accessibilityIdentifier(modelIdentifier)
   }
 }
