@@ -116,7 +116,8 @@ struct UsageActivityLoadTests {
     #expect(await loader.calls.last?.detail == .agents)
     await model.retryActivityDay()
     guard case .loaded(let agents) = model.activityDaySheet?.agents else {
-      Issue.record("expected loaded agents, got \(String(describing: model.activityDaySheet?.agents))")
+      Issue.record(
+        "expected loaded agents, got \(String(describing: model.activityDaySheet?.agents))")
       return
     }
     #expect(agents.map(\.agent) == [.codex])
@@ -204,7 +205,8 @@ private func activitySession() -> AccountSession {
     accessToken: "qia_synthetic_access_token",
     accessExpiresAt: activityNow(),
     refreshToken: "qiar_synthetic_refresh_token",
-    refreshExpiresAt: activityNow().addingTimeInterval(8_000_000)
+    refreshExpiresAt: activityNow().addingTimeInterval(8_000_000),
+    activation: .active
   )
 }
 

@@ -66,6 +66,19 @@ public actor AccountClient {
     try sessionStore.load() != nil
   }
 
+  public func loadSession() throws -> AccountSession? {
+    try sessionStore.load()
+  }
+
+  /// Continue is the only promotion from `pending` to `active`. Already-active is a no-op.
+  public func activateSession() throws {
+    guard let session = try sessionStore.load() else {
+      throw AccountClientError.notSignedIn
+    }
+    guard session.activation == .pending else { return }
+    try persist(session.withActivation(.active))
+  }
+
   public func loadCachedSummary() throws -> CachedAccountSummary? {
     try loadBoundCachedSummary()
   }
@@ -279,7 +292,7 @@ public actor AccountClient {
       guard rotated.accountID == current.accountID else {
         throw AccountClientError.accountMismatch
       }
-      let session = AccountSession(rotated)
+      let session = AccountSession(rotated, activation: current.activation)
       try persist(session)
       return session
     } catch RelayClientError.invalidGrant {

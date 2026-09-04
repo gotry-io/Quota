@@ -181,10 +181,10 @@ final class QuotaUITests: XCTestCase {
     let button = app.buttons["Connect with GitHub"]
     XCTAssertTrue(button.waitForExistence(timeout: 10), "Connect with GitHub")
     XCTAssertFalse(button.isEnabled, "Connecting disables the button")
+    XCTAssertEqual(
+      button.value as? String, "Connecting", "Connecting is the busy accessibility value")
     attachScreenshot(app, name: "connect-connecting")
-    // Disabled `.glassProminent` paints Connecting… as system vibrant text on
-    // the glass control. Signed-out Connect runs the full contrast audit.
-    try audit(app, skipping: .contrast)
+    try audit(app)
   }
 
   func testConnectErrorFixtureShowsTheFailureLine() throws {
@@ -219,6 +219,21 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Loading account…"].exists, "Loading account…")
     attachScreenshot(app, name: "root-loading")
+    try audit(app)
+  }
+
+  func testConnectRefreshFailedFixtureShowsRetryWithoutContinue() throws {
+    let app = launch(fixture: "connect-refresh-failed")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
+      "connect.root"
+    )
+    XCTAssertTrue(app.buttons["Retry"].exists, "Retry")
+    XCTAssertTrue(app.buttons["Use a different account"].exists, "Use a different account")
+    XCTAssertFalse(app.buttons["Continue"].exists, "Continue is not offered")
+    XCTAssertFalse(app.buttons["Connect with GitHub"].exists, "Connect is replaced by Retry")
+    XCTAssertTrue(app.staticTexts["Could not reach quota.gotry.io."].exists, "network copy")
+    attachScreenshot(app, name: "connect-refresh-failed")
     try audit(app)
   }
 
@@ -279,13 +294,13 @@ final class QuotaUITests: XCTestCase {
 
   /// Every issue is reported with the element it names, so a failure says what to fix.
   ///
-  /// Connect signed-out, error, expired, loading, confirm, and Settings destinations run the
-  /// full audit. Connecting skips contrast because disabled `.glassProminent` is system vibrant
-  /// text. Remaining skips on Overview and Usage are content later work packages rebuild.
-  /// System exceptions: unnamed tab-bar Liquid Glass contrast; grouped Form header/footer
-  /// StaticText contrast (including a header sitting against the tab bar); partial Dynamic
-  /// Type on system caption headers. Connect (primary label, no tab bar) still runs contrast.
-  /// Clipping and hit-region issues still fail this test. There is no unnamed clipping skip.
+  /// Connect signed-out, connecting, error, expired, first-refresh failure, loading, confirm, and
+  /// Settings destinations run the full audit, including contrast. Remaining skips on Overview and
+  /// Usage are content later work packages rebuild. System exceptions: unnamed tab-bar Liquid Glass
+  /// contrast; grouped Form header/footer StaticText contrast (including a header sitting against
+  /// the tab bar); partial Dynamic Type on system caption headers. Connect (primary label, no tab
+  /// bar) still runs contrast. Clipping and hit-region issues still fail this test. There is no
+  /// unnamed clipping skip.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = []

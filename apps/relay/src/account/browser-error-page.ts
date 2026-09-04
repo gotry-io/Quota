@@ -15,7 +15,26 @@ const reasonCopy: Record<BrowserSignInFailureReason, string> = {
 };
 
 export function acceptsHtml(accept: string | undefined): boolean {
-  return (accept ?? "").includes("text/html");
+  if (!accept) return false;
+  for (const part of accept.split(",")) {
+    const segments = part
+      .split(";")
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+    const media = segments[0]?.toLowerCase();
+    if (media !== "text/html") continue;
+    let quality = 1;
+    for (const param of segments.slice(1)) {
+      const separator = param.indexOf("=");
+      if (separator <= 0) continue;
+      const key = param.slice(0, separator).trim().toLowerCase();
+      if (key !== "q") continue;
+      const parsed = Number.parseFloat(param.slice(separator + 1).trim());
+      quality = Number.isFinite(parsed) ? parsed : 0;
+    }
+    if (quality > 0) return true;
+  }
+  return false;
 }
 
 /**

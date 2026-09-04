@@ -59,6 +59,7 @@
 		8A416ECAF51DB9D6FD49C114 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F9141D8E147B24CE24D48194 /* AppIntents.framework */; };
 		8E2336FC11600A345D6A4817 /* ConnectAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */; };
 		8E57B6067B4EB65D1BDA4972 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 70DAD0FC0DCFE3F2F7AFA0D8 /* Assets.xcassets */; };
+		907D0829E6048DEE050CEFC9 /* QuotaAppMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE1A9E6B6F4DB3AF29DF133 /* QuotaAppMark.swift */; };
 		928A3FAC8EEBD87B3E935755 /* QuotaWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8425987F3D6831016C246ABC /* QuotaWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		93ED7CA9E53DBA0831F68102 /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = 23A19765ECCA061436638820 /* QuotaWidgetData */; };
 		96D0B6A0658806BC47971F19 /* DeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FC2FD6A54DA22398C4BB8A9 /* DeepLinkTests.swift */; };
@@ -160,6 +161,7 @@
 		582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAuthenticator.swift; sourceTree = "<group>"; };
 		592AE2441A525DB2921A5FA2 /* StatusBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBanner.swift; sourceTree = "<group>"; };
 		59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModelTests.swift; sourceTree = "<group>"; };
+		5CE1A9E6B6F4DB3AF29DF133 /* QuotaAppMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAppMark.swift; sourceTree = "<group>"; };
 		608229F3060A24633515D297 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		64B7535F6DB6CD1DDED5BA92 /* WidgetSnapshotProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjection.swift; sourceTree = "<group>"; };
@@ -279,6 +281,7 @@
 				BC69B2A2F2BB1AA4BCC8A7EE /* PrivacyInfo.xcprivacy */,
 				715109BDC79F55A51B6113F8 /* ProviderQuotaCard.swift */,
 				BAF12711B0EE040379EE3695 /* QuotaApp.swift */,
+				5CE1A9E6B6F4DB3AF29DF133 /* QuotaAppMark.swift */,
 				A5FCDA22B62B0D142212AA65 /* RootView.swift */,
 				9D250348840DC439E58D5B60 /* SelectedUsagePeriod.swift */,
 				33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */,
@@ -637,6 +640,7 @@
 				BF4EB86683573B2A1938B4A2 /* OverviewWidgetIntent.swift in Sources */,
 				C8EB7E95748A0F794077C115 /* ProviderQuotaCard.swift in Sources */,
 				A372DB0655F086AD434D9CBE /* QuotaApp.swift in Sources */,
+				907D0829E6048DEE050CEFC9 /* QuotaAppMark.swift in Sources */,
 				CF0106D41F578E1909080626 /* RootView.swift in Sources */,
 				107D14A056BAA9DD0F41DC66 /* SelectedUsagePeriod.swift in Sources */,
 				E83E20523B31256BDC034CAE /* SelectionSalt.swift in Sources */,

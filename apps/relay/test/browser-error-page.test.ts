@@ -14,6 +14,17 @@ describe("browser sign-in error page", () => {
     expect(acceptsHtml(undefined)).toBe(false);
   });
 
+  it("treats q=0 as a refusal of HTML", () => {
+    expect(acceptsHtml("text/html;q=0")).toBe(false);
+    expect(acceptsHtml("text/html;q=0.0,application/json")).toBe(false);
+    expect(acceptsHtml("text/html;q=0.1")).toBe(true);
+  });
+
+  it("matches the HTML media type case-insensitively", () => {
+    expect(acceptsHtml("TEXT/HTML,application/json")).toBe(true);
+    expect(acceptsHtml("Text/Html;Q=0")).toBe(false);
+  });
+
   it.each([
     "no_session",
     "expired",

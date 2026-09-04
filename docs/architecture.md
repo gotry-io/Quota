@@ -242,8 +242,9 @@ Device fields and returns only an account session: it is not a collection Device
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. Because GitHub may silently reuse that Safari
 account, the app confirms **Use this GitHub account?** against the Account `display_label` before
-opening signed-in tabs, and **Use a different account** revokes the session just opened and
-repeats authorize in an ephemeral browser session. The app process alone holds OAuth
+opening signed-in tabs. The Keychain session is stored with `activation: pending` at exchange and
+becomes `active` only when Continue confirms it; **Use a different account** revokes the session
+just opened and repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
 `group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may

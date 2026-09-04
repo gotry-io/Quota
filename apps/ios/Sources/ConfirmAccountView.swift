@@ -8,7 +8,7 @@ struct ConfirmAccountView: View {
     GeometryReader { proxy in
       ScrollView {
         VStack(spacing: 24) {
-          mark
+          QuotaAppMark()
 
           Text("Use this GitHub account?")
             .font(.title2.weight(.semibold))
@@ -23,7 +23,7 @@ struct ConfirmAccountView: View {
             .fixedSize(horizontal: false, vertical: true)
 
           Button {
-            model.confirmAccount()
+            Task { await model.confirmAccount() }
           } label: {
             Text("Continue")
               .font(.headline)
@@ -69,14 +69,5 @@ struct ConfirmAccountView: View {
     prefix.append(name)
     prefix.append(suffix)
     return prefix
-  }
-
-  private var mark: some View {
-    Image(systemName: "gauge.with.dots.needle.33percent")
-      .font(.system(size: 28, weight: .semibold))
-      .foregroundStyle(QuotaTheme.emerald)
-      .frame(width: 56, height: 56)
-      .accessibilityLabel("Quota")
-      .accessibilityAddTraits(.isImage)
   }
 }

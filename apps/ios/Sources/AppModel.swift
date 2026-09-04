@@ -10,11 +10,12 @@ import QuotaWire
 @MainActor
 @Observable
 final class AppModel {
-  enum Phase: Equatable {
+  enum Phase: Equatable, Hashable {
     case launching
     case signedOut
     case connecting
     case confirmingAccount(label: String)
+    case pendingRefreshFailed
     case signedIn
   }
 
@@ -58,6 +59,7 @@ final class AppModel {
   var activityChart: ActivityChartPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
+  private var sessionActivation: AccountSessionActivation?
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -139,17 +141,31 @@ final class AppModel {
 
   func restore() async {
     let cached = try? await account.loadCachedSummary()
+    let session = try? await account.loadSession()
+    sessionActivation = session?.activation
     summary = cached?.summary
     fetchedAt = cached?.fetchedAt
     fromCache = cached != nil
-    if (try? await account.hasSession()) == true {
+    switch session?.activation {
+    case .active:
       phase = .signedIn
       if let cached {
         publishWidget(summary: cached.summary, fetchedAt: cached.fetchedAt)
       }
       resolvePendingSubscriptionSelection()
       await refresh()
-    } else {
+    case .pending:
+      if let label = PlanDisplay.accountLabel(cached?.summary.account.displayLabel) {
+        phase = .confirmingAccount(label: label)
+      } else {
+        await refresh()
+        if phase == .launching {
+          presentPendingRefreshFailure(
+            message: AuthorizationError.genericConnectFailureMessage
+          )
+        }
+      }
+    case nil:
       applySignedOut()
     }
   }
@@ -168,14 +184,11 @@ final class AppModel {
         callbackScheme: QuotaIOSOAuth.callbackScheme,
         prefersEphemeralWebBrowserSession: switchingAccount
       )
-      _ = try await account.completeLogin(callback: callback, expected: attempt)
+      let session = try await account.completeLogin(callback: callback, expected: attempt)
+      sessionActivation = session.activation
       expiredMessage = nil
       banner = nil
       await refresh()
-      guard phase != .signedOut else { return }
-      let label = PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
-      banner = nil
-      phase = .confirmingAccount(label: label)
     } catch is CancellationError {
       applySignedOut()
     } catch AuthorizationError.cancelled, AccountClientError.cancelled {
@@ -206,9 +219,20 @@ final class AppModel {
     }
   }
 
-  /// Keep the session this device just opened.
-  func confirmAccount() {
+  /// Keep the session this device just opened. Continue is the only promotion to `active`.
+  func confirmAccount() async {
     guard case .confirmingAccount = phase else { return }
+    do {
+      try await account.activateSession()
+    } catch {
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.genericConnectFailureMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+      return
+    }
+    sessionActivation = .active
     expiredMessage = nil
     phase = .signedIn
     if let summary, let fetchedAt {
@@ -224,14 +248,26 @@ final class AppModel {
     pruneOverviewPath()
   }
 
+  /// Retry the identifying Account read while the session stays pending.
+  func retryPendingIdentification() async {
+    guard phase == .pendingRefreshFailed else { return }
+    banner = nil
+    expiredMessage = nil
+    await refresh()
+  }
+
   /// Revoke the session just opened and sign in again in an ephemeral browser session so GitHub
   /// cannot reuse the Safari account.
   func useDifferentAccount() async {
-    guard case .confirmingAccount = phase else { return }
+    switch phase {
+    case .confirmingAccount, .pendingRefreshFailed: break
+    default: return
+    }
     phase = .connecting
     banner = nil
     expiredMessage = nil
     await account.logout()
+    sessionActivation = nil
     summary = nil
     fetchedAt = nil
     fromCache = false
@@ -254,7 +290,7 @@ final class AppModel {
     isRefreshing = true
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
-    apply(result)
+    await apply(result)
     if phase == .signedIn {
       backgroundRefresh.scheduleNextRefresh()
     }
@@ -416,25 +452,22 @@ final class AppModel {
     activityDaySheet = sheet
   }
 
-  private var holdsUnconfirmedSession: Bool {
-    switch phase {
-    case .connecting, .confirmingAccount: true
-    default: false
-    }
+  private var isPendingSession: Bool {
+    sessionActivation == .pending
   }
 
-  private func apply(_ result: AccountRefreshResult) {
+  private func apply(_ result: AccountRefreshResult) async {
     summary = result.summary
     fetchedAt = result.fetchedAt
     fromCache = result.fromCache
-    let awaitingConfirmation = holdsUnconfirmedSession
+    if isPendingSession {
+      await applyPending(result)
+      return
+    }
     switch result.error {
     case .none:
       banner = nil
       expiredMessage = nil
-      if awaitingConfirmation {
-        break
-      }
       phase = .signedIn
       if let summary = result.summary, let fetchedAt = result.fetchedAt {
         publishWidget(summary: summary, fetchedAt: fetchedAt)
@@ -449,12 +482,10 @@ final class AppModel {
       // someone who deliberately logged out invents a failure that did not happen.
       applySignedOut()
     case .relay(.unavailable), .relay(.timeout):
-      if awaitingConfirmation { break }
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
     case .some:
-      if awaitingConfirmation { break }
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
       syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
@@ -463,6 +494,59 @@ final class AppModel {
       resolvePendingSubscriptionSelection()
       pruneOverviewPath()
     }
+  }
+
+  private func applyPending(_ result: AccountRefreshResult) async {
+    switch result.error {
+    case .none:
+      if let label = PlanDisplay.accountLabel(result.summary?.account.displayLabel) {
+        banner = nil
+        expiredMessage = nil
+        phase = .confirmingAccount(label: label)
+      } else {
+        presentPendingRefreshFailure(message: AuthorizationError.genericConnectFailureMessage)
+      }
+    case .sessionExpired:
+      await revokePendingSession()
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.expiredSignInMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    case .notSignedIn:
+      sessionActivation = nil
+      applySignedOut()
+    case .some(let error) where isExpiredConnectError(error):
+      await revokePendingSession()
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    case .some(let error):
+      presentPendingRefreshFailure(message: error.userFacingMessage)
+    }
+  }
+
+  private func isExpiredConnectError(_ error: AccountClientError) -> Bool {
+    error.userFacingMessage == AuthorizationError.expiredSignInMessage
+  }
+
+  private func revokePendingSession() async {
+    await account.logout()
+    sessionActivation = nil
+  }
+
+  private func presentPendingRefreshFailure(message: String) {
+    banner = Banner(
+      kind: .refreshFailed,
+      text: message,
+      symbolName: "exclamationmark.triangle"
+    )
+    expiredMessage = nil
+    phase = .pendingRefreshFailed
   }
 
   private func pruneOverviewPath() {
@@ -510,6 +594,7 @@ final class AppModel {
     fromCache = false
     banner = nil
     expiredMessage = nil
+    sessionActivation = nil
     phase = .signedOut
     selectedTab = .overview
     selectedUsagePeriod = .last30Days

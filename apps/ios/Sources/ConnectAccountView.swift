@@ -7,8 +7,8 @@ struct ConnectAccountView: View {
     GeometryReader { proxy in
       ScrollView {
         VStack(spacing: 24) {
-          mark
-          connectButton
+          QuotaAppMark()
+          actions
           VStack(spacing: 12) {
             footnote
             statusLine
@@ -28,27 +28,91 @@ struct ConnectAccountView: View {
     .accessibilityIdentifier("connect.root")
   }
 
+  @ViewBuilder
+  private var actions: some View {
+    if model.phase == .pendingRefreshFailed {
+      retryButton
+      switchAccountButton
+    } else {
+      connectButton
+    }
+  }
+
+  private var connecting: Bool {
+    model.phase == .connecting
+  }
+
   private var connectButton: some View {
     Button {
       Task { await model.connectAccount() }
     } label: {
       HStack(spacing: 8) {
-        if model.phase == .connecting {
+        if connecting {
           ProgressView()
+            .tint(Color(uiColor: .label))
             .accessibilityHidden(true)
         }
-        Text(model.phase == .connecting ? "Connecting…" : "Connect with GitHub")
+        Group {
+          if connecting {
+            Text("Connecting…")
+              .font(.headline)
+              .foregroundStyle(Color(uiColor: .label))
+          } else {
+            Text("Connect with GitHub")
+              .font(.headline)
+          }
+        }
+        .accessibilityHidden(true)
+      }
+      .frame(maxWidth: .infinity)
+      .frame(minHeight: 50)
+    }
+    .connectChrome(connecting: connecting)
+    .disabled(connecting)
+    .accessibilityLabel("Connect with GitHub")
+    .accessibilityValue(connecting ? "Connecting" : "")
+    .accessibilityHint("Opens GitHub sign-in in your browser.")
+    .accessibilityRespondsToUserInteraction(!connecting)
+    .accessibilityIdentifier("connect.github")
+  }
+
+  private var retryButton: some View {
+    Button {
+      Task { await model.retryPendingIdentification() }
+    } label: {
+      HStack(spacing: 8) {
+        if model.isRefreshing {
+          ProgressView()
+            .tint(Color(uiColor: .label))
+            .accessibilityHidden(true)
+        }
+        Text("Retry")
           .font(.headline)
-          .accessibilityHidden(true)
       }
       .frame(maxWidth: .infinity)
       .frame(minHeight: 50)
     }
     .buttonStyle(.glassProminent)
     .tint(QuotaTheme.emerald)
-    .disabled(model.phase == .connecting)
-    .accessibilityLabel("Connect with GitHub")
-    .accessibilityHint("Opens GitHub sign-in in your browser.")
+    .disabled(model.isRefreshing)
+    .accessibilityLabel("Retry")
+    .accessibilityHint("Tries to load this GitHub account again.")
+    .accessibilityIdentifier("connect.retry")
+  }
+
+  private var switchAccountButton: some View {
+    Button {
+      Task { await model.useDifferentAccount() }
+    } label: {
+      Text("Use a different account")
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: QuotaTheme.minimumTouchTarget)
+    }
+    .buttonStyle(.bordered)
+    .disabled(model.isRefreshing)
+    .accessibilityLabel("Use a different account")
+    .accessibilityHint("Signs out and opens GitHub so you can pick another account.")
+    .accessibilityIdentifier("connect.switch")
   }
 
   private var footnote: some View {
@@ -81,13 +145,19 @@ struct ConnectAccountView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .combine)
   }
+}
 
-  private var mark: some View {
-    Image(systemName: "gauge.with.dots.needle.33percent")
-      .font(.system(size: 28, weight: .semibold))
-      .foregroundStyle(QuotaTheme.emerald)
-      .frame(width: 56, height: 56)
-      .accessibilityLabel("Quota")
-      .accessibilityAddTraits(.isImage)
+extension View {
+  @ViewBuilder
+  fileprivate func connectChrome(connecting: Bool) -> some View {
+    if connecting {
+      self
+        .buttonStyle(.glass)
+        .foregroundStyle(Color(uiColor: .label))
+    } else {
+      self
+        .buttonStyle(.glassProminent)
+        .tint(QuotaTheme.emerald)
+    }
   }
 }
