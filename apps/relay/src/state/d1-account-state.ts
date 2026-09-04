@@ -8,6 +8,7 @@ import type {
   AccountMaintenanceInput,
   AccountRecord,
   AccountState,
+  AccountUsageVersionStamp,
   AccountVersionStamp,
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
@@ -843,6 +844,39 @@ export class D1AccountState implements AccountState {
       device_signed_out_at: stampInstant(merged.device_signed_out_at),
       snapshots: stampCount(merged.snapshots),
       snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
+    };
+  }
+
+  /**
+   * Aggregates over the Usage facts an activity read projects. A quota snapshot is not one of
+   * them, and neither is how recently a device spoke: the chart is daily totals, and those move
+   * when a Usage upload is accepted, a device is added or deleted, or the Account row itself
+   * is rewritten.
+   */
+  async accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp> {
+    const [devices, account] = await this.database.batch<Record<string, unknown>>([
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS devices,
+                  COALESCE(SUM(usage_sync_revision), 0) AS usage_revision,
+                  COALESCE(MAX(generation), 0) AS device_generation
+           FROM devices
+           WHERE account_id = ?1 AND deleted_at IS NULL`,
+        )
+        .bind(accountId),
+      this.database
+        .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
+        .bind(accountId),
+    ]);
+    const merged = {
+      ...(devices?.results[0] ?? {}),
+      ...(account?.results[0] ?? {}),
+    };
+    return {
+      account_updated_at: stampInstant(merged.account_updated_at),
+      devices: stampCount(merged.devices),
+      usage_revision: stampCount(merged.usage_revision),
+      device_generation: stampCount(merged.device_generation),
     };
   }
 

@@ -61,6 +61,39 @@ enum Fixtures {
     ]
   }
 
+  static func usageActivityDay(
+    date: String = "2026-08-10",
+    totals: [String: Any]? = nil,
+    cost: [String: Any]? = nil,
+    partial: Bool = false,
+    agents: [[String: Any]]? = nil
+  ) -> [String: Any] {
+    var object: [String: Any] = [
+      "date": date,
+      "totals": totals ?? summaryTotals(),
+      "cost": cost ?? completeCost(),
+      "partial": partial,
+    ]
+    if let agents {
+      object["agents"] = agents
+    }
+    return object
+  }
+
+  static func usageActivityJSON(
+    days: [[String: Any]],
+    extra: [String: Any] = [:]
+  ) throws -> Data {
+    var object: [String: Any] = [
+      "protocol_version": 6,
+      "days": days,
+    ]
+    for (key, value) in extra {
+      object[key] = value
+    }
+    return try JSONSerialization.data(withJSONObject: object)
+  }
+
   static func usagePeriod(
     totals: [String: Any]? = nil,
     cost: [String: Any]? = nil,

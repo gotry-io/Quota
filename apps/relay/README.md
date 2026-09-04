@@ -33,7 +33,8 @@ The v6 data contract is four routes
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
   carry gets a shorter `all` rather than no summary at all.
-- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates.
+- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
+  single-day read may take `detail=agents` and then carries that day's agent tree.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such

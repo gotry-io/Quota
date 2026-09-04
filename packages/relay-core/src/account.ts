@@ -219,6 +219,21 @@ export interface AccountVersionStamp {
   snapshot_updated_at: string | null;
 }
 
+/**
+ * The aggregates an activity read's ETag depends on.
+ *
+ * Activity answers daily Usage totals, not devices or observations, so a quota snapshot must
+ * not move this stamp. Device count, summed usage revision, and generation still catch
+ * deletion and a Usage upload; the Account's `updated_at` is here because a later GitHub
+ * sign-in rewrites the row without touching Usage.
+ */
+export interface AccountUsageVersionStamp {
+  account_updated_at: string | null;
+  devices: number;
+  usage_revision: number;
+  device_generation: number;
+}
+
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
@@ -337,6 +352,7 @@ export interface AccountState {
     updatedAt: string,
   ): Promise<boolean>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
+  accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

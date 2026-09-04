@@ -30,7 +30,7 @@ function accountUsage(
 }
 
 /** Leaf models of a period, flattened the way a reader walks the tree. */
-function leaves(period: ReturnType<typeof accountUsage>["all"]) {
+function leaves(period: { agents: ReturnType<typeof accountUsage>["all"]["agents"] }) {
   return period.agents.flatMap((agent) =>
     agent.providers.flatMap((provider) =>
       provider.models.map((model) => ({
@@ -191,6 +191,30 @@ describe("Account Usage activity", () => {
       catalog: PRICING_CATALOG,
     });
     expect(days[0]?.partial).toBe(true);
+  });
+
+  it("attaches a period's agent tree when a catalog is supplied, without changing the day's totals", () => {
+    const rows = [
+      { ...usageRow(null, 0), date: "2026-08-10" },
+      { ...usageRow(null, 1), date: "2026-08-10" },
+    ];
+    const without = buildActivityDays({ rows, catalog: PRICING_CATALOG });
+    const withAgents = buildActivityDays({
+      rows,
+      catalog: PRICING_CATALOG,
+      modelCatalog: MODEL_CATALOG,
+    });
+
+    expect(Object.hasOwn(without[0] ?? {}, "agents")).toBe(false);
+    expect(withAgents).toHaveLength(1);
+    expect(withAgents[0]?.totals).toEqual(without[0]?.totals);
+    expect(withAgents[0]?.cost).toEqual(without[0]?.cost);
+    expect(withAgents[0]?.partial).toBe(without[0]?.partial);
+    const tree = withAgents[0]?.agents ?? [];
+    expect(tree.length).toBeGreaterThan(0);
+    expect(leaves({ agents: tree }).reduce((total, leaf) => total + leaf.messages, 0)).toBe(
+      withAgents[0]?.totals.messages,
+    );
   });
 });
 
