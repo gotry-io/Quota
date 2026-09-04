@@ -1097,7 +1097,7 @@ footer {
 .settings-row > p {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
+  font-size: var(--fs-body);
 }
 
 .dashboard-heading h1 {
@@ -1267,6 +1267,141 @@ footer {
   margin-top: 0;
 }
 
+.usage-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px 32px;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-section);
+}
+
+.usage-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: var(--space-section);
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-totals article {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-totals span,
+.usage-totals small {
+  color: var(--body);
+  font-size: var(--fs-caption);
+}
+
+.usage-totals strong {
+  font-size: 20px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.usage-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-section);
+  align-items: start;
+}
+
+.usage-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.usage-panel-heading h2,
+.settings-group h2,
+.subscription-sources h2 {
+  max-width: none;
+  margin: 0 0 16px;
+  font-size: var(--fs-h2);
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.usage-panel-heading h2 {
+  margin: 0;
+}
+
+.settings-group {
+  margin-top: var(--space-section);
+}
+
+.settings-group:first-of-type {
+  margin-top: 0;
+}
+
+.settings-copy {
+  max-width: 680px;
+  margin: 0 0 12px;
+  color: var(--body);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+
+.settings-account-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+
+.settings-links {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  color: var(--ink);
+  font-size: var(--fs-body);
+}
+
+.settings-danger {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--hairline);
+}
+
+.settings-danger h3 {
+  max-width: none;
+  margin: 0;
+  font-size: var(--fs-h2);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.platform-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  color: var(--charcoal);
+}
+
+.subscription-card {
+  margin-bottom: var(--space-section);
+}
+
 .today-strip,
 .devices-strip {
   display: grid;
@@ -1360,6 +1495,16 @@ footer {
   font-size: 11px;
 }
 
+.subscription-card .quota-card-account {
+  font-size: var(--fs-caption);
+}
+
+.subscription-card .provider-mark,
+.subscription-card .provider-mark-fallback {
+  width: 36px;
+  height: 36px;
+}
+
 .quota-card-meta,
 .quota-window-meta {
   color: var(--mute);
@@ -1435,10 +1580,6 @@ footer {
   border-top: 1px solid var(--hairline);
 }
 
-.subscription-sources h3 {
-  margin: 0 0 16px;
-}
-
 .subscription-source-list {
   display: grid;
   gap: 0;
@@ -1448,6 +1589,10 @@ footer {
 }
 
 .subscription-source-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   padding: 14px 0;
   border-bottom: 1px solid var(--hairline);
   color: var(--ink);
@@ -1486,15 +1631,21 @@ footer {
 }
 
 .status-available {
-  border-color: var(--brand-mint);
-  color: var(--brand-emerald);
+  border-color: var(--meter-good);
+  color: var(--meter-good);
   background: var(--brand-surface);
 }
 
-.status-offline,
+.status-offline {
+  border-color: var(--meter-warn);
+  color: var(--meter-warn);
+  background: color-mix(in srgb, var(--meter-warn) 12%, var(--canvas));
+}
+
 .status-unavailable {
-  color: var(--body);
-  background: var(--surface-soft);
+  border-color: var(--meter-critical);
+  color: var(--meter-critical);
+  background: color-mix(in srgb, var(--meter-critical) 10%, var(--canvas));
 }
 
 .text-button {
@@ -1538,7 +1689,8 @@ footer {
   line-height: 1.6;
 }
 
-.danger-zone h2:focus {
+.danger-zone h2:focus,
+.danger-zone h3:focus {
   outline: 3px solid var(--focus-ring);
   outline-offset: 3px;
 }
@@ -1564,7 +1716,7 @@ footer {
 
 .usage-activity-card {
   max-width: 100%;
-  padding: 24px;
+  padding: var(--space-card);
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: 12px;
@@ -1809,12 +1961,25 @@ button.usage-activity-cell[aria-pressed="true"] {
 .period-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 4px;
 }
 
-.period-tabs button[aria-pressed="true"] {
-  color: var(--title);
-  text-decoration: underline;
+.period-tab {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--charcoal);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-body);
+  cursor: pointer;
+}
+
+.period-tab[aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 600;
+  background: var(--surface-soft);
 }
 
 table {
@@ -1842,6 +2007,17 @@ th {
   font-weight: 500;
 }
 
+.device-table th,
+.device-table td {
+  text-align: left;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.device-table td:last-child {
+  text-align: right;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }
@@ -1863,6 +2039,10 @@ tbody tr:last-child td {
   color: var(--ink);
   font-size: 13px;
   font-weight: 400;
+}
+
+.usage-tree td {
+  font-variant-numeric: tabular-nums;
 }
 
 .usage-show-more {
@@ -1970,6 +2150,12 @@ button:focus-visible {
     max-width: none;
     object-fit: cover;
     object-position: 8% 42%;
+  }
+}
+
+@media (max-width: 1023px) {
+  .usage-columns {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2089,6 +2275,7 @@ button:focus-visible {
   .device-grid,
   .quota-grid,
   .today-strip,
+  .usage-totals,
   .usage-activity-detail-stats {
     grid-template-columns: 1fr;
   }

@@ -17,6 +17,10 @@ export function isSubscriptionPath(pathname: string): boolean {
   return pathname.startsWith(`${DASHBOARD_PATH}/subscriptions/`);
 }
 
+export function isUsagePath(pathname: string): boolean {
+  return pathname === USAGE_PATH;
+}
+
 export function accountPageTitle(pathname: string): string {
   if (pathname === DASHBOARD_PATH) return "Overview";
   if (pathname === USAGE_PATH) return "Usage";

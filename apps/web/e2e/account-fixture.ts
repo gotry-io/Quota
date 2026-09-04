@@ -107,6 +107,23 @@ export const accountSummary = structuredClone(accepted.payload) as AccountSummar
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
 
+const smokeDevices = accountSummary as unknown as {
+  devices: Array<{
+    id: string;
+    display_name: string;
+    platform: string;
+    last_seen_at: string | null;
+    last_observed_at: string | null;
+  }>;
+};
+smokeDevices.devices.push({
+  id: "device_2",
+  display_name: "Kitchen",
+  platform: "macos",
+  last_seen_at: "2026-08-10T09:31:00Z",
+  last_observed_at: "2026-08-10T09:00:00Z",
+});
+
 const thirtyDayProvider = accountSummary.usage.last_30_days.agents[0]?.providers[0];
 const thirtyDaySeed = thirtyDayProvider?.models[0];
 if (!thirtyDayProvider || !thirtyDaySeed) {

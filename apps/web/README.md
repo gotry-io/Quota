@@ -46,7 +46,10 @@ them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every 
 Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
 it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
 quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
-`/my/usage?period=today`, and a Devices summary line to `/my/devices`. Sign-in is a plain navigation
+`/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
+same row as the page name, totals Tokens / API-equivalent cost / Requests, and a two-column tree +
+Activity layout at 1024 px. Devices is a last-seen table with platform icons. Settings groups
+Appearance, Notifications, Account, and Legal. Sign-in is a plain navigation
 to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a signed-out
 visitor returns to the page they asked for. Sign-out posts to `/api/auth/logout` and Delete Account
 is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
@@ -66,9 +69,9 @@ period recomputes from the summary and does not refetch.
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
 Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from
 `GET /api/v6/account/usage/activity`, on UTC dates. All time is the last 730 days. Each Device shows
-its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
-or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
-rather than broken.
+a platform icon, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
+or Not reporting from the newer of the two, newest last-seen first. It is read-only, and a quiet
+Device is asleep or closed rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
 `apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`,

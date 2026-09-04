@@ -80,7 +80,7 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
 
   await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
 
   await accountNav.getByRole("link", { name: "Devices" }).click();
@@ -94,7 +94,7 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
   await expect(page.locator(".loading-block")).toHaveCount(0);
 
   await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
   await expect(page.locator(".loading-block")).toHaveCount(0);
 
@@ -130,15 +130,17 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   await accountMenu.locator("summary").click();
 
   await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
   await expect(accountNav.getByRole("link", { name: "Usage" })).toHaveAttribute(
     "aria-current",
     "page",
   );
   const tokens = page.locator("#token-total");
   const cost = page.locator("#cost-total");
+  const requests = page.locator("#request-total");
   await expect(tokens).not.toHaveText("—");
   await expect(cost).not.toHaveText("—");
+  await expect(requests).not.toHaveText("—");
 
   const thirtyDayTokens = await tokens.innerText();
   await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toHaveCount(0);
@@ -159,7 +161,10 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
     "page",
   );
   await expect(page.locator("#device-list")).toContainText("Studio");
-  await expect(page.locator("#device-list")).toContainText("macOS");
+  await expect(page.getByRole("img", { name: "macOS" }).first()).toBeVisible();
+  const deviceNames = page.locator("#device-list tbody th");
+  await expect(deviceNames.nth(0)).toHaveText("Studio");
+  await expect(deviceNames.nth(1)).toHaveText("Kitchen");
 });
 
 test("subscription card opens the detail page with windows and Reporting", async ({ page }) => {
@@ -178,6 +183,62 @@ test("subscription card opens the detail page with windows and Reporting", async
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(seriousOrCritical(results.violations)).toEqual([]);
+});
+
+test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
+  await mockV6(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/my/usage");
+  await expect(page.locator(".usage-columns")).toBeVisible();
+  await expect(page.locator("#token-total")).not.toHaveText("—");
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  const headingRow = await page.evaluate(() => {
+    const h1 = document.querySelector(".usage-heading h1")?.getBoundingClientRect();
+    const tabs = document.querySelector(".period-tabs")?.getBoundingClientRect();
+    if (!h1 || !tabs) return false;
+    return Math.abs(h1.top - tabs.top) < 48;
+  });
+  expect(headingRow).toBe(true);
+  const sideBySide = await page.evaluate(() => {
+    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
+    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
+    if (!tree || !activity) return false;
+    return activity.left >= tree.right - 1;
+  });
+  expect(sideBySide).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const stacked = await page.evaluate(() => {
+    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
+    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
+    if (!tree || !activity) return false;
+    return activity.top >= tree.bottom - 1;
+  });
+  expect(stacked).toBe(true);
+});
+
+test("Settings groups Appearance, Notifications, Account, and Legal", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my/settings");
+  await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Legal" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Quota reminds you on your Mac and iPhone when a refresh brings new data. The web does not send notifications.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.locator(".settings-links").getByRole("link", { name: "Privacy" }),
+  ).toHaveAttribute("href", "/privacy");
+  await expect(
+    page.locator(".settings-links").getByRole("link", { name: "Terms" }),
+  ).toHaveAttribute("href", "/terms");
+  await expect(
+    page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
 });
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
@@ -249,7 +310,7 @@ for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const)
     if (path === "/my") {
       await expect(page.locator(".quota-card")).toBeVisible();
     } else if (path === "/my/usage") {
-      await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
     } else if (path === "/my/devices") {
       await expect(page.locator("#device-list")).toBeVisible();
     } else {

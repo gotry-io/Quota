@@ -55,19 +55,29 @@ The site has these routes:
      `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and the 30-day
      top model, linking `/my/usage?period=today`), and a one-line Devices summary linking
      `/my/devices`. Overview does not repeat a cost block or an Installations list.
-   - `/my/subscriptions/<sel>` — one subscription: provider display name, masked account
-     label, plan badge, and the shared freshness line; each window with remaining quota, a
-     meter, and the reset countdown (`resets_at` re-read every 60 seconds); per-device
+   - `/my/subscriptions/<sel>` — one subscription, visually the same card as Overview: provider
+     mark, provider display name, masked account label, plan badge, and the shared freshness
+     line; each window with remaining quota, a remaining-percent meter in the shared threshold
+     colors, and the reset countdown (`resets_at` re-read every 60 seconds); per-device
      readings from `sources[]`, newest first, with the selected source labelled **Reporting**.
      A selector with no current match reads **This subscription is no longer reported.** The
      page never prints a device id, fingerprint, or subscription key. **← Overview** returns
      to `/my`.
-   - `/my/usage` — Totals (period tabs, Tokens and API-equivalent cost, an agent → provider →
-     model tree) and Activity. The graph is one tab stop (roving tabindex). Choosing a day
-     opens its details under the grid and writes `?day=YYYY-MM-DD`.
-   - `/my/devices` — Device cards and Device deletion.
-   - `/my/settings` — appearance (the same ThemeToggle as the footer, as one row) and Delete
-     Account. `?delete=account` scrolls to the delete region and focuses its heading.
+   - `/my/usage` — period tabs (**Today**, **7 Days**, **30 Days**, **Up to 2 years**) on the
+     same row as the page `h1`. Totals are three cells: Tokens, API-equivalent cost, and
+     Requests (`totals.messages`). At 1024 px and above, the agent → provider → model tree sits
+     on the left and Activity (heatmap plus day-detail panel) on the right; below 1024 px those
+     stack. The graph is one tab stop (roving tabindex). Choosing a day opens its details under
+     the grid and writes `?day=YYYY-MM-DD`. The selected period is `?period=today|7d|30d|all`.
+   - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
+     (mac or iPhone), Active / Idle / Not reporting (semantic color plus the label), Last seen,
+     Newest reading, and Delete (danger color, existing confirmation). Empty state is the Mac
+     setup card.
+   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Notifications
+     (`Quota reminds you on your Mac and iPhone when a refresh brings new data. The web does not
+     send notifications.` plus a Support link); Account (GitHub login, Sign out, Delete Account).
+     `?delete=account` scrolls to the delete region and focuses its heading. Legal links Privacy,
+     Terms, and Support.
    Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
    `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
    `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
@@ -189,12 +199,14 @@ The signed-in shell is `/my` with four routes — overview, Usage, Devices, and 
 Account nav in the site header. The overview leads with remaining quota: subscription cards, then a
 Today strip (tokens, API-equivalent cost, 30-day top model), then a Devices summary line
 (`2 devices · all reporting` or `1 of 2 reporting`, plus the oldest Device's verdict). It does not
-repeat a cost block or an Installations list. Under Usage, totals lead with tokens and API-equivalent
-cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
+repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as the
+page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
+show — and Requests from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
 partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
 **30 Days**, and **Up to 2 years** (`all`); **30 Days** is the default. The selected tab is
-`?period=today|7d|30d|all`, so a refresh keeps it. User-facing dates, numbers, units, and
+`?period=today|7d|30d|all`, so a refresh keeps it. At 1024 px and above the model tree and Activity
+sit side by side; below 1024 px they stack, tree first. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
 shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
@@ -231,19 +243,26 @@ carrying the reading that still describes it, with the reporting device and age 
 — rather than as a current number, so the card needs no separate status pill. Other reporting
 devices stay on the subscription detail page.
 
-The subscription detail page is `/my/subscriptions/<sel>`. It names the provider from the catalog,
-the masked account label, the plan, and the shared freshness line, then each window with remaining
-quota, a meter, and the reset countdown. A passed refill instant prints no Resets line. `sources[]`
+The subscription detail page is `/my/subscriptions/<sel>`. Its header matches an Overview card:
+provider mark, provider name from the catalog, masked account label, and plan badge, then the
+shared freshness line, then each window with remaining quota, a meter in the shared threshold
+colors, and the reset countdown. A passed refill instant prints no Resets line. `sources[]`
 are listed newest first as the Device display name (or **Device** when that Device is gone), that
 reading's primary remaining figure, and freshness; the selected source is labelled **Reporting**.
 Nothing on the page prints a device id, fingerprint, or subscription key. A selector that matches
 no current row reads **This subscription is no longer reported.** **← Overview** returns to `/my`.
 
-Device cards show display name, an **Active** / **Idle** / **Not reporting** pill, and one line of
-platform plus the age that verdict came from. Never a claim that a sleeping or closed app failed,
-never raw Device IDs, and never a request that the viewing browser fix another Device's provider
-credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed. Agent
-Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
+The Devices table is sorted by last-seen, newest first. Each row is display name, a mac or iPhone
+platform icon, an **Active** / **Idle** / **Not reporting** pill (semantic color plus the label),
+Last seen, Newest reading, and Delete. Never a claim that a sleeping or closed app failed, never
+raw Device IDs, and never a request that the viewing browser fix another Device's provider
+credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed.
+Empty Devices is the Mac setup card. Settings is a grouped form: Appearance; Notifications (Quota
+reminds you on Mac and iPhone; the web does not send notifications; link `/support`); Account
+(GitHub login, Sign out, Delete Account, with `?delete=account` focusing the delete heading);
+Legal (Privacy, Terms, Support).
+
+Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
 column headers, and one `<tbody>` per agent. Group title rows (`<th scope="rowgroup">`) name the
 agent, then each inference provider. Model rows follow; the `other` fold bucket reads **Other**.
 Each provider shows five models and a **Show N more** control (`aria-expanded`) for the rest. A
@@ -254,6 +273,7 @@ couldn't load this. Retry.** — at most one next action.
 
 ## Responsive behavior
 
+- At 1024 px, Usage is two columns (model tree · Activity). Below 1024 px those stack, tree first.
 - At 840 px, two-column hero and architecture layouts become one column.
 - At 620 px, the page gutter reduces, header navigation hides nonessential links, the Account
   nav scrolls horizontally without wrapping, actions become full width where useful, summary
