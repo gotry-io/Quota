@@ -16,6 +16,16 @@ struct WireConformanceTests {
       #expect(decoded == testCase.accepted, "\(testCase.name)")
     }
   }
+
+  @Test func accountUsageActivityMatchesTheSharedConformanceFixture() throws {
+    let cases = try WireConformanceFixture.cases(for: "account_usage_activity")
+    #expect(cases.count > 1)
+    for testCase in cases {
+      let data = try JSONSerialization.data(withJSONObject: testCase.payload)
+      let decoded = (try? WireCodec.decode(AccountUsageActivityResponse.self, from: data)) != nil
+      #expect(decoded == testCase.accepted, "\(testCase.name)")
+    }
+  }
 }
 
 enum WireConformanceFixture {

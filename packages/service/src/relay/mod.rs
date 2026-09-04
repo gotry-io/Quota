@@ -2993,8 +2993,20 @@ mod tests {
             ("account_summary", validate_account_summary),
             ("usage_submission", validate_usage_submission),
         ];
+        // This service never fetches GET /api/v6/account/usage/activity, so it has no
+        // trust-boundary restatement of that read (ADR 0019). TypeScript and Swift answer it.
+        const SKIPPED_CONTRACTS: &[&str] = &["account_usage_activity"];
         let registered = validators.map(|(contract, _)| contract);
+        for skipped in SKIPPED_CONTRACTS {
+            assert!(
+                contracts.contains_key(*skipped),
+                "{skipped} is skipped but missing from the fixture"
+            );
+        }
         for contract in contracts.keys() {
+            if SKIPPED_CONTRACTS.contains(&contract.as_str()) {
+                continue;
+            }
             assert!(
                 registered.contains(&contract.as_str()),
                 "{contract} has no validator registered here"

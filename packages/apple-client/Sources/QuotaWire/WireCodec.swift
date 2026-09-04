@@ -6,6 +6,9 @@ public enum WireCodec {
   public static let managedDataProtocolVersion = QuotaProtocol.managedData
   public static let jsonSafeIntegerMaximum = 9_007_199_254_740_991
   public static let maximumResponseBytes = 1_048_576
+  /// One period's agent tree carries at most this many model leaves; a reader uses the same
+  /// cap for an activity day's optional `agents` array.
+  public static let maximumUsagePeriodLeaves = 200
 
   public static func makeDecoder() -> JSONDecoder {
     let decoder = JSONDecoder()

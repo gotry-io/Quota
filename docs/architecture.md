@@ -241,9 +241,10 @@ sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
-moves `today` with no write behind it. The stamp is a handful of aggregates over the devices and
-observation rows the response projects, so a matching `If-None-Match` returns 304 before any Usage
-query runs. The summary's Usage fold is stored keyed by what it depends on
+moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
+and observation rows the response projects; the activity stamp is usage-only (device count, usage
+revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
+keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a

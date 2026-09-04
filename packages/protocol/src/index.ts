@@ -1139,13 +1139,19 @@ export const AccountSummarySchema = z
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
-/** One UTC day of the activity chart, which stays on UTC dates whatever calendar reads it. */
+/**
+ * One UTC day of the activity chart, which stays on UTC dates whatever calendar reads it.
+ *
+ * A single-day read asked with `detail=agents` carries the same agent tree a period does.
+ * Without that query the field is absent, so a range response stays the shape it was.
+ */
 export const UsageActivityDaySchema = z
   .object({
     date: UsageDateSchema,
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
     partial: z.boolean(),
+    agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length).optional(),
   })
   .strict();
 export type UsageActivityDay = z.infer<typeof UsageActivityDaySchema>;
@@ -1254,6 +1260,7 @@ export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
+  agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
 }).loose();
 export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
 

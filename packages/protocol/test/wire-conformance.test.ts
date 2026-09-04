@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AccountSummaryReadSchema,
   AccountSummarySchema,
+  AccountUsageActivityResponseReadSchema,
   QuotaSnapshotEnvelopeSchema,
   UsageUploadSchema,
 } from "../src/index.ts";
@@ -27,6 +28,7 @@ const conformance = conformanceJson as WireConformance;
 const schemas = {
   quota_snapshot_envelope: QuotaSnapshotEnvelopeSchema,
   account_summary: AccountSummaryReadSchema,
+  account_usage_activity: AccountUsageActivityResponseReadSchema,
   usage_submission: UsageUploadSchema,
 };
 

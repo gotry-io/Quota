@@ -1082,6 +1082,13 @@
         },
         "partial": {
           "type": "boolean"
+        },
+        "agents": {
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema28"
+          }
         }
       },
       "required": ["date", "totals", "cost", "partial"],

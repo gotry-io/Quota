@@ -43,6 +43,7 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
+  AccountUsageVersionStamp,
   AccountVersionStamp,
   DeviceRecord,
   DeviceWriterPrincipal,
@@ -159,6 +160,8 @@ export interface RelayAppOptions {
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
   modelCatalog?: ModelCatalog;
+  /** Test override for the Usage fold/representation version in the activity ETag. */
+  usageFoldVersion?: number;
 }
 
 export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
@@ -650,18 +653,26 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const checkedAt = now();
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    if (!hasOnlyQueryKeys(context, ["from", "to"])) return invalidRequest(context);
+    if (!hasOnlyQueryKeys(context, ["from", "to", "detail"])) return invalidRequest(context);
     const range = UsageActivityRangeSchema.safeParse({
       from: context.req.query("from"),
       to: context.req.query("to"),
     });
     if (!range.success) return invalidRequest(context);
-    // The range is pinned by the request, so nothing about this answer turns over on its own.
-    const { notModified } = await answerConditionally(context, principal, options, {
+    const detail = context.req.query("detail");
+    const includeAgents = detail === "agents";
+    if (detail !== undefined && (!includeAgents || range.data.from !== range.data.to)) {
+      return invalidRequest(context);
+    }
+    // The stamp is usage-only: a quota snapshot must not move an activity ETag. Retention
+    // deletes `usage_daily` without touching that stamp, so a range that reaches the cutoff
+    // carries the cutoff date as its rollover — only then does the calendar move the ETag.
+    const stamp = await options.state.accountUsageVersionStamp(principal.account_id);
+    const notModified = await answerIfNoneMatch(context, principal, stamp, {
       catalogRevision: catalog.revision,
       modelCatalogRevision: modelCatalog.revision,
-      checkedAt,
-      rolloverKey: null,
+      rolloverKey: activityRolloverKey(range.data.from, checkedAt),
+      foldVersion: options.usageFoldVersion ?? USAGE_FOLD_VERSION,
     });
     if (notModified) return notModified;
     const daily = await options.usageState.queryDailyUsage(principal.account_id, {
@@ -674,7 +685,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return context.json(
         AccountUsageActivityResponseSchema.parse({
           protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
-          days: buildActivityDays({ rows: daily.rows, catalog }),
+          days: buildActivityDays({
+            rows: daily.rows,
+            catalog,
+            ...(includeAgents ? { modelCatalog } : {}),
+          }),
         }),
       );
     } catch (error) {
@@ -979,11 +994,29 @@ async function answerConditionally(
     rolloverKey: string | null;
   },
 ): Promise<{ notModified: Response | null; stamp: AccountVersionStamp }> {
-  const url = new URL(context.req.url);
   const stamp = await options.state.accountVersionStamp(
     principal.account_id,
     new Date(input.checkedAt.getTime() - activeDeviceMilliseconds).toISOString(),
   );
+  return {
+    notModified: await answerIfNoneMatch(context, principal, stamp, input),
+    stamp,
+  };
+}
+
+async function answerIfNoneMatch(
+  context: Context,
+  principal: SessionPrincipal,
+  stamp: AccountVersionStamp | AccountUsageVersionStamp,
+  input: {
+    catalogRevision: string;
+    modelCatalogRevision: string;
+    rolloverKey: string | null;
+    /** Activity includes the fold/representation version; summary does not. */
+    foldVersion?: number;
+  },
+): Promise<Response | null> {
+  const url = new URL(context.req.url);
   const entity = await canonicalDigest({
     // Two routes answer the same query string with different bodies, so the path is part of
     // the identity. The Account is in the digest because two empty Accounts have the same
@@ -995,14 +1028,12 @@ async function answerConditionally(
     pricing_revision: input.catalogRevision,
     model_catalog_revision: input.modelCatalogRevision,
     rollover: input.rolloverKey,
+    ...(input.foldVersion === undefined ? {} : { fold: input.foldVersion }),
   });
   const etag = `"${entity}"`;
   context.header("ETag", etag);
   context.header("Cache-Control", "private, no-cache");
-  return {
-    notModified: context.req.header("If-None-Match") === etag ? context.body(null, 304) : null,
-    stamp,
-  };
+  return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
 async function beginGitHubSignIn(
@@ -1028,6 +1059,19 @@ async function beginGitHubSignIn(
  */
 function summaryRolloverKey(localDate: string, checkedAt: Date): string {
   return `${localDate}|${checkedAt.toISOString().slice(0, 13)}`;
+}
+
+/**
+ * The UTC date before which `usage_daily` is deleted, when that date cuts the asked range.
+ *
+ * Retention rewrites the rollup without touching a device or the Account row, so a held
+ * activity body for an expired day would otherwise stay current. A range that starts after
+ * the cutoff cannot lose a day when the cutoff advances one UTC day, and takes no calendar
+ * key.
+ */
+function activityRolloverKey(rangeFrom: string, checkedAt: Date): string | null {
+  const cutoff = utcDate(daysBefore(checkedAt, usageDayRetentionDays));
+  return cutoff > rangeFrom ? cutoff : null;
 }
 
 /** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */
