@@ -1,108 +1,120 @@
 import QuotaWire
 import SwiftUI
 
-struct UsageActivityCard: View {
+struct UsageActivitySection: View {
   @Bindable var model: AppModel
+  @State private var selectedDate = ""
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Activity")
-        .font(.headline)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
+    Section("Activity") {
       switch model.activityChart {
       case .idle, .loading:
         UsageActivitySkeleton()
       case .failed:
-        failed
+        Text("Couldn't load activity.")
+          .foregroundStyle(.primary)
+        Button("Retry") {
+          Task { await model.retryActivity() }
+        }
+        .tint(.primary)
+        .accessibilityLabel("Retry")
+        .accessibilityIdentifier("usage.activity.retry")
       case .loaded(let days):
-        UsageActivityHeatmap(
-          chart: UsageActivityChart.build(
-            reported: days,
-            range: model.activityDateRange,
-            today: model.activityToday
-          ),
-          onSelect: { day in
-            Task { await model.openActivityDay(date: day.date) }
-          }
-        )
+        if UsageActivityChart.hasReportedActivity(days) {
+          loaded(
+            UsageActivityChart.build(
+              reported: days,
+              range: model.activityDateRange,
+              today: model.activityToday
+            )
+          )
+        } else {
+          Text("No activity in the last year.")
+            .foregroundStyle(.primary)
+            .accessibilityIdentifier("usage.activity.empty")
+        }
       }
     }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityIdentifier("usage.activity")
   }
 
-  private var failed: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("Could not load activity.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-      Button("Retry") {
-        Task { await model.retryActivity() }
+  @ViewBuilder
+  private func loaded(_ chart: UsageActivityChart) -> some View {
+    UsageActivityHeatmap(chart: chart, selectedDate: $selectedDate)
+      .onAppear { ensureSelection(in: chart) }
+      .onChange(of: chart.selectableDays.map(\.date)) { _, _ in
+        ensureSelection(in: chart)
       }
-      .font(.subheadline.weight(.medium))
-      .foregroundStyle(QuotaTheme.emerald)
-      .frame(minHeight: QuotaTheme.minimumTouchTarget, alignment: .leading)
-      .contentShape(Rectangle())
-      .accessibilityIdentifier("usage.activity.retry")
+
+    if let day = chart.selectableDay(on: selectedDate) {
+      selectedDaySummary(day)
+      Button("View day") {
+        Task { await model.openActivityDay(date: day.date) }
+      }
+      .tint(.primary)
+      .accessibilityHint("Shows usage for \(UsageActivityCalendar.longDate(day.date)).")
+      .accessibilityIdentifier("usage.activity.view-day")
+    }
+  }
+
+  private func selectedDaySummary(_ day: UsageActivityChart.Day) -> some View {
+    let costText = QuotaFormat.cost(day.cost ?? UsageActivityChart.emptyCost())
+    return VStack(alignment: .leading, spacing: 4) {
+      Text(UsageActivityCalendar.longDate(day.date))
+        .font(.subheadline)
+      Text("\(QuotaFormat.compactCount(day.tokens)) · \(costText)")
+        .font(.subheadline.monospacedDigit())
+        .foregroundStyle(.primary)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityHidden(true)
+    .accessibilityIdentifier("usage.activity.selected-day")
+  }
+
+  private func ensureSelection(in chart: UsageActivityChart) {
+    if chart.selectableDay(on: selectedDate) == nil {
+      selectedDate = chart.defaultSelectedDate
     }
   }
 }
 
 struct UsageActivitySkeleton: View {
   var body: some View {
+    let stride = QuotaTheme.activityCellSize + QuotaTheme.activityCellGap
     VStack(alignment: .leading, spacing: 8) {
-      RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(QuotaTheme.meterTrack)
-        .frame(width: 120, height: 8)
-      HStack(alignment: .top, spacing: 8) {
-        VStack(spacing: QuotaTheme.activityCellGap) {
-          ForEach(0..<7, id: \.self) { _ in
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-              .fill(QuotaTheme.meterTrack)
-              .frame(width: 18, height: QuotaTheme.activityCellSize)
-          }
-        }
-        HStack(spacing: QuotaTheme.activityCellGap) {
-          ForEach(0..<16, id: \.self) { _ in
-            VStack(spacing: QuotaTheme.activityCellGap) {
-              ForEach(0..<7, id: \.self) { _ in
-                RoundedRectangle(
-                  cornerRadius: QuotaTheme.activityCellCorner,
-                  style: .continuous
-                )
-                .fill(QuotaTheme.meterTrack)
-                .frame(
-                  width: QuotaTheme.activityCellSize,
-                  height: QuotaTheme.activityCellSize
-                )
-              }
-            }
+      Text("Loading activity")
+        .foregroundStyle(.primary)
+        .accessibilityValue("Loading activity")
+        .accessibilityIdentifier("usage.activity.loading")
+      Canvas { context, _ in
+        for week in 0..<16 {
+          for day in 0..<7 {
+            let rect = CGRect(
+              x: CGFloat(week) * stride,
+              y: CGFloat(day) * stride,
+              width: QuotaTheme.activityCellSize,
+              height: QuotaTheme.activityCellSize
+            )
+            let path = RoundedRectangle(
+              cornerRadius: QuotaTheme.activityCellCorner,
+              style: .continuous
+            ).path(in: rect)
+            context.fill(path, with: .color(QuotaTheme.meterTrack))
           }
         }
       }
+      .frame(
+        width: 16 * stride - QuotaTheme.activityCellGap,
+        height: 7 * stride - QuotaTheme.activityCellGap
+      )
+      .dynamicTypeSize(...DynamicTypeSize.large)
+      .accessibilityHidden(true)
     }
-    .redacted(reason: .placeholder)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Loading activity")
-    .accessibilityIdentifier("usage.activity.loading")
   }
 }
 
 struct UsageActivityHeatmap: View {
   let chart: UsageActivityChart
-  var onSelect: (UsageActivityChart.Day) -> Void
-  @State private var selectedDate: String
-
-  init(chart: UsageActivityChart, onSelect: @escaping (UsageActivityChart.Day) -> Void) {
-    self.chart = chart
-    self.onSelect = onSelect
-    let today = chart.days.first(where: \.today)?.date ?? chart.selectableDays.last?.date ?? ""
-    _selectedDate = State(initialValue: today)
-  }
+  @Binding var selectedDate: String
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -127,34 +139,25 @@ struct UsageActivityHeatmap: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Usage activity")
     .accessibilityValue(selectedDay?.accessibilityValue ?? "No day selected")
-    .accessibilityHint("Adjusts the selected day. Activates to show this day's usage.")
-    .accessibilityAddTraits(.isButton)
+    .accessibilityHint("Adjusts the selected day.")
     .accessibilityAdjustableAction { direction in
       adjustSelection(direction)
     }
-    .accessibilityAction {
-      if let day = selectedDay {
-        onSelect(day)
-      }
-    }
+    .accessibilityIdentifier("usage.activity.heatmap")
   }
 
   private var selectedDay: UsageActivityChart.Day? {
-    chart.days.first { $0.date == selectedDate && !$0.outside }
+    chart.selectableDay(on: selectedDate)
   }
 
   private var weekdayColumn: some View {
     VStack(alignment: .leading, spacing: QuotaTheme.activityCellGap) {
-      Color.clear.frame(height: 14)
+      Color.clear.frame(width: QuotaTheme.activityWeekdayWidth, height: 16)
       ForEach(Array(UsageActivityCalendar.weekdayLabels.enumerated()), id: \.offset) { _, label in
-        Text(label)
-          .font(.system(size: 9))
-          .foregroundStyle(.secondary)
-          .frame(
-            width: QuotaTheme.activityWeekdayWidth,
-            height: QuotaTheme.activityCellSize,
-            alignment: .leading
-          )
+        Text(label.isEmpty ? " " : label)
+          .font(.caption2)
+          .foregroundStyle(.primary)
+          .frame(width: QuotaTheme.activityWeekdayWidth, alignment: .leading)
       }
     }
     .accessibilityHidden(true)
@@ -168,7 +171,7 @@ struct UsageActivityHeatmap: View {
       ForEach(chart.monthLabels) { label in
         Text(label.label)
           .font(.caption2)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.primary)
           .lineLimit(1)
           .frame(width: weekWidth(label.span) - QuotaTheme.activityCellGap, alignment: .leading)
       }
@@ -177,48 +180,53 @@ struct UsageActivityHeatmap: View {
   }
 
   private var weeksRow: some View {
-    HStack(alignment: .top, spacing: QuotaTheme.activityCellGap) {
-      ForEach(Array(chart.weeks.enumerated()), id: \.offset) { index, week in
-        VStack(spacing: QuotaTheme.activityCellGap) {
-          ForEach(week) { day in
-            cell(day)
+    let stride = QuotaTheme.activityCellSize + QuotaTheme.activityCellGap
+    let width = CGFloat(chart.weeks.count) * stride - QuotaTheme.activityCellGap
+    let height = 7 * stride - QuotaTheme.activityCellGap
+    return Canvas { context, _ in
+      for (weekIndex, week) in chart.weeks.enumerated() {
+        for (dayIndex, day) in week.enumerated() {
+          guard !day.outside else { continue }
+          let rect = CGRect(
+            x: CGFloat(weekIndex) * stride,
+            y: CGFloat(dayIndex) * stride,
+            width: QuotaTheme.activityCellSize,
+            height: QuotaTheme.activityCellSize
+          )
+          let path = RoundedRectangle(
+            cornerRadius: QuotaTheme.activityCellCorner,
+            style: .continuous
+          ).path(in: rect)
+          context.fill(path, with: .color(QuotaTheme.activityFill(day.level)))
+          let selected = day.date == selectedDate
+          context.stroke(
+            path,
+            with: .color(selected ? QuotaTheme.emerald : QuotaTheme.activityBorder(day.level)),
+            lineWidth: selected ? 1.5 : 1
+          )
+          if day.today {
+            let ring = RoundedRectangle(
+              cornerRadius: QuotaTheme.activityCellCorner + 1,
+              style: .continuous
+            ).path(in: rect.insetBy(dx: -2, dy: -2))
+            context.stroke(ring, with: .color(.primary), lineWidth: 2)
           }
         }
-        .id(index == chart.weeks.count - 1 ? "activity-end" : "week-\(index)")
       }
     }
-  }
-
-  private func cell(_ day: UsageActivityChart.Day) -> some View {
-    let selected = !day.outside && day.date == selectedDate
-    return Button {
-      guard !day.outside else { return }
-      selectedDate = day.date
-      onSelect(day)
-    } label: {
-      RoundedRectangle(cornerRadius: QuotaTheme.activityCellCorner, style: .continuous)
-        .fill(day.outside ? Color.clear : QuotaTheme.activityFill(day.level))
-        .overlay {
-          if !day.outside {
-            RoundedRectangle(cornerRadius: QuotaTheme.activityCellCorner, style: .continuous)
-              .strokeBorder(
-                selected ? QuotaTheme.emerald : QuotaTheme.activityBorder(day.level),
-                lineWidth: selected ? 1.5 : 1
-              )
-          }
-        }
-        .overlay {
-          if day.today {
-            RoundedRectangle(cornerRadius: QuotaTheme.activityCellCorner + 1, style: .continuous)
-              .strokeBorder(Color.primary, lineWidth: 2)
-              .padding(-2)
-          }
-        }
-        .frame(width: QuotaTheme.activityCellSize, height: QuotaTheme.activityCellSize)
-        .opacity(day.outside ? 0 : 1)
+    .frame(width: max(width, 0), height: max(height, 0))
+    .dynamicTypeSize(...DynamicTypeSize.large)
+    .contentShape(Rectangle())
+    .id("activity-end")
+    .onTapGesture { location in
+      select(at: location)
     }
-    .buttonStyle(.plain)
-    .disabled(day.outside)
+    .gesture(
+      DragGesture(minimumDistance: 12)
+        .onChanged { value in
+          select(at: value.location)
+        }
+    )
     .accessibilityHidden(true)
   }
 
@@ -226,7 +234,7 @@ struct UsageActivityHeatmap: View {
     HStack(spacing: 6) {
       Text("Less")
         .font(.caption2)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
       ForEach(0..<5, id: \.self) { level in
         RoundedRectangle(cornerRadius: QuotaTheme.activityCellCorner, style: .continuous)
           .fill(QuotaTheme.activityFill(level))
@@ -238,7 +246,7 @@ struct UsageActivityHeatmap: View {
       }
       Text("More")
         .font(.caption2)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
     }
     .accessibilityHidden(true)
   }
@@ -247,23 +255,29 @@ struct UsageActivityHeatmap: View {
     CGFloat(weeks) * (QuotaTheme.activityCellSize + QuotaTheme.activityCellGap)
   }
 
-  private func adjustSelection(_ direction: AccessibilityAdjustmentDirection) {
-    let selectable = chart.selectableDays
-    guard let index = selectable.firstIndex(where: { $0.date == selectedDate }) else {
-      selectedDate = selectable.last?.date ?? selectedDate
-      return
+  private func select(at point: CGPoint) {
+    if let day = chart.nearestSelectableDay(
+      atX: Double(point.x),
+      atY: Double(point.y),
+      cellSize: Double(QuotaTheme.activityCellSize),
+      cellGap: Double(QuotaTheme.activityCellGap)
+    ) {
+      selectedDate = day.date
     }
+  }
+
+  private func adjustSelection(_ direction: AccessibilityAdjustmentDirection) {
+    let increment: Bool
     switch direction {
     case .increment:
-      if index + 1 < selectable.count {
-        selectedDate = selectable[index + 1].date
-      }
+      increment = true
     case .decrement:
-      if index > 0 {
-        selectedDate = selectable[index - 1].date
-      }
+      increment = false
     @unknown default:
-      break
+      return
+    }
+    if let next = chart.adjacentSelectableDay(from: selectedDate, increment: increment) {
+      selectedDate = next.date
     }
   }
 }
@@ -271,22 +285,25 @@ struct UsageActivityHeatmap: View {
 struct UsageDayDetailSheet: View {
   @Bindable var model: AppModel
   @State private var expandedProviderIDs: Set<String> = []
+  @State private var detent: PresentationDetent = .large
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       Group {
         if let sheet = model.activityDaySheet {
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-              headline(sheet.headline)
-              agents(sheet)
-            }
-            .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
-            .padding(.horizontal, QuotaTheme.contentGutter)
-            .padding(.vertical, 16)
-            .frame(maxWidth: .infinity)
+          List {
+            UsageTotalsSection(
+              totals: sheet.headline.totals,
+              cost: sheet.headline.cost,
+              partial: sheet.headline.partial,
+              partialCopy: "Some hours on this day were scanned incompletely.",
+              identifier: "usage.day.headline"
+            )
+            agents(sheet)
           }
+          .listStyle(.insetGrouped)
+          .contentMargins(.bottom, 24, for: .scrollContent)
           .navigationTitle(QuotaFormat.utcLongDate(sheet.date))
           .navigationBarTitleDisplayMode(.inline)
         }
@@ -297,69 +314,44 @@ struct UsageDayDetailSheet: View {
         }
       }
     }
+    .presentationDetents([.medium, .large], selection: $detent)
+    .presentationContentInteraction(.scrolls)
+    .presentationDragIndicator(.visible)
+    .presentationBackground(Color(uiColor: .systemGroupedBackground))
     .accessibilityIdentifier("usage.day")
-  }
-
-  private func headline(_ day: UsageActivityDay) -> some View {
-    UsageHeadlineCard(
-      totals: day.totals,
-      cost: day.cost,
-      partial: day.partial,
-      partialCopy: "Some hours on this day were scanned incompletely.",
-      basisCopy: QuotaFormat.costBasis(day.cost),
-      identifier: "usage.day.headline"
-    )
   }
 
   @ViewBuilder
   private func agents(_ sheet: ActivityDaySheetState) -> some View {
     switch sheet.agents {
     case .loading:
-      daySkeleton
+      Section {
+        Text("Loading this day's usage…")
+          .foregroundStyle(.primary)
+          .accessibilityIdentifier("usage.day.loading")
+      }
     case .failed:
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Could not load this day's usage.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+      Section {
+        Text("Couldn't load this day's usage.")
+          .foregroundStyle(.primary)
         Button("Retry") {
           Task { await model.retryActivityDay() }
         }
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(QuotaTheme.emerald)
-        .frame(minHeight: QuotaTheme.minimumTouchTarget, alignment: .leading)
-        .contentShape(Rectangle())
+        .tint(.primary)
         .accessibilityIdentifier("usage.day.retry")
       }
-      .padding(16)
-      .frame(maxWidth: .infinity, alignment: .leading)
     case .empty:
-      Text("No Usage on this day.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityIdentifier("usage.day.empty")
+      Section {
+        Text("No usage on this day.")
+          .foregroundStyle(.primary)
+          .accessibilityIdentifier("usage.day.empty")
+      }
     case .loaded(let agents):
-      ForEach(UsageBreakdown.sections(agents: agents)) { section in
-        UsageAgentCard(section: section, expandedProviderIDs: $expandedProviderIDs)
-      }
+      UsageAgentListSections(
+        sections: UsageBreakdown.sections(agents: agents),
+        expandedProviderIDs: $expandedProviderIDs,
+        modelIdentifier: "usage.day.model"
+      )
     }
-  }
-
-  private var daySkeleton: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      ForEach(0..<3, id: \.self) { _ in
-        RoundedRectangle(cornerRadius: 4, style: .continuous)
-          .fill(QuotaTheme.meterTrack)
-          .frame(height: 16)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .redacted(reason: .placeholder)
-    .accessibilityLabel("Loading this day's usage")
-    .accessibilityIdentifier("usage.day.loading")
   }
 }

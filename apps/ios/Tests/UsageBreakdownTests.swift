@@ -43,6 +43,9 @@ struct UsageBreakdownTests {
     #expect(sections[0].providers[0].visibleModels(expanded: false).count == 5)
     #expect(sections[0].providers[0].hiddenCount(expanded: false) == 2)
     #expect(sections[0].providers[0].hiddenCount(expanded: true) == 0)
+    #expect(sections[0].providers[0].foldsModels)
+    #expect(sections[0].providers[0].visibleModels(expanded: true).count == 7)
+    #expect(!sections[1].providers[0].foldsModels)
     #expect(sections[1].providers[0].models[0].displayName == "Other")
   }
 

@@ -194,11 +194,12 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. Period totals come from the same Account summary as Overview: the four
-precomputed periods `today`, `last_7_days`, `last_30_days`, and `all`. Opening Usage requests the
-last 365 UTC days of activity once (`from = today-364`, `to = today`) and keeps that answer in
-memory; it does not write it to disk. A failure stays in the Activity card and does not block the
-period list.
+Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Period totals
+come from the same Account summary as Overview: the four precomputed periods `today`,
+`last_7_days`, `last_30_days`, and `all`. Opening Usage requests the last 365 UTC days of activity
+once (`from = today-364`, `to = today`) and keeps that answer in memory; it does not write it to
+disk. A failure stays in the Activity section and does not block the period totals or model
+sections.
 
 Header:
 
@@ -206,34 +207,51 @@ Header:
 
 Body, in order:
 
-1. A segmented period control: **Today**, **7 Days**, **30 Days**, and **2 Years**. The fourth
-   segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**. The selection lives in
-   memory for the signed-in session.
-2. Headline card: Tokens as the strongest number (`CompactCountFormat`) with an `in · out` support
-   line, then API-equivalent cost (`$X.XX`, `≥ $X.XX`, or **— unpriced**). When `partial` is true,
-   a footnote: **Some hours in this period were scanned incompletely.**
-3. Activity card: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
-   weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
-   steps over tokens — empty, then four equal bands of the busiest day in the response, the same
-   mapping the website uses. Today has a primary stroke. Loading is a skeleton in the card;
-   failure is **Could not load activity.** with **Retry**.
-4. Agent groups in the summary's order. Each agent uses its display name (Codex, Claude Code, Grok,
-   OpenCode, Pi, Cursor). Inside an agent, provider subheadings (`InferenceProvider.displayName`)
-   and model rows (display name · tokens · cost). The model `other` is **Other**. Each provider
-   shows at most five models until **Show N more** reveals the rest.
-5. When the selected period has no agents: **No Usage in this period.** The Activity card still
-   shows.
+1. A segmented period control in the first List row: **Today**, **7 Days**, **30 Days**, and
+   **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
+   The selection lives in memory for the signed-in session. It is a system content filter, not a
+   floating navigation action, and it scrolls with the List.
+2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
+   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
+   is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
+   incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
+   contrast and Dynamic Type stay system-owned.
+3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+   system image `chart.bar`, description **No usage was reported for this period.** The Activity
+   section still follows.
+4. Activity section, headed **Activity**:
+   - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
+     activity**.
+   - Failure: **Couldn't load activity.** plus a native **Retry** row.
+   - Loaded with zero reported tokens across the range: **No activity in the last year.** Do not
+     render 365 empty interactive cells.
+   - Loaded with data: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
+     weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
+     emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
+     the same mapping the website uses. Today has a primary stroke. Weekday and month labels use
+     `caption` / `caption2`. Cells are visual shapes, not buttons. The grid is one adjustable
+     control: a spatial tap or drag selects the nearest in-range day; VoiceOver
+     increment/decrement changes the same selection. Under the grid, the selected day is visible
+     text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
+     that day.
+5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
+   rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
+   **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
+   **Show fewer** collapses them again. Both are standard 44-point List buttons with expanded /
+   collapsed accessibility state.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
-accessibility text sizes. The heatmap is one adjustable control: VoiceOver reads the selected day
-as date, tokens, and cost, swiping adjusts the day, and activating opens that day. Individual cells
-are not accessibility elements.
+accessibility text sizes. Individual heatmap cells are not accessibility elements. The combined
+chart value remains date, tokens, and cost.
 
-Tapping a cell, or activating the heatmap, presents a sheet for that UTC day: the long UTC date,
-tokens, API-equivalent cost and its basis, and **Some hours on this day were scanned incompletely.**
-when `partial` is true. The sheet then asks `detail=agents` for that date. Loading is a skeleton;
-failure is **Could not load this day's usage.** with **Retry**; an empty agent tree is **No Usage on
-this day.**; a populated tree reuses the period's agent groups.
+**View day** presents a `NavigationStack` sheet for the selected UTC day: the long UTC date as the
+inline title, system **Done** as the confirmation toolbar item, `presentationDetents` medium and
+large, and the system drag indicator. The body is an inset-grouped List of totals and agent
+Sections — the same rows as the period view, including **Some hours on this day were scanned
+incompletely.** when `partial` is true. Loading text: **Loading this day's usage…**. Failure:
+**Couldn't load this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet
+asks `detail=agents` for that date. There is no custom material.
 
 ### Devices
 
@@ -335,10 +353,13 @@ Rules:
 | Loading, no cache | Centered progress and **Loading account…**. No surface. |
 | Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
 | Empty Today | **No Usage for Today.** |
-| Empty Usage period | **No Usage in this period.** |
-| Loading activity | Skeleton in the Activity card |
-| Activity failed | **Could not load activity.** with **Retry** |
-| Empty activity day | **No Usage on this day.** |
+| Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
+| Loading activity | Skeleton in the Activity section. Accessibility value **Loading activity** |
+| Activity failed | **Couldn't load activity.** with **Retry** |
+| Empty activity | **No activity in the last year.** |
+| Loading activity day | **Loading this day's usage…** |
+| Activity day failed | **Couldn't load this day's usage.** with **Retry** |
+| Empty activity day | **No usage on this day.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
@@ -358,10 +379,13 @@ modifier and no ambient wash. Semantic text styles (`largeTitle` / `title2` for 
 `headline` for provider names, `subheadline` and `footnote` for support). Connect content is a
 320-point column.
 
-Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt). Dynamic
-Type may wrap every label, including the Connect footnote; do not clip remaining values.
-Accessibility text sizes and widget no-data layouts must keep the strongest remaining figure
-readable (`minimumScaleFactor` is preferred over truncation of the primary value).
+Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
+**View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
+may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
+and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
+month labels on that grid use `caption` / `caption2`. Accessibility text sizes and widget no-data
+layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
+truncation of the primary value).
 
 The accent is adaptive emerald (`#087456` light, `#82ddb8` dark). Ink, body, and mute follow
 `Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
@@ -378,8 +402,10 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - The account context line is the shared freshness phrase, read in full.
-- The Usage heatmap is one adjustable element. It speaks the selected UTC date, tokens, and cost;
-  cells are not their own VoiceOver nodes.
+- The Usage heatmap is one adjustable element, not a button. It speaks the selected UTC date,
+  tokens, and cost; cells are not their own VoiceOver nodes. Direct touch, VoiceOver adjust, and
+  **View day** operate on the same selected date. **View day** is the 44-point activation that
+  presents the day sheet. **Show N more** / **Show fewer** expose expanded or collapsed state.
 - Widget entries combine provider, remaining, why the reading is not current, reset, and updated
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
@@ -387,14 +413,20 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Reduce Transparency is system-owned. Do not skip Connect's contrast audit in the signed-out
   state. Disabled `.glassProminent` Connecting… contrast is system glass, documented on that
   control. Confirm is inline on the signed-out screen and runs the full accessibility audit with
-  no skip.
+  no skip. Usage runs hit-region checks. Contrast, Dynamic Type, and text-clipped audits on Usage
+  skip iOS 26 List section headers, List buttons, decorative heatmap fills, monospaced token
+  digits, and tab/sheet glass. Unnamed contrast on the system tab bar / navigation glass, and
+  Dynamic Type on the system sheet **Done** confirmation item, are documented system-owned
+  exceptions.
 
 ## Visual QA
 
 Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, loading, signed-in content,
-empty quota/Today, Usage at 30 Days with the Activity heatmap, a single-day sheet, no-devices Mac
-setup, cached content with a refresh banner, the four tabs, Settings (Notifications switch, Log
+empty quota/Today, Usage at 30 Days as one native scrolling List (period control, totals, Activity
+heatmap, agent sections, no glass cards), Usage empty / activity loading / activity failed, a
+single-day sheet (populated, empty, failed) with system chrome and medium/large detents, no-devices
+Mac setup, cached content with a refresh banner, the four tabs, Settings (Notifications switch, Log
 Out, Appearance), subscription detail (windows, countdown, Reporting row), and each widget family
 in placeholder, content, and no-data states. Check iPhone, light and dark, standard and
 accessibility text sizes, VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic
@@ -403,7 +435,9 @@ production data.
 
 `scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `connecting`, `connect-error`,
 `expired`, `loading`, `confirm-account`, `no-devices`, `usage-content`, `usage-activity`,
-`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
+`usage-activity-loading`, `usage-activity-failed`, `usage-empty`, `usage-day`, `usage-day-empty`,
+`usage-day-failed`, `subscription-detail`, and `settings` fixture screenshots to
+`dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -420,6 +454,10 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture cached-error
 --visual-fixture empty
 --visual-fixture no-devices
+--visual-fixture activity-loading
+--visual-fixture activity-failed
+--visual-fixture activity-day-empty
+--visual-fixture activity-day-failed
 ```
 
 | Fixture | UI state |
@@ -432,8 +470,12 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
-| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |
+| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |
+| `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |
+| `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |
+| `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |
+| `activity-day-failed` | Signed-in Usage presenting a day sheet with **Couldn't load this day's usage.** and **Retry** |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
 access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time

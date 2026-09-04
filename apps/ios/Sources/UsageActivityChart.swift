@@ -117,6 +117,59 @@ struct UsageActivityChart: Equatable, Sendable {
 
   var selectableDays: [Day] { days.filter { !$0.outside } }
 
+  /// Today when it is in range, otherwise the last in-range day.
+  var defaultSelectedDate: String {
+    days.first { $0.today && !$0.outside }?.date ?? selectableDays.last?.date ?? ""
+  }
+
+  /// Any reported day with tokens. An empty or all-zero range must not draw 365 empty cells.
+  static func hasReportedActivity(_ days: [UsageActivityDay]) -> Bool {
+    days.contains { $0.totals.totalTokens > 0 }
+  }
+
+  func selectableDay(on date: String) -> Day? {
+    selectableDays.first { $0.date == date }
+  }
+
+  /// Next or previous in-range day. Stays put at the range ends. Unknown dates resolve to the
+  /// last in-range day so VoiceOver has somewhere to land.
+  func adjacentSelectableDay(from date: String, increment: Bool) -> Day? {
+    let selectable = selectableDays
+    guard let index = selectable.firstIndex(where: { $0.date == date }) else {
+      return selectable.last
+    }
+    if increment {
+      return index + 1 < selectable.count ? selectable[index + 1] : selectable[index]
+    }
+    return index > 0 ? selectable[index - 1] : selectable[index]
+  }
+
+  /// Nearest in-range day to a point in the week-grid coordinate space (origin at the first
+  /// Sunday cell, columns are weeks, rows are weekdays). Outside padding cells are skipped.
+  func nearestSelectableDay(
+    atX x: Double,
+    atY y: Double,
+    cellSize: Double,
+    cellGap: Double
+  ) -> Day? {
+    let stride = cellSize + cellGap
+    var best: Day?
+    var bestDistance = Double.greatestFiniteMagnitude
+    for (weekIndex, week) in weeks.enumerated() {
+      for (dayIndex, day) in week.enumerated() {
+        guard !day.outside else { continue }
+        let dx = x - (Double(weekIndex) * stride + cellSize / 2)
+        let dy = y - (Double(dayIndex) * stride + cellSize / 2)
+        let distance = dx * dx + dy * dy
+        if distance < bestDistance {
+          bestDistance = distance
+          best = day
+        }
+      }
+    }
+    return best
+  }
+
   static func build(
     reported: [UsageActivityDay],
     range: (from: String, to: String),
