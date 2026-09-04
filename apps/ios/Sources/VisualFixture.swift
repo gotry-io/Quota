@@ -10,6 +10,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case content
   case cachedError = "cached-error"
   case empty
+  case noDevices = "no-devices"
 
   /// Parse `--visual-fixture <name>` from process arguments. Returns nil when absent or unknown.
   static func parse(arguments: [String]) -> VisualFixture? {
@@ -46,6 +47,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
       case .cachedError:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.summary(at: now)
@@ -58,7 +60,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil
-      case .empty:
+        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+      case .empty, .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
         model.fetchedAt = now.addingTimeInterval(-60)
@@ -66,6 +69,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+        model.activityChart = .loaded([])
       }
     }
   }
@@ -73,33 +77,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
   @MainActor
   enum VisualFixtureContent {
     static func summary(at date: Date) -> AccountSummary {
-      let deviceID = "device_visual_fixture_01"
+      let studioID = "device_visual_fixture_01"
+      let kitchenID = "device_visual_fixture_02"
       let subscriptions = [
-        subscription(
-          provider: .codex,
-          deviceID: deviceID,
-          fingerprint: "visual_codex",
-          label: "pe***@example.com",
-          plan: "Plus",
-          windows: [
-            window(
-              id: "five_hour",
-              title: "5 Hours",
-              usedPercent: 32,
-              resetsAt: date.addingTimeInterval(2_700)
-            ),
-            window(
-              id: "weekly",
-              title: "Weekly",
-              usedPercent: 16,
-              resetsAt: date.addingTimeInterval(4 * 86_400)
-            ),
-          ],
-          observedAt: date.addingTimeInterval(-90),
-        ),
+        codexSubscription(studioID: studioID, kitchenID: kitchenID, at: date),
         subscription(
           provider: .claude,
-          deviceID: deviceID,
+          deviceID: studioID,
           fingerprint: "visual_claude",
           label: "Team workspace",
           plan: "Max",
@@ -115,7 +99,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         subscription(
           provider: .grok,
-          deviceID: deviceID,
+          deviceID: studioID,
           fingerprint: "visual_grok",
           label: nil,
           plan: "SuperGrok",
@@ -139,12 +123,19 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         devices: [
           AccountDevice(
-            id: deviceID,
+            id: studioID,
             displayName: "Studio Mac",
             platform: .macos,
             lastSeenAt: date.addingTimeInterval(-45),
             lastObservedAt: date.addingTimeInterval(-90)
-          )
+          ),
+          AccountDevice(
+            id: kitchenID,
+            displayName: "Kitchen Mac",
+            platform: .macos,
+            lastSeenAt: date.addingTimeInterval(-300),
+            lastObservedAt: date.addingTimeInterval(-360)
+          ),
         ],
         subscriptions: subscriptions,
         usage: usage(),
@@ -169,37 +160,237 @@ enum VisualFixture: String, CaseIterable, Sendable {
     }
 
     private static func usage() -> AccountUsage {
-      let period = UsagePeriod(
-        totals: UsageSummaryTotals(
-          totalTokens: 1_704_620,
-          inputTokens: 1_420_500,
-          outputTokens: 284_120,
-          cacheReadInputTokens: 480_000,
-          cacheWriteInputTokens: 20_000,
-          reasoningTokens: 92_400,
-          messages: 164
+      AccountUsage(
+        today: period(
+          input: 1_420_500,
+          output: 284_120,
+          cacheRead: 480_000,
+          cacheWrite: 20_000,
+          reasoning: 92_400,
+          messages: 164,
+          microusd: "1489234",
+          scale: 1
         ),
-        cost: UsageCostOutcome(
-          mode: .calculate,
-          basis: .calculated,
-          status: .complete,
-          amountMicrousd: "1489234",
-          catalogRevision: "pricing_visual_fixture",
-          calculatedRows: 164,
-          reportedRows: 0,
-          unpricedRows: 0,
-          assumptions: [.agentDefaultChannel],
-          unpriced: []
+        last7Days: period(
+          input: 3_800_000,
+          output: 760_000,
+          cacheRead: 1_000_000,
+          cacheWrite: 40_000,
+          reasoning: 240_000,
+          messages: 410,
+          microusd: "3200000",
+          scale: 3
         ),
+        last30Days: period(
+          input: 9_500_000,
+          output: 1_900_000,
+          cacheRead: 2_500_000,
+          cacheWrite: 80_000,
+          reasoning: 600_000,
+          messages: 980,
+          microusd: "8500000",
+          scale: 8
+        ),
+        all: period(
+          input: 18_000_000,
+          output: 3_600_000,
+          cacheRead: 5_000_000,
+          cacheWrite: 150_000,
+          reasoning: 1_100_000,
+          messages: 1_800,
+          microusd: "16200000",
+          scale: 15
+        )
+      )
+    }
+
+    private static func period(
+      input: Int,
+      output: Int,
+      cacheRead: Int,
+      cacheWrite: Int,
+      reasoning: Int,
+      messages: Int,
+      microusd: String,
+      scale: Int
+    ) -> UsagePeriod {
+      UsagePeriod(
+        totals: totals(
+          input: input,
+          output: output,
+          cacheRead: cacheRead,
+          cacheWrite: cacheWrite,
+          reasoning: reasoning,
+          messages: messages
+        ),
+        cost: completeCost(microusd: microusd, rows: messages),
         partial: false,
-        agents: []
+        agents: agents(scale: scale)
       )
-      return AccountUsage(
-        today: period,
-        last7Days: period,
-        last30Days: period,
-        all: period
+    }
+
+    static func dayAgents() -> [UsageAgentUsage] {
+      agents(scale: 1)
+    }
+
+    private static func agents(scale: Int) -> [UsageAgentUsage] {
+      [
+        UsageAgentUsage(
+          agent: .codex,
+          providers: [
+            UsageProviderUsage(
+              provider: .openai,
+              models: [
+                model(
+                  "gpt-4.1", input: 80_000, output: 16_000, messages: 12, microusd: 120_000,
+                  scale: scale),
+                model(
+                  "gpt-4o", input: 60_000, output: 12_000, messages: 10, microusd: 90_000,
+                  scale: scale),
+                model(
+                  "gpt-5", input: 200_000, output: 40_000, messages: 28, microusd: 400_000,
+                  scale: scale),
+                model(
+                  "gpt-5-codex", input: 150_000, output: 30_000, messages: 20, microusd: 280_000,
+                  scale: scale),
+                model(
+                  "o3", input: 40_000, output: 8_000, messages: 6, microusd: 70_000, scale: scale),
+                model(
+                  "o4-mini", input: 30_000, output: 6_000, messages: 5, microusd: 40_000,
+                  scale: scale),
+                model(
+                  "other", input: 20_000, output: 4_000, messages: 4, microusd: 15_000, scale: scale
+                ),
+              ]
+            )
+          ]
+        ),
+        UsageAgentUsage(
+          agent: .claudeCode,
+          providers: [
+            UsageProviderUsage(
+              provider: .anthropic,
+              models: [
+                model(
+                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18, microusd: 210_000,
+                  scale: scale),
+                model(
+                  "claude-opus-4", input: 50_000, output: 10_000, messages: 8, microusd: 180_000,
+                  scale: scale),
+              ]
+            )
+          ]
+        ),
+        UsageAgentUsage(
+          agent: .grok,
+          providers: [
+            UsageProviderUsage(
+              provider: .xai,
+              models: [
+                model(
+                  "grok-4", input: 90_000, output: 18_000, messages: 14, microusd: 95_000,
+                  scale: scale),
+                model(
+                  "grok-3", input: 40_000, output: 8_000, messages: 7, microusd: 30_000,
+                  scale: scale),
+              ]
+            )
+          ]
+        ),
+      ]
+    }
+
+    private static func model(
+      _ name: String,
+      input: Int,
+      output: Int,
+      messages: Int,
+      microusd: Int,
+      scale: Int
+    ) -> UsageModelUsage {
+      let scaledInput = input * scale
+      let scaledOutput = output * scale
+      let scaledMessages = messages * scale
+      return UsageModelUsage(
+        model: name,
+        totals: totals(
+          input: scaledInput,
+          output: scaledOutput,
+          cacheRead: scaledInput / 4,
+          cacheWrite: 0,
+          reasoning: scaledOutput / 4,
+          messages: scaledMessages
+        ),
+        cost: completeCost(microusd: String(microusd * scale), rows: scaledMessages)
       )
+    }
+
+    private static func totals(
+      input: Int,
+      output: Int,
+      cacheRead: Int,
+      cacheWrite: Int,
+      reasoning: Int,
+      messages: Int
+    ) -> UsageSummaryTotals {
+      UsageSummaryTotals(
+        totalTokens: input + output,
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadInputTokens: cacheRead,
+        cacheWriteInputTokens: cacheWrite,
+        reasoningTokens: reasoning,
+        messages: messages
+      )
+    }
+
+    private static func completeCost(microusd: String, rows: Int) -> UsageCostOutcome {
+      UsageCostOutcome(
+        mode: .calculate,
+        basis: .calculated,
+        status: .complete,
+        amountMicrousd: microusd,
+        catalogRevision: "pricing_visual_fixture",
+        calculatedRows: rows,
+        reportedRows: 0,
+        unpricedRows: 0,
+        assumptions: [.agentDefaultChannel],
+        unpriced: []
+      )
+    }
+
+    static func activityDays(ending now: Date) -> [UsageActivityDay] {
+      let today = UsageActivityCalendar.utcDay(from: now)
+      func day(_ offset: Int, input: Int, output: Int, microusd: String, partial: Bool = false)
+        -> UsageActivityDay
+      {
+        let date = UsageActivityCalendar.addDays(offset, to: today)
+        return UsageActivityDay(
+          date: date,
+          totals: totals(
+            input: input,
+            output: output,
+            cacheRead: input / 4,
+            cacheWrite: 0,
+            reasoning: output / 4,
+            messages: 4
+          ),
+          cost: completeCost(microusd: microusd, rows: 4),
+          partial: partial,
+          agents: nil
+        )
+      }
+      return [
+        day(0, input: 90_000, output: 18_000, microusd: "95000"),
+        day(-1, input: 40_000, output: 8_000, microusd: "30000", partial: true),
+        day(-2, input: 10_000, output: 2_000, microusd: "8000"),
+        day(-5, input: 200_000, output: 40_000, microusd: "400000"),
+        day(-8, input: 5_000, output: 1_000, microusd: "4000"),
+        day(-20, input: 80_000, output: 16_000, microusd: "120000"),
+        day(-40, input: 30_000, output: 6_000, microusd: "40000"),
+        day(-90, input: 150_000, output: 30_000, microusd: "280000"),
+        day(-180, input: 20_000, output: 4_000, microusd: "15000"),
+      ]
     }
 
     private static func emptyUsage() -> AccountUsage {
@@ -233,6 +424,77 @@ enum VisualFixture: String, CaseIterable, Sendable {
         last7Days: period,
         last30Days: period,
         all: period
+      )
+    }
+
+    /// Codex reports from two Macs so subscription detail can show per-device readings.
+    /// Studio Mac is the selected source (newer); Kitchen Mac is the other reading.
+    private static func codexSubscription(
+      studioID: String,
+      kitchenID: String,
+      at date: Date
+    ) -> QuotaSubscription {
+      let studioObserved = date.addingTimeInterval(-90)
+      let kitchenObserved = date.addingTimeInterval(-360)
+      let studio = QuotaSnapshot(
+        provider: .codex,
+        account: QuotaAccount(
+          fingerprint: "visual_codex",
+          label: "pe***@example.com",
+          plan: "Plus",
+          fingerprintScope: .global
+        ),
+        windows: [
+          window(
+            id: "five_hour",
+            title: "5 Hours",
+            usedPercent: 32,
+            resetsAt: date.addingTimeInterval(2_700)
+          ),
+          window(
+            id: "weekly",
+            title: "Weekly",
+            usedPercent: 16,
+            resetsAt: date.addingTimeInterval(4 * 86_400)
+          ),
+        ],
+        status: .available,
+        observedAt: studioObserved
+      )
+      let kitchen = QuotaSnapshot(
+        provider: .codex,
+        account: QuotaAccount(
+          fingerprint: "visual_codex",
+          label: "pe***@example.com",
+          plan: "Plus",
+          fingerprintScope: .global
+        ),
+        windows: [
+          window(
+            id: "five_hour",
+            title: "5 Hours",
+            usedPercent: 41,
+            resetsAt: date.addingTimeInterval(2_100)
+          ),
+          window(
+            id: "weekly",
+            title: "Weekly",
+            usedPercent: 22,
+            resetsAt: date.addingTimeInterval(4 * 86_400)
+          ),
+        ],
+        status: .available,
+        observedAt: kitchenObserved
+      )
+      return QuotaSubscription(
+        key: "codex|visual_codex|global|",
+        provider: .codex,
+        snapshot: studio,
+        sources: [
+          QuotaSubscriptionSource(
+            deviceID: kitchenID, observedAt: kitchenObserved, snapshot: kitchen),
+          QuotaSubscriptionSource(deviceID: studioID, observedAt: studioObserved, snapshot: studio),
+        ]
       )
     }
 
@@ -289,8 +551,16 @@ enum VisualFixture: String, CaseIterable, Sendable {
     /// Pass an explicit `now` (e.g. `VisualFixture.referenceDate` in tests, `Date()` at launch).
     static func visualFixture(
       _ fixture: VisualFixture,
-      now: Date
+      now: Date,
+      selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore()
     ) -> AppModel {
+      let days: [UsageActivityDay]
+      switch fixture {
+      case .content, .cachedError:
+        days = VisualFixtureContent.activityDays(ending: now)
+      case .signedOut, .empty, .noDevices:
+        days = []
+      }
       let model = AppModel(
         account: AccountClient(
           relay: RelayClient(transport: FixtureBlockedHTTPTransport()),
@@ -299,10 +569,50 @@ enum VisualFixture: String, CaseIterable, Sendable {
           now: { now }
         ),
         authenticator: FixtureBlockedAuthenticator(),
-        widgetPublisher: NoOpWidgetSnapshotPublisher()
+        widgetPublisher: NoOpWidgetSnapshotPublisher(),
+        selectionSaltStore: selectionSaltStore,
+        activity: FixtureActivityLoader(
+          days: days,
+          populatedAgents: VisualFixtureContent.dayAgents()
+        ),
+        now: { now }
       )
       fixture.apply(to: model, now: now)
+      model.resolvePendingSubscriptionSelection()
       return model
+    }
+  }
+
+  /// Answers the heatmap and a single-day `detail=agents` read without touching Relay.
+  private final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
+    let days: [UsageActivityDay]
+    let populatedAgents: [UsageAgentUsage]
+
+    init(days: [UsageActivityDay], populatedAgents: [UsageAgentUsage]) {
+      self.days = days
+      self.populatedAgents = populatedAgents
+    }
+
+    func fetchUsageActivity(
+      from: String,
+      to: String,
+      detail: ActivityDetail?
+    ) async -> AccountActivityResult {
+      if from == to {
+        let base = days.first { $0.date == from } ?? UsageActivityChart.emptyDay(date: from)
+        let agents: [UsageAgentUsage] = detail == .agents && base.totals.totalTokens > 0
+          ? populatedAgents
+          : (detail == .agents ? [] : (base.agents ?? []))
+        let day = UsageActivityDay(
+          date: base.date,
+          totals: base.totals,
+          cost: base.cost,
+          partial: base.partial,
+          agents: detail == .agents ? agents : nil
+        )
+        return .activity(AccountUsageActivityResponse(days: [day]))
+      }
+      return .activity(AccountUsageActivityResponse(days: days))
     }
   }
 
@@ -318,5 +628,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
     func authenticate(url: URL, callbackScheme: String) async throws -> URL {
       throw AuthorizationError.cancelled
     }
+
+    func present(
+      url: URL,
+      callbackScheme: String?,
+      prefersEphemeralWebBrowserSession: Bool
+    ) async throws {}
   }
 #endif

@@ -1,0 +1,8 @@
+# Draft — pending owner review
+Welcome to Quota 1.0.
+
+Quota is the iPhone companion to QuotaBar. Connect the GitHub Account you already use on a Mac to see remaining coding-agent quota, Today Usage, and which collection Devices are Active, Idle, or Not reporting.
+
+Home Screen and Lock Screen widgets keep remaining quota in glance range. Optional notifications can remind you when remaining quota crosses a threshold you set.
+
+This iPhone is a read-only viewer. Collection, credentials, and agent logs stay on the Mac.

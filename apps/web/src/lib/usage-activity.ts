@@ -3,8 +3,10 @@ import { activityLevel, formatCount, WEB_LOCALE } from "./format.ts";
 
 export const ACTIVITY_WEEKDAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""] as const;
 export const ACTIVITY_TOOLTIP_MARGIN = 8;
+export const ACTIVITY_PAGE_DAYS = 30;
 const MONTH_LABEL_MIN_WEEKS = 2;
 const TOOLTIP_GAP = 8;
+const UTC_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export type ActivityRange = {
   from: string;
@@ -52,7 +54,17 @@ type UsageActivityModel = {
 
 type ActivityCostView = Pick<UsageActivityDayRead["cost"], "status" | "amount_microusd" | "basis">;
 
-function formatActivityDate(value: string): string {
+export type ActivityRoverAction =
+  | "next-day"
+  | "previous-day"
+  | "next-week"
+  | "previous-week"
+  | "row-start"
+  | "row-end"
+  | "page-forward"
+  | "page-back";
+
+export function formatActivityDate(value: string): string {
   return new Intl.DateTimeFormat(WEB_LOCALE, {
     dateStyle: "long",
     timeZone: "UTC",
@@ -110,6 +122,83 @@ export function formatActivityTooltip(input: {
   return `${date} · ${tokens} · ${formatActivityPrice(input.cost)} API-equivalent · ${tooltipSemantics(input.cost)}`;
 }
 
+export function usageActivityDayFromQuery(
+  value: string | null,
+  range: ActivityRange,
+): string | null {
+  if (value === null || !isUtcDateString(value)) return null;
+  if (value < range.from || value > range.to) return null;
+  return value;
+}
+
+export function usageActivityDayHref(url: URL, day: string | null): string {
+  const next = new URL(url);
+  if (day === null) next.searchParams.delete("day");
+  else next.searchParams.set("day", day);
+  return `${next.pathname}${next.search}${next.hash}`;
+}
+
+export function activityRoverFromKey(key: string): ActivityRoverAction | "select" | null {
+  switch (key) {
+    case "ArrowLeft":
+      return "previous-day";
+    case "ArrowRight":
+      return "next-day";
+    case "ArrowUp":
+      return "previous-week";
+    case "ArrowDown":
+      return "next-week";
+    case "Home":
+      return "row-start";
+    case "End":
+      return "row-end";
+    case "PageUp":
+      return "page-back";
+    case "PageDown":
+      return "page-forward";
+    case "Enter":
+    case " ":
+      return "select";
+    default:
+      return null;
+  }
+}
+
+export function nextActivityDate(
+  days: readonly { date: string; outside: boolean }[],
+  current: string,
+  action: ActivityRoverAction,
+): string {
+  const selectable = days.filter((day) => !day.outside).map((day) => day.date);
+  const index = selectable.indexOf(current);
+  if (index < 0) return current;
+  const at = (value: number): string =>
+    selectable[Math.min(selectable.length - 1, Math.max(0, value))] ?? current;
+  switch (action) {
+    case "next-day":
+      return at(index + 1);
+    case "previous-day":
+      return at(index - 1);
+    case "next-week":
+      return at(index + 7);
+    case "previous-week":
+      return at(index - 7);
+    case "page-forward":
+      return at(index + ACTIVITY_PAGE_DAYS);
+    case "page-back":
+      return at(index - ACTIVITY_PAGE_DAYS);
+    case "row-start":
+    case "row-end": {
+      const allIndex = days.findIndex((day) => day.date === current);
+      if (allIndex < 0) return current;
+      const weekStart = allIndex - (allIndex % 7);
+      const week = days.slice(weekStart, weekStart + 7).filter((day) => !day.outside);
+      const edge = action === "row-start" ? week[0] : week.at(-1);
+      return edge?.date ?? current;
+    }
+  }
+}
+
 export function buildUsageActivityModel(
   reported: readonly UsageActivityDayRead[],
   range: ActivityRange,
@@ -165,6 +254,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function utcDate(value: string): Date {
   return new Date(`${value}T00:00:00Z`);
+}
+
+function isUtcDateString(value: string): boolean {
+  return UTC_DATE.test(value) && utcDate(value).toISOString().slice(0, 10) === value;
 }
 
 function sundayAlignedDates(range: ActivityRange): string[] {

@@ -100,6 +100,26 @@ func settingsExternalLinkRow(title: String, systemImage: String, url: URL) -> so
   .accessibilityHint("Opens in browser")
 }
 
+@MainActor
+func settingsToggleRow(
+  title: String,
+  systemImage: String,
+  isOn: Binding<Bool>,
+  accessibilityLabel: String,
+  accessibilityHint: String
+) -> some View {
+  SettingsListRow(title: title, systemImage: systemImage) {
+    Toggle(accessibilityLabel, isOn: isOn)
+      .labelsHidden()
+      .toggleStyle(.switch)
+      .controlSize(.mini)
+      .tint(QuotaPalette.accent)
+  }
+  .accessibilityElement(children: .combine)
+  .accessibilityLabel(accessibilityLabel)
+  .accessibilityHint(accessibilityHint)
+}
+
 /// A row that opens a page one level deeper, stating the choice in force on the right when the
 /// page is about one.
 @MainActor

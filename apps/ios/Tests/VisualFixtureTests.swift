@@ -24,6 +24,7 @@ struct VisualFixtureParserTests {
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
+      ("no-devices", VisualFixture.noDevices),
     ]
   )
   func parseRecognizesEachFixture(raw: String, expected: VisualFixture) {
@@ -42,10 +43,11 @@ struct VisualFixtureParserTests {
       #expect(model.summary == nil)
       #expect(model.banner == nil)
       #expect(model.expiredMessage == nil)
+      #expect(model.activityChart == .idle)
     }
 
     @Test
-    func contentIncludesCodexClaudeGrokAndTodayValues() {
+    func contentIncludesCodexClaudeGrokAndTodayValues() throws {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       #expect(model.skipsRestore)
       #expect(model.phase == .signedIn)
@@ -57,12 +59,43 @@ struct VisualFixtureParserTests {
       #expect(providers == [.codex, .claude, .grok])
       #expect(model.providerCards.count == 3)
 
-      let usage = model.summary?.usage.today
-      #expect(usage?.totals.inputTokens == 1_420_500)
-      #expect(usage?.totals.outputTokens == 284_120)
-      #expect(usage?.totals.messages == 164)
-      #expect(usage?.cost.status == .complete)
-      #expect(usage?.cost.amountMicrousd == "1489234")
+      let codex = try #require(model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
+      #expect(codex.sources.count == 2)
+      #expect(model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
+      let readings = SubscriptionDetailContent.make(
+        subscription: codex,
+        devices: model.summary?.devices ?? [],
+        now: VisualFixture.referenceDate
+      )
+      #expect(readings.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
+      #expect(readings.sources.map(\.isReporting) == [true, false])
+
+      let usage = model.summary!.usage
+      let today = usage.today
+      #expect(today.totals.inputTokens == 1_420_500)
+      #expect(today.totals.outputTokens == 284_120)
+      #expect(today.totals.messages == 164)
+      #expect(today.cost.status == .complete)
+      #expect(today.cost.amountMicrousd == "1489234")
+      #expect(today.totals.totalTokens < usage.last7Days.totals.totalTokens)
+      #expect(usage.last7Days.totals.totalTokens < usage.last30Days.totals.totalTokens)
+      #expect(usage.last30Days.totals.totalTokens < usage.all.totals.totalTokens)
+
+      let openaiModels =
+        usage.last30Days.agents
+        .first { $0.agent == .codex }?
+        .providers.first { $0.provider == .openai }?
+        .models ?? []
+      #expect(openaiModels.count > 5)
+      #expect(openaiModels.contains { $0.model == "other" })
+      #expect(model.selectedUsagePeriod == .last30Days)
+
+      guard case .loaded(let days) = model.activityChart else {
+        Issue.record("content fixture should preload activity")
+        return
+      }
+      #expect(!days.isEmpty)
+      #expect(days.contains { $0.date == UsageActivityCalendar.utcDay(from: VisualFixture.referenceDate) })
 
       // Fixtures must never carry session material.
       #expect(model.summary?.account.accountID.hasPrefix("account_visual_") == true)
@@ -120,6 +153,20 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.subscriptions.isEmpty == true)
       #expect(model.summary?.usage.today.totals.messages == 0)
       #expect(model.summary?.usage.today.totals.inputTokens == 0)
+      #expect(model.summary?.usage.today.agents.isEmpty == true)
+      #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
+      #expect(model.banner == nil)
+      #expect(model.activityChart == .loaded([]))
+    }
+
+    @Test
+    func noDevicesIsSignedInWithoutDevicesOrSubscriptions() {
+      let model = AppModel.visualFixture(.noDevices, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedIn)
+      #expect(model.summary?.devices.isEmpty == true)
+      #expect(model.summary?.subscriptions.isEmpty == true)
+      #expect(model.providerCards.isEmpty)
       #expect(model.banner == nil)
     }
   }

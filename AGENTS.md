@@ -55,7 +55,8 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
 - The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
   managed wire types — quota, account, and Usage — plus `ProviderID` and Relay access;
-  `packages/apple-shared` owns Foundation-only presentation semantics. QuotaBar owns its private IPC
+  `packages/apple-shared` owns Foundation-only presentation semantics and `QuotaAlerts`, the
+  Foundation-only remaining-quota rule evaluator both Apple apps share. QuotaBar owns its private IPC
   models, its Usage upload and local-report types, and app-only provider behavior, and extends the
   shared types rather than declaring a second copy. Wire validation lives with the type it protects,
   so both products answer the same input the same way. Do not restate a type one of those packages
@@ -141,7 +142,9 @@ pnpm check
 pnpm test
 pnpm build
 pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
+pnpm version:bump:ios patch       # Quota iOS MARKETING_VERSION, then generate-ios
 # Publish: git tag menubar-vX.Y.Z
+# Publish iOS: git tag ios-vX.Y.Z
 ```
 
 main carries the version being developed, not the one last released: after a stable
@@ -185,8 +188,8 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
   `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
   apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
-- Web change: run its type check and production build; inspect desktop and mobile rendering when
-  browser tooling is available.
+- Web change: run its type check, existing and component tests, e2e smoke, and production build;
+  inspect desktop and mobile rendering when browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets
   dry-run build.
 - Cross-cutting change: run the full root format, check, test, and build sequence.

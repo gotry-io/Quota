@@ -272,4 +272,65 @@ struct DecodingTests {
 
     #expect(snapshot.primaryCadenceWindows.map(\.id) == ["five_hour", "seven_day", "monthly"])
   }
+
+  @Test
+  func decodesAnActivityDayWithAndWithoutItsAgentTree() throws {
+    let totals = Fixtures.summaryTotals()
+    let agents: [[String: Any]] = [
+      [
+        "agent": "codex",
+        "providers": [
+          [
+            "provider": "openai",
+            "models": [["model": "gpt-5.6-sol", "totals": totals, "cost": Fixtures.completeCost()]],
+          ]
+        ],
+      ]
+    ]
+    let withoutAgents = try WireCodec.decode(
+      AccountUsageActivityResponse.self,
+      from: try Fixtures.usageActivityJSON(days: [Fixtures.usageActivityDay()])
+    )
+    #expect(withoutAgents.protocolVersion == WireCodec.managedDataProtocolVersion)
+    #expect(withoutAgents.days.count == 1)
+    #expect(withoutAgents.days.first?.date == "2026-08-10")
+    #expect(withoutAgents.days.first?.agents == nil)
+
+    let withAgents = try WireCodec.decode(
+      AccountUsageActivityResponse.self,
+      from: try Fixtures.usageActivityJSON(days: [
+        Fixtures.usageActivityDay(agents: agents)
+      ])
+    )
+    #expect(withAgents.days.first?.agents?.first?.agent == .codex)
+    #expect(
+      withAgents.days.first?.agents?.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
+
+    var extra = try JSONSerialization.jsonObject(
+      with: try Fixtures.usageActivityJSON(days: [Fixtures.usageActivityDay()])
+    ) as! [String: Any]
+    extra["generated_at"] = "2026-08-24T09:05:00Z"
+    let tolerated = try WireCodec.decode(
+      AccountUsageActivityResponse.self,
+      from: try JSONSerialization.data(withJSONObject: extra)
+    )
+    #expect(tolerated.days.first?.date == "2026-08-10")
+
+    extra["protocol_version"] = 5
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountUsageActivityResponse.self,
+        from: try JSONSerialization.data(withJSONObject: extra)
+      )
+    }
+
+    var nullAgents = Fixtures.usageActivityDay()
+    nullAgents["agents"] = NSNull()
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountUsageActivityResponse.self,
+        from: try Fixtures.usageActivityJSON(days: [nullAgents])
+      )
+    }
+  }
 }

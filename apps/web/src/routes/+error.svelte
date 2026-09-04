@@ -2,6 +2,10 @@
 import { page } from "$app/state";
 </script>
 
+<svelte:head>
+  <title>Quota</title>
+</svelte:head>
+
 <section class="dashboard" aria-labelledby="error-title">
   <div class="dashboard-heading">
     <div>

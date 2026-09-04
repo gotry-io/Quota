@@ -36,9 +36,16 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 - The exact phrases and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`.
   `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
   so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
-- **A window with no reported refill instant reads “No reset time reported.”** One phrase; a future
-  reset instant still prints as a date or a countdown, because that is not an age. A percent window
-  that is still full omits the line: there is no refill to wait for.
+- **A future reset is a countdown or a local date, never an age.** All of it is relative to the
+  reader’s time zone, and the English is fixed: it does not follow the device locale. Under an
+  hour: **Resets in 42m** (minutes round up; anything under a minute is still **Resets in 1m**).
+  From one hour to a day: **Resets in 3h 12m**, or **Resets in 3h** when the minutes are zero. From
+  a day to a week: **Resets Tue 14:00** (weekday abbreviation and 24-hour `HH:mm`). A week or more:
+  **Resets Sep 12** (month abbreviation and day). A reset that has already passed prints no Resets
+  line; the reading is **Not current**, or the status word the source reported. The `reset` array in
+  the same fixture is the shared statement of these thresholds.
+- **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
+  window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
   the only place a provider is named for a person. No surface keeps a second table and none derives
   a name from an identifier.
@@ -54,6 +61,16 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   Counting how many readings came from this Mac and how many from the account is implementation
   detail; whether the numbers are still current is not. **This Mac** and **Account** remain valid as
   the two Usage sources a person picks between.
+- **Notification copy.** Title is **`<Provider display_name> · <Window title>`**. Body is
+  **`12% left · resets in 42m`**, using the shared reset countdown in lowercase; if that countdown
+  is nil, the body is only **`12% left`**. A window refill reads **`<Window title> quota reset`**.
+  Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
+  When a remaining-quota reading should fire a local threshold or reset notification is
+  `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
+  answer that file through `QuotaAlerts`.
+- **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
+  days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
+  it **2 Years**; the accessibility name stays **Up to 2 years**.
 
 ## Window and layout tokens
 
@@ -244,6 +261,7 @@ Overview
     ├── Account
     │   └── Devices
     ├── Usage
+    ├── Notifications
     ├── Menu Bar Style
     ├── Menu Bar Provider
     ├── Support
@@ -280,8 +298,7 @@ Each quota observation shows:
 - percent-only windows as `71%`;
 - balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
 - one meter per quota window when a percent is meaningful;
-- reset time as quiet metadata. Reset copy uses weekday and time within six days, otherwise month
-  and day; it does not imply the window period.
+- reset time as quiet metadata, in the shared reset copy; it does not imply the window period.
 
 An Overview row spends no line on which source answered or how old its reading is. A reading that
 no longer describes live quota says so in tone — muted value, meter at reduced opacity — and the
@@ -348,7 +365,7 @@ The Account group on Settings is one row deep in every state:
 The Account group is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
+Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
 **Style** and **Provider**: two rows that state the choice in force on the right and open a page to
 change it, never a menu that drops over the panel. General contains the native mini **Launch at
@@ -404,6 +421,32 @@ empty, error, or content at its root uses this host; individual pages must not d
 guess the navigation duration. Header actions stay hidden during the transition and then reflect the
 published page state. Reduce Motion skips the transition and publishes updates immediately.
 
+### Notifications
+
+Notifications is a Settings destination under Quota. It holds the local remaining-quota rules this
+Mac evaluates itself: one master switch, remaining-percent thresholds on each subscription Overview
+is showing, and a switch for window-reset reminders.
+
+- The master switch is off until the person turns it on and macOS grants alerts and sound. Turning
+  it on asks `UNUserNotificationCenter` for `.alert` and `.sound`. A refusal puts the switch back
+  to off and shows **Allow notifications for QuotaBar in System Settings.** with **Open System
+  Settings**, which opens `x-apple.systempreferences:com.apple.Notifications-Settings.extension`.
+  Opening the page re-reads the system permission; a later grant in System Settings does not turn
+  the switch on by itself.
+- Each visible subscription is one group: the catalog `display_name` and the masked account label.
+  Two compact menus pick remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
+  defaults to **20**; the second defaults to **10** and may be **Off**, which stores a single
+  threshold. Stored values stay descending and unique.
+- Reset reminders default on. QuotaBar books a calendar notification at each available
+  subscription's primary window `resets_at` and replaces it when a new reading arrives. Signing out
+  or turning the master switch off removes every pending reminder. A `windowReset` the evaluator
+  emits for a window that already has a reminder is left to that reminder.
+- The page footer is **Quota reminds you when a refresh brings new data.** Quota does not promise
+  real-time.
+- The Settings home row trails **On** or **Off**. Delivery is native.
+
+The page uses the same Settings list rows as the rest of this panel.
+
 ### Account
 
 The Account page is reachable only while signed in, and it holds everything that belongs to the
@@ -435,7 +478,7 @@ simply **Account**, with a single-account symbol, and **This Mac**. Omit the men
 unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
 source preserves the selected period.
 
-A four-item 28pt tab control selects Today, 7 Days, 30 Days, or All; Today is the default. Its
+A four-item 28pt tab control selects Today, 7 Days, 30 Days, or 2 Years; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
 The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
@@ -660,7 +703,7 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), a source, Devices, Usage, Menu Bar
+setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
 Style, Menu Bar Provider, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.

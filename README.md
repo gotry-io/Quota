@@ -50,7 +50,7 @@ The canonical documents are [architecture](docs/architecture.md),
 ## Repository layout
 
 ```text
-apps/ios/                 Quota iPhone/iPad SwiftUI account app
+apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI
@@ -127,6 +127,11 @@ pnpm version:bump:menubar patch  # or minor | major | explicit semver
 ```
 
 The marketing version lives in `apps/menubar/Support/Info.plist`.
+
+Quota iOS publishes through an `ios-vX.Y.Z` tag that must match `apps/ios/project.yml`
+`MARKETING_VERSION`. The owner-only workflow archives, exports, and uploads to App Store Connect
+when the secrets listed in [`apps/ios/README.md`](apps/ios/README.md) are set. Signing identities
+are not in git.
 
 ## Current status
 

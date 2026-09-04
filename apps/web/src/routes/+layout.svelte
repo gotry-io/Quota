@@ -8,10 +8,6 @@ let { data, children }: LayoutProps = $props();
 const year = new Date().getFullYear();
 </script>
 
-<svelte:head>
-  <title>Quota — Know what you have left</title>
-</svelte:head>
-
 <Header viewer={data.viewer} />
 <main id="main">
   {@render children()}
@@ -20,6 +16,10 @@ const year = new Date().getFullYear();
   <span>© {year} GoTry IO · MIT</span>
   <div class="footer-controls">
     <div class="footer-links">
+      <a href="/download">Download</a>
+      <a href="/support">Support</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
       <a href="https://github.com/gotry-io/Quota">GitHub</a>
       <a href="/my">Account</a>
     </div>

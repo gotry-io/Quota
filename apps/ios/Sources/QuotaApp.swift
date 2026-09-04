@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct QuotaApp: App {
   @State private var model: AppModel
+  @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.system
 
   init() {
     #if DEBUG
@@ -24,11 +25,15 @@ struct QuotaApp: App {
   var body: some Scene {
     WindowGroup {
       RootView(model: model)
+        .preferredColorScheme(appearance.colorScheme)
         .task {
           #if DEBUG
             if model.skipsRestore { return }
           #endif
           await model.restore()
+        }
+        .onOpenURL { url in
+          model.openDeepLink(url)
         }
     }
   }

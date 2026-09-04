@@ -1,7 +1,9 @@
 import AppKit
 import Foundation
+import QuotaAlerts
 import QuotaWire
 import Testing
+import UserNotifications
 
 @testable import QuotaBar
 
@@ -404,7 +406,10 @@ func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
 }
 
 /// A device signed in, with the first account read still running.
-private func justSignedInState(label: String?) -> LocalServiceState {
+func justSignedInState(
+  label: String?,
+  overview: [LocalServiceOverviewItem] = []
+) -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
     revision: 2,
@@ -431,7 +436,7 @@ private func justSignedInState(label: String?) -> LocalServiceState {
     providers: [],
     providerBrowserSessions: [],
     browserScanEnabled: [],
-    overview: [],
+    overview: overview,
     cache: .settled
   )
 }
@@ -651,6 +656,230 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
 }
 
+@Test @MainActor
+func quotaApplyDeliversFirstSeenThresholdEventsWhenNotificationsAreEnabled() throws {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  let store = InMemoryNotificationStateStore()
+  let sink = RecordingNotificationSink()
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState()),
+    notificationStore: store,
+    notificationSink: sink,
+    notificationDefaults: defaults.store
+  )
+  model.apply(overviewOnlyState(overview: [codexOverviewItem(remainingPercent: 12, now: now)]))
+
+  #expect(sink.events.count == 1)
+  #expect(
+    sink.events
+      == [
+        .thresholdCrossed(
+          selector: "ccfc96629357",
+          windowID: "weekly",
+          threshold: 20,
+          remainingPercent: 12,
+          resetsAt: nil
+        )
+      ]
+  )
+  #expect(try store.load().fired.count == 1)
+}
+
+@Test @MainActor
+func signingOutClearsNotificationDedupState() throws {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  let store = InMemoryNotificationStateStore(
+    state: AlertDedupState(
+      fired: [
+        AlertDedupKey(
+          selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
+      ],
+      readings: [
+        AlertStoredReading(
+          selector: "ccfc96629357", windowID: "weekly", remainingPercent: 18, resetsAt: nil)
+      ]
+    )
+  )
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: justSignedInState(label: "octocat")),
+    notificationStore: store,
+    notificationDefaults: defaults.store
+  )
+  model.apply(justSignedInState(label: "octocat"))
+  #expect(try store.load().fired.count == 1)
+
+  model.apply(signedOutWithSessionEndedState())
+  #expect(try store.load() == .empty)
+}
+
+@Test @MainActor
+func newReadingsRescheduleResetReminders() throws {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  let center = FakeNotificationCenter()
+  let now = Date()
+  let firstReset = now.addingTimeInterval(3_600)
+  let secondReset = now.addingTimeInterval(7_200)
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState()),
+    notificationCenter: center,
+    notificationDefaults: defaults.store
+  )
+
+  model.apply(
+    overviewOnlyState(overview: [codexOverviewItem(remainingPercent: 40, now: now, resetsAt: firstReset)])
+  )
+  #expect(center.pending.count == 1)
+  let firstID = try #require(center.pending.first?.identifier)
+  #expect(center.pending.first?.trigger is UNCalendarNotificationTrigger)
+  #expect(
+    firstID
+      == AlertDedupKey(
+        selector: "ccfc96629357", windowID: "weekly", resetsAt: firstReset, threshold: nil
+      ).requestIdentifier
+  )
+
+  model.apply(
+    overviewOnlyState(
+      overview: [codexOverviewItem(remainingPercent: 40, now: now, resetsAt: secondReset)])
+  )
+  #expect(center.pending.count == 1)
+  #expect(center.pending.first?.identifier != firstID)
+  #expect(
+    center.pending.first?.identifier
+      == AlertDedupKey(
+        selector: "ccfc96629357", windowID: "weekly", resetsAt: secondReset, threshold: nil
+      ).requestIdentifier
+  )
+}
+
+@Test @MainActor
+func signingOutRemovesScheduledResetReminders() {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  let center = FakeNotificationCenter()
+  let now = Date()
+  let resetsAt = now.addingTimeInterval(3_600)
+  let item = codexOverviewItem(remainingPercent: 40, now: now, resetsAt: resetsAt)
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: justSignedInState(label: "octocat", overview: [item])),
+    notificationCenter: center,
+    notificationDefaults: defaults.store
+  )
+  model.apply(justSignedInState(label: "octocat", overview: [item]))
+  #expect(!center.pending.isEmpty)
+
+  model.apply(signedOutWithSessionEndedState())
+  #expect(center.pending.isEmpty)
+  #expect(center.removedAllPendingCount >= 1)
+}
+
+@Test @MainActor
+func turningOffResetRemindersClearsScheduledReminders() {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  let center = FakeNotificationCenter()
+  let now = Date()
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState()),
+    notificationCenter: center,
+    notificationDefaults: defaults.store
+  )
+  model.apply(
+    overviewOnlyState(
+      overview: [
+        codexOverviewItem(
+          remainingPercent: 40, now: now, resetsAt: now.addingTimeInterval(3_600))
+      ])
+  )
+  #expect(!center.pending.isEmpty)
+
+  model.setResetReminders(false)
+  #expect(center.pending.isEmpty)
+  #expect(!model.notificationRules.resetReminders)
+}
+
+final class RecordingNotificationSink: NotificationSink, @unchecked Sendable {
+  var events: [AlertEvent] = []
+
+  func deliver(_ events: [AlertEvent]) {
+    self.events.append(contentsOf: events)
+  }
+}
+
+struct NotificationDefaultsSuite {
+  let name: String
+  let store: UserDefaults
+
+  func tearDown() {
+    store.removePersistentDomain(forName: name)
+  }
+}
+
+func notificationDefaultsSuite() -> NotificationDefaultsSuite {
+  let name = "QuotaBarTests.MenuBarNotifications.\(UUID().uuidString)"
+  let store = UserDefaults(suiteName: name)!
+  store.removePersistentDomain(forName: name)
+  return NotificationDefaultsSuite(name: name, store: store)
+}
+
+func codexOverviewItem(
+  remainingPercent: Double,
+  now: Date,
+  resetsAt: Date? = nil
+) -> LocalServiceOverviewItem {
+  let snapshot = QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(
+      fingerprint: "account_test",
+      label: nil,
+      plan: "Plus",
+      fingerprintScope: .global
+    ),
+    windows: [
+      QuotaWindow(
+        id: "weekly",
+        title: "Weekly",
+        usedPercent: 100 - remainingPercent,
+        resetsAt: resetsAt,
+        primaryCadence: .weekly
+      )
+    ],
+    status: .available,
+    observedAt: now
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    observedAt: now,
+    isStale: false
+  )
+  return LocalServiceOverviewItem(
+    identity: LocalServiceOverviewIdentity(
+      provider: .codex,
+      fingerprint: "account_test",
+      scope: .global,
+      sourceID: nil
+    ),
+    snapshot: snapshot,
+    sources: [source],
+    selectedSourceID: source.sourceID,
+    selectedSourceDisplayName: source.displayName,
+    automaticSourceID: source.sourceID,
+    automaticSourceDisplayName: source.displayName,
+    isStale: false
+  )
+}
+
 private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   LocalServiceUsagePeriodValues(
     today: LocalServiceUsageDetail(
@@ -688,7 +917,7 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   )
 }
 
-private func signedOutWithSessionEndedState() -> LocalServiceState {
+func signedOutWithSessionEndedState() -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
     revision: 1,
@@ -723,7 +952,7 @@ private func signedOutWithSessionEndedState() -> LocalServiceState {
   )
 }
 
-private func loggingInState() -> LocalServiceState {
+func loggingInState() -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
     revision: 1,
@@ -799,7 +1028,7 @@ private func sourceScopedOverviewItem(
   )
 }
 
-private func overviewOnlyState(
+func overviewOnlyState(
   overview: [LocalServiceOverviewItem]
 ) -> LocalServiceState {
   LocalServiceState(
@@ -863,7 +1092,7 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
-private actor PinCallRecord {
+actor PinCallRecord {
   private(set) var identitySourceID: String?
   private(set) var identityKey: String?
   private(set) var pin: String?
@@ -877,7 +1106,7 @@ private actor PinCallRecord {
 
 /// Counts the calls a stub was asked for, which is all a fire-and-forget operation leaves behind
 /// once the service it spoke to is gone.
-private actor CallRecord {
+actor CallRecord {
   private(set) var count = 0
 
   func record() {
@@ -905,7 +1134,7 @@ private struct StubLoginURLOpener: LoginURLOpening {
   }
 }
 
-private struct StubLocalService: LocalServiceServing {
+struct StubLocalService: LocalServiceServing {
   let stateValue: LocalServiceState
   let events: AsyncStream<LocalServiceEvent>
   let loginDelayNanoseconds: UInt64

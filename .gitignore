@@ -9,6 +9,7 @@
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+apps/ios/Local.xcconfig
 
 # JavaScript / TypeScript / Cloudflare
 node_modules/

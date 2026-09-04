@@ -19,7 +19,8 @@ The v6 data contract is four routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):
 
 - `PUT /api/v6/device/snapshots` stores this device's readings by `(provider, fingerprint)`, keeps
-  the newer of the stored and uploaded `observed_at`, and drops the fingerprints the envelope no
+  the newer of the stored and uploaded `observed_at` (a same-instant restatement is taken only when
+  it changes status from `available` to a failure), and drops the fingerprints the envelope no
   longer names for a provider it does name. It answers `{accepted, ignored}` by provider.
 - `PUT /api/v6/device/usage` replaces whole UTC hours. An hour whose `scan_version` is strictly
   newer than the stored one replaces every row of that hour; anything else is `ignored`, including
@@ -32,7 +33,8 @@ The v6 data contract is four routes
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
   carry gets a shorter `all` rather than no summary at all.
-- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates.
+- `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
+  single-day read may take `detail=agents` and then carries that day's agent tree.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such

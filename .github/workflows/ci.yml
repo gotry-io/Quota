@@ -50,6 +50,32 @@ jobs:
       - name: Build the Relay Worker and website
         run: pnpm --filter @gotry-io/quota-relay build
 
+  verify-web-e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install pinned toolchain packages
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.23.0
+          node --version
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter @gotry-io/quota-web exec playwright install --with-deps chromium
+
+      - name: Run website end-to-end tests
+        run: pnpm --filter @gotry-io/quota-web test:e2e
+
   verify:
     runs-on: macos-26
     steps:
@@ -84,3 +110,58 @@ jobs:
 
       - name: Test packaged helper with isolated local state
         run: ./scripts/test-menubar-helper.sh
+
+  # iOS generate/build/test. Advisory: not a required check. The Xcode steps run
+  # only when the pull request or push touches iOS-related paths.
+  verify-ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect iOS-related path changes
+        id: ios
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          pattern='^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|\.github/workflows/ci\.yml$)'
+          run=true
+          from=""
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${BASE_SHA:-}" ]; then
+            from="$BASE_SHA"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            from="$BEFORE_SHA"
+          fi
+          if [ -n "$from" ]; then
+            if changed=$(git diff --name-only "$from" HEAD); then
+              if printf '%s\n' "$changed" | grep -E -q "$pattern"; then
+                run=true
+              else
+                run=false
+                echo "No iOS-related path changes; skipping generate/build/test."
+              fi
+            else
+              echo "Could not diff against $from; running iOS verification."
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Install XcodeGen
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate the iOS Xcode project
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: ./scripts/generate-ios.sh
+
+      - name: Build Quota iOS
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: ./scripts/build-ios.sh
+
+      - name: Test Quota iOS
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: ./scripts/test-ios.sh

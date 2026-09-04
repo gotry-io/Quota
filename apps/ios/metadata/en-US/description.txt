@@ -1,0 +1,41 @@
+# Draft — pending owner review
+Quota is the iPhone companion to QuotaBar.
+
+See remaining coding-agent quota and Today Usage for the GitHub Account you already use on a Mac. Quota on iPhone is a read-only viewer. It does not collect local logs, store provider credentials, or upload snapshots. Collection happens on a Mac running QuotaBar.
+
+WHAT YOU NEED
+
+• A Mac with QuotaBar collecting quota and Usage
+• The same GitHub Account on this iPhone — tap Connect Account to sign in
+
+WHAT YOU SEE
+
+• Remaining quota for each subscription, with reset times
+• Collection Devices marked Active, Idle, or Not reporting — never Device IDs or remote credentials
+• Today Usage: tokens and API-equivalent cost
+• Home Screen and Lock Screen widgets
+• Optional notifications when remaining quota crosses a threshold you set
+
+WHAT QUOTA NEVER COLLECTS
+
+QuotaBar reads provider sessions and agent logs on your Mac and uploads only the numbers. This iPhone never sees, stores, or uploads:
+
+• Provider credentials, cookies, or API keys
+• Prompts, completions, tool payloads, or raw events
+• Local file paths, session IDs, or conversation IDs
+
+PROVIDERS AND AGENTS
+
+Quota collection: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and Cursor.
+
+Usage analytics: Codex, Claude Code, Grok, OpenCode, Pi, and Cursor.
+
+SIGN-IN
+
+Connect Account signs in with GitHub — the same identity QuotaBar uses. Quota does not create a separate account system. GitHub is the account, not a convenience login on top of one.
+
+ACCOUNT DELETION
+
+Delete the Account from Settings › Delete Account. That continues on the website after you sign in with GitHub again. Deletion requires a session authenticated within the last ten minutes.
+
+Requires iOS 17 or later. QuotaBar for Mac is available at https://quota.gotry.io

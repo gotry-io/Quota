@@ -20,7 +20,7 @@ struct ProviderSourceDetailView: View {
               Text(freshnessLabel(source))
                 .quotaSecondaryStyle()
               if let snapshot = source.snapshot {
-                QuotaReadingWindowsView(snapshot: snapshot, isStale: source.isStale)
+                QuotaReadingWindowsView(snapshot: snapshot, isStale: source.isStale, now: now)
               }
             }
             .padding(QuotaDesign.Layout.groupContentInset)
@@ -63,11 +63,17 @@ struct ProviderSourceDetailView: View {
 struct QuotaReadingWindowsView: View {
   let snapshot: QuotaSnapshot
   let isStale: Bool
+  let now: Date
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
       ForEach(snapshot.windows) { window in
-        QuotaWindowRow(window: window, provider: snapshot.provider, isStale: isStale)
+        QuotaWindowRow(
+          window: window,
+          provider: snapshot.provider,
+          isStale: isStale,
+          now: now
+        )
       }
     }
   }

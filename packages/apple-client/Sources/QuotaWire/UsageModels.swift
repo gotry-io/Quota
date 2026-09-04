@@ -690,3 +690,96 @@ public struct AccountUsage: Codable, Equatable, Sendable {
     case all
   }
 }
+
+/// One UTC day of the activity chart, which stays on UTC dates whatever calendar reads it.
+///
+/// A single-day read asked with `detail=agents` carries the same agent tree a period does.
+public struct UsageActivityDay: Codable, Equatable, Sendable {
+  public let date: String
+  public let totals: UsageSummaryTotals
+  public let cost: UsageCostOutcome
+  public let partial: Bool
+  public let agents: [UsageAgentUsage]?
+
+  public init(
+    date: String,
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    partial: Bool,
+    agents: [UsageAgentUsage]? = nil
+  ) {
+    self.date = date
+    self.totals = totals
+    self.cost = cost
+    self.partial = partial
+    self.agents = agents
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(String.self, forKey: .date)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    if container.contains(.agents) {
+      agents = try container.decode([UsageAgentUsage].self, forKey: .agents)
+    } else {
+      agents = nil
+    }
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .date,
+        in: container,
+        debugDescription: "Invalid Usage activity day."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    WireValidation.isCalendarDate(date) && totals.isValid && cost.isValid
+      && (agents.map {
+        $0.count <= WireCodec.maximumUsagePeriodLeaves && $0.allSatisfy(\.isValid)
+      } ?? true)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case totals
+    case cost
+    case partial
+    case agents
+  }
+}
+
+/// The activity chart an Account read answers: up to 400 UTC days of totals, and optionally
+/// one day's agent tree.
+public struct AccountUsageActivityResponse: Codable, Equatable, Sendable {
+  public let protocolVersion: Int
+  public let days: [UsageActivityDay]
+
+  public init(days: [UsageActivityDay]) {
+    protocolVersion = WireCodec.managedDataProtocolVersion
+    self.days = days
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
+    days = try container.decode([UsageActivityDay].self, forKey: .days)
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
+      days.count <= 400,
+      days.allSatisfy(\.isValid)
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .protocolVersion,
+        in: container,
+        debugDescription: "Invalid Usage activity response."
+      )
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case protocolVersion
+    case days
+  }
+}

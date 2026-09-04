@@ -8,6 +8,7 @@ import type {
   AccountMaintenanceInput,
   AccountRecord,
   AccountState,
+  AccountUsageVersionStamp,
   AccountVersionStamp,
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
@@ -56,6 +57,32 @@ interface SessionPrincipalRow {
 interface SnapshotRow {
   device_id: string;
   snapshot_json: string;
+}
+
+interface StoredSnapshotCursor {
+  observed_at: string;
+  status: string | null;
+}
+
+/**
+ * Same accept rule as the `ON CONFLICT … WHERE` in `recordSnapshot`: a newer `observed_at`
+ * always wins; a same-instant restatement wins only when it changes `available` to a failure.
+ */
+function snapshotWriteIsAccepted(
+  stored: StoredSnapshotCursor | undefined,
+  incoming: { observed_at: string; status: string },
+): boolean {
+  if (stored === undefined) {
+    return true;
+  }
+  if (incoming.observed_at > stored.observed_at) {
+    return true;
+  }
+  return (
+    incoming.observed_at === stored.observed_at &&
+    stored.status === "available" &&
+    incoming.status !== "available"
+  );
 }
 
 export class D1AccountState implements AccountState {
@@ -820,6 +847,39 @@ export class D1AccountState implements AccountState {
     };
   }
 
+  /**
+   * Aggregates over the Usage facts an activity read projects. A quota snapshot is not one of
+   * them, and neither is how recently a device spoke: the chart is daily totals, and those move
+   * when a Usage upload is accepted, a device is added or deleted, or the Account row itself
+   * is rewritten.
+   */
+  async accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp> {
+    const [devices, account] = await this.database.batch<Record<string, unknown>>([
+      this.database
+        .prepare(
+          `SELECT COUNT(*) AS devices,
+                  COALESCE(SUM(usage_sync_revision), 0) AS usage_revision,
+                  COALESCE(MAX(generation), 0) AS device_generation
+           FROM devices
+           WHERE account_id = ?1 AND deleted_at IS NULL`,
+        )
+        .bind(accountId),
+      this.database
+        .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
+        .bind(accountId),
+    ]);
+    const merged = {
+      ...(devices?.results[0] ?? {}),
+      ...(account?.results[0] ?? {}),
+    };
+    return {
+      account_updated_at: stampInstant(merged.account_updated_at),
+      devices: stampCount(merged.devices),
+      usage_revision: stampCount(merged.usage_revision),
+      device_generation: stampCount(merged.device_generation),
+    };
+  }
+
   async deleteDeviceData(
     accountId: string,
     deviceId: string,
@@ -915,10 +975,11 @@ export class D1AccountState implements AccountState {
    * Store this device's readings and drop the fingerprints it no longer sees.
    *
    * A reading is placed by `(provider, fingerprint)` and ordered by the instant it was observed,
-   * so a re-sent envelope changes nothing and a reading older than the stored one cannot
-   * overwrite it. The envelope states the fingerprints this device currently sees for each
-   * provider it names, so a subscription it has stopped observing stops speaking for it here
-   * rather than waiting out retention.
+   * so a reading older than the stored one cannot overwrite it. A restatement at the same instant
+   * is ignored unless it only changes status from `available` to a failure, which is how a device
+   * republishes a collection failure without pretending the numbers are newer. The envelope states
+   * the fingerprints this device currently sees for each provider it names, so a subscription it
+   * has stopped observing stops speaking for it here rather than waiting out retention.
    */
   async recordSnapshot(
     principal: DeviceWriterPrincipal,
@@ -943,25 +1004,31 @@ export class D1AccountState implements AccountState {
 
     const stored = await this.database
       .prepare(
-        `SELECT provider, account_fingerprint AS fingerprint, observed_at
+        `SELECT provider, account_fingerprint AS fingerprint, observed_at,
+                json_extract(snapshot_json, '$.status') AS status
          FROM quota_snapshots WHERE device_id = ?1`,
       )
       .bind(principal.device_id)
-      .all<{ provider: string; fingerprint: string; observed_at: string }>();
+      .all<{ provider: string; fingerprint: string } & StoredSnapshotCursor>();
     const observed = new Map(
-      stored.results.map((row) => [`${row.provider}\u0000${row.fingerprint}`, row.observed_at]),
+      stored.results.map((row) => [
+        `${row.provider}\u0000${row.fingerprint}`,
+        { observed_at: row.observed_at, status: row.status },
+      ]),
     );
 
     const accepted = new Set<ProviderId>();
     const ignored = new Set<ProviderId>();
     const statements: D1PreparedStatement[] = [];
     for (const snapshot of envelope.snapshots) {
-      const current = observed.get(`${snapshot.provider}\u0000${snapshot.account.fingerprint}`);
-      if (current !== undefined && Date.parse(snapshot.observed_at) <= Date.parse(current)) {
+      const key = `${snapshot.provider}\u0000${snapshot.account.fingerprint}`;
+      const current = observed.get(key);
+      if (!snapshotWriteIsAccepted(current, snapshot)) {
         ignored.add(snapshot.provider);
         continue;
       }
       accepted.add(snapshot.provider);
+      observed.set(key, { observed_at: snapshot.observed_at, status: snapshot.status });
       statements.push(
         this.database
           .prepare(
@@ -978,7 +1045,12 @@ export class D1AccountState implements AccountState {
                observed_at = excluded.observed_at,
                snapshot_json = excluded.snapshot_json,
                updated_at = excluded.updated_at
-             WHERE excluded.observed_at > quota_snapshots.observed_at`,
+             WHERE excluded.observed_at > quota_snapshots.observed_at
+                OR (
+                  excluded.observed_at = quota_snapshots.observed_at
+                  AND json_extract(quota_snapshots.snapshot_json, '$.status') = 'available'
+                  AND json_extract(excluded.snapshot_json, '$.status') != 'available'
+                )`,
           )
           .bind(
             principal.device_id,

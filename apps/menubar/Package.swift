@@ -28,12 +28,19 @@ let package = Package(
       dependencies: [
         .product(name: "QuotaWire", package: "apple-client"),
         .product(name: "QuotaPresentation", package: "apple-shared"),
+        .product(name: "QuotaAlerts", package: "apple-shared"),
         .product(name: "SweetCookieKit", package: "SweetCookieKit"),
         .product(name: "Sparkle", package: "Sparkle"),
         "QuotaBarKeychainShim",
       ],
-      resources: [.process("Resources")]),
+      resources: [.process("Resources")],
+      linkerSettings: [
+        .linkedFramework("UserNotifications")
+      ]),
     .testTarget(
       name: "QuotaBarTests",
-      dependencies: ["QuotaBar"]),
+      dependencies: [
+        "QuotaBar",
+        .product(name: "QuotaAlerts", package: "apple-shared"),
+      ]),
   ])

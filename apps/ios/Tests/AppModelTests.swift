@@ -348,10 +348,58 @@ struct AppModelTests {
     // The pending request outlives the session unless it is cancelled.
     #expect(scheduler.cancelCount == 1)
   }
+
+  @Test
+  func logoutClearsTheSelectionSaltSoTheNextPublishGetsANewOne() async throws {
+    let salt = Data(repeating: 0x11, count: 32)
+    let saltStore = InMemorySelectionSaltStore(salt: salt) {
+      Data(repeating: 0x22, count: 32)
+    }
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+        summaryStore: MemoryAccountSummaryStore(),
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      widgetPublisher: publisher,
+      selectionSaltStore: saltStore
+    )
+
+    #expect(try saltStore.loadOrCreate() == salt)
+    await model.logout()
+    #expect(model.phase == .signedOut)
+    #expect(try saltStore.loadOrCreate() == Data(repeating: 0x22, count: 32))
+  }
+
+  @Test
+  func presentDeleteAccountOpensNonEphemeralGitHubStartWithEncodedReturnTo() async {
+    let authenticator = ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled))
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+        summaryStore: MemoryAccountSummaryStore(),
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: authenticator
+    )
+
+    await model.presentDeleteAccount()
+    #expect(authenticator.lastPresentURL == QuotaWebLinks.deleteAccountStart)
+    #expect(authenticator.lastPresentCallbackScheme == nil)
+    #expect(authenticator.lastPresentPrefersEphemeral == false)
+    #expect(
+      authenticator.lastPresentURL?.absoluteString
+        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+    )
+  }
 }
 
 @MainActor
-private final class ScriptedAuthenticator: BrowserSessionAuthenticating {
+final class ScriptedAuthenticator: BrowserSessionAuthenticating {
   var result: Result<URL, Error>
   var lastURL: URL?
   var lastCallbackScheme: String?
@@ -365,9 +413,23 @@ private final class ScriptedAuthenticator: BrowserSessionAuthenticating {
     lastCallbackScheme = callbackScheme
     return try result.get()
   }
+
+  var lastPresentURL: URL?
+  var lastPresentCallbackScheme: String?
+  var lastPresentPrefersEphemeral: Bool?
+
+  func present(
+    url: URL,
+    callbackScheme: String?,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws {
+    lastPresentURL = url
+    lastPresentCallbackScheme = callbackScheme
+    lastPresentPrefersEphemeral = prefersEphemeralWebBrowserSession
+  }
 }
 
-private final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
+final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
   struct Exchange {
     var status: Int
     var body: Data
@@ -394,12 +456,16 @@ private final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
 }
 
 @MainActor
-private func makeModel(
+func makeModel(
   session: AccountSession?,
   cache: CachedAccountSummary?,
   exchanges: [ScriptedHTTPTransport.Exchange],
   widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
-  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler()
+  backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
+  alertCoordinator: AlertCoordinator? = nil,
+  alertRulesStore: IOSAlertRulesStore? = nil,
+  notificationCenter: (any NotificationCentering)? = nil,
+  now: @escaping @Sendable () -> Date = { Date() }
 ) -> AppModel {
   AppModel(
     account: AccountClient(
@@ -412,7 +478,11 @@ private func makeModel(
       result: .failure(AuthorizationError.cancelled)
     ),
     widgetPublisher: widgetPublisher,
-    backgroundRefresh: backgroundRefresh
+    backgroundRefresh: backgroundRefresh,
+    alertCoordinator: alertCoordinator,
+    alertRulesStore: alertRulesStore,
+    notificationCenter: notificationCenter,
+    now: now
   )
 }
 
@@ -446,7 +516,7 @@ private func tokenResponse() throws -> Data {
   )
 }
 
-private enum Fixtures {
+enum Fixtures {
   static let accessToken = "qia_synthetic_access_token"
   static let refreshToken = "qiar_synthetic_refresh_token"
 

@@ -1,0 +1,2 @@
+// Optional local signing overlay. Copy Local.xcconfig.example to Local.xcconfig.
+#include? "Local.xcconfig"

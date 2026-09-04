@@ -6,12 +6,24 @@ type ThemePreference = "system" | Theme;
 
 const options = ["system", "light", "dark"] as const satisfies readonly ThemePreference[];
 
+let {
+  id = "theme-toggle",
+  menuPlacement = "up",
+}: {
+  id?: string;
+  menuPlacement?: "up" | "down";
+} = $props();
+
 let menu = $state<HTMLDetailsElement | null>(null);
 let preference = $state<ThemePreference>("system");
 
 function storedPreference(): ThemePreference {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === "light" || stored === "dark" ? stored : "system";
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : "system";
+  } catch {
+    return "system";
+  }
 }
 
 function resolvedTheme(value: ThemePreference): Theme {
@@ -34,8 +46,12 @@ function applyAppearance(value: ThemePreference): void {
 
 function choose(value: ThemePreference): void {
   preference = value;
-  if (value === "system") localStorage.removeItem(THEME_STORAGE_KEY);
-  else localStorage.setItem(THEME_STORAGE_KEY, value);
+  try {
+    if (value === "system") localStorage.removeItem(THEME_STORAGE_KEY);
+    else localStorage.setItem(THEME_STORAGE_KEY, value);
+  } catch {
+    // Private browsing and some test environments expose no storage.
+  }
   applyAppearance(value);
   menu?.removeAttribute("open");
 }
@@ -52,9 +68,13 @@ $effect(() => {
 });
 </script>
 
-<details class="appearance-menu" bind:this={menu}>
+<details
+  class="appearance-menu"
+  class:appearance-menu-down={menuPlacement === "down"}
+  bind:this={menu}
+>
   <summary
-    id="theme-toggle"
+    {id}
     class="theme-toggle"
     aria-label={`Appearance: ${label(preference)}`}
     title={`Appearance: ${label(preference)}`}

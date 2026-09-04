@@ -58,6 +58,20 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func notificationsIsOneLevelBelowSettings() {
+    var navigation = MenuBarNavigationState()
+    navigation.open(.settings)
+    navigation.open(.notifications)
+
+    #expect(navigation.path == [.settings, .notifications])
+    #expect(navigation.title == "Notifications")
+    #expect(MenuBarRoute.notifications.title == "Notifications")
+
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings])
+  }
+
+  @Test
   func chosingAMenuBarOptionIsOneLevelDownAndReturnsWhenItIsChosen() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)
@@ -84,6 +98,15 @@ struct AccountSettingsPageTests {
     let choices = MenuBarProviderPreference.choices(visibleProviders: [.grok, .codex, .claude])
     #expect(choices.first == .automatic)
     #expect(choices.map(\.label) == ["Automatic", "Grok", "Codex", "Claude Code"])
+  }
+
+  @Test
+  func usagePeriodTabsUseTheSharedPeriodNames() {
+    #expect(UsagePeriod.allCases.map(\.label) == ["Today", "7 Days", "30 Days", "2 Years"])
+    #expect(
+      UsagePeriod.allCases.map(\.accessibilityLabel)
+        == ["Today", "7 Days", "30 Days", "Up to 2 years"]
+    )
   }
 
   @Test

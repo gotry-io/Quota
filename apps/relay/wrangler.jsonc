@@ -22,7 +22,13 @@
       "!/schema/*",
       "!/logo.svg",
       "!/logo-monochrome.svg",
-      "!/og.png"
+      "!/og.png",
+      "!/apple-touch-icon.png",
+      "!/favicon.ico",
+      "!/robots.txt",
+      "!/site.webmanifest",
+      "!/sitemap.xml",
+      "!/screenshots/*"
     ]
   },
   "observability": {

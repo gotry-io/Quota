@@ -1,9 +1,11 @@
 import AppKit
 import Foundation
 import Observation
+import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 import SweetCookieKit
+import UserNotifications
 
 enum QuotaOverviewState: Equatable {
   case loading
@@ -258,6 +260,27 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   @ObservationIgnored
   private let shutdownDeadline: Duration
 
+  @ObservationIgnored
+  private let notificationStore: any NotificationStateStore
+
+  @ObservationIgnored
+  private let notificationSink: any NotificationSink
+
+  @ObservationIgnored
+  private let notificationDefaults: UserDefaults
+
+  @ObservationIgnored
+  private let notificationCenter: any NotificationCentering
+
+  @ObservationIgnored
+  private let resetScheduler: ResetReminderScheduler
+
+  @ObservationIgnored
+  private let userNotificationSink: UserNotificationSink?
+
+  private(set) var notificationRules: AlertRules
+  private(set) var notificationAuthorizationDenied = false
+
   init(
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
@@ -265,6 +288,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     accessProbe: (any BrowserAccessProbing)? = nil,
     grantPresenter: (any BrowserAccessGrantPresenting)? = nil,
     relauncher: (any QuotaBarRelaunching)? = nil,
+    notificationStore: (any NotificationStateStore)? = nil,
+    notificationSink: (any NotificationSink)? = nil,
+    notificationCenter: (any NotificationCentering)? = nil,
+    notificationDefaults: UserDefaults = .standard,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     let injectedClient = client != nil
@@ -277,6 +304,31 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       ? NoOpQuotaBarRelauncher()
       : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
+    self.notificationDefaults = notificationDefaults
+    self.notificationRules = NotificationRules.load(from: notificationDefaults)
+    let resolvedCenter =
+      notificationCenter
+      ?? (injectedClient ? NoOpNotificationCenter() : SystemNotificationCenter())
+    self.notificationCenter = resolvedCenter
+    self.resetScheduler = ResetReminderScheduler(center: resolvedCenter)
+    if let notificationSink {
+      self.notificationSink = notificationSink
+      self.userNotificationSink = nil
+    } else if injectedClient && notificationCenter == nil {
+      self.notificationSink = NoOpNotificationSink()
+      self.userNotificationSink = nil
+    } else {
+      let sink = UserNotificationSink(center: resolvedCenter)
+      self.notificationSink = sink
+      self.userNotificationSink = sink
+    }
+    if let notificationStore {
+      self.notificationStore = notificationStore
+    } else if injectedClient {
+      self.notificationStore = InMemoryNotificationStateStore()
+    } else {
+      self.notificationStore = FileNotificationStateStore.applicationSupport()
+    }
     if let client {
       self.client = client
       initializationError = nil
@@ -310,6 +362,14 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       relauncher = NoOpQuotaBarRelauncher()
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
+      notificationStore = InMemoryNotificationStateStore()
+      notificationSink = NoOpNotificationSink()
+      notificationDefaults = .standard
+      let center = NoOpNotificationCenter()
+      notificationCenter = center
+      resetScheduler = ResetReminderScheduler(center: center)
+      userNotificationSink = nil
+      notificationRules = AlertRules()
       initializationError = nil
       self.errorMessage = errorMessage
       self.lastCheckedAt = lastCheckedAt
@@ -1149,6 +1209,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     let incomingAuth =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)
+    let previouslySignedIn = authStatus == .signedIn || authStatus == .logoutPending
     if incomingAuth == .signedIn {
       if !browserOpenFailed {
         accountActionErrorMessage = nil
@@ -1202,6 +1263,147 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     } else {
       accountErrorMessage = nil
     }
+
+    if previouslySignedIn && incomingAuth == .signedOut {
+      try? notificationStore.clear()
+      resetScheduler.removeAll()
+    } else {
+      evaluateNotifications(overview: state.overview, now: Date())
+    }
+  }
+
+  func notificationSubscriptions() -> [NotificationSettingsSubscription] {
+    var result: [NotificationSettingsSubscription] = []
+    for provider in ProviderDisplayOrder.enabledProviders() {
+      let items = overview.filter { $0.identity.provider == provider }
+      var accountIndex = 0
+      for item in items {
+        guard Self.presentation(for: item) != nil else { continue }
+        let label =
+          PlanDisplay.accountLabel(item.snapshot.account.label)
+          ?? "Account \(accountIndex + 1)"
+        accountIndex += 1
+        let selector = NotificationOverview.selector(for: item)
+        let values = notificationRules.thresholds(for: selector)
+        result.append(
+          NotificationSettingsSubscription(
+            selector: selector,
+            provider: provider,
+            providerDisplayName: provider.displayName,
+            accountLabel: label,
+            firstThreshold: values[0],
+            secondThreshold: values.count > 1 ? values[1] : nil
+          )
+        )
+      }
+    }
+    return result
+  }
+
+  func setNotificationsEnabled(_ enabled: Bool) async {
+    if enabled {
+      let granted: Bool
+      do {
+        granted = try await notificationCenter.requestAuthorization(options: [.alert, .sound])
+      } catch {
+        granted = false
+      }
+      if granted {
+        notificationAuthorizationDenied = false
+        persistNotificationRules { $0.enabled = true }
+      } else {
+        notificationAuthorizationDenied = true
+        persistNotificationRules { $0.enabled = false }
+        resetScheduler.removeAll()
+      }
+    } else {
+      persistNotificationRules { $0.enabled = false }
+      resetScheduler.removeAll()
+    }
+  }
+
+  func setResetReminders(_ enabled: Bool) {
+    persistNotificationRules { $0.resetReminders = enabled }
+  }
+
+  func setNotificationFirstThreshold(_ value: Int, for selector: String) {
+    let current = notificationRules.thresholds(for: selector)
+    var next = [value]
+    if current.count > 1, current[1] != value {
+      next.append(current[1])
+    }
+    persistNotificationRules { $0.setThresholds(next, for: selector) }
+  }
+
+  func setNotificationSecondThreshold(_ value: Int?, for selector: String) {
+    let current = notificationRules.thresholds(for: selector)
+    var next = [current[0]]
+    if let value, value != current[0] {
+      next.append(value)
+    }
+    persistNotificationRules { $0.setThresholds(next, for: selector) }
+  }
+
+  func refreshNotificationAuthorization() async {
+    let status = await notificationCenter.authorizationStatus()
+    switch status {
+    case .denied:
+      notificationAuthorizationDenied = true
+      if notificationRules.enabled {
+        persistNotificationRules { $0.enabled = false }
+        resetScheduler.removeAll()
+      }
+    case .authorized, .provisional, .notDetermined:
+      notificationAuthorizationDenied = false
+    default:
+      break
+    }
+  }
+
+  func openNotificationSystemSettings() {
+    _ = loginURLOpener.open(NotificationsSettingsCopy.systemSettingsURL)
+  }
+
+  private func persistNotificationRules(_ update: (inout AlertRules) -> Void) {
+    var rules = notificationRules
+    update(&rules)
+    guard rules != notificationRules else { return }
+    NotificationRules.save(rules, to: notificationDefaults)
+    notificationRules = rules
+    evaluateNotifications(overview: overview, now: Date())
+  }
+
+  /// Compare the latest Overview readings against the last available ones, hand events to the
+  /// sink, and rebuild reset reminders. A `windowReset` whose selector and window already have
+  /// a scheduled reminder is left to that reminder.
+  private func evaluateNotifications(overview: [LocalServiceOverviewItem], now: Date) {
+    let rules = notificationRules
+    let previous = (try? notificationStore.load()) ?? .empty
+    let current = NotificationOverview.readings(from: overview)
+    let catalog = NotificationOverview.catalog(from: overview)
+    let result = AlertEvaluator.evaluate(
+      rules: rules,
+      previous: previous,
+      current: current,
+      now: now
+    )
+    if result.state != previous {
+      try? notificationStore.save(result.state)
+    }
+    if let userNotificationSink {
+      userNotificationSink.catalog = catalog
+      userNotificationSink.scheduledResetKeys = resetScheduler.scheduledResetKeys
+      userNotificationSink.now = now
+    }
+    if !result.events.isEmpty {
+      notificationSink.deliver(result.events)
+    }
+    resetScheduler.reschedule(
+      rules: rules,
+      subscriptions: current,
+      catalog: catalog,
+      now: now
+    )
   }
 
   private static func presentation(

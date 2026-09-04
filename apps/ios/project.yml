@@ -3,18 +3,21 @@ options:
   bundleIdPrefix: io.gotry
   deploymentTarget:
     iOS: "17.0"
-  createIntermediateGroups: true
+  createIntermediateGroups: false
   generateEmptyDirectories: true
   developmentLanguage: en
 settings:
   base:
     SWIFT_VERSION: "6.2"
     SWIFT_STRICT_CONCURRENCY: complete
-    TARGETED_DEVICE_FAMILY: "1,2"
+    TARGETED_DEVICE_FAMILY: "1"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     MARKETING_VERSION: 0.0.1
     CURRENT_PROJECT_VERSION: 1
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
 packages:
   QuotaAppleClient:
     path: ../../packages/apple-client
@@ -40,8 +43,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Sources/Quota.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        PROVISIONING_PROFILE_SPECIFIER: $(QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER)
     dependencies:
       - package: QuotaAppleClient
         product: QuotaWire
@@ -53,12 +57,18 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+      - package: QuotaAppleShared
+        product: QuotaAlerts
       - sdk: BackgroundTasks.framework
+      - sdk: UserNotifications.framework
+      - sdk: WidgetKit.framework
+      - sdk: AppIntents.framework
       - target: QuotaWidgets
         embed: true
     scheme:
       testTargets:
         - QuotaTests
+        - QuotaUITests
   QuotaWidgets:
     type: app-extension
     platform: iOS
@@ -76,9 +86,10 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: Widgets/QuotaWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
         SKIP_INSTALL: YES
+        PROVISIONING_PROFILE_SPECIFIER: $(QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER)
     dependencies:
       - package: QuotaAppleClient
         product: QuotaWidgetData
@@ -86,6 +97,7 @@ targets:
         product: QuotaPresentation
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+      - sdk: AppIntents.framework
   QuotaTests:
     type: bundle.unit-test
     platform: iOS
@@ -97,6 +109,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quota.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quota"
+        TARGETED_DEVICE_FAMILY: "1"
     dependencies:
       - target: Quota
       - package: QuotaAppleClient
@@ -109,3 +122,19 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleShared
         product: QuotaPresentation
+      - package: QuotaAppleShared
+        product: QuotaAlerts
+      - sdk: UserNotifications.framework
+  QuotaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quota.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Quota
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - target: Quota

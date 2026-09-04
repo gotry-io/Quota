@@ -1,16 +1,21 @@
-import { type AccountSummaryRead, AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
+import { AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
+import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   type AccountActivityResult,
+  type AccountSummaryResult,
   accountActivityPath,
   accountActivityRange,
   accountSummaryPath,
   ACTIVITY_DAYS,
   browserTimezone,
   parseAccountActivityResponse,
+  storedSummary,
+  storedSummaryETag,
+  storeSummary,
 } from "./account-reads.ts";
-import { signInHref } from "$lib/routes";
+import { DASHBOARD_PATH, signInHref } from "./routes.ts";
 
-export type { AccountActivityResult };
+export type { AccountActivityResult, AccountError, AccountSummaryResult };
 export {
   accountActivityPath,
   accountActivityRange,
@@ -39,39 +44,74 @@ export async function signOut(): Promise<void> {
   window.location.assign("/");
 }
 
-export async function fetchAccountActivity(range: {
-  from: string;
-  to: string;
-}): Promise<AccountActivityResult> {
-  const response = await fetch(accountActivityPath(range), jsonRequest);
-  if (!response.ok) return parseAccountActivityResponse(response.status, null);
-  return parseAccountActivityResponse(response.status, await response.json());
+export async function fetchAccountActivity(
+  range: {
+    from: string;
+    to: string;
+  },
+  detail?: "agents",
+): Promise<AccountActivityResult> {
+  try {
+    const response = await fetch(accountActivityPath(range, detail), jsonRequest);
+    if (!response.ok) return classifyAccountError(response);
+    return parseAccountActivityResponse(response.status, await response.json());
+  } catch {
+    return classifyAccountError(null);
+  }
 }
 
-export async function fetchAccountSummary(): Promise<
-  { status: "ok"; summary: AccountSummaryRead } | { status: "unauthorized" } | { status: "error" }
-> {
-  const response = await fetch(accountSummaryPath(browserTimezone()), jsonRequest);
-  if (response.status === 401) return { status: "unauthorized" };
-  if (!response.ok) return { status: "error" };
-  const parsed = AccountSummaryReadSchema.safeParse(await response.json());
-  return parsed.success ? { status: "ok", summary: parsed.data } : { status: "error" };
+export async function fetchAccountSummary(): Promise<AccountSummaryResult> {
+  const etag = storedSummaryETag();
+  const headers = etag
+    ? { Accept: "application/json", "If-None-Match": etag }
+    : jsonRequest.headers;
+  try {
+    const response = await fetch(accountSummaryPath(browserTimezone()), {
+      ...jsonRequest,
+      headers,
+    });
+    if (response.status === 304) {
+      const cached = storedSummary();
+      return cached ? { status: "ok", summary: cached } : classifyAccountError(response);
+    }
+    if (!response.ok) return classifyAccountError(response);
+    const parsed = AccountSummaryReadSchema.safeParse(await response.json());
+    if (!parsed.success) return classifyAccountError(null);
+    const nextETag = response.headers.get("ETag");
+    if (nextETag) storeSummary(nextETag, parsed.data);
+    return { status: "ok", summary: parsed.data };
+  } catch {
+    return classifyAccountError(null);
+  }
 }
 
-export async function deleteDevice(deviceId: string): Promise<"ok" | "reauth" | "error"> {
-  const response = await fetch(`/api/v2/account/devices/${encodeURIComponent(deviceId)}`, {
-    method: "DELETE",
-    ...jsonRequest,
-  });
-  if (response.status === 403) return "reauth";
-  return response.ok ? "ok" : "error";
+export async function deleteDevice(
+  deviceId: string,
+  currentPath: string = DASHBOARD_PATH,
+): Promise<"ok" | AccountError> {
+  try {
+    const response = await fetch(`/api/v2/account/devices/${encodeURIComponent(deviceId)}`, {
+      method: "DELETE",
+      ...jsonRequest,
+    });
+    if (response.ok) return "ok";
+    return classifyAccountError(response, { destructive: true, currentPath });
+  } catch {
+    return classifyAccountError(null, { currentPath });
+  }
 }
 
-export async function deleteAccount(): Promise<"ok" | "reauth" | "error"> {
-  const response = await fetch("/api/v2/account", {
-    method: "DELETE",
-    ...jsonRequest,
-  });
-  if (response.status === 401 || response.status === 403) return "reauth";
-  return response.ok ? "ok" : "error";
+export async function deleteAccount(
+  currentPath: string = DASHBOARD_PATH,
+): Promise<"ok" | AccountError> {
+  try {
+    const response = await fetch("/api/v2/account", {
+      method: "DELETE",
+      ...jsonRequest,
+    });
+    if (response.ok) return "ok";
+    return classifyAccountError(response, { destructive: true, currentPath });
+  } catch {
+    return classifyAccountError(null, { currentPath });
+  }
 }
