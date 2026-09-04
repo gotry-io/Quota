@@ -162,6 +162,18 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.doesNotMatch(overview, /Installations/);
   assert.match(usage, /id="token-total"/);
   assert.match(usage, /id="cost-total"/);
+  assert.match(usage, /id="request-total"/);
+  assert.match(usage, /usage-columns/);
+  assert.match(usage, /totals\.messages/);
   assert.match(devices, /id="device-list"/);
+  assert.match(devices, /sortDevicesByLastSeen/);
   assert.match(settings, /searchParams\.get\("delete"\) !== "account"/);
+  assert.match(
+    settings,
+    /Quota reminds you on your Mac and iPhone when a refresh brings new data\. The web does not send\s+notifications\./,
+  );
+  assert.match(settings, /id="appearance-title"/);
+  assert.match(settings, /id="notifications-title"/);
+  assert.match(settings, /id="account-title"/);
+  assert.match(settings, /id="legal-title"/);
 });

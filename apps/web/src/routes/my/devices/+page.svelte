@@ -1,16 +1,21 @@
 <script lang="ts">
 import type { AccountDeviceRead } from "@gotry-io/quota-protocol";
-import { platformDisplayName } from "@gotry-io/quota-protocol";
 import { page } from "$app/state";
 import { deleteDevice } from "$lib/account-client";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import PlatformIcon from "$lib/components/PlatformIcon.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
-import { deviceActivity } from "$lib/device-activity";
-import { lastReadingCopy } from "$lib/format";
+import { deviceActivity, sortDevicesByLastSeen } from "$lib/device-activity";
+import { relativeAge } from "$lib/format";
 
 const store = getAccountStore();
+const devices = $derived(store.summary ? sortDevicesByLastSeen(store.summary.devices) : []);
+
+function instantCopy(value: string | null): string {
+  return value ? relativeAge(value) : "—";
+}
 
 async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<void> {
   if (!window.confirm(`Delete ${device.display_name} and all of its Quota and Usage data?`)) {
@@ -33,7 +38,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<section class="dashboard-section" aria-labelledby="dashboard-title">
+<section class="overview-section" aria-labelledby="dashboard-title">
   {#if store.loadError}
     <RetryNotice
       message={store.loadError.message}
@@ -46,28 +51,45 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
       <LoadingBlock lines={3} label="Loading devices" />
     {/if}
   {:else}
-    <div id="device-list" class="device-grid">
-      {#if store.summary.devices.length === 0}
+    <div id="device-list">
+      {#if devices.length === 0}
         <p class="empty-state">No devices yet. Sign in from QuotaBar to add this Mac.</p>
       {:else}
-        {#each store.summary.devices as device (device.id)}
-          {@const activity = deviceActivity(device)}
-          <article class="device-card">
-            <div class="device-card-heading">
-              <h3>{device.display_name}</h3>
-              <span class="status-pill status-{activity.tone}">{activity.label}</span>
-            </div>
-            <p>
-              {platformDisplayName(device.platform)} · {lastReadingCopy(activity.since)}
-            </p>
-            <button
-              class="text-button danger-button"
-              type="button"
-              onclick={(event) => void onDeleteDevice(device, event)}
-              >Delete device and data</button
-            >
-          </article>
-        {/each}
+        <div class="table-wrap">
+          <table class="device-table">
+            <caption class="visually-hidden">Devices</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Platform</th>
+                <th scope="col">Status</th>
+                <th scope="col">Last seen</th>
+                <th scope="col">Newest reading</th>
+                <th scope="col"><span class="visually-hidden">Delete</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each devices as device (device.id)}
+                {@const activity = deviceActivity(device)}
+                <tr>
+                  <th scope="row">{device.display_name}</th>
+                  <td><PlatformIcon platform={device.platform} /></td>
+                  <td><span class="status-pill status-{activity.tone}">{activity.label}</span></td>
+                  <td>{instantCopy(device.last_seen_at)}</td>
+                  <td>{instantCopy(device.last_observed_at)}</td>
+                  <td>
+                    <button
+                      class="text-button danger-button"
+                      type="button"
+                      aria-label="Delete {device.display_name} and data"
+                      onclick={(event) => void onDeleteDevice(device, event)}>Delete</button
+                    >
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </div>
   {/if}

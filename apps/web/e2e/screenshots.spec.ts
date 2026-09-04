@@ -87,9 +87,11 @@ for (const appearance of appearances) {
     test(`usage ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my/usage");
-      await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
       await expect(page.locator("#token-total")).toHaveText("11.4M");
       await expect(page.locator("#cost-total")).toHaveText("$8.50");
+      await expect(page.locator("#request-total")).toBeVisible();
+      await expect(page.locator(".usage-columns")).toBeVisible();
       await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();

@@ -7,6 +7,7 @@ import {
   accountNoticeRetry,
 } from "$lib/account-errors";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import ProviderMark from "$lib/components/ProviderMark.svelte";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import { formatQuotaRemaining, observationFreshnessCopy } from "$lib/format";
@@ -83,27 +84,10 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<section class="dashboard-section" aria-labelledby="subscription-title">
+<section class="overview-section subscription-detail" aria-labelledby="subscription-title">
   <p class="subscription-back">
     <a href={DASHBOARD_PATH}>← Overview</a>
   </p>
-  <div class="dashboard-section-heading">
-    <div>
-      <p class="eyebrow">Subscription</p>
-      <h1 id="subscription-title">
-        {subscription ? providerDisplayName(subscription.provider) : "Subscription"}
-      </h1>
-      {#if subscription?.snapshot.account.label}
-        <p class="subscription-label">{subscription.snapshot.account.label}</p>
-      {/if}
-    </div>
-    {#if subscription}
-      {@const plan = planDisplayName(subscription.snapshot.account.plan)}
-      {#if plan}
-        <span class="status-pill">{plan}</span>
-      {/if}
-    {/if}
-  </div>
   {#if loadError}
     <RetryNotice
       message={loadError.message}
@@ -112,20 +96,39 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
     />
   {/if}
   {#if !summary}
+    <h1 id="subscription-title">Subscription</h1>
     {#if !loadError}
       <LoadingBlock lines={4} label="Loading subscription" />
     {/if}
   {:else if !subscription}
+    <h1 id="subscription-title">Subscription</h1>
     <p class="empty-state">This subscription is no longer reported.</p>
   {:else}
     {@const snapshot = subscription.snapshot}
     {@const quotaStatus = observedSnapshotStatus(snapshot, now)}
-    <p class="subscription-freshness">
-      {observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}
-    </p>
-    <QuotaWindows windows={snapshot.windows} now={now} />
+    {@const plan = planDisplayName(snapshot.account.plan)}
+    <article class="quota-card subscription-card">
+      <div class="quota-card-heading">
+        <ProviderMark provider={subscription.provider} />
+        <div class="quota-card-identity">
+          <h1 id="subscription-title" class="quota-card-provider">
+            {providerDisplayName(subscription.provider)}
+          </h1>
+          {#if snapshot.account.label}
+            <p class="quota-card-account">{snapshot.account.label}</p>
+          {/if}
+        </div>
+        {#if plan}
+          <span class="status-pill">{plan}</span>
+        {/if}
+      </div>
+      <p class="subscription-freshness">
+        {observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}
+      </p>
+      <QuotaWindows windows={snapshot.windows} provider={subscription.provider} now={now} />
+    </article>
     <div class="subscription-sources">
-      <h3 id="subscription-sources-title">Devices</h3>
+      <h2 id="subscription-sources-title">Devices</h2>
       {#if sources.length === 0}
         <p class="empty-state">No devices reported this subscription.</p>
       {:else}
@@ -137,7 +140,7 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
             <li>
               {deviceName(source.device_id)}{#if remaining}
                 {" · "}{remaining}{/if}{" · "}{sourceFreshness(reading, source.observed_at)}{#if reporting}
-                {" · "}<strong>Reporting</strong>{/if}
+                {" · "}<span class="status-pill status-available">Reporting</span>{/if}
             </li>
           {/each}
         </ul>
@@ -145,4 +148,3 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
     </div>
   {/if}
 </section>
-
