@@ -27,22 +27,23 @@ struct ProviderQuotaCard: View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(index + 1)"
     let stateLabel = snapshot.stateLabel()
     return VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(label)
-          .font(.subheadline.weight(.medium))
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .accessibilityLabel("Account: \(label)")
-        Spacer(minLength: 8)
-        if let plan = QuotaFormat.planBadge(snapshot.account.plan) {
-          Text(plan)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(QuotaTheme.meterTrack, in: Capsule())
-            .accessibilityLabel("Plan: \(plan)")
+      let plan = QuotaFormat.planBadge(snapshot.account.plan)
+      // Label and plan share a line while they fit; at accessibility text sizes they stack so
+      // neither is clipped.
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          accountLabel(label)
+          Spacer(minLength: 8)
+          if let plan { planCapsule(plan) }
+        }
+        VStack(alignment: .leading, spacing: 6) {
+          accountLabel(label)
+          if let plan { planCapsule(plan) }
         }
       }
+      // One element: the plan capsule is a label, not a target, so it must not be its own node.
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(plan.map { "Account: \(label). Plan: \($0)" } ?? "Account: \(label)")
 
       if snapshot.windows.isEmpty {
         Text("No quota windows reported.")
@@ -54,6 +55,21 @@ struct ProviderQuotaCard: View {
         }
       }
     }
+  }
+
+  private func accountLabel(_ label: String) -> some View {
+    Text(label)
+      .font(.subheadline.weight(.medium))
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func planCapsule(_ plan: String) -> some View {
+    Text(plan)
+      .font(.caption.weight(.semibold))
+      .layoutPriority(1)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .background(QuotaTheme.meterTrack, in: Capsule())
   }
 }
 
@@ -67,7 +83,6 @@ struct QuotaWindowBlock: View {
       Text(QuotaFormat.windowTitle(window))
         .font(.subheadline)
         .foregroundStyle(.secondary)
-        .lineLimit(2)
         .fixedSize(horizontal: false, vertical: true)
 
       Text(QuotaFormat.remaining(window))
@@ -84,10 +99,10 @@ struct QuotaWindowBlock: View {
       }
 
       if let support = supportLine {
+        // No line limit: at accessibility text sizes a capped line clips the reset time.
         Text(support)
           .font(.footnote)
           .foregroundStyle(.tertiary)
-          .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
       }
     }

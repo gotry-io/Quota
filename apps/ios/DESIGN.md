@@ -204,6 +204,9 @@ states. Check iPhone and iPad, light and dark, standard and accessibility text s
 labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
 contain access tokens, refresh tokens, or production data.
 
+`scripts/ios-ui-screenshots.sh` exports the `content` and `signed-out` fixture screenshots to
+`dist/ios-ui-screenshots/`.
+
 ### DEBUG visual fixtures
 
 For deterministic simulator screenshots (DEBUG builds only), pass a launch argument:

@@ -69,8 +69,23 @@ Xcode project. Do not add a third-party package manager. The app has no Sparkle,
 analytics, or App Store upload workflow.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and, when an iPhone 17 Pro simulator is
-available, the Quota iOS unit tests. `pnpm build:ios` builds for the generic iOS Simulator. These
-commands are not part of root `pnpm test` or `pnpm build`.
+available, the Quota scheme tests (`QuotaTests` and `QuotaUITests`). `pnpm build:ios` builds for the
+generic iOS Simulator. These commands are not part of root `pnpm test` or `pnpm build`.
+
+### UI tests
+
+`QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
+`overview.root` / `overview.today` for `content` and the Connect Account control for `signed-out`,
+and runs an iOS 17+ accessibility audit on each.
+
+```bash
+./scripts/ios-ui-screenshots.sh
+```
+
+That script runs only `QuotaUITests`, writes `dist/ios-ui.xcresult`, and exports PNG attachments to
+`dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the first available
+iPhone from `xcrun simctl list devices available -j`. Screenshot artifacts are for local visual QA
+and are not part of CI.
 
 ### DEBUG visual fixtures
 
