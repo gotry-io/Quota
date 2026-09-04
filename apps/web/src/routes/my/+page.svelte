@@ -2,7 +2,7 @@
 import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
 import { providerDisplayName } from "@gotry-io/quota-protocol";
 import { observedSnapshotStatus } from "@gotry-io/quota-model";
-import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
+import { getAccountStore } from "$lib/account-store.svelte.ts";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import DeviceSummary from "$lib/components/DeviceSummary.svelte";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
@@ -11,10 +11,10 @@ import RetryNotice from "$lib/components/RetryNotice.svelte";
 import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } from "$lib/format";
 import { planDisplayName, subscriptionPath } from "$lib/routes";
 
-const dashboard = getAccountDashboard();
-let today = $derived(dashboard.summary?.usage.today ?? null);
+const store = getAccountStore();
+let today = $derived(store.summary?.usage.today ?? null);
 let deviceNames = $derived(
-  new Map(dashboard.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
+  new Map(store.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
 );
 
 function deviceName(deviceId: string): string {
@@ -48,27 +48,27 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
       <h2 id="quota-title">Subscriptions</h2>
     </div>
   </div>
-  {#if dashboard.loadError}
+  {#if store.loadError}
     <RetryNotice
-      message={dashboard.loadError.message}
-      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
-      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+      message={store.loadError.message}
+      actionLabel={accountNoticeActionLabel(store.loadError)}
+      onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
     />
   {/if}
-  {#if !dashboard.summary}
-    {#if !dashboard.loadError}
+  {#if !store.summary}
+    {#if !store.loadError}
       <LoadingBlock lines={4} label="Loading subscriptions" />
     {/if}
   {:else}
     <div id="quota-list" class="quota-grid">
-      {#if dashboard.summary.subscriptions.length === 0}
+      {#if store.summary.subscriptions.length === 0}
         <p class="empty-state">No quota snapshots yet. Sign in from QuotaBar to add this Mac.</p>
       {:else}
-        {#each dashboard.summary.subscriptions as subscription (subscription.key)}
+        {#each store.summary.subscriptions as subscription (subscription.key)}
           {@const snapshot = subscription.snapshot}
           {@const quotaStatus = observedSnapshotStatus(snapshot)}
           {@const alsoReporting = otherReportingDevices(subscription)}
-          {@const sel = dashboard.subscriptionSelectors[subscription.key]}
+          {@const sel = store.subscriptionSelectors[subscription.key]}
           <article class="quota-card">
             {#snippet card()}
               <div class="quota-card-heading">
@@ -111,15 +111,15 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
       <h2 id="today-title">Today</h2>
     </div>
   </div>
-  {#if dashboard.loadError}
+  {#if store.loadError}
     <RetryNotice
-      message={dashboard.loadError.message}
-      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
-      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+      message={store.loadError.message}
+      actionLabel={accountNoticeActionLabel(store.loadError)}
+      onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
     />
   {/if}
   {#if !today}
-    {#if !dashboard.loadError}
+    {#if !store.loadError}
       <LoadingBlock lines={2} label="Loading today" />
     {/if}
   {:else}
@@ -147,21 +147,21 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
       <h2 id="devices-summary-title">Devices</h2>
     </div>
     <span id="overview-device-count" class="count-pill"
-      >{dashboard.summary ? dashboard.summary.devices.length : ""}</span
+      >{store.summary ? store.summary.devices.length : ""}</span
     >
   </div>
-  {#if dashboard.loadError}
+  {#if store.loadError}
     <RetryNotice
-      message={dashboard.loadError.message}
-      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
-      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+      message={store.loadError.message}
+      actionLabel={accountNoticeActionLabel(store.loadError)}
+      onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
     />
   {/if}
-  {#if !dashboard.summary}
-    {#if !dashboard.loadError}
+  {#if !store.summary}
+    {#if !store.loadError}
       <LoadingBlock lines={3} label="Loading devices" />
     {/if}
   {:else}
-    <DeviceSummary devices={dashboard.summary.devices} />
+    <DeviceSummary devices={store.summary.devices} />
   {/if}
 </section>

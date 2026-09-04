@@ -13,8 +13,10 @@ const items = [
 
 <nav class="account-nav" aria-label="Account">
   {#each items as item (item.href)}
-    <a href={item.href} aria-current={currentPath === item.href ? "page" : undefined}
-      >{item.label}</a
+    <a
+      href={item.href}
+      data-sveltekit-preload-data="hover"
+      aria-current={currentPath === item.href ? "page" : undefined}>{item.label}</a
     >
   {/each}
 </nav>

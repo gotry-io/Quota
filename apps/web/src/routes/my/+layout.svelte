@@ -1,15 +1,18 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import { page } from "$app/state";
-import { createAccountDashboard, setAccountDashboard } from "$lib/account-dashboard.svelte.ts";
+import { createAccountStore, setAccountStore } from "$lib/account-store.svelte.ts";
 import AccountNav from "$lib/components/AccountNav.svelte";
 
 let { children } = $props();
 
-const dashboard = createAccountDashboard();
-setAccountDashboard(dashboard);
+const store = createAccountStore();
+setAccountStore(store);
 
-$effect(() => {
-  void dashboard.loadSummary();
+onMount(() => {
+  void store.ensureSummary().then(() => {
+    void store.ensureActivity(store.activityRange);
+  });
 });
 </script>
 

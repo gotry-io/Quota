@@ -46,6 +46,62 @@ function seriousOrCritical(
     }));
 }
 
+test("switching account tabs does not refetch summary or activity", async ({ page }) => {
+  let summaryRequests = 0;
+  let activityListRequests = 0;
+  await page.route("**/api/v6/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/v6/account/summary")) {
+      summaryRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountSummary),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/activity")) {
+      const asked = new URL(url);
+      if (asked.searchParams.get("detail") !== "agents") activityListRequests += 1;
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const detailed = asked.searchParams.get("detail") === "agents";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/my");
+  const accountNav = page.getByRole("navigation", { name: "Account" });
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Usage" }).click();
+  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Devices" }).click();
+  await expect(page.locator("#device-list")).toContainText("Studio");
+
+  await accountNav.getByRole("link", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Overview" }).click();
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+  await expect(page.locator(".loading-block")).toHaveCount(0);
+
+  await accountNav.getByRole("link", { name: "Usage" }).click();
+  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  await expect(page.locator(".loading-block")).toHaveCount(0);
+
+  expect(summaryRequests).toBe(1);
+  expect(activityListRequests).toBe(1);
+});
+
 test("/my shows overview, Usage period switch, and Devices", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my");

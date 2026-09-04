@@ -74,12 +74,13 @@ The site has these routes:
    Activity day loads that day's Usage under the grid. The header
    shows the GitHub username; the name opens `/my`, and its menu contains only **Sign out**.
    Session cookies stay HttpOnly. SvelteKit renders the header from `WebDocumentPort.getViewer`
-   on the first HTML byte. While rendering the signed-in document, the Worker starts
-   `GET /api/v6/account/summary` internally, reuses the resolved session, and streams the typed
-   result into the page. The browser fetch is only a development or retry path; it is not the
-   production first-load path. Unsigned visits to `/my` and its sub-routes are a server redirect
-   to `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never
-   published without a session.
+   on the first HTML byte. The `/my` document is a signed-in shell and does not carry Account
+   data: one client store holds the summary, activity (keyed by `from|to`), and per-day detail,
+   loads `GET /api/v6/account/summary` with the browser's IANA timezone, then prefetches a year
+   of activity without blocking first paint. Fresh reads are reused for 60 seconds
+   (stale-while-revalidate); switching tabs does not refetch. Unsigned visits to `/my` and its
+   sub-routes are a server redirect to `/`. The shipped `/app` bookmark is a single redirect to
+   `/my`. Account data is never published without a session.
 
 The document `<head>` is per-route. `/` publishes the public title, description, and canonical URL
 `https://quota.gotry.io/`. `/my` is `noindex, nofollow` and has no canonical URL.

@@ -53,7 +53,12 @@ The document for `/my` is a signed-in shell and carries no Account data. The rea
 bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
 the trailing windows start and end — and a document request has no clock, so rendering one on the
 server would answer in UTC and be thrown away by every browser keeping another calendar. The client
-makes it once, sending its own IANA timezone as `tz`.
+makes it once, sending its own IANA timezone as `tz`. One account store
+(`src/lib/account-store.svelte.ts`) holds the summary, activity keyed by `from|to`, and per-day
+detail. The `/my` layout calls `ensureSummary()` on mount and then `ensureActivity()` for the
+default 365-day range without blocking first paint. Each tab reads that store: a second visit is a
+cache hit (60 s stale-while-revalidate, in-flight dedup), not a new request. Switching the Usage
+period recomputes from the summary and does not refetch.
 
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
 Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from

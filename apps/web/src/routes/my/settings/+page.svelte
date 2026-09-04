@@ -1,12 +1,12 @@
 <script lang="ts">
 import { page } from "$app/state";
 import { deleteAccount } from "$lib/account-client";
-import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
+import { getAccountStore } from "$lib/account-store.svelte.ts";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import ThemeToggle from "$lib/components/ThemeToggle.svelte";
 
-const dashboard = getAccountDashboard();
+const store = getAccountStore();
 let deleteHeading = $state<HTMLHeadingElement | null>(null);
 
 $effect(() => {
@@ -25,7 +25,7 @@ async function onDeleteAccount(event: Event): Promise<void> {
   const outcome = await deleteAccount(`${page.url.pathname}${page.url.search}`);
   if (outcome !== "ok") {
     if (button instanceof HTMLButtonElement) button.disabled = false;
-    dashboard.setError(outcome);
+    store.setError(outcome);
     return;
   }
   window.location.assign("/");
@@ -37,12 +37,12 @@ async function onDeleteAccount(event: Event): Promise<void> {
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-{#if dashboard.loadError}
+{#if store.loadError}
   <RetryNotice
     id="account-error"
-    message={dashboard.loadError.message}
-    actionLabel={accountNoticeActionLabel(dashboard.loadError)}
-    onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+    message={store.loadError.message}
+    actionLabel={accountNoticeActionLabel(store.loadError)}
+    onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
   />
 {/if}
 

@@ -11,6 +11,9 @@ it("marks the current account route", () => {
   expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBeNull();
   expect(screen.getByRole("link", { name: "Devices" }).getAttribute("aria-current")).toBeNull();
   expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBeNull();
+  expect(
+    screen.getByRole("link", { name: "Overview" }).getAttribute("data-sveltekit-preload-data"),
+  ).toBe("hover");
 });
 
 it("marks Overview only on /my", () => {
