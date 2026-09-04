@@ -37,7 +37,7 @@ struct RootView: View {
       .tag(AppTab.overview)
 
       NavigationStack {
-        UsagePlaceholderView()
+        UsageView(model: model)
       }
       .tabItem {
         Label(AppTab.usage.title, systemImage: AppTab.usage.systemImage)

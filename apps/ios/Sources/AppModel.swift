@@ -43,6 +43,7 @@ final class AppModel {
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
+  var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
   /// Selection id from a subscription deep link. Detail presentation arrives in a later slice.
   var pendingSubscriptionSelection: String?
 
@@ -252,6 +253,7 @@ final class AppModel {
     expiredMessage = nil
     phase = .signedOut
     selectedTab = .overview
+    selectedUsagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     backgroundRefresh.cancelPendingRefresh()
     clearWidget()

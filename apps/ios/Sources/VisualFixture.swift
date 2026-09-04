@@ -170,36 +170,198 @@ enum VisualFixture: String, CaseIterable, Sendable {
     }
 
     private static func usage() -> AccountUsage {
-      let period = UsagePeriod(
-        totals: UsageSummaryTotals(
-          totalTokens: 1_704_620,
-          inputTokens: 1_420_500,
-          outputTokens: 284_120,
-          cacheReadInputTokens: 480_000,
-          cacheWriteInputTokens: 20_000,
-          reasoningTokens: 92_400,
-          messages: 164
+      AccountUsage(
+        today: period(
+          input: 1_420_500,
+          output: 284_120,
+          cacheRead: 480_000,
+          cacheWrite: 20_000,
+          reasoning: 92_400,
+          messages: 164,
+          microusd: "1489234",
+          scale: 1
         ),
-        cost: UsageCostOutcome(
-          mode: .calculate,
-          basis: .calculated,
-          status: .complete,
-          amountMicrousd: "1489234",
-          catalogRevision: "pricing_visual_fixture",
-          calculatedRows: 164,
-          reportedRows: 0,
-          unpricedRows: 0,
-          assumptions: [.agentDefaultChannel],
-          unpriced: []
+        last7Days: period(
+          input: 3_800_000,
+          output: 760_000,
+          cacheRead: 1_000_000,
+          cacheWrite: 40_000,
+          reasoning: 240_000,
+          messages: 410,
+          microusd: "3200000",
+          scale: 3
         ),
-        partial: false,
-        agents: []
+        last30Days: period(
+          input: 9_500_000,
+          output: 1_900_000,
+          cacheRead: 2_500_000,
+          cacheWrite: 80_000,
+          reasoning: 600_000,
+          messages: 980,
+          microusd: "8500000",
+          scale: 8
+        ),
+        all: period(
+          input: 18_000_000,
+          output: 3_600_000,
+          cacheRead: 5_000_000,
+          cacheWrite: 150_000,
+          reasoning: 1_100_000,
+          messages: 1_800,
+          microusd: "16200000",
+          scale: 15
+        )
       )
-      return AccountUsage(
-        today: period,
-        last7Days: period,
-        last30Days: period,
-        all: period
+    }
+
+    private static func period(
+      input: Int,
+      output: Int,
+      cacheRead: Int,
+      cacheWrite: Int,
+      reasoning: Int,
+      messages: Int,
+      microusd: String,
+      scale: Int
+    ) -> UsagePeriod {
+      UsagePeriod(
+        totals: totals(
+          input: input,
+          output: output,
+          cacheRead: cacheRead,
+          cacheWrite: cacheWrite,
+          reasoning: reasoning,
+          messages: messages
+        ),
+        cost: completeCost(microusd: microusd, rows: messages),
+        partial: false,
+        agents: agents(scale: scale)
+      )
+    }
+
+    private static func agents(scale: Int) -> [UsageAgentUsage] {
+      [
+        UsageAgentUsage(
+          agent: .codex,
+          providers: [
+            UsageProviderUsage(
+              provider: .openai,
+              models: [
+                model(
+                  "gpt-4.1", input: 80_000, output: 16_000, messages: 12, microusd: 120_000,
+                  scale: scale),
+                model(
+                  "gpt-4o", input: 60_000, output: 12_000, messages: 10, microusd: 90_000,
+                  scale: scale),
+                model(
+                  "gpt-5", input: 200_000, output: 40_000, messages: 28, microusd: 400_000,
+                  scale: scale),
+                model(
+                  "gpt-5-codex", input: 150_000, output: 30_000, messages: 20, microusd: 280_000,
+                  scale: scale),
+                model(
+                  "o3", input: 40_000, output: 8_000, messages: 6, microusd: 70_000, scale: scale),
+                model(
+                  "o4-mini", input: 30_000, output: 6_000, messages: 5, microusd: 40_000,
+                  scale: scale),
+                model(
+                  "other", input: 20_000, output: 4_000, messages: 4, microusd: 15_000, scale: scale
+                ),
+              ]
+            )
+          ]
+        ),
+        UsageAgentUsage(
+          agent: .claudeCode,
+          providers: [
+            UsageProviderUsage(
+              provider: .anthropic,
+              models: [
+                model(
+                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18, microusd: 210_000,
+                  scale: scale),
+                model(
+                  "claude-opus-4", input: 50_000, output: 10_000, messages: 8, microusd: 180_000,
+                  scale: scale),
+              ]
+            )
+          ]
+        ),
+        UsageAgentUsage(
+          agent: .grok,
+          providers: [
+            UsageProviderUsage(
+              provider: .xai,
+              models: [
+                model(
+                  "grok-4", input: 90_000, output: 18_000, messages: 14, microusd: 95_000,
+                  scale: scale),
+                model(
+                  "grok-3", input: 40_000, output: 8_000, messages: 7, microusd: 30_000,
+                  scale: scale),
+              ]
+            )
+          ]
+        ),
+      ]
+    }
+
+    private static func model(
+      _ name: String,
+      input: Int,
+      output: Int,
+      messages: Int,
+      microusd: Int,
+      scale: Int
+    ) -> UsageModelUsage {
+      let scaledInput = input * scale
+      let scaledOutput = output * scale
+      let scaledMessages = messages * scale
+      return UsageModelUsage(
+        model: name,
+        totals: totals(
+          input: scaledInput,
+          output: scaledOutput,
+          cacheRead: scaledInput / 4,
+          cacheWrite: 0,
+          reasoning: scaledOutput / 4,
+          messages: scaledMessages
+        ),
+        cost: completeCost(microusd: String(microusd * scale), rows: scaledMessages)
+      )
+    }
+
+    private static func totals(
+      input: Int,
+      output: Int,
+      cacheRead: Int,
+      cacheWrite: Int,
+      reasoning: Int,
+      messages: Int
+    ) -> UsageSummaryTotals {
+      UsageSummaryTotals(
+        totalTokens: input + output,
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadInputTokens: cacheRead,
+        cacheWriteInputTokens: cacheWrite,
+        reasoningTokens: reasoning,
+        messages: messages
+      )
+    }
+
+    private static func completeCost(microusd: String, rows: Int) -> UsageCostOutcome {
+      UsageCostOutcome(
+        mode: .calculate,
+        basis: .calculated,
+        status: .complete,
+        amountMicrousd: microusd,
+        catalogRevision: "pricing_visual_fixture",
+        calculatedRows: rows,
+        reportedRows: 0,
+        unpricedRows: 0,
+        assumptions: [.agentDefaultChannel],
+        unpriced: []
       )
     }
 
