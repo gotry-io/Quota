@@ -46,6 +46,27 @@ enum QuotaFormat {
     )
   }
 
+  /// How the cost was arrived at, matching the website's basis line.
+  static func costBasis(_ outcome: UsageCostOutcome) -> String {
+    if outcome.status == .unavailable { return "Unpriced" }
+    let basis: String
+    switch outcome.basis {
+    case .calculated: basis = "estimated"
+    case .reported: basis = "reported"
+    case .mixed: basis = "mixed"
+    case .none: basis = "none"
+    }
+    switch outcome.status {
+    case .complete: return "\(basis) · complete"
+    case .partial: return "\(basis) · priced subset only"
+    case .unavailable: return "Unpriced"
+    }
+  }
+
+  static func utcLongDate(_ value: String) -> String {
+    UsageActivityCalendar.longDate(value)
+  }
+
   /// How old the account summary on screen is, in the words every Quota client uses.
   static func updated(_ date: Date, now: Date = Date()) -> String {
     FreshnessCopy.updated(since: date, now: now)

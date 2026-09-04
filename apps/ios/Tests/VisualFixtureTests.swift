@@ -43,6 +43,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary == nil)
       #expect(model.banner == nil)
       #expect(model.expiredMessage == nil)
+      #expect(model.activityChart == .idle)
     }
 
     @Test
@@ -77,6 +78,13 @@ struct VisualFixtureParserTests {
       #expect(openaiModels.count > 5)
       #expect(openaiModels.contains { $0.model == "other" })
       #expect(model.selectedUsagePeriod == .last30Days)
+
+      guard case .loaded(let days) = model.activityChart else {
+        Issue.record("content fixture should preload activity")
+        return
+      }
+      #expect(!days.isEmpty)
+      #expect(days.contains { $0.date == UsageActivityCalendar.utcDay(from: VisualFixture.referenceDate) })
 
       // Fixtures must never carry session material.
       #expect(model.summary?.account.accountID.hasPrefix("account_visual_") == true)
@@ -137,6 +145,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.usage.today.agents.isEmpty == true)
       #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
       #expect(model.banner == nil)
+      #expect(model.activityChart == .loaded([]))
     }
 
     @Test

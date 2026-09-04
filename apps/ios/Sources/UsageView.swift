@@ -20,15 +20,17 @@ struct UsageView: View {
               emptyCard
             } else {
               UsageHeadlineCard(period: period)
-              ForEach(sections) { section in
-                UsageAgentCard(
-                  section: section,
-                  expandedProviderIDs: $expandedProviderIDs
-                )
-              }
+            }
+            UsageActivityCard(model: model)
+            ForEach(sections) { section in
+              UsageAgentCard(
+                section: section,
+                expandedProviderIDs: $expandedProviderIDs
+              )
             }
           } else {
             emptyCard
+            UsageActivityCard(model: model)
           }
         }
         .frame(maxWidth: QuotaTheme.contentMaxWidth, alignment: .leading)
@@ -36,6 +38,13 @@ struct UsageView: View {
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity)
       }
+    }
+    .task(id: model.selectedTab) {
+      guard model.selectedTab == .usage else { return }
+      await model.loadActivity()
+    }
+    .sheet(item: $model.activityDaySheet) { _ in
+      UsageDayDetailSheet(model: model)
     }
     .accessibilityIdentifier("usage.root")
     .navigationTitle("Usage")
@@ -68,18 +77,52 @@ struct UsageView: View {
 }
 
 struct UsageHeadlineCard: View {
-  let period: UsagePeriod
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+  let partial: Bool
+  var partialCopy: String = "Some hours in this period were scanned incompletely."
+  var basisCopy: String? = nil
+  var identifier: String = "usage.headline"
+
+  init(period: UsagePeriod) {
+    totals = period.totals
+    cost = period.cost
+    partial = period.partial
+  }
+
+  init(
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    partial: Bool,
+    partialCopy: String = "Some hours in this period were scanned incompletely.",
+    basisCopy: String? = nil,
+    identifier: String = "usage.headline"
+  ) {
+    self.totals = totals
+    self.cost = cost
+    self.partial = partial
+    self.partialCopy = partialCopy
+    self.basisCopy = basisCopy
+    self.identifier = identifier
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       tokensMetric
       metric(
         label: "API-equivalent cost",
-        value: QuotaFormat.cost(period.cost),
-        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(period.cost))"
+        value: QuotaFormat.cost(cost),
+        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
       )
-      if period.partial {
-        Text("Some hours in this period were scanned incompletely.")
+      if let basisCopy {
+        Text(basisCopy)
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel("Cost basis, \(basisCopy)")
+      }
+      if partial {
+        Text(partialCopy)
           .font(.footnote)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -88,7 +131,7 @@ struct UsageHeadlineCard: View {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .quotaSurface()
-    .accessibilityIdentifier("usage.headline")
+    .accessibilityIdentifier(identifier)
   }
 
   private var tokensMetric: some View {
@@ -100,13 +143,13 @@ struct UsageHeadlineCard: View {
           .layoutPriority(0)
           .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 12)
-        Text(QuotaFormat.compactCount(period.totals.totalTokens))
+        Text(QuotaFormat.compactCount(totals.totalTokens))
           .font(.body.monospacedDigit().weight(.medium))
           .fixedSize(horizontal: false, vertical: true)
           .layoutPriority(1)
       }
       Text(
-        "\(QuotaFormat.compactCount(period.totals.inputTokens)) in · \(QuotaFormat.compactCount(period.totals.outputTokens)) out"
+        "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
       )
       .font(.footnote.monospacedDigit())
       .foregroundStyle(.secondary)
@@ -115,7 +158,7 @@ struct UsageHeadlineCard: View {
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
-      "\(QuotaFormat.accessibleCount(period.totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(period.totals.inputTokens)) in, \(QuotaFormat.accessibleCount(period.totals.outputTokens)) out"
+      "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
     )
   }
 

@@ -34,6 +34,8 @@ final class AppModel {
   private let makeAuthorizationAttempt: @Sendable () throws -> AuthorizationAttempt
   private let widgetPublisher: any WidgetSnapshotPublishing
   private let backgroundRefresh: any BackgroundRefreshScheduling
+  private let activity: any ActivityLoading
+  private let now: @Sendable () -> Date
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -46,6 +48,10 @@ final class AppModel {
   var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
   /// Selection id from a subscription deep link. Detail presentation arrives in a later slice.
   var pendingSubscriptionSelection: String?
+  /// Last 365 UTC days. Memory only; a failed read stays here and does not block the period list.
+  var activityChart: ActivityChartPhase = .idle
+  /// Presented day sheet, if any.
+  var activityDaySheet: ActivityDaySheetState?
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -59,13 +65,17 @@ final class AppModel {
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
-    }
+    },
+    activity: (any ActivityLoading)? = nil,
+    now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
     self.backgroundRefresh = backgroundRefresh
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
+    self.activity = activity ?? AccountClientActivityLoading(client: account)
+    self.now = now
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -185,6 +195,114 @@ final class AppModel {
     }
   }
 
+  var activityToday: String {
+    UsageActivityCalendar.utcDay(from: now())
+  }
+
+  var activityDateRange: (from: String, to: String) {
+    UsageActivityCalendar.range(endingOn: activityToday)
+  }
+
+  /// First visit to Usage asks once. Retry is explicit. The answer stays in memory.
+  func loadActivity(force: Bool = false) async {
+    guard phase == .signedIn else { return }
+    if !force {
+      switch activityChart {
+      case .idle: break
+      case .loading, .loaded, .failed: return
+      }
+    } else if case .loading = activityChart {
+      return
+    }
+    activityChart = .loading
+    let range = activityDateRange
+    let result = await activity.fetchUsageActivity(from: range.from, to: range.to, detail: nil)
+    guard phase == .signedIn else { return }
+    applyActivity(result)
+  }
+
+  func retryActivity() async {
+    await loadActivity(force: true)
+  }
+
+  func openActivityDay(date: String) async {
+    guard phase == .signedIn else { return }
+    presentActivityDay(date: date)
+    await loadActivityDayAgents()
+  }
+
+  func presentActivityDay(date: String) {
+    activityDaySheet = ActivityDaySheetState(
+      date: date,
+      headline: reportedDay(on: date),
+      agents: .loading
+    )
+  }
+
+  func retryActivityDay() async {
+    guard activityDaySheet != nil else { return }
+    updateDaySheet { $0.agents = .loading }
+    await loadActivityDayAgents()
+  }
+
+  private func loadActivityDayAgents() async {
+    guard let current = activityDaySheet else { return }
+    let result = await activity.fetchUsageActivity(
+      from: current.date,
+      to: current.date,
+      detail: .agents
+    )
+    guard phase == .signedIn, activityDaySheet?.date == current.date else { return }
+    switch result {
+    case .activity(let response):
+      applyDayDetail(response, onto: current.date)
+    case .failure(.sessionExpired):
+      applyExpired()
+    case .failure(.notSignedIn):
+      applySignedOut()
+    case .failure:
+      updateDaySheet { $0.agents = .failed }
+    }
+  }
+
+  private func applyActivity(_ result: AccountActivityResult) {
+    switch result {
+    case .activity(let response):
+      activityChart = .loaded(response.days)
+    case .failure(.sessionExpired):
+      applyExpired()
+    case .failure(.notSignedIn):
+      applySignedOut()
+    case .failure:
+      activityChart = .failed
+    }
+  }
+
+  private func applyDayDetail(_ response: AccountUsageActivityResponse, onto date: String) {
+    updateDaySheet { sheet in
+      if let day = response.days.first(where: { $0.date == date }) ?? response.days.first {
+        sheet.headline = day
+        let agents = day.agents ?? []
+        sheet.agents = agents.isEmpty ? .empty : .loaded(agents)
+      } else {
+        sheet.agents = .empty
+      }
+    }
+  }
+
+  private func reportedDay(on date: String) -> UsageActivityDay {
+    if case .loaded(let days) = activityChart, let day = days.first(where: { $0.date == date }) {
+      return day
+    }
+    return UsageActivityChart.emptyDay(date: date)
+  }
+
+  private func updateDaySheet(_ mutate: (inout ActivityDaySheetState) -> Void) {
+    guard var sheet = activityDaySheet else { return }
+    mutate(&sheet)
+    activityDaySheet = sheet
+  }
+
   private func apply(_ result: AccountRefreshResult) {
     summary = result.summary
     fetchedAt = result.fetchedAt
@@ -255,6 +373,8 @@ final class AppModel {
     selectedTab = .overview
     selectedUsagePeriod = .last30Days
     pendingSubscriptionSelection = nil
+    activityChart = .idle
+    activityDaySheet = nil
     backgroundRefresh.cancelPendingRefresh()
     clearWidget()
   }
@@ -273,4 +393,25 @@ struct ProviderQuotaCardModel: Identifiable, Equatable {
   var id: ProviderID { provider }
   let provider: ProviderID
   let subscriptions: [QuotaSubscription]
+}
+
+enum ActivityChartPhase: Equatable, Sendable {
+  case idle
+  case loading
+  case loaded([UsageActivityDay])
+  case failed
+}
+
+enum ActivityDayAgentsPhase: Equatable, Sendable {
+  case loading
+  case loaded([UsageAgentUsage])
+  case empty
+  case failed
+}
+
+struct ActivityDaySheetState: Identifiable, Equatable, Sendable {
+  var id: String { date }
+  var date: String
+  var headline: UsageActivityDay
+  var agents: ActivityDayAgentsPhase
 }

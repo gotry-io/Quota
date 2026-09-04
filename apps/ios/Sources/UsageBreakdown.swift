@@ -43,7 +43,15 @@ enum UsageBreakdown {
   }
 
   static func sections(in period: UsagePeriod) -> [AgentSection] {
-    period.agents.map { agent in
+    sections(agents: period.agents)
+  }
+
+  static func sections(in day: UsageActivityDay) -> [AgentSection] {
+    sections(agents: day.agents ?? [])
+  }
+
+  static func sections(agents: [UsageAgentUsage]) -> [AgentSection] {
+    agents.map { agent in
       AgentSection(
         agent: agent.agent,
         providers: agent.providers.map { provider in

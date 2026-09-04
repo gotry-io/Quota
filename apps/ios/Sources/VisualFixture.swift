@@ -47,6 +47,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
       case .cachedError:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.summary(at: now)
@@ -59,6 +60,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil
+        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
       case .empty, .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
@@ -67,6 +69,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+        model.activityChart = .loaded([])
       }
     }
   }
@@ -239,6 +242,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    static func dayAgents() -> [UsageAgentUsage] {
+      agents(scale: 1)
+    }
+
     private static func agents(scale: Int) -> [UsageAgentUsage] {
       [
         UsageAgentUsage(
@@ -365,6 +372,40 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    static func activityDays(ending now: Date) -> [UsageActivityDay] {
+      let today = UsageActivityCalendar.utcDay(from: now)
+      func day(_ offset: Int, input: Int, output: Int, microusd: String, partial: Bool = false)
+        -> UsageActivityDay
+      {
+        let date = UsageActivityCalendar.addDays(offset, to: today)
+        return UsageActivityDay(
+          date: date,
+          totals: totals(
+            input: input,
+            output: output,
+            cacheRead: input / 4,
+            cacheWrite: 0,
+            reasoning: output / 4,
+            messages: 4
+          ),
+          cost: completeCost(microusd: microusd, rows: 4),
+          partial: partial,
+          agents: nil
+        )
+      }
+      return [
+        day(0, input: 90_000, output: 18_000, microusd: "95000"),
+        day(-1, input: 40_000, output: 8_000, microusd: "30000", partial: true),
+        day(-2, input: 10_000, output: 2_000, microusd: "8000"),
+        day(-5, input: 200_000, output: 40_000, microusd: "400000"),
+        day(-8, input: 5_000, output: 1_000, microusd: "4000"),
+        day(-20, input: 80_000, output: 16_000, microusd: "120000"),
+        day(-40, input: 30_000, output: 6_000, microusd: "40000"),
+        day(-90, input: 150_000, output: 30_000, microusd: "280000"),
+        day(-180, input: 20_000, output: 4_000, microusd: "15000"),
+      ]
+    }
+
     private static func emptyUsage() -> AccountUsage {
       let period = UsagePeriod(
         totals: UsageSummaryTotals(
@@ -454,6 +495,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
       _ fixture: VisualFixture,
       now: Date
     ) -> AppModel {
+      let days: [UsageActivityDay]
+      switch fixture {
+      case .content, .cachedError:
+        days = VisualFixtureContent.activityDays(ending: now)
+      case .signedOut, .empty, .noDevices:
+        days = []
+      }
       let model = AppModel(
         account: AccountClient(
           relay: RelayClient(transport: FixtureBlockedHTTPTransport()),
@@ -462,10 +510,48 @@ enum VisualFixture: String, CaseIterable, Sendable {
           now: { now }
         ),
         authenticator: FixtureBlockedAuthenticator(),
-        widgetPublisher: NoOpWidgetSnapshotPublisher()
+        widgetPublisher: NoOpWidgetSnapshotPublisher(),
+        activity: FixtureActivityLoader(
+          days: days,
+          populatedAgents: VisualFixtureContent.dayAgents()
+        ),
+        now: { now }
       )
       fixture.apply(to: model, now: now)
       return model
+    }
+  }
+
+  /// Answers the heatmap and a single-day `detail=agents` read without touching Relay.
+  private final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
+    let days: [UsageActivityDay]
+    let populatedAgents: [UsageAgentUsage]
+
+    init(days: [UsageActivityDay], populatedAgents: [UsageAgentUsage]) {
+      self.days = days
+      self.populatedAgents = populatedAgents
+    }
+
+    func fetchUsageActivity(
+      from: String,
+      to: String,
+      detail: ActivityDetail?
+    ) async -> AccountActivityResult {
+      if from == to {
+        let base = days.first { $0.date == from } ?? UsageActivityChart.emptyDay(date: from)
+        let agents: [UsageAgentUsage] = detail == .agents && base.totals.totalTokens > 0
+          ? populatedAgents
+          : (detail == .agents ? [] : (base.agents ?? []))
+        let day = UsageActivityDay(
+          date: base.date,
+          totals: base.totals,
+          cost: base.cost,
+          partial: base.partial,
+          agents: detail == .agents ? agents : nil
+        )
+        return .activity(AccountUsageActivityResponse(days: [day]))
+      }
+      return .activity(AccountUsageActivityResponse(days: days))
     }
   }
 
