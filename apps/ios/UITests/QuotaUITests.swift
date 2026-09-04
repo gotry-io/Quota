@@ -26,6 +26,24 @@ final class QuotaUITests: XCTestCase {
     attachScreenshot(app, name: "overview-content")
     try audit(app, skipping: [.contrast, .dynamicType, .hitRegion])
 
+    app.tabBars.buttons["Usage"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
+      "usage.root"
+    )
+    let period = app.segmentedControls.firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period control")
+    XCTAssertTrue(period.buttons["Today"].exists, "Today segment")
+    XCTAssertTrue(period.buttons["7 Days"].exists, "7 Days segment")
+    XCTAssertTrue(period.buttons["30 Days"].exists, "30 Days segment")
+    period.buttons["30 Days"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.model"].waitForExistence(timeout: 5),
+      "usage.model"
+    )
+    attachScreenshot(app, name: "usage-content")
+
+    app.tabBars.buttons["Overview"].tap()
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
     card.tap()
@@ -114,11 +132,12 @@ final class QuotaUITests: XCTestCase {
   ///
   /// Two checks are skipped where the system, not this app, decides the answer. `.contrast`:
   /// on iOS 26 the audit flags text on Liquid Glass cards — an opaque `.label` subtitle on
-  /// Connect, and card copy on Overview — although the rendered text is black on a light
-  /// surface (see the attached screenshots). `.hitRegion` on Overview: iOS 26 system TabView
-  /// exposes ~28pt tab icons; system control, not ours. `.dynamicType` on Overview: the masked
-  /// account label still reports partial support at accessibility sizes. Clipping, element
-  /// description, and trait checks run on both fixtures. An unnamed "Text clipped" on
+  /// Connect, and card copy on Overview and Usage — although the rendered text is black on a
+  /// light surface (see the attached screenshots). `.hitRegion` on Overview and Usage: iOS 26
+  /// system TabView exposes ~28pt tab icons; system control, not ours. `.dynamicType` on
+  /// Overview: the masked account label still reports partial support at accessibility sizes.
+  /// Usage keeps the same skip set so the shared tab chrome is not a second failure. Clipping,
+  /// element description, and trait checks run on both fixtures. An unnamed "Text clipped" on
   /// Settings is the glass tab bar covering a Form row the audit cannot name.
   private func audit(
     _ app: XCUIApplication,

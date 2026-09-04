@@ -69,12 +69,25 @@ struct VisualFixtureParserTests {
       #expect(readings.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
       #expect(readings.sources.map(\.isReporting) == [true, false])
 
-      let usage = model.summary?.usage.today
-      #expect(usage?.totals.inputTokens == 1_420_500)
-      #expect(usage?.totals.outputTokens == 284_120)
-      #expect(usage?.totals.messages == 164)
-      #expect(usage?.cost.status == .complete)
-      #expect(usage?.cost.amountMicrousd == "1489234")
+      let usage = model.summary!.usage
+      let today = usage.today
+      #expect(today.totals.inputTokens == 1_420_500)
+      #expect(today.totals.outputTokens == 284_120)
+      #expect(today.totals.messages == 164)
+      #expect(today.cost.status == .complete)
+      #expect(today.cost.amountMicrousd == "1489234")
+      #expect(today.totals.totalTokens < usage.last7Days.totals.totalTokens)
+      #expect(usage.last7Days.totals.totalTokens < usage.last30Days.totals.totalTokens)
+      #expect(usage.last30Days.totals.totalTokens < usage.all.totals.totalTokens)
+
+      let openaiModels =
+        usage.last30Days.agents
+        .first { $0.agent == .codex }?
+        .providers.first { $0.provider == .openai }?
+        .models ?? []
+      #expect(openaiModels.count > 5)
+      #expect(openaiModels.contains { $0.model == "other" })
+      #expect(model.selectedUsagePeriod == .last30Days)
 
       // Fixtures must never carry session material.
       #expect(model.summary?.account.accountID.hasPrefix("account_visual_") == true)
@@ -132,6 +145,8 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.subscriptions.isEmpty == true)
       #expect(model.summary?.usage.today.totals.messages == 0)
       #expect(model.summary?.usage.today.totals.inputTokens == 0)
+      #expect(model.summary?.usage.today.agents.isEmpty == true)
+      #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
       #expect(model.banner == nil)
     }
 

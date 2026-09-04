@@ -151,7 +151,30 @@ Shared rules:
 
 ### Usage
 
-Placeholder: navigation title **Usage** and **Usage detail arrives with the next update.**
+Shown when a session exists. Content comes from the same Account summary as Overview: the four
+precomputed periods `today`, `last_7_days`, `last_30_days`, and `all`. Opening Usage never starts
+a fetch of its own.
+
+Header:
+
+- Title is **Usage**.
+
+Body, in order:
+
+1. A segmented period control: **Today**, **7 Days**, **30 Days**, and **2 Years**. The fourth
+   segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**. The selection lives in
+   memory for the signed-in session.
+2. Headline card: Tokens as the strongest number (`CompactCountFormat`) with an `in · out` support
+   line, then API-equivalent cost (`$X.XX`, `≥ $X.XX`, or **— unpriced**). When `partial` is true,
+   a footnote: **Some hours in this period were scanned incompletely.**
+3. Agent groups in the summary's order. Each agent uses its display name (Codex, Claude Code, Grok,
+   OpenCode, Pi, Cursor). Inside an agent, provider subheadings (`InferenceProvider.displayName`)
+   and model rows (display name · tokens · cost). The model `other` is **Other**. Each provider
+   shows at most five models until **Show N more** reveals the rest.
+4. When the selected period has no agents: **No Usage in this period.**
+
+Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
+accessibility text sizes. Heatmap and single-day detail belong to a later slice.
 
 ### Devices
 
@@ -254,6 +277,7 @@ Rules:
 | Loading, no cache | Centered progress and **Loading account…** |
 | Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
 | Empty Today | **No Usage for Today.** |
+| Empty Usage period | **No Usage in this period.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
@@ -296,15 +320,15 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect Account, loading, signed-in content, empty quota/Today, no-devices Mac setup, cached
-content with a refresh banner, expired session, the four tabs, Settings (Notifications switch, Log
-Out, Appearance), subscription detail (windows, countdown, Reporting row), and each widget family in
-placeholder, content, and no-data states.
-Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver labels, and Reduce
-Motion. Synthetic fixtures may contain display labels only; they must never contain access tokens,
-refresh tokens, or production data.
+Inspect Connect Account, loading, signed-in content, empty quota/Today, Usage at 30 Days, no-devices
+Mac setup, cached content with a refresh banner, expired session, the four tabs, Settings
+(Notifications switch, Log Out, Appearance), subscription detail (windows, countdown, Reporting row),
+and each widget family in placeholder, content, and no-data states. Check iPhone, light and dark,
+standard and accessibility text sizes, VoiceOver labels, and Reduce Motion. Synthetic fixtures may
+contain display labels only; they must never contain access tokens, refresh tokens, or production
+data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`,
+`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, `usage-content`,
 `subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
@@ -322,9 +346,9 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect Account, no session restore |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals and one provider group of more than five models |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
-| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** |
+| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed

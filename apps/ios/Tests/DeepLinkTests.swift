@@ -151,11 +151,13 @@ struct DeepLinkTests {
     func logoutClearsTabPendingSelectionAndDetailPath() async {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       model.selectedTab = .settings
+      model.selectedUsagePeriod = .today
       model.pendingSubscriptionSelection = "0123456789ab"
       model.overviewPath = ["codex|visual_codex|global|"]
       await model.logout()
       #expect(model.phase == .signedOut)
       #expect(model.selectedTab == .overview)
+      #expect(model.selectedUsagePeriod == .last30Days)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)
     }

@@ -49,6 +49,7 @@ final class AppModel {
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
+  var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
   /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
@@ -336,6 +337,7 @@ final class AppModel {
     expiredMessage = nil
     phase = .signedOut
     selectedTab = .overview
+    selectedUsagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     overviewPath = []
     backgroundRefresh.cancelPendingRefresh()
