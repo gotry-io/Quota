@@ -5,8 +5,7 @@ import QuotaWire
 
 /// Evaluates local remaining-quota alert rules against an Account summary.
 ///
-/// Delivery is `AlertSink`; this slice ships `NoOpAlertSink`. Sign-out clears the state store
-/// and leaves rules in place.
+/// Delivery is `AlertSink`. Sign-out clears the state store and leaves rules in place.
 @MainActor
 final class AlertCoordinator {
   private let rulesStore: IOSAlertRulesStore
@@ -44,21 +43,43 @@ final class AlertCoordinator {
     }
   }
 
+  func currentRules() -> AlertRules {
+    rulesStore.load()
+  }
+
   func clearState() {
     try? stateStore.clear()
+  }
+
+  static func selector(for subscription: QuotaSubscription) -> String {
+    SubscriptionSelector.make(
+      provider: subscription.provider.rawValue,
+      fingerprint: subscription.snapshot.account.fingerprint,
+      fingerprintScope: subscription.snapshot.account.fingerprintScope.rawValue,
+      // A source-scoped subscription carries its source id as the key's fourth segment;
+      // the selector has to include it so every client names the same subscription.
+      sourceID: sourceID(fromKey: subscription.key)
+    )
+  }
+
+  static func catalog(from subscriptions: [QuotaSubscription]) -> AlertDeliveryCatalog {
+    var entries: [String: AlertDeliveryCatalog.Entry] = [:]
+    for subscription in subscriptions {
+      let windows = Dictionary(
+        uniqueKeysWithValues: subscription.snapshot.windows.map { ($0.id, $0.title) }
+      )
+      entries[selector(for: subscription)] = AlertDeliveryCatalog.Entry(
+        providerDisplayName: subscription.provider.displayName,
+        windows: windows
+      )
+    }
+    return AlertDeliveryCatalog(entries: entries)
   }
 
   static func readings(from subscriptions: [QuotaSubscription]) -> [AlertSubscriptionReading] {
     subscriptions.map { subscription in
       AlertSubscriptionReading(
-        selector: SubscriptionSelector.make(
-          provider: subscription.provider.rawValue,
-          fingerprint: subscription.snapshot.account.fingerprint,
-          fingerprintScope: subscription.snapshot.account.fingerprintScope.rawValue,
-          // A source-scoped subscription carries its source id as the key's fourth segment;
-          // the selector has to include it so every client names the same subscription.
-          sourceID: sourceID(fromKey: subscription.key)
-        ),
+        selector: selector(for: subscription),
         status: subscription.snapshot.status.rawValue,
         windows: subscription.snapshot.windows.compactMap { window in
           guard window.showsPercentMeter else { return nil }

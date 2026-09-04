@@ -60,6 +60,7 @@ targets:
       - package: QuotaAppleShared
         product: QuotaAlerts
       - sdk: BackgroundTasks.framework
+      - sdk: UserNotifications.framework
       - target: QuotaWidgets
         embed: true
     scheme:
@@ -119,6 +120,7 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
+      - sdk: UserNotifications.framework
   QuotaUITests:
     type: bundle.ui-testing
     platform: iOS

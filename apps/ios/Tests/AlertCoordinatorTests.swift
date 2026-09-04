@@ -104,7 +104,7 @@ final class RecordingAlertSink: AlertSink, @unchecked Sendable {
   }
 }
 
-private struct IsolatedAlertDefaults {
+struct IsolatedAlertDefaults {
   let name: String
   let store: UserDefaults
 
@@ -113,14 +113,16 @@ private struct IsolatedAlertDefaults {
   }
 }
 
-private func isolatedAlertDefaults() -> IsolatedAlertDefaults {
+func isolatedAlertDefaults() -> IsolatedAlertDefaults {
   let name = "QuotaTests.AlertRules.\(UUID().uuidString)"
   let store = UserDefaults(suiteName: name)!
   store.removePersistentDomain(forName: name)
   return IsolatedAlertDefaults(name: name, store: store)
 }
 
-private func alertSummaryJSON(usedPercent: Double = 88) throws -> Data {
+func alertSummaryJSON(usedPercent: Double = 88, resetsAt: String = "2026-08-18T00:00:00Z")
+  throws -> Data
+{
   let period: [String: Any] = [
     "totals": [
       "total_tokens": 1200,
@@ -170,7 +172,7 @@ private func alertSummaryJSON(usedPercent: Double = 88) throws -> Data {
                 "id": "weekly",
                 "title": "Weekly",
                 "used_percent": usedPercent,
-                "resets_at": "2026-08-18T00:00:00Z",
+                "resets_at": resetsAt,
                 "primary_cadence": "weekly",
               ]
             ],

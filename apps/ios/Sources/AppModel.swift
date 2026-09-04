@@ -37,6 +37,9 @@ final class AppModel {
   private let selectionSaltStore: any SelectionSaltStore
   private let backgroundRefresh: any BackgroundRefreshScheduling
   private let alertCoordinator: AlertCoordinator
+  private let iosAlertSink: IOSAlertSink?
+  private let resetScheduler: IOSResetReminderScheduler
+  private let now: () -> Date
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -58,6 +61,10 @@ final class AppModel {
     selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore(),
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     alertCoordinator: AlertCoordinator? = nil,
+    alertRulesStore: IOSAlertRulesStore? = nil,
+    alertStateStore: (any IOSAlertStateStore)? = nil,
+    notificationCenter: (any NotificationCentering)? = nil,
+    now: @escaping () -> Date = Date.init,
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
     }
@@ -67,14 +74,23 @@ final class AppModel {
     self.widgetPublisher = widgetPublisher
     self.selectionSaltStore = selectionSaltStore
     self.backgroundRefresh = backgroundRefresh
-    self.alertCoordinator =
-      alertCoordinator
-      ?? AlertCoordinator(
-        rulesStore: IOSAlertRulesStore(),
-        stateStore: InMemoryIOSAlertStateStore(),
-        sink: NoOpAlertSink()
-      )
+    self.now = now
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
+    let center = notificationCenter ?? NoOpNotificationCenter()
+    let sink = IOSAlertSink(center: center)
+    self.resetScheduler = IOSResetReminderScheduler(center: center)
+    if let alertCoordinator {
+      self.alertCoordinator = alertCoordinator
+      self.iosAlertSink = nil
+    } else {
+      self.iosAlertSink = sink
+      self.alertCoordinator = AlertCoordinator(
+        rulesStore: alertRulesStore ?? IOSAlertRulesStore(),
+        stateStore: alertStateStore ?? InMemoryIOSAlertStateStore(),
+        sink: sink,
+        now: now
+      )
+    }
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -88,11 +104,8 @@ final class AppModel {
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
       selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
-      alertCoordinator: AlertCoordinator(
-        rulesStore: IOSAlertRulesStore(),
-        stateStore: FileIOSAlertStateStore.applicationSupport(),
-        sink: NoOpAlertSink()
-      )
+      alertStateStore: FileIOSAlertStateStore.applicationSupport(),
+      notificationCenter: IOSNotificationCenter()
     )
   }
 
@@ -166,9 +179,10 @@ final class AppModel {
   }
 
   /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
-  /// the account summary, apply it, republish the widget snapshot from the result, and ask for
-  /// the next background window. Reports whether the read reached Relay, which is the success
-  /// a `BGAppRefreshTask` completes with.
+  /// the account summary, apply it, republish the widget snapshot from the result, evaluate
+  /// local remaining-quota alerts, rebuild reset reminders, and ask for the next background
+  /// window. Reports whether the read reached Relay, which is the success a `BGAppRefreshTask`
+  /// completes with.
   ///
   /// The next window is only worth asking for while a session exists to read with. A read that
   /// ends signed out — no session, or one Relay would not renew — leaves without asking, and
@@ -202,7 +216,7 @@ final class AppModel {
       phase = .signedIn
       if let summary = result.summary, let fetchedAt = result.fetchedAt {
         publishWidget(summary: summary, fetchedAt: fetchedAt)
-        alertCoordinator.evaluate(summary: summary)
+        evaluateAlerts(summary: summary)
       } else {
         clearWidget()
       }
@@ -263,6 +277,27 @@ final class AppModel {
     try? selectionSaltStore.clear()
     clearWidget()
     alertCoordinator.clearState()
+    resetScheduler.removeAll()
+  }
+
+  /// Compare the latest Account readings against the last available ones, hand events to the
+  /// sink, and rebuild reset reminders. A `windowReset` whose selector and window already have
+  /// a scheduled reminder is left to that reminder.
+  private func evaluateAlerts(summary: AccountSummary) {
+    let instant = now()
+    let catalog = AlertCoordinator.catalog(from: summary.subscriptions)
+    if let iosAlertSink {
+      iosAlertSink.catalog = catalog
+      iosAlertSink.scheduledResetKeys = resetScheduler.scheduledResetKeys
+      iosAlertSink.now = instant
+    }
+    alertCoordinator.evaluate(summary: summary)
+    resetScheduler.reschedule(
+      rules: alertCoordinator.currentRules(),
+      subscriptions: AlertCoordinator.readings(from: summary.subscriptions),
+      catalog: catalog,
+      now: instant
+    )
   }
 
   private func publishWidget(summary: AccountSummary, fetchedAt: Date) {

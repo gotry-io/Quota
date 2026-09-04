@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		011405043FDF67F0D00C7144 /* NotificationCentering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE0A805BC9E5E73C26B6B62 /* NotificationCentering.swift */; };
 		0374504D7745DE8B5CE8F010 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BC69B2A2F2BB1AA4BCC8A7EE /* PrivacyInfo.xcprivacy */; };
 		092F9DDC6D4E80C799CBF568 /* RecordingBackgroundRefreshScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C93FF0EFBA23DF68838B83A2 /* RecordingBackgroundRefreshScheduler.swift */; };
 		1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */; };
@@ -21,7 +22,9 @@
 		4656473090590B41CD1FB908 /* BackgroundRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6AEB03C55BFF99F77BD429 /* BackgroundRefreshTests.swift */; };
 		4694AB9ADAE0941DA5E1C6E1 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */; };
 		476F9FC23E13F2FDDE7AC5E5 /* RecordingWidgetSnapshotPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7817116D076AF5E867D37B90 /* RecordingWidgetSnapshotPublisher.swift */; };
+		52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */; };
 		533F79CF7F3865C7299BAE41 /* IOSAlertRulesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82B4DB61764DEFFBCBBA024 /* IOSAlertRulesStore.swift */; };
+		555EC34AA789A1CED31AB7DF /* IOSResetReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */; };
 		56843F72991FA3E7410AE3B2 /* IOSAlertStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */; };
 		5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4CAD6B32A3936603EB853755 /* QuotaAccount */; };
 		5B2E98397B6D7F825BDB3411 /* QuotaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B4F64D1FE4D0DD3024D71E /* QuotaWidgetsBundle.swift */; };
@@ -42,6 +45,7 @@
 		A8CC3D826FEBFB1542BC90CA /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20ECC9117266738C855DB30 /* WidgetKit.framework */; };
 		A99DFABE7D4312F20F4A88C9 /* OverviewWidgetContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C9CDBC80406B0970101D09 /* OverviewWidgetContentTests.swift */; };
 		B3F133C0994AE8E197DD658A /* WidgetSnapshotProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */; };
+		B5BD28504186F90204E99F21 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */; };
 		BBACF39AE0F13EF7DDC2E995 /* AlertSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48F33ED7365409E390FC7F4D /* AlertSink.swift */; };
 		BCC41879989EFE8E246E42F1 /* BrowserAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */; };
 		BCE88EDDB6AFEF29FF1B47C5 /* QuotaRelay in Frameworks */ = {isa = PBXBuildFile; productRef = 6E068EE6F8898C14325FB6C8 /* QuotaRelay */; };
@@ -50,6 +54,7 @@
 		C8EB7E95748A0F794077C115 /* ProviderQuotaCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 715109BDC79F55A51B6113F8 /* ProviderQuotaCard.swift */; };
 		CC18EA3EC0F6816AA0F2E3A9 /* StatusBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 592AE2441A525DB2921A5FA2 /* StatusBanner.swift */; };
 		CF0106D41F578E1909080626 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5FCDA22B62B0D142212AA65 /* RootView.swift */; };
+		D3480A0E787B196E8D4CBB69 /* NotificationDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */; };
 		D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */; };
 		D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC67366D6301AC5644D841EB /* OverviewView.swift */; };
 		DDE6A6D1075A876C9DF0DA11 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = A16F5F6EF52A9473C084077F /* QuotaWire */; };
@@ -104,11 +109,15 @@
 
 /* Begin PBXFileReference section */
 		0217A9DC324748A19C8043BC /* apple-client */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-client"; path = "../../packages/apple-client"; sourceTree = SOURCE_ROOT; };
+		03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDeliveryTests.swift; sourceTree = "<group>"; };
 		032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectAccountView.swift; sourceTree = "<group>"; };
 		0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjectionTests.swift; sourceTree = "<group>"; };
 		1DF31866210B6905C77A5CF7 /* QuotaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuotaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1FE0A805BC9E5E73C26B6B62 /* NotificationCentering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationCentering.swift; sourceTree = "<group>"; };
 		33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionSalt.swift; sourceTree = "<group>"; };
 		383D78AB5F09A4248D36752A /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
+		45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSResetReminderScheduler.swift; sourceTree = "<group>"; };
 		461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetViews.swift; sourceTree = "<group>"; };
 		48F33ED7365409E390FC7F4D /* AlertSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertSink.swift; sourceTree = "<group>"; };
 		4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetContent.swift; sourceTree = "<group>"; };
@@ -163,6 +172,7 @@
 				FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */,
 				732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */,
 				20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */,
+				52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -187,6 +197,7 @@
 				E0E82363C627689AE14A1F86 /* QuotaWidgetData in Frameworks */,
 				3CA35579C61CEBEA2255B6EE /* QuotaPresentation in Frameworks */,
 				DE1AA85409EB6850B541C363 /* QuotaAlerts in Frameworks */,
+				B5BD28504186F90204E99F21 /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -240,6 +251,7 @@
 				FE24F23209102B4AEFA59594 /* AlertCoordinatorTests.swift */,
 				DC3CB5A3738E2091BBC468F4 /* AppModelTests.swift */,
 				FD6AEB03C55BFF99F77BD429 /* BackgroundRefreshTests.swift */,
+				03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */,
 				A6C9CDBC80406B0970101D09 /* OverviewWidgetContentTests.swift */,
 				C93FF0EFBA23DF68838B83A2 /* RecordingBackgroundRefreshScheduler.swift */,
 				7817116D076AF5E867D37B90 /* RecordingWidgetSnapshotPublisher.swift */,
@@ -271,6 +283,7 @@
 			children = (
 				383D78AB5F09A4248D36752A /* BackgroundTasks.framework */,
 				9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */,
+				408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */,
 				D20ECC9117266738C855DB30 /* WidgetKit.framework */,
 			);
 			name = Frameworks;
@@ -283,6 +296,8 @@
 				48F33ED7365409E390FC7F4D /* AlertSink.swift */,
 				D82B4DB61764DEFFBCBBA024 /* IOSAlertRulesStore.swift */,
 				F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */,
+				45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */,
+				1FE0A805BC9E5E73C26B6B62 /* NotificationCentering.swift */,
 			);
 			path = Alerts;
 			sourceTree = "<group>";
@@ -496,6 +511,7 @@
 				F7C0E34B3ACF4FAF4B9CDB31 /* AlertCoordinatorTests.swift in Sources */,
 				82054C4CA07354E6E4F2CC16 /* AppModelTests.swift in Sources */,
 				4656473090590B41CD1FB908 /* BackgroundRefreshTests.swift in Sources */,
+				D3480A0E787B196E8D4CBB69 /* NotificationDeliveryTests.swift in Sources */,
 				A99DFABE7D4312F20F4A88C9 /* OverviewWidgetContentTests.swift in Sources */,
 				092F9DDC6D4E80C799CBF568 /* RecordingBackgroundRefreshScheduler.swift in Sources */,
 				476F9FC23E13F2FDDE7AC5E5 /* RecordingWidgetSnapshotPublisher.swift in Sources */,
@@ -518,6 +534,8 @@
 				9E7A1AC1B14494BA2E4181F1 /* Formatters.swift in Sources */,
 				533F79CF7F3865C7299BAE41 /* IOSAlertRulesStore.swift in Sources */,
 				56843F72991FA3E7410AE3B2 /* IOSAlertStateStore.swift in Sources */,
+				555EC34AA789A1CED31AB7DF /* IOSResetReminderScheduler.swift in Sources */,
+				011405043FDF67F0D00C7144 /* NotificationCentering.swift in Sources */,
 				D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */,
 				36AA8F7A68FF6D773AB89793 /* OverviewWidgetContent.swift in Sources */,
 				C8EB7E95748A0F794077C115 /* ProviderQuotaCard.swift in Sources */,

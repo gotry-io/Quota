@@ -114,9 +114,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
   summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
   the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
-  app target alone performs OAuth, holds the session, and calls Relay; the extension has no network,
-  Keychain, Security, or account modules. The widget snapshot may carry a locally salted
-  `selection_id`; the 32-byte salt lives in the app-private Keychain with
+  iOS alert dedup file (`Application Support/alert-state.json`) and pending reset reminders hold
+  only subscription selectors and remaining percents, never credentials. The app target alone
+  performs OAuth, holds the session, and calls Relay; the extension has no network, Keychain,
+  Security, or account modules. The widget snapshot may carry a locally salted `selection_id`; the
+  32-byte salt lives in the app-private Keychain with
   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and never in the App Group, so the App Group
   file sees only the irreversible id. Logout deletes the salt so prior deep links and widget Intent
   configuration fall back to Overview.
