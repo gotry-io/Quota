@@ -400,7 +400,10 @@ func makeModel(
   exchanges: [ScriptedHTTPTransport.Exchange],
   widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
   backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
-  alertCoordinator: AlertCoordinator? = nil
+  alertCoordinator: AlertCoordinator? = nil,
+  alertRulesStore: IOSAlertRulesStore? = nil,
+  notificationCenter: (any NotificationCentering)? = nil,
+  now: @escaping () -> Date = Date.init
 ) -> AppModel {
   AppModel(
     account: AccountClient(
@@ -414,7 +417,10 @@ func makeModel(
     ),
     widgetPublisher: widgetPublisher,
     backgroundRefresh: backgroundRefresh,
-    alertCoordinator: alertCoordinator
+    alertCoordinator: alertCoordinator,
+    alertRulesStore: alertRulesStore,
+    notificationCenter: notificationCenter,
+    now: now
   )
 }
 

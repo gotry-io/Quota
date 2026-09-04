@@ -130,6 +130,22 @@ Shared rules:
   extension never fetches. The app republishes the snapshot on a foreground refresh and on a
   background app refresh it asks for no sooner than every thirty minutes.
 
+### Notifications
+
+Quota on iOS evaluates the same local remaining-quota rules QuotaBar does, through `QuotaAlerts`,
+and posts the same `AlertCopy` title and body. A successful refresh — pull-to-refresh or the
+background app refresh asked for no sooner than every thirty minutes — compares the new Account
+summary to the last available readings and delivers native `UNUserNotificationCenter` alerts.
+
+A calendar notification is booked at each available subscription's primary window `resets_at` so a
+reset is not missed if the next background refresh lands later. A later reading replaces the
+previous request for that window. Signing out, or turning the rules off, removes every pending
+reminder. A `windowReset` the evaluator emits for a window that already has a reminder is left to
+that reminder.
+
+This slice does not request notification permission and does not ship a Settings page. An add while
+unauthorized is silently ineffective.
+
 ## Liquid Glass (main app)
 
 Quota on iOS 26 uses Apple's native SwiftUI glass APIs. There is no third-party UI kit and no custom
