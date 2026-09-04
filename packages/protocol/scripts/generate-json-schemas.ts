@@ -28,6 +28,7 @@ import {
   RelayErrorEnvelopeSchema,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
+  UsageActivityDaySchema,
   UsagePeriodSchema,
   UsageUploadResponseSchema,
   UsageUploadSchema,
@@ -60,6 +61,7 @@ const UsagePayloadSchema = z.union([
   UsageUploadSchema,
   UsageUploadResponseSchema,
   UsagePeriodSchema,
+  UsageActivityDaySchema,
 ]);
 
 const outputs = [

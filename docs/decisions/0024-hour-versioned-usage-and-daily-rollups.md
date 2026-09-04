@@ -27,7 +27,8 @@ edge falling inside an hour rounds up, because an hour is the finest fact stored
 **A subscription is resolved once, in Relay.** `GET /api/v6/account/summary?tz=` answers
 `subscriptions[]` — one row per subscription key, carrying the chosen reading and every
 `{device_id, observed_at}` behind it — plus devices, the four periods, and the pricing and
-model-catalog revisions; `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals.
+model-catalog revisions; `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals,
+and, for a single UTC day asked with `detail=agents`, that day's agent tree.
 Every earlier managed route is deleted, and a path naming a version this deployment does not serve
 answers `client_upgrade_required`. D1 migration 0018 rebuilds `usage_hourly` on the new key with
 `scan_version = 0`, backfills `usage_daily`, and drops `usage_coverage`, `usage_submissions`,

@@ -6,6 +6,7 @@ public enum RelayClientError: Error, Equatable, Sendable {
   case invalidGrant
   case rejected(code: String, status: Int)
   case invalidResponse
+  case invalidQuery
   case responseTooLarge
   case timeout
   case redirectRefused
@@ -13,15 +14,30 @@ public enum RelayClientError: Error, Equatable, Sendable {
   case invalidOrigin
 }
 
-public enum RelayRoute: String, CaseIterable, Sendable {
+/// The only extra query the activity read may name: `detail=agents`.
+public enum ActivityDetail: String, Sendable {
+  case agents
+}
+
+public enum RelayRoute: CaseIterable, Sendable {
   case token
   case revoke
   case accountSummary
+  case accountUsageActivity(from: String, to: String, detail: ActivityDetail?)
+
+  public static var allCases: [RelayRoute] {
+    [
+      .token,
+      .revoke,
+      .accountSummary,
+      .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil),
+    ]
+  }
 
   public var method: String {
     switch self {
     case .token, .revoke: "POST"
-    case .accountSummary: "GET"
+    case .accountSummary, .accountUsageActivity: "GET"
     }
   }
 
@@ -30,6 +46,22 @@ public enum RelayRoute: String, CaseIterable, Sendable {
     case .token: "/oauth/v2/token"
     case .revoke: "/oauth/v2/revoke"
     case .accountSummary: "/api/v6/account/summary"
+    case .accountUsageActivity: "/api/v6/account/usage/activity"
+    }
+  }
+
+  /// Query keys the route itself names. Extra items such as summary `tz` are still passed to
+  /// `perform`. Activity lists only `from`, `to`, and optionally `detail=agents`.
+  public var query: [(String, String)] {
+    switch self {
+    case .accountUsageActivity(let from, let to, let detail):
+      var items = [("from", from), ("to", to)]
+      if let detail {
+        items.append(("detail", detail.rawValue))
+      }
+      return items
+    case .token, .revoke, .accountSummary:
+      return []
     }
   }
 }
@@ -142,6 +174,30 @@ public struct RelayClient: Sendable {
     }
   }
 
+  /// Reads UTC activity days. This client does not send `If-None-Match` and does not store the
+  /// body: activity has no last-good cache.
+  public func fetchAccountUsageActivity(
+    accessToken: String,
+    from: String,
+    to: String,
+    detail: ActivityDetail? = nil
+  ) async throws -> AccountUsageActivityResponse {
+    guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to) else {
+      throw RelayClientError.invalidQuery
+    }
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    return try await send(
+      route: .accountUsageActivity(from: from, to: to, detail: detail),
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: AccountUsageActivityResponse.self
+    )
+  }
+
   private func send<T: Decodable>(
     route: RelayRoute,
     query: [(String, String)],
@@ -232,8 +288,9 @@ public struct RelayClient: Sendable {
       throw RelayClientError.invalidOrigin
     }
     components.path = route.path
-    if !query.isEmpty {
-      components.queryItems = query.map { URLQueryItem(name: $0.0, value: $0.1) }
+    let items = route.query + query
+    if !items.isEmpty {
+      components.queryItems = items.map { URLQueryItem(name: $0.0, value: $0.1) }
     }
     guard let url = components.url else {
       throw RelayClientError.invalidOrigin

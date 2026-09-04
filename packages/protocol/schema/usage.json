@@ -76,6 +76,33 @@
       },
       "required": ["totals", "cost", "partial", "agents"],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "totals": {
+          "$ref": "#/$defs/__schema17"
+        },
+        "cost": {
+          "$ref": "#/$defs/__schema18"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "agents": {
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema29"
+          }
+        }
+      },
+      "required": ["date", "totals", "cost", "partial"],
+      "additionalProperties": false
     }
   ],
   "$defs": {

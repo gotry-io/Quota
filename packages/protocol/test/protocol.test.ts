@@ -6,6 +6,7 @@ import * as protocol from "../src/index.ts";
 import {
   AccountSummaryReadSchema,
   AccountSummarySchema,
+  AccountUsageActivityResponseReadSchema,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceProfileUpdateRequestSchema,
@@ -632,9 +633,51 @@ describe("quota protocol", () => {
     expect(
       AccountUsageActivityResponseSchema.safeParse({
         protocol_version: 6,
+        days: [
+          {
+            date: "2026-08-02",
+            totals: emptyTotals(),
+            cost: emptyCost(),
+            partial: false,
+            agents: emptyPeriod().agents,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
         days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost() }],
       }).success,
     ).toBe(false);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [
+          {
+            date: "2026-08-02",
+            totals: emptyTotals(),
+            cost: emptyCost(),
+            partial: false,
+            extra: true,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsageActivityResponseReadSchema.safeParse({
+        protocol_version: 6,
+        days: [
+          {
+            date: "2026-08-02",
+            totals: emptyTotals(),
+            cost: emptyCost(),
+            partial: false,
+            extra: true,
+          },
+        ],
+      }).success,
+    ).toBe(true);
     const summary = accountSummary();
     expect(
       AccountSummarySchema.safeParse({

@@ -11,6 +11,7 @@ struct RelayClientTests {
         "/oauth/v2/token",
         "/oauth/v2/revoke",
         "/api/v6/account/summary",
+        "/api/v6/account/usage/activity",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/") })
     #expect(RelayRoute.allCases.allSatisfy { $0.method == "GET" || $0.method == "POST" })
@@ -104,6 +105,101 @@ struct RelayClientTests {
   }
 
   @Test
+  func activityRequestEncodesWhitelistQueryAndOmitsDetailWhenAbsent() async throws {
+    let body = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body),
+      .init(status: 200, body: body),
+    ])
+    let client = RelayClient(transport: transport)
+
+    let omitted = try await client.fetchAccountUsageActivity(
+      accessToken: Fixtures.accessToken,
+      from: "2026-08-01",
+      to: "2026-08-10"
+    )
+    #expect(omitted.days.map(\.date) == ["2026-08-10"])
+    #expect(omitted.days.first?.agents == nil)
+
+    let detailed = try await client.fetchAccountUsageActivity(
+      accessToken: Fixtures.accessToken,
+      from: "2026-08-10",
+      to: "2026-08-10",
+      detail: .agents
+    )
+    #expect(detailed.days.first?.date == "2026-08-10")
+
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/api/v6/account/usage/activity",
+        "/api/v6/account/usage/activity",
+      ])
+    #expect(transport.recordedMethods == ["GET", "GET"])
+    #expect(transport.recordedIfNoneMatch == [nil, nil])
+    #expect(
+      transport.recordedURLs.allSatisfy { url in
+        url.scheme == "https" && url.host == "quota.gotry.io"
+          && (url.port == nil || url.port == 443)
+      })
+    #expect(transport.recordedAuthorization == [
+      "Bearer \(Fixtures.accessToken)",
+      "Bearer \(Fixtures.accessToken)",
+    ])
+
+    let omittedQuery = queryItems(transport.recordedURLs[0])
+    #expect(omittedQuery.map(\.name) == ["from", "to"])
+    #expect(Dictionary(uniqueKeysWithValues: omittedQuery.map { ($0.name, $0.value ?? "") }) == [
+      "from": "2026-08-01",
+      "to": "2026-08-10",
+    ])
+
+    let detailedQuery = queryItems(transport.recordedURLs[1])
+    #expect(detailedQuery.map(\.name) == ["from", "to", "detail"])
+    #expect(Dictionary(uniqueKeysWithValues: detailedQuery.map { ($0.name, $0.value ?? "") }) == [
+      "from": "2026-08-10",
+      "to": "2026-08-10",
+      "detail": "agents",
+    ])
+  }
+
+  @Test
+  func activityRefusesResponsesOverOneMebibyte() async throws {
+    let oversized = Data(repeating: 0x61, count: WireCodec.maximumResponseBytes + 1)
+    let transport = ScriptedTransport([.init(status: 200, body: oversized)])
+    let client = RelayClient(transport: transport)
+    await #expect(throws: RelayClientError.responseTooLarge) {
+      _ = try await client.fetchAccountUsageActivity(
+        accessToken: Fixtures.accessToken,
+        from: "2026-08-10",
+        to: "2026-08-10"
+      )
+    }
+  }
+
+  @Test
+  func activityRejectsInvalidCalendarDatesWithoutSending() async {
+    let transport = ScriptedTransport([])
+    let client = RelayClient(transport: transport)
+    await #expect(throws: RelayClientError.invalidQuery) {
+      _ = try await client.fetchAccountUsageActivity(
+        accessToken: Fixtures.accessToken,
+        from: "2026-8-10",
+        to: "2026-08-10"
+      )
+    }
+    await #expect(throws: RelayClientError.invalidQuery) {
+      _ = try await client.fetchAccountUsageActivity(
+        accessToken: Fixtures.accessToken,
+        from: "2026-08-10",
+        to: "not-a-date"
+      )
+    }
+    #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
   func originGuardRejectsNonManagedHosts() {
     #expect(throws: RelayClientError.invalidOrigin) {
       try RelayClient.requireManagedOrigin(URL(string: "https://example.com/api")!)
@@ -115,5 +211,9 @@ struct RelayClientTests {
     #expect(throws: RelayClientError.invalidOrigin) {
       try RelayClient.attachBearer(&request, token: Fixtures.accessToken)
     }
+  }
+
+  private func queryItems(_ url: URL) -> [URLQueryItem] {
+    URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
   }
 }

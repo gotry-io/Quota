@@ -33,6 +33,12 @@ public struct AccountRefreshResult: Equatable, Sendable {
   }
 }
 
+/// An activity read's answer. Failure never falls back to a stored body: this client does not keep one.
+public enum AccountActivityResult: Equatable, Sendable {
+  case activity(AccountUsageActivityResponse)
+  case failure(AccountClientError)
+}
+
 public actor AccountClient {
   private let relay: RelayClient
   private let sessionStore: any AccountSessionStore
@@ -115,6 +121,31 @@ public actor AccountClient {
     }
   }
 
+  /// Reads UTC activity days. Does not write the summary cache.
+  public func fetchUsageActivity(
+    from: String,
+    to: String,
+    detail: ActivityDetail? = nil
+  ) async -> AccountActivityResult {
+    do {
+      let activity = try await withAuthorizedSession { session in
+        try await relay.fetchAccountUsageActivity(
+          accessToken: session.accessToken,
+          from: from,
+          to: to,
+          detail: detail
+        )
+      }
+      return .activity(activity)
+    } catch let error as AccountClientError {
+      return .failure(error)
+    } catch let error as RelayClientError {
+      return .failure(.relay(error))
+    } catch {
+      return .failure(.relay(.unavailable))
+    }
+  }
+
   private func loadBoundCachedSummary() throws -> CachedAccountSummary? {
     let cached = try summaryStore.load()
     guard let cached else { return nil }
@@ -158,26 +189,36 @@ public actor AccountClient {
     cached: CachedAccountSummary?,
     allowRefresh: Bool
   ) async throws -> (summary: AccountSummary, etag: String?) {
-    guard let session = try sessionStore.load() else {
-      throw AccountClientError.notSignedIn
-    }
-    let held = cached?.summary.account.accountID == session.accountID ? cached : nil
-    let timeZone = calendar.timeZone.identifier
-    do {
+    try await withAuthorizedSession(allowRefresh: allowRefresh) { session in
+      let held = cached?.summary.account.accountID == session.accountID ? cached : nil
+      let timeZone = calendar.timeZone.identifier
       let read = try await relay.fetchAccountSummary(
         timeZone: timeZone,
         accessToken: session.accessToken,
         etag: held?.etag
       )
       return try resolve(read, held: held, session: session)
+    }
+  }
+
+  private func withAuthorizedSession<T>(
+    allowRefresh: Bool = true,
+    _ operation: (AccountSession) async throws -> T
+  ) async throws -> T {
+    guard let session = try sessionStore.load() else {
+      throw AccountClientError.notSignedIn
+    }
+    do {
+      return try await operation(session)
     } catch RelayClientError.unauthorized where allowRefresh {
       let refreshed = try await refreshSessionAfterUnauthorized()
-      let read = try await relay.fetchAccountSummary(
-        timeZone: timeZone,
-        accessToken: refreshed.accessToken,
-        etag: held?.etag
-      )
-      return try resolve(read, held: held, session: refreshed)
+      do {
+        return try await operation(refreshed)
+      } catch let error as AccountClientError {
+        throw error
+      } catch let error as RelayClientError {
+        throw AccountClientError.relay(error)
+      }
     } catch let error as AccountClientError {
       throw error
     } catch let error as RelayClientError {
