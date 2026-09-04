@@ -12,3 +12,19 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   build
+
+for privacy in \
+  apps/ios/Sources/PrivacyInfo.xcprivacy \
+  apps/ios/Widgets/PrivacyInfo.xcprivacy
+do
+  if [ ! -f "$privacy" ]; then
+    echo "missing $privacy" >&2
+    exit 1
+  fi
+  plutil -lint "$privacy"
+  tracking="$(plutil -extract NSPrivacyTracking raw "$privacy")"
+  if [ "$tracking" != "false" ]; then
+    echo "$privacy: NSPrivacyTracking must be false, got: $tracking" >&2
+    exit 1
+  fi
+done

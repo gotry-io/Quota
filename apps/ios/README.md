@@ -52,6 +52,20 @@ opened. Signing out, an expired session, and a launch with no session withdraw t
 instead: there is nothing to read, so there is nothing to be woken for. The extension is unchanged:
 it still only reads the snapshot.
 
+## Privacy manifest
+
+The app target ships [`Sources/PrivacyInfo.xcprivacy`](Sources/PrivacyInfo.xcprivacy) and the
+widget extension ships [`Widgets/PrivacyInfo.xcprivacy`](Widgets/PrivacyInfo.xcprivacy). Neither
+tracks. The app declares the Account data Relay retains — a GitHub-subject HMAC account id
+(`NSPrivacyCollectedDataTypeUserID`) and quota/usage summaries
+(`NSPrivacyCollectedDataTypeOtherUsageData`) — linked, for App Functionality, matching the
+retention list in [`docs/security.md`](../../docs/security.md). The extension collects nothing: it
+only reads the App Group snapshot. Required-reason APIs are listed only when this target's code
+calls them; neither target currently does.
+
+After an Archive, use Xcode **Product › Generate Privacy Report** on the archive to confirm there
+are no undeclared required-reason APIs (owner step).
+
 ## Development
 
 From the repository root:
