@@ -89,8 +89,9 @@ Regenerate the web shots with `pnpm --filter @gotry-io/quota-web screenshots` (`
 part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that hosts
 `VisualTestConfiguration` (`--route overview --fixture content --appearance light|dark`) in a
 320×480 `NSHostingView`, writes PNG @2x via `bitmapImageRepForCachingDisplay` to
-`quotabar-overview-{light,dark}.png`, then is deleted. Compress each PNG below 300 KB (`pngquant` or
-`sips`).
+`quotabar-overview-{light,dark}.png`, then is deleted. iPhone overview shots are
+`overview-content.png` from `./scripts/ios-ui-screenshots.sh`, copied to
+`ios-overview-{light,dark}.png`. Compress each PNG below 300 KB (`pngquant` or `sips`).
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).

@@ -16,8 +16,14 @@ const providers = (catalog as ProviderCatalog).providers
 
 const markById = new Map(providers.map((provider) => [provider.id, provider.brand_icon_asset]));
 
+/** Catalog providers in catalog order. Display names stay on the catalog row. */
+export const CATALOG_PROVIDERS = providers.map((provider) => ({
+  id: provider.id,
+  display_name: provider.display_name,
+}));
+
 /** Catalog `display_name` values, in catalog order. Not a second name table. */
-export const PROVIDER_DISPLAY_NAMES = providers.map((provider) => provider.display_name);
+export const PROVIDER_DISPLAY_NAMES = CATALOG_PROVIDERS.map((provider) => provider.display_name);
 
 /** Usage agent names this build knows, from `BILLING_AGENTS`. */
 export const AGENT_DISPLAY_NAMES = BILLING_AGENTS.map((agent) => agentDisplayName(agent));

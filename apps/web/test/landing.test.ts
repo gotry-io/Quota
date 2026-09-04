@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { agentDisplayName, BILLING_AGENTS } from "@gotry-io/quota-protocol";
+import { IOS_AVAILABILITY } from "../src/lib/platforms.ts";
 import { AGENT_DISPLAY_NAMES, PROVIDER_DISPLAY_NAMES } from "../src/lib/providers.ts";
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,7 @@ const html = readFileSync(join(root, "../src/app.html"), "utf8");
 const landing = readFileSync(join(root, "../src/routes/+page.svelte"), "utf8");
 const install = readFileSync(join(root, "../src/lib/components/InstallOptions.svelte"), "utf8");
 const providers = readFileSync(join(root, "../src/lib/providers.ts"), "utf8");
+const platforms = readFileSync(join(root, "../src/lib/platforms.ts"), "utf8");
 const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
@@ -26,9 +28,14 @@ const catalog = JSON.parse(
 ) as { providers: Array<{ display_name: string; order: number }> };
 
 test("homepage introduces QuotaBar and both install paths", () => {
-  assert.match(landing, /Know what you have left/);
+  assert.match(
+    landing,
+    /See what's left on every coding-agent plan — Codex, Claude, Grok, Cursor — in your Mac menu/,
+  );
+  assert.match(landing, /Download for macOS/);
+  assert.match(landing, /Sign in with GitHub/);
+  assert.match(landing, /signInHref/);
   assert.match(landing, /InstallOptions/);
-  assert.match(install, /Download QuotaBar \.dmg/);
   assert.match(
     install,
     /https:\/\/github.com\/gotry-io\/Quota\/releases\/latest\/download\/QuotaBar-macos-arm64.dmg/,
@@ -36,7 +43,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(install, /brew install gotry-io\/tap\/quotabar/);
   assert.match(install, /aria-live="polite"/);
   assert.match(install, /copied \? "Copied" : "Copy"/);
-  assert.match(landing, /brew install gotry-io\/tap\/quotabar/);
+  assert.match(landing, /id="platforms"/);
   assert.match(header, /Continue with GitHub/);
   assert.match(header, /id="header-account"/);
   assert.match(header, /Settings/);
@@ -58,11 +65,13 @@ test("homepage introduces QuotaBar and both install paths", () => {
 });
 
 test("the hero uses real light and dark screenshots, not a coded mock", () => {
-  assert.equal((landing.match(/<picture>/g) ?? []).length, 2);
+  assert.equal((landing.match(/<picture>/g) ?? []).length, 3);
   assert.match(landing, /quotabar-overview-light\.png/);
   assert.match(landing, /quotabar-overview-dark\.png/);
   assert.match(landing, /web-overview-light-desktop\.png/);
   assert.match(landing, /web-overview-dark-desktop\.png/);
+  assert.match(landing, /ios-overview-light\.png/);
+  assert.match(landing, /ios-overview-dark\.png/);
   assert.match(landing, /prefers-color-scheme: dark/);
   assert.match(landing, /width="640"/);
   assert.match(landing, /height="960"/);
@@ -72,7 +81,7 @@ test("the hero uses real light and dark screenshots, not a coded mock", () => {
 
 test("works-with names come from the catalog and billing agents", () => {
   assert.match(providers, /packages\/provider\/catalog\.json/);
-  assert.match(landing, /PROVIDER_DISPLAY_NAMES/);
+  assert.match(landing, /CATALOG_PROVIDERS/);
   assert.match(landing, /AGENT_DISPLAY_NAMES/);
   const catalogNames = catalog.providers
     .slice()
@@ -91,18 +100,43 @@ test("works-with names come from the catalog and billing agents", () => {
 });
 
 test("the privacy callout is the documented sentence and links /privacy", () => {
-  assert.match(
-    landing,
-    /Provider credentials, prompts, and local paths never leave your Mac\. Quota uploads remaining\s+quota and privacy-preserving Usage totals only\./,
-  );
+  assert.match(landing, /What never leaves your Mac/);
+  assert.match(landing, /Provider credentials, prompts, and local paths never leave your Mac\./);
+  assert.match(landing, /Quota uploads remaining quota and privacy-preserving Usage totals only\./);
   assert.match(landing, /href="\/privacy"/);
-  assert.match(landing, /Quota for iPhone: coming soon/);
+});
+
+test("iPhone availability is a switchable constant, default coming soon", () => {
+  assert.equal(IOS_AVAILABILITY, "coming-soon");
+  assert.match(platforms, /"coming-soon" \| "testflight" \| "app-store"/);
+  assert.match(landing, /IOS_AVAILABILITY/);
+  assert.match(landing, /iosAvailabilityCopy/);
+  assert.doesNotMatch(landing, /apps\.apple\.com/);
+  assert.doesNotMatch(landing, /itunes\.apple\.com/);
 });
 
 test("the homepage does not advertise an App Store destination", () => {
   assert.doesNotMatch(landing, /App Store/);
   assert.doesNotMatch(landing, /apps\.apple\.com/);
   assert.doesNotMatch(landing, /itunes\.apple\.com/);
+});
+
+test("the landing keeps canonical and Open Graph", () => {
+  assert.match(landing, /rel="canonical"/);
+  assert.match(landing, /property="og:title"/);
+  assert.match(landing, /property="og:url"/);
+  assert.doesNotMatch(landing, /application\/ld\+json/);
+});
+
+test("the landing does not keep slogan blocks", () => {
+  assert.doesNotMatch(landing, /Know what you have left/);
+  assert.doesNotMatch(landing, /One quiet place/);
+  assert.doesNotMatch(landing, /Collect · persist · sync/);
+  assert.doesNotMatch(landing, /Bring every device into one view/);
+  assert.match(landing, /How it works/);
+  assert.match(landing, /Install QuotaBar/);
+  assert.match(landing, /reads your providers locally/);
+  assert.match(landing, /Web &amp; iPhone show the same numbers/);
 });
 
 test("no surface explains itself in implementation words", () => {

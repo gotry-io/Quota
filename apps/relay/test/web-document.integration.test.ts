@@ -39,7 +39,7 @@ describe("composed Worker documents", () => {
     const html = await response.text();
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(html).toContain("Know what you have left");
+    expect(html).toContain("See what's left on every coding-agent plan");
     expect(html).toContain("Continue with GitHub");
     expect(html).toContain('id="header-login"');
   });

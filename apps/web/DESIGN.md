@@ -29,12 +29,13 @@ provider or agent name table of its own.
 
 The site has these routes:
 
-1. `/` explains local collection, one GitHub-backed Account, Devices, and API-equivalent Usage cost.
-   The hero offers a QuotaBar `.dmg` download as the primary action. Homebrew is a compact
-   secondary install under that CTA: a Homebrew label, a short tap note, the
-   `brew install gotry-io/tap/quotabar` command, and a Copy control with brief Copied feedback.
-   GitHub sign-in lives only in the site header. The appearance control lives in the footer.
-2. `/download` is the install page: the same `.dmg` and Homebrew controls as the hero, plus
+1. `/` is the public landing: a hero (value sentence, **Download for macOS**, **Sign in with
+   GitHub**, and three product screenshots), How it works, Providers & agents, Privacy, and
+   Platforms. Homebrew is the compact install in the Platforms macOS card: a Homebrew label, a
+   short tap note, the `brew install gotry-io/tap/quotabar` command, and a Copy control with
+   brief Copied feedback. GitHub sign-in is in the hero and the site header. The appearance
+   control lives in the footer.
+2. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
    that Quota for iPhone is coming soon. It does not present an App Store badge or a dead store
    link.
@@ -90,8 +91,9 @@ The site has these routes:
    visits to `/my` and its sub-routes are a server redirect to `/`. The shipped `/app` bookmark
    is a single redirect to `/my`. Account data is never published without a session.
 
-The document `<head>` is per-route. `/` publishes the public title, description, and canonical URL
-`https://quota.gotry.io/`. `/my` is `noindex, nofollow` and has no canonical URL.
+The document `<head>` is per-route. `/` publishes the public title, description, canonical URL
+`https://quota.gotry.io/`, and Open Graph tags. `/my` is `noindex, nofollow` and has no canonical
+URL.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -150,38 +152,35 @@ label stays next to the bar.
 
 ## Landing page
 
-The hero headline is “Know what you have left.” Its primary action is the QuotaBar `.dmg`
-download and its secondary action scrolls to the product explanation. GitHub sign-in is only
-in the header. The product preview is two real screenshots, not a hand-coded mock: QuotaBar
-overview and the account overview, each with a light and dark asset selected by
-`prefers-color-scheme`. Images declare `width` and `height`. Beside the menu-bar shot at
-840 px and above, the account screenshot is a cropped strip of the desktop capture; below
-840 px it stacks and uses the mobile capture. The shots show remaining quota — provider, plan,
-window, percent, meter, reset, and freshness — and do not lead with a monthly spend figure.
+The landing is six blocks, in this order. It does not use slogan sections.
 
-After the hero, a Works with list names every catalog provider and a Usage from list names
-every billing agent; those names come from `packages/provider/catalog.json` and
-`agentDisplayName`, not from a page-local table. A privacy callout states that provider
-credentials, prompts, and local paths never leave the Mac, that Quota uploads remaining quota
-and privacy-preserving Usage totals only, and links `/privacy`. One account copy includes
-“Quota for iPhone: coming soon” as plain text — no App Store badge and no dead store link.
-
-The explanation follows this order:
-
-- local collection and what never uploads;
-- one Account with Device visibility;
-- defensible, effective-dated cost;
-- the direct local agent logs → QuotaBar local service → Account data path.
-
-The hero presents the live GitHub Releases `.dmg` first. Homebrew sits below it as a hairline
-or neutral-surface secondary install: no fake terminal, gradient, or shadow. The command is
-monospace; Copy announces a short Copied state through `aria-live`. Narrow viewports stack or
-scroll the command safely without overflowing the page. Do not present unavailable downloads
-or documentation as active destinations.
-
-The footer shows `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
-and Account, and the appearance toggle in a controls group. The toggle keeps a visible focus ring
-and a 42 px target.
+1. **Hero.** The `h1` is “See what's left on every coding-agent plan — Codex, Claude, Grok,
+   Cursor — in your Mac menu bar, on the web, and on iPhone.” Dual CTAs: **Download for macOS**
+   (the live GitHub Releases `.dmg`) and **Sign in with GitHub** (`/api/auth/github/start`).
+   The product preview is three real screenshots, not a hand-coded mock: QuotaBar overview,
+   the account overview (desktop capture), and Quota for iPhone overview, each with a light
+   and dark asset selected by `prefers-color-scheme`. Images declare `width` and `height`. The
+   shots show remaining quota — provider, plan, window, percent, meter, reset, and freshness —
+   and do not lead with a monthly spend figure.
+2. **How it works.** Three steps: Install QuotaBar; it reads your providers locally; web and
+   iPhone show the same numbers.
+3. **Providers & agents.** A grid names every catalog provider (with its mark) and every
+   billing agent. Those names come from `packages/provider/catalog.json` and
+   `agentDisplayName`, not from a page-local table.
+4. **Privacy.** “What never leaves your Mac,” three points: provider credentials, prompts, and
+   local paths never leave the Mac; Quota uploads remaining quota and privacy-preserving Usage
+   totals only; a link to `/privacy`.
+5. **Platforms.** Three cards. macOS is QuotaBar: the `.dmg` download plus Homebrew as a
+   hairline or neutral-surface secondary install — no fake terminal, gradient, or shadow. The
+   command is monospace; Copy announces a short Copied state through `aria-live`. Narrow
+   viewports stack or scroll the command safely without overflowing the page. Web is Sign in
+   with GitHub. iPhone status is `IOS_AVAILABILITY` in `src/lib/platforms.ts`
+   (`coming-soon` | `testflight` | `app-store`, default `coming-soon`). The card shows that
+   label as a badge. Do not present an App Store or TestFlight destination until that constant
+   names a live one; do not present a dead store link.
+6. **Footer.** `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
+   and Account, and the appearance toggle in a controls group. The toggle keeps a visible
+   focus ring and a 42 px target.
 
 ## Account dashboard
 

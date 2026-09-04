@@ -49,7 +49,7 @@ async function onLogout(event: SubmitEvent): Promise<void> {
     <AccountNav currentPath={page.url.pathname} />
   {:else}
     <nav class="primary-nav" aria-label="Primary navigation">
-      <a href="/#product">Product</a>
+      <a href="/#how-it-works">Product</a>
       <a href="https://github.com/gotry-io/Quota">GitHub</a>
     </nav>
   {/if}

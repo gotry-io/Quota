@@ -220,7 +220,13 @@ for (const viewport of [
   test(`landing does not overflow horizontally at ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Know what you have left." })).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "See what's left on every coding-agent plan — Codex, Claude, Grok, Cursor — in your Mac menu bar, on the web, and on iPhone.",
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Download for macOS" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with GitHub" }).first()).toBeVisible();
     await expect(page.locator(".hero-preview img").first()).toBeVisible();
     await page.evaluate(async () => {
       await Promise.all(
