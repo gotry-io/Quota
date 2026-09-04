@@ -230,17 +230,19 @@ it("switches the activity cache key at the UTC day boundary", async () => {
   });
 
   const store = createAccountStore();
+  const stopClock = store.startClock();
   const first = store.activityRange;
   await store.ensureActivity(first);
   expect(activityRangeKey(first)).toBe("2025-08-13|2026-08-12");
   expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(1);
 
-  vi.setSystemTime(new Date("2026-08-13T00:01:00Z"));
+  await vi.advanceTimersByTimeAsync(120_000);
   const second = store.activityRange;
   expect(activityRangeKey(second)).toBe("2025-08-14|2026-08-13");
   expect(activityRangeKey(second)).not.toBe(activityRangeKey(first));
   await store.ensureActivity(second);
   expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(2);
+  stopClock();
 });
 
 it("stores activity by range and day detail by date", async () => {

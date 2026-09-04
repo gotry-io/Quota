@@ -13,6 +13,7 @@ const landing = readFileSync(join(root, "../src/routes/+page.svelte"), "utf8");
 const install = readFileSync(join(root, "../src/lib/components/InstallOptions.svelte"), "utf8");
 const providers = readFileSync(join(root, "../src/lib/providers.ts"), "utf8");
 const platforms = readFileSync(join(root, "../src/lib/platforms.ts"), "utf8");
+const support = readFileSync(join(root, "../src/content/support.md"), "utf8");
 const layout = readFileSync(join(root, "../src/routes/+layout.svelte"), "utf8");
 const header = readFileSync(join(root, "../src/lib/components/Header.svelte"), "utf8");
 const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"), "utf8");
@@ -123,6 +124,17 @@ test("iPhone availability is a switchable constant, default coming soon", () => 
   assert.match(platforms, /iPhone app coming soon/);
   assert.doesNotMatch(landing, /apps\.apple\.com/);
   assert.doesNotMatch(landing, /itunes\.apple\.com/);
+});
+
+test("Support does not use current iPhone availability copy while coming soon", () => {
+  assert.equal(IOS_AVAILABILITY, "coming-soon");
+  assert.match(support, /### When is Quota for iPhone available\?/);
+  assert.match(support, /Quota for iPhone is coming soon\./);
+  assert.match(support, /When it ships, it will read the Account reported by QuotaBar\./);
+  assert.doesNotMatch(support, /Why is there no data on iPhone\?/);
+  assert.doesNotMatch(support, /Quota for iPhone (?:reads|is a read-only|and the website read)/);
+  assert.doesNotMatch(support, /the iPhone (?:has nothing to show|app shows)/i);
+  assert.doesNotMatch(support, /It shows what a Mac running QuotaBar/);
 });
 
 test("the homepage does not advertise an App Store destination", () => {

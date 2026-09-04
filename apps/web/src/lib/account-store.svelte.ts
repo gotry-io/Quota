@@ -37,6 +37,8 @@ function isFresh(fetchedAt: number | null, maxAgeMs: number): boolean {
 
 export function createAccountStore() {
   let nowMs = $state(Date.now());
+  const utcDate = $derived(new Date(nowMs).toISOString().slice(0, 10));
+  const currentActivityRange = $derived(accountActivityRange(new Date(`${utcDate}T00:00:00Z`)));
   let summary = $state<AccountSummaryRead | null>(null);
   let summaryStatus = $state<AccountLoadStatus>("idle");
   let summaryFetchedAt = $state<number | null>(null);
@@ -229,7 +231,7 @@ export function createAccountStore() {
       return subscriptionSelectors;
     },
     get activityRange() {
-      return accountActivityRange(new Date());
+      return currentActivityRange;
     },
     get activity() {
       return activity;

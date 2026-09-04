@@ -41,11 +41,11 @@ The site has these routes:
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
    that Quota for iPhone is coming soon. It does not present an App Store badge or a dead store
    link.
-3. `/support` answers FAQ from `src/content/support.md`: where data comes from, why iPhone has no
-   data until a Mac running QuotaBar has signed in, how to copy a diagnostic report, and how to
-   delete an account from `/my`. Notifications live at `/support#notifications`: remaining-quota
-   alerts and reset reminders are configured and evaluated in QuotaBar on the Mac; the website
-   does not send notifications.
+3. `/support` answers FAQ from `src/content/support.md`: where data comes from, when Quota for
+   iPhone will be available (Coming soon; when it ships it will read the Account QuotaBar
+   reports), how to copy a diagnostic report, and how to delete an account from `/my`.
+   Notifications live at `/support#notifications`: remaining-quota alerts and reset reminders
+   are configured and evaluated in QuotaBar on the Mac; the website does not send notifications.
 4. `/privacy` and `/terms` render `src/content/privacy.md` and `src/content/terms.md`. Both are
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
@@ -103,8 +103,9 @@ The site has these routes:
    `from|to`), and per-day detail, and loads `GET /api/v6/account/summary` with the browser's IANA
    timezone. The account shell re-runs `ensureSummary()` on account navigations without blocking
    first paint or replacing cached data with a skeleton. Usage loads and revalidates activity
-   when that route is entered; the activity range is computed at access time and the cache key
-   changes at the UTC day boundary. Fresh reads are reused for 60 seconds
+   when that route is entered. The activity range is a UTC date taken from the 60-second display
+   clock, so the cache key and fetch change at the UTC day boundary even if the page stays open;
+   minutes within the same UTC day do not refetch. Fresh reads are reused for 60 seconds
    (stale-while-revalidate); an immediate tab switch does not refetch. Unsigned
    visits to `/my` and its sub-routes are a server redirect to `/`. The shipped `/app` bookmark
    is a single redirect to `/my`. Account data is never published without a session.

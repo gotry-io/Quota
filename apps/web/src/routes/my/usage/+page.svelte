@@ -4,6 +4,7 @@ import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import { usageStatusLine } from "$lib/account-overview";
+import { accountActivityRange } from "$lib/account-reads.ts";
 import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
@@ -21,8 +22,9 @@ import {
 } from "$lib/usage-period";
 
 const store = getAccountStore();
-const activityRange = store.activityRange;
-const rangeKey = activityRangeKey(activityRange);
+const utcDate = $derived(store.now.toISOString().slice(0, 10));
+const activityRange = $derived(accountActivityRange(new Date(`${utcDate}T00:00:00Z`)));
+const rangeKey = $derived(activityRangeKey(activityRange));
 const selectedQuery = $derived(usagePeriodFromQuery(page.url.searchParams.get("period")));
 const selectedDay = $derived(
   usageActivityDayFromQuery(page.url.searchParams.get("day"), activityRange),
