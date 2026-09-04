@@ -26,7 +26,7 @@ body (without the HTML comment) into the matching App Store Connect box.
 
 | File | App Store Connect field | Limit | Notes |
 | --- | --- | --- | --- |
-| `en-US/name.txt` | App Information › Name | 30 characters | Product name **Quota** |
+| `en-US/name.txt` | App Information › Name | 30 characters | **Quota – AI Usage** (ASC app 6808567160; "Quota" was already taken, 2026-09-04). On-device display name stays **Quota**. |
 | `en-US/subtitle.txt` | App Information › Subtitle | 30 characters | |
 | `en-US/description.txt` | App Information › Description | 4,000 characters | |
 | `en-US/keywords.txt` | App Information › Keywords | 100 characters | Comma-separated, no competitor names |
