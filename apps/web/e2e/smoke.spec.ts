@@ -69,8 +69,16 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   await expect(cost).not.toHaveText("—");
 
   const thirtyDayTokens = await tokens.innerText();
+  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Show 1 more" }).click();
+  await expect(page.getByRole("button", { name: "Show 1 more" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toBeVisible();
   await page.getByRole("button", { name: "Today" }).click();
   await expect(tokens).not.toHaveText(thirtyDayTokens);
+  await expect(page).toHaveURL(/[?&]period=today(?:&|$)/);
 
   await accountNav.getByRole("link", { name: "Devices" }).click();
   await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();

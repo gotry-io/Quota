@@ -40,8 +40,8 @@ The site has four surfaces:
    - `/my` — overview: remaining-quota cards (each a link to `/my/subscriptions/<sel>`; the
      detail page is a later task), today's Tokens and API-equivalent cost, and a Devices summary
      (count plus one verdict line per Device).
-   - `/my/usage` — the current Totals / period tabs / breakdown table / Activity graph. Usage
-     layout and the activity keyboard model are later tasks.
+   - `/my/usage` — Totals (period tabs, Tokens and API-equivalent cost, an agent → provider →
+     model tree) and Activity. The activity keyboard model is a later task.
    - `/my/devices` — Device cards and Device deletion.
    - `/my/settings` — appearance (the same ThemeToggle as the footer, as one row) and Delete
      Account. `?delete=account` scrolls to the delete region and focuses its heading.
@@ -138,7 +138,9 @@ The signed-in shell is `/my` with four routes — overview, Usage, Devices, and 
 Account nav. The overview leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
 cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
+partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
+**30 Days**, and **Up to 2 years** (`all`); **30 Days** is the default. The selected tab is
+`?period=today|7d|30d|all`, so a refresh keeps it. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
 shadows, or glass. Weeks are Sunday-first columns. The left axis shows Mon, Wed, and Fri. Month
@@ -171,7 +173,11 @@ Device cards show display name, an **Active** / **Idle** / **Not reporting** pil
 platform plus the age that verdict came from. Never a claim that a sleeping or closed app failed,
 never raw Device IDs, and never a request that the viewing browser fix another Device's provider
 credentials. Deletion copy must say that both the Device and its Quota/Usage data are removed. Agent
-Usage uses a semantic table with real column headers. Empty and loading states use a skeleton
+Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
+column headers, and one `<tbody>` per agent. Group title rows (`<th scope="rowgroup">`) name the
+agent, then each inference provider. Model rows follow; the `other` fold bucket reads **Other**.
+Each provider shows five models and a **Show N more** control (`aria-expanded`) for the rest. A
+period with no agents reads **No Usage in this period.** Empty and loading states use a skeleton
 (`aria-busy`); a failed Relay response is **Your session ended. Sign in again.** (401), **Sign in
 again to confirm this change.** or **You don't have permission to do that.** (403), or **Quota
 couldn't load this. Retry.** — at most one next action.

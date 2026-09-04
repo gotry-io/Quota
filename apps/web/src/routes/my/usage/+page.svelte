@@ -1,42 +1,31 @@
 <script lang="ts">
 import type { UsageActivityDayRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
-import { agentDisplayName, inferenceProviderDisplayName } from "@gotry-io/quota-protocol";
+import { goto } from "$app/navigation";
+import { page } from "$app/state";
 import { type AccountError, accountActivityRange, fetchAccountActivity } from "$lib/account-client";
 import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
+import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
+import UsagePeriodTabs from "$lib/components/UsagePeriodTabs.svelte";
 import { costBasisLabel, formatCost, formatCount } from "$lib/format";
-
-const periodNames = [
-  { key: "today", label: "Today" },
-  { key: "last_7_days", label: "Last 7 days" },
-  { key: "last_30_days", label: "Last 30 days" },
-  { key: "all", label: "All time" },
-] as const;
+import {
+  type UsagePeriodQuery,
+  usagePeriodFromQuery,
+  usagePeriodHref,
+  usagePeriodKey,
+} from "$lib/usage-period";
 
 const dashboard = getAccountDashboard();
 let activityDays = $state<UsageActivityDayRead[] | null>(null);
 let activityError = $state<AccountError | null>(null);
-let selectedPeriod = $state<(typeof periodNames)[number]["key"]>("last_30_days");
 
 const activityRange = accountActivityRange(new Date());
+const selectedQuery = $derived(usagePeriodFromQuery(page.url.searchParams.get("period")));
 let period = $derived<UsagePeriodRead | null>(
-  dashboard.summary ? dashboard.summary.usage[selectedPeriod] : null,
-);
-/** Every model leaf of the selected period, flattened for one table. */
-let modelRows = $derived(
-  (period?.agents ?? []).flatMap((agent) =>
-    agent.providers.flatMap((provider) =>
-      provider.models.map((model) => ({
-        key: `${agent.agent}/${provider.provider}/${model.model}`,
-        agent: agent.agent,
-        provider: provider.provider,
-        ...model,
-      })),
-    ),
-  ),
+  dashboard.summary ? dashboard.summary.usage[usagePeriodKey(selectedQuery)] : null,
 );
 
 $effect(() => {
@@ -52,6 +41,14 @@ async function loadActivity(): Promise<void> {
   }
   activityError = result;
 }
+
+function selectPeriod(query: UsagePeriodQuery): void {
+  void goto(usagePeriodHref(page.url, query), {
+    replaceState: true,
+    keepFocus: true,
+    noScroll: true,
+  });
+}
 </script>
 
 <svelte:head>
@@ -65,18 +62,7 @@ async function loadActivity(): Promise<void> {
       <p class="eyebrow">Usage</p>
       <h2 id="usage-title">Totals</h2>
     </div>
-    <div class="period-tabs" role="group" aria-label="Usage period">
-      {#each periodNames as item (item.key)}
-        <button
-          class="text-button"
-          type="button"
-          aria-pressed={selectedPeriod === item.key}
-          onclick={() => {
-            selectedPeriod = item.key;
-          }}>{item.label}</button
-        >
-      {/each}
-    </div>
+    <UsagePeriodTabs {selectedQuery} onSelectQuery={selectPeriod} />
   </div>
   {#if dashboard.loadError}
     <RetryNotice
@@ -89,58 +75,21 @@ async function loadActivity(): Promise<void> {
     {#if !dashboard.loadError}
       <LoadingBlock lines={4} label="Loading Usage totals" />
     {/if}
-  {:else}
+  {:else if period}
     <div class="summary-grid">
       <article
         ><span>Tokens</span><strong id="token-total"
-          >{period ? formatCount(period.totals.total_tokens) : "—"}</strong
+          >{formatCount(period.totals.total_tokens)}</strong
         ><small id="token-split"
-          >{period
-            ? `${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`
-            : ""}</small
+          >{`${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`}</small
         ></article
       >
       <article
-        ><span>API-equivalent cost</span><strong id="cost-total"
-          >{period ? formatCost(period.cost) : "—"}</strong
-        >{#if period}<small id="cost-basis">{costBasisLabel(period.cost)}</small>{/if}</article
+        ><span>API-equivalent cost</span><strong id="cost-total">{formatCost(period.cost)}</strong
+        ><small id="cost-basis">{costBasisLabel(period.cost)}</small></article
       >
     </div>
-    {#if period?.partial}
-      <p class="usage-day-note">Some hours in this period were scanned incompletely.</p>
-    {/if}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Agent</th>
-            <th scope="col">Provider</th>
-            <th scope="col">Model</th>
-            <th scope="col">Input</th>
-            <th scope="col">Output</th>
-            <th scope="col">Cost</th>
-          </tr>
-        </thead>
-        <tbody id="usage-breakdown">
-          {#if period}
-            {#if modelRows.length === 0}
-              <tr><td colspan="6">No Usage has been synced for this period.</td></tr>
-            {:else}
-              {#each modelRows as row (row.key)}
-                <tr>
-                  <td>{agentDisplayName(row.agent)}</td>
-                  <td>{inferenceProviderDisplayName(row.provider)}</td>
-                  <td>{row.model}</td>
-                  <td>{formatCount(row.totals.input_tokens)}</td>
-                  <td>{formatCount(row.totals.output_tokens)}</td>
-                  <td>{formatCost(row.cost)}</td>
-                </tr>
-              {/each}
-            {/if}
-          {/if}
-        </tbody>
-      </table>
-    </div>
+    <UsageBreakdown {period} />
   {/if}
 </section>
 
