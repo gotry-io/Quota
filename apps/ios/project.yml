@@ -61,6 +61,8 @@ targets:
         product: QuotaAlerts
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
+      - sdk: WidgetKit.framework
+      - sdk: AppIntents.framework
       - target: QuotaWidgets
         embed: true
     scheme:
@@ -95,6 +97,7 @@ targets:
         product: QuotaPresentation
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+      - sdk: AppIntents.framework
   QuotaTests:
     type: bundle.unit-test
     platform: iOS
