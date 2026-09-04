@@ -151,9 +151,11 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. Content comes from the same Account summary as Overview: the four
-precomputed periods `today`, `last_7_days`, `last_30_days`, and `all`. Opening Usage never starts
-a fetch of its own.
+Shown when a session exists. Period totals come from the same Account summary as Overview: the four
+precomputed periods `today`, `last_7_days`, `last_30_days`, and `all`. Opening Usage requests the
+last 365 UTC days of activity once (`from = today-364`, `to = today`) and keeps that answer in
+memory; it does not write it to disk. A failure stays in the Activity card and does not block the
+period list.
 
 Header:
 
@@ -167,14 +169,28 @@ Body, in order:
 2. Headline card: Tokens as the strongest number (`CompactCountFormat`) with an `in · out` support
    line, then API-equivalent cost (`$X.XX`, `≥ $X.XX`, or **— unpriced**). When `partial` is true,
    a footnote: **Some hours in this period were scanned incompletely.**
-3. Agent groups in the summary's order. Each agent uses its display name (Codex, Claude Code, Grok,
+3. Activity card: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
+   weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
+   steps over tokens — empty, then four equal bands of the busiest day in the response, the same
+   mapping the website uses. Today has a primary stroke. Loading is a skeleton in the card;
+   failure is **Could not load activity.** with **Retry**.
+4. Agent groups in the summary's order. Each agent uses its display name (Codex, Claude Code, Grok,
    OpenCode, Pi, Cursor). Inside an agent, provider subheadings (`InferenceProvider.displayName`)
    and model rows (display name · tokens · cost). The model `other` is **Other**. Each provider
    shows at most five models until **Show N more** reveals the rest.
-4. When the selected period has no agents: **No Usage in this period.**
+5. When the selected period has no agents: **No Usage in this period.** The Activity card still
+   shows.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
-accessibility text sizes. Heatmap and single-day detail belong to a later slice.
+accessibility text sizes. The heatmap is one adjustable control: VoiceOver reads the selected day
+as date, tokens, and cost, swiping adjusts the day, and activating opens that day. Individual cells
+are not accessibility elements.
+
+Tapping a cell, or activating the heatmap, presents a sheet for that UTC day: the long UTC date,
+tokens, API-equivalent cost and its basis, and **Some hours on this day were scanned incompletely.**
+when `partial` is true. The sheet then asks `detail=agents` for that date. Loading is a skeleton;
+failure is **Could not load this day's usage.** with **Retry**; an empty agent tree is **No Usage on
+this day.**; a populated tree reuses the period's agent groups.
 
 ### Devices
 
@@ -278,6 +294,9 @@ Rules:
 | Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
 | Empty Today | **No Usage for Today.** |
 | Empty Usage period | **No Usage in this period.** |
+| Loading activity | Skeleton in the Activity card |
+| Activity failed | **Could not load activity.** with **Retry** |
+| Empty activity day | **No Usage on this day.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
@@ -313,6 +332,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - The account context line is the shared freshness phrase, read in full.
+- The Usage heatmap is one adjustable element. It speaks the selected UTC date, tokens, and cost;
+  cells are not their own VoiceOver nodes.
 - Widget entries combine provider, remaining, why the reading is not current, reset, and updated
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
@@ -320,16 +341,17 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect Account, loading, signed-in content, empty quota/Today, Usage at 30 Days, no-devices
-Mac setup, cached content with a refresh banner, expired session, the four tabs, Settings
-(Notifications switch, Log Out, Appearance), subscription detail (windows, countdown, Reporting row),
-and each widget family in placeholder, content, and no-data states. Check iPhone, light and dark,
-standard and accessibility text sizes, VoiceOver labels, and Reduce Motion. Synthetic fixtures may
-contain display labels only; they must never contain access tokens, refresh tokens, or production
-data.
+Inspect Connect Account, loading, signed-in content, empty quota/Today, Usage at 30 Days with the
+Activity heatmap, a single-day sheet, no-devices Mac setup, cached content with a refresh banner,
+expired session, the four tabs, Settings (Notifications switch, Log Out, Appearance), subscription
+detail (windows, countdown, Reporting row), and each widget family in placeholder, content, and
+no-data states. Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver
+labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
+contain access tokens, refresh tokens, or production data.
 
 `scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, `usage-content`,
-`subscription-detail`, and `settings` fixture screenshots to `dist/ios-ui-screenshots/`.
+`usage-activity`, `subscription-detail`, and `settings` fixture screenshots to
+`dist/ios-ui-screenshots/`.
 
 ### DEBUG visual fixtures
 
@@ -346,7 +368,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Connect Account, no session restore |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals and one provider group of more than five models |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |

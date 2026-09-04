@@ -41,7 +41,13 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["usage.model"].waitForExistence(timeout: 5),
       "usage.model"
     )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.activity"].waitForExistence(timeout: 5),
+      "usage.activity"
+    )
+    XCTAssertTrue(app.staticTexts["Activity"].exists, "Activity card title")
     attachScreenshot(app, name: "usage-content")
+    attachScreenshot(app, name: "usage-activity")
 
     app.tabBars.buttons["Overview"].tap()
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch

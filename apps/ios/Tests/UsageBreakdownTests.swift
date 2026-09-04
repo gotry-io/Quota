@@ -67,6 +67,30 @@ struct UsageBreakdownTests {
     )
     #expect(UsageBreakdown.sections(in: period).isEmpty)
   }
+
+  @Test
+  func groupsADaysAgentTreeTheSameWay() {
+    let day = UsageActivityDay(
+      date: "2026-08-14",
+      totals: totals(input: 10, output: 2, messages: 1),
+      cost: completeCost(microusd: "1000", rows: 1),
+      partial: false,
+      agents: [
+        UsageAgentUsage(
+          agent: .grok,
+          providers: [
+            UsageProviderUsage(
+              provider: .xai,
+              models: [model("grok-4", input: 10, output: 2, messages: 1, microusd: "1000")]
+            )
+          ]
+        )
+      ]
+    )
+    let sections = UsageBreakdown.sections(in: day)
+    #expect(sections.map(\.displayName) == ["Grok"])
+    #expect(sections[0].providers[0].displayName == "xAI")
+  }
 }
 
 private func model(
