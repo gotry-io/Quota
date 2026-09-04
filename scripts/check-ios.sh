@@ -12,3 +12,4 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   build
+./scripts/check-ios-assets.sh

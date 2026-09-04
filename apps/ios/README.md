@@ -65,8 +65,8 @@ open apps/ios/Quota.xcodeproj
 ```
 
 `pnpm generate:ios` runs the installed XcodeGen against `project.yml` and refreshes the checked-in
-Xcode project. Do not add a third-party package manager. The app has no Sparkle, notification,
-analytics, or App Store upload workflow.
+Xcode project. Do not add a third-party package manager. The app has no Sparkle or analytics.
+App icon assets live in `Resources/Assets.xcassets`.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and, when an iPhone 17 Pro simulator is
 available, the Quota iOS unit tests. `pnpm build:ios` builds for the generic iOS Simulator. These
