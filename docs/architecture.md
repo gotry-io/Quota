@@ -336,9 +336,9 @@ keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first 
 by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cookie through
 `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the QuotaBar
 `.dmg` and Homebrew install command, GitHub sign-in is in the header, and `/my` is a server redirect
-when unsigned and otherwise a streaming dashboard whose document load starts the existing
-`GET /api/v6/account/summary` handler inside the composed Worker and reuses the request's memoized
-session read, so Account data resolves in parallel with hydration without a second round trip. `/`
+when unsigned and otherwise a client-rendered dashboard: the browser requests
+`GET /api/v6/account/summary` once with its own IANA timezone; the document layer does not
+aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none
 anonymously, and `/app` redirects to `/my`. Relay owns GitHub login and browser
 sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition decision is
