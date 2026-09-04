@@ -1051,6 +1051,98 @@ describe("managed Relay on real Workers and D1", () => {
     ).toBe(0);
   });
 
+  it("accepts a same-instant restatement that only changes available to a failure", async () => {
+    const { app, webSessions } = await quotabarHarness("account_same_instant", { now });
+    const tokens = await loginQuotabar(app, webSessions);
+    const headers = {
+      Authorization: `Bearer ${tokens.session.access_token}`,
+      "Content-Type": "application/json",
+    };
+    const observedAt = now.toISOString();
+    const earlier = new Date(now.getTime() - 60_000).toISOString();
+    const later = new Date(now.getTime() + 60_000).toISOString();
+    const snapshot = (status: "available" | "auth_required", at: string, usedPercent: number) => ({
+      provider: "codex" as const,
+      account: { fingerprint: "fingerprint_same_instant", fingerprint_scope: "global" as const },
+      windows: [{ id: "weekly", title: "Weekly", used_percent: usedPercent }],
+      status,
+      observed_at: at,
+    });
+    const put = async (status: "available" | "auth_required", at: string, usedPercent: number) => {
+      const response = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          protocol_version: 6,
+          generation: tokens.device_generation,
+          snapshots: [snapshot(status, at, usedPercent)],
+        }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as { accepted: string[]; ignored: string[] };
+    };
+    const summarySnapshot = async () => {
+      const response = await app.request("https://quota.gotry.io/api/v6/account/summary", {
+        headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        subscriptions: Array<{
+          snapshot: {
+            status: string;
+            observed_at: string;
+            windows: Array<{ used_percent: number }>;
+          };
+        }>;
+      };
+      return body.subscriptions[0]?.snapshot;
+    };
+
+    expect(await put("available", observedAt, 25)).toMatchObject({
+      accepted: ["codex"],
+      ignored: [],
+    });
+    expect(await put("auth_required", observedAt, 25)).toMatchObject({
+      accepted: ["codex"],
+      ignored: [],
+    });
+    expect(await summarySnapshot()).toMatchObject({
+      status: "auth_required",
+      observed_at: observedAt,
+      windows: [{ used_percent: 25 }],
+    });
+
+    expect(await put("available", observedAt, 40)).toMatchObject({
+      accepted: [],
+      ignored: ["codex"],
+    });
+    expect(await summarySnapshot()).toMatchObject({
+      status: "auth_required",
+      observed_at: observedAt,
+      windows: [{ used_percent: 25 }],
+    });
+
+    expect(await put("available", earlier, 10)).toMatchObject({
+      accepted: [],
+      ignored: ["codex"],
+    });
+    expect(await summarySnapshot()).toMatchObject({
+      status: "auth_required",
+      observed_at: observedAt,
+      windows: [{ used_percent: 25 }],
+    });
+
+    expect(await put("available", later, 40)).toMatchObject({
+      accepted: ["codex"],
+      ignored: [],
+    });
+    expect(await summarySnapshot()).toMatchObject({
+      status: "available",
+      observed_at: later,
+      windows: [{ used_percent: 40 }],
+    });
+  });
+
   it("a refresh whose answer was lost can be repeated with the token it replaced", async () => {
     const clock = { now };
     const { app, webSessions } = await quotabarHarness("account_rotation_grace", clock);

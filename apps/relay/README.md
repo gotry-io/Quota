@@ -19,7 +19,8 @@ The v6 data contract is four routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):
 
 - `PUT /api/v6/device/snapshots` stores this device's readings by `(provider, fingerprint)`, keeps
-  the newer of the stored and uploaded `observed_at`, and drops the fingerprints the envelope no
+  the newer of the stored and uploaded `observed_at` (a same-instant restatement is taken only when
+  it changes status from `available` to a failure), and drops the fingerprints the envelope no
   longer names for a provider it does name. It answers `{accepted, ignored}` by provider.
 - `PUT /api/v6/device/usage` replaces whole UTC hours. An hour whose `scan_version` is strictly
   newer than the stored one replaces every row of that hour; anything else is `ignored`, including

@@ -91,7 +91,9 @@ both ([ADR 0017](decisions/0017-derived-observation-freshness.md)). A device tha
 republishes its own last reading with the status it found — `auth_required`, `unavailable`,
 `unsupported`, or `error` — so a failure it detects becomes a fact every client shows at its next
 refresh; the reading and its `observed_at` are untouched, because the numbers really are that old,
-and only a reading still current is republished, which bounds the restatement. Time covers what
+and only a reading still current is republished, which bounds the restatement. Relay accepts that
+restatement when it shares the stored `observed_at` and only changes status from `available` to a
+failure; any other same-instant restatement is ignored. Time covers what
 detection cannot, because a device that stopped collecting reports nothing at all: every observation
 carries its own validity boundary — the first window reset it reports, its shortest window cadence
 when it reports none, and at the latest a fixed maximum age — derived by each reader from the
