@@ -1,0 +1,2 @@
+# Draft — pending owner review
+Quota is the iPhone companion to QuotaBar. See remaining coding-agent quota and Today Usage from a Mac that already collects it — never prompts, credentials, or raw logs.
