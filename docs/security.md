@@ -86,6 +86,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - QuotaBar keeps no second report cache. Component state may carry masked provider labels,
   normalized quota, Usage totals, display metadata, and cost coverage, but no secret or raw source
   metadata, and account tokens never cross IPC.
+- QuotaBar's notification dedup file (`Application Support/QuotaBar/notification-state.json`) holds
+  only subscription selectors and remaining percents, never credentials.
 
 ## Account authentication
 

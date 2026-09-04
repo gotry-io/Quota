@@ -58,6 +58,20 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func notificationsIsOneLevelBelowSettings() {
+    var navigation = MenuBarNavigationState()
+    navigation.open(.settings)
+    navigation.open(.notifications)
+
+    #expect(navigation.path == [.settings, .notifications])
+    #expect(navigation.title == "Notifications")
+    #expect(MenuBarRoute.notifications.title == "Notifications")
+
+    navigation.navigateBack()
+    #expect(navigation.path == [.settings])
+  }
+
+  @Test
   func chosingAMenuBarOptionIsOneLevelDownAndReturnsWhenItIsChosen() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)

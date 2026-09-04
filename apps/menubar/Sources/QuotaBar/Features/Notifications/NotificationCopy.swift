@@ -3,8 +3,7 @@ import QuotaPresentation
 
 /// Title and body for a local remaining-quota notification.
 ///
-/// The phrases live in `apps/menubar/DESIGN.md` Shared product vocabulary. Delivery is a later
-/// change; this type only writes the words.
+/// The phrases live in `apps/menubar/DESIGN.md` Shared product vocabulary.
 enum NotificationCopy {
   static func title(providerDisplayName: String, windowTitle: String) -> String {
     "\(providerDisplayName) · \(windowTitle)"

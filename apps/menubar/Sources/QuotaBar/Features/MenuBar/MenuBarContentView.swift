@@ -198,6 +198,7 @@ struct MenuBarContentView: View {
         onOpenAccount: { navigate(to: .account) },
         onOpenAgents: { navigate(to: .agents) },
         onOpenUsage: { navigate(to: .usage) },
+        onOpenNotifications: { navigate(to: .notifications) },
         onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
         onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
         onOpenSupport: { navigate(to: .support) },
@@ -245,6 +246,8 @@ struct MenuBarContentView: View {
       AccountDevicesView(model: model)
     case .usage:
       AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
+    case .notifications:
+      NotificationsSettingsView(model: model)
     case .menuBarStyle:
       MenuBarStyleSettingsView(onSelect: navigateBack)
     case .menuBarProvider:
@@ -354,6 +357,7 @@ enum MenuBarRoute: Hashable {
   case provider(ProviderID)
   case devices
   case usage
+  case notifications
   case menuBarStyle
   case menuBarProvider
   case quotaRefreshInterval
@@ -373,6 +377,7 @@ enum MenuBarRoute: Hashable {
     case .providerAPIKey: "API Key"
     case .devices: "Devices"
     case .usage: "Usage"
+    case .notifications: "Notifications"
     // The section header says Menu Bar; a page carries its own context.
     case .menuBarStyle: "Menu Bar Style"
     case .menuBarProvider: "Menu Bar Provider"

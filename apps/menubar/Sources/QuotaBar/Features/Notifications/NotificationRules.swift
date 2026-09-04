@@ -16,6 +16,8 @@ struct NotificationRules: Equatable, Sendable {
   static let defaultEnabled = false
   static let defaultResetReminders = true
   static let defaultThresholds = [20, 10]
+  /// Remaining-percent choices the Notifications page offers. The second slot may be Off.
+  static let thresholdChoices = [5, 10, 15, 20, 25, 30, 40, 50]
 
   init(
     enabled: Bool = defaultEnabled,
@@ -56,6 +58,10 @@ struct NotificationRules: Equatable, Sendable {
 
   func thresholds(for selector: String) -> [Int] {
     Self.normalized(thresholds[selector] ?? Self.defaultThresholds)
+  }
+
+  mutating func setThresholds(_ values: [Int], for selector: String) {
+    thresholds[selector] = Self.normalized(values)
   }
 
   /// Drops values outside 1–99, then unique descending. An empty result is the default pair.

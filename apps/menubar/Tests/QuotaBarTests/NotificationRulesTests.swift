@@ -4,6 +4,10 @@ import Testing
 @testable import QuotaBar
 
 struct NotificationRulesTests {
+  @Test func thresholdChoicesAreTheDocumentedSet() {
+    #expect(NotificationRules.thresholdChoices == [5, 10, 15, 20, 25, 30, 40, 50])
+  }
+
   @Test func missingKeysUseTheDocumentedDefaults() {
     let defaults = isolatedDefaults()
     defer { defaults.tearDown() }

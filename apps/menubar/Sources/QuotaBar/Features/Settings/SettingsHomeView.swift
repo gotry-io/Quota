@@ -6,6 +6,7 @@ struct SettingsHomeView: View {
   let onOpenAccount: () -> Void
   let onOpenAgents: () -> Void
   let onOpenUsage: () -> Void
+  let onOpenNotifications: () -> Void
   let onOpenMenuBarStyle: () -> Void
   let onOpenMenuBarProvider: () -> Void
   let onOpenSupport: () -> Void
@@ -49,6 +50,14 @@ struct SettingsHomeView: View {
               trailing: agentsSummary,
               accessibilityLabel: "Agents",
               action: onOpenAgents
+            )
+            settingsDestinationRow(
+              title: "Notifications",
+              systemImage: "bell",
+              trailing: NotificationsSettingsCopy.homeTrailing(
+                enabled: model.notificationRules.enabled),
+              accessibilityLabel: "Notifications",
+              action: onOpenNotifications
             )
           }
         }
@@ -214,24 +223,5 @@ struct SettingsHomeView: View {
     let shown = "\(visible) shown"
     guard needing > 0 else { return shown }
     return "\(shown) · \(needing) need\(needing == 1 ? "s" : "") sign-in"
-  }
-
-  private func settingsToggleRow(
-    title: String,
-    systemImage: String,
-    isOn: Binding<Bool>,
-    accessibilityLabel: String,
-    accessibilityHint: String
-  ) -> some View {
-    SettingsListRow(title: title, systemImage: systemImage) {
-      Toggle(accessibilityLabel, isOn: isOn)
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .tint(QuotaPalette.accent)
-    }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(accessibilityLabel)
-    .accessibilityHint(accessibilityHint)
   }
 }

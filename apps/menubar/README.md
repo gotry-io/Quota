@@ -85,6 +85,9 @@ anything about another, and QuotaBar cannot alter another Device or request cred
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
 
+Notifications are local: remaining-quota rules are evaluated on this Mac and delivered through the
+system notification center; nothing is uploaded.
+
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
 requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
 [`DESIGN.md`](DESIGN.md).
@@ -119,7 +122,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|provider-codex-source|provider-litellm-key|devices|usage|menu-bar-style|menu-bar-provider|support|diagnostics
+--route overview|settings|account|agents|provider-codex|provider-openrouter|provider-cursor|provider-codex-source|provider-litellm-key|devices|usage|notifications|menu-bar-style|menu-bar-provider|support|diagnostics
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```
