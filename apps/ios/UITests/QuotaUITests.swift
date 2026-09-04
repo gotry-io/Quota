@@ -668,6 +668,15 @@ final class QuotaUITests: XCTestCase {
     if let screenshot {
       attachScreenshot(app, name: screenshot)
     }
+    // Scroll back toward the top so a minimized tab bar re-expands before the next tab tap.
+    for _ in 0..<3 where !tabBar.buttons["Usage"].exists {
+      scrollContent(app, up: false)
+      RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    }
+    XCTAssertTrue(
+      tabBar.buttons["Usage"].waitForExistence(timeout: 5),
+      "tab bar re-expands after scrolling back up"
+    )
   }
 
   private func scrollableList(in app: XCUIApplication) -> XCUIElement {
