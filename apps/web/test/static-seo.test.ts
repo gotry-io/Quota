@@ -15,18 +15,19 @@ function parseJsonc(source: string): unknown {
   return JSON.parse(source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
 }
 
-test("every top-level static file has a Wrangler asset-first negation", () => {
+test("every static file and directory has a Wrangler asset-first negation", () => {
   const wrangler = parseJsonc(readFileSync(wranglerPath, "utf8")) as {
     assets: { run_worker_first: string[] };
   };
   const rules = new Set(wrangler.assets.run_worker_first);
-  const files = readdirSync(staticDir).filter((name) => {
-    if (name.startsWith(".")) return false;
-    return statSync(join(staticDir, name)).isFile();
-  });
-  assert.ok(files.length > 0, "static/ has no top-level files");
-  for (const file of files) {
-    assert.ok(rules.has(`!/${file}`), `missing run_worker_first negation for ${file}`);
+  const entries = readdirSync(staticDir).filter((name) => !name.startsWith("."));
+  assert.ok(entries.length > 0, "static/ has no entries");
+  for (const name of entries) {
+    if (statSync(join(staticDir, name)).isDirectory()) {
+      assert.ok(rules.has(`!/${name}/*`), `missing run_worker_first negation for ${name}/*`);
+    } else {
+      assert.ok(rules.has(`!/${name}`), `missing run_worker_first negation for ${name}`);
+    }
   }
 });
 

@@ -27,7 +27,8 @@
       "!/favicon.ico",
       "!/robots.txt",
       "!/site.webmanifest",
-      "!/sitemap.xml"
+      "!/sitemap.xml",
+      "!/screenshots/*"
     ]
   },
   "observability": {

@@ -17,7 +17,8 @@
     "preview": "vite preview",
     "test": "node --test 'test/*.test.ts' && vitest run",
     "test:e2e": "playwright test",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "screenshots": "SCREENSHOTS=1 playwright test e2e/screenshots.spec.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

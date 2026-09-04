@@ -142,3 +142,44 @@ export function accountActivityDay(date: string) {
     ],
   };
 }
+
+type ScreenshotAccount = {
+  account: { display_label: string };
+  devices: Array<{
+    display_name: string;
+    last_seen_at: string;
+    last_observed_at: string;
+  }>;
+  subscriptions: Array<{
+    snapshot: {
+      account: { label?: string };
+      observed_at: string;
+      windows: Array<{ resets_at?: string }>;
+    };
+    sources: Array<{ observed_at: string }>;
+  }>;
+};
+
+/** Homepage shots: same wire fixture, with the synthetic identity WP-2.6 requires. */
+export function screenshotAccountSummary(): unknown {
+  const summary = structuredClone(accountSummary) as AccountSummary & ScreenshotAccount;
+  const observedAt = new Date(Date.now() - 90_000).toISOString();
+  const resetsAt = new Date(Date.now() + 4 * 86_400_000).toISOString();
+  summary.account.display_label = "octocat";
+  for (const device of summary.devices) {
+    device.display_name = "Studio Mac";
+    device.last_seen_at = observedAt;
+    device.last_observed_at = observedAt;
+  }
+  for (const subscription of summary.subscriptions) {
+    subscription.snapshot.account.label = "pe***@example.com";
+    subscription.snapshot.observed_at = observedAt;
+    for (const window of subscription.snapshot.windows) {
+      window.resets_at = resetsAt;
+    }
+    for (const source of subscription.sources) {
+      source.observed_at = observedAt;
+    }
+  }
+  return summary;
+}

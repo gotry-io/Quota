@@ -63,14 +63,25 @@ or Not reporting from the newer of the two. It is read-only, and a quiet Device 
 rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
-`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, and `schema/` need a
-matching `!/filename` negation in `apps/relay/wrangler.jsonc`.
+`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`, and
+`screenshots/` need a matching `!/filename` (or `!/dir/*`) negation in `apps/relay/wrangler.jsonc`;
+`test/static-seo.test.ts` checks this.
 
 Public pages `/download`, `/support`, `/privacy`, and `/terms` are SvelteKit routes. Support,
 Privacy, and Terms copy lives in `src/content/*.md` and is rendered by `src/lib/markdown.ts`
 (headings through `###`, paragraphs, `-` lists, `**bold**`, inline code, `>` quotes, and `http(s)`
 or same-site `/` links only; raw HTML is escaped). Privacy and Terms show a Draft label until
 review removes it.
+
+Product-preview PNGs live in `static/screenshots/`. They are synthetic: account `octocat`, mailbox
+`pe***@example.com`, device `Studio Mac`. They are not live captures.
+
+Regenerate the web shots with `pnpm --filter @gotry-io/quota-web screenshots` (`SCREENSHOTS=1`; not
+part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that hosts
+`VisualTestConfiguration` (`--route overview --fixture content --appearance light|dark`) in a
+320×480 `NSHostingView`, writes PNG @2x via `bitmapImageRepForCachingDisplay` to
+`quotabar-overview-{light,dark}.png`, then is deleted. Compress each PNG below 300 KB (`pngquant` or
+`sips`).
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
