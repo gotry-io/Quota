@@ -99,23 +99,28 @@ project. Pass `--no-commit` to skip the commit.
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
 `usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
 sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
-opens the first quota row for `subscription-detail`, the compact Mac setup Section for
-`no-devices`, Devices content and empty states, the cached-error status Label, the Connect with
-GitHub control for `signed-out`, connecting / connect-error / expired / loading fixtures, the inline
-GitHub account confirmation for `confirm-account`, and Settings for the compact hub plus
-Notifications, Appearance, and About destinations, and runs an accessibility audit on each. Connect
-(no contrast skip), Overview, subscription detail, Devices, Usage, and the Settings destinations run
-the app-owned audit with no unnamed clipping skip. Log Out and Delete Account sit on the Settings
-hub. Delete Account starts on the website.
+opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
+setup Section for `no-devices`, Devices content and empty states, the cached-error status Label, the
+Connect with GitHub control for `signed-out`, connecting / connect-error / expired / loading
+fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
+hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
+Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
+Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
+unnamed clipping skip and no whole-type contrast skip. Log Out and Delete Account sit on the
+Settings hub. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
+QUOTA_IOS_APPEARANCE=dark ./scripts/ios-ui-screenshots.sh
+QUOTA_IOS_TEXT_SIZE=accessibilityExtraLarge ./scripts/ios-ui-screenshots.sh
 ```
 
 That script runs only `QuotaUITests`, writes `dist/ios-ui.xcresult`, and exports PNG attachments to
 `dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the first available
-iPhone from `xcrun simctl list devices available -j`. Screenshot artifacts are for local visual QA
-and are not part of CI.
+iPhone from `xcrun simctl list devices available -j`. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
+name or a `UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are
+forwarded to the UI tests; variant runs write a subdirectory. Screenshot artifacts are for local
+visual QA and are not part of CI.
 
 ### DEBUG visual fixtures
 
@@ -124,7 +129,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | loading | content | cached-error | empty | no-devices | activity-loading | activity-failed | activity-day-empty | activity-day-failed
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | activity-loading | activity-failed | activity-day-empty | activity-day-failed
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

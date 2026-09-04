@@ -3,6 +3,12 @@ import XCTest
 final class QuotaUITests: XCTestCase {
   override func setUpWithError() throws {
     continueAfterFailure = false
+    switch uitestEnvironment("QUOTA_IOS_APPEARANCE")?.lowercased() {
+    case "dark":
+      XCUIDevice.shared.appearance = .dark
+    default:
+      XCUIDevice.shared.appearance = .light
+    }
   }
 
   func testContentFixtureShowsOverview() throws {
@@ -30,6 +36,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Today"].exists, "Today section")
     attachScreenshot(app, name: "overview-content")
     try audit(app)
+    try assertTabBarMinimizesOnScroll(app, screenshot: "overview-tab-minimized")
 
     app.tabBars.buttons["Usage"].tap()
     XCTAssertTrue(
@@ -47,9 +54,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
     attachScreenshot(app, name: "usage-content")
     attachScreenshot(app, name: "usage-activity")
-    // Heatmap cells are decorative 14-point fills, not text. Contrast on that
-    // grid times out the iOS 26 auditor; hit-region / Dynamic Type / clipping still run.
-    try usageAudit(app)
+    try audit(app)
     let showMore = app.descendants(matching: .any)["usage.show-more"]
     let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
     let codex = app.staticTexts["Codex"]
@@ -73,8 +78,10 @@ final class QuotaUITests: XCTestCase {
       "usage.day.model"
     )
     attachScreenshot(app, name: "usage-day")
-    try usageAudit(app)
+    try audit(app)
     app.buttons["Done"].tap()
+    try restoreTabBar(app)
+    try assertTabBarMinimizesOnScroll(app)
 
     app.tabBars.buttons["Overview"].tap()
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
@@ -92,9 +99,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Quota"].exists, "Quota")
     XCTAssertTrue(app.staticTexts["Readings"].exists, "Readings")
     attachScreenshot(app, name: "subscription-detail")
-    // Last Readings rows sit under the tab-bar Liquid Glass; contrast on those
-    // named rows is the same system overlay Settings documents as unnamed clipping.
-    try audit(app, skipping: .contrast)
+    try audit(app)
   }
 
   func testContentFixtureShowsSettingsDestinations() throws {
@@ -365,7 +370,23 @@ final class QuotaUITests: XCTestCase {
       "empty activity"
     )
     attachScreenshot(app, name: "usage-empty")
-    try usageAudit(app)
+    try audit(app)
+  }
+
+  func testEmptyFixtureShowsOverviewEmpty() throws {
+    let app = launch(fixture: "empty")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
+    XCTAssertFalse(
+      app.staticTexts["Set up QuotaBar"].exists,
+      "empty Overview keeps devices, so Mac setup stays off this screen"
+    )
+    attachScreenshot(app, name: "overview-empty")
+    try audit(app)
   }
 
   func testUsageActivityLoadingShowsSkeleton() throws {
@@ -381,7 +402,7 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Tokens"].exists, "period totals remain visible")
     attachScreenshot(app, name: "usage-activity-loading")
-    try usageAudit(app)
+    try audit(app)
   }
 
   func testUsageActivityFailedShowsRetry() throws {
@@ -401,7 +422,7 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Tokens"].exists, "period totals remain visible")
     attachScreenshot(app, name: "usage-activity-failed")
-    try usageAudit(app)
+    try audit(app)
   }
 
   func testUsageDayEmptyShowsEmptyCopy() throws {
@@ -415,7 +436,7 @@ final class QuotaUITests: XCTestCase {
       "empty day copy"
     )
     attachScreenshot(app, name: "usage-day-empty")
-    try usageAudit(app)
+    try audit(app)
   }
 
   func testUsageDayFailedShowsRetry() throws {
@@ -433,7 +454,72 @@ final class QuotaUITests: XCTestCase {
       "Retry"
     )
     attachScreenshot(app, name: "usage-day-failed")
-    try usageAudit(app)
+    try audit(app)
+  }
+
+  func testLargeTypeScreenshots() throws {
+    try XCTSkipUnless(
+      uitestEnvironment("QUOTA_IOS_TEXT_SIZE") != nil,
+      "only when QUOTA_IOS_TEXT_SIZE is set"
+    )
+
+    func waitRoot(_ app: XCUIApplication, _ identifier: String) {
+      XCTAssertTrue(
+        app.descendants(matching: .any)[identifier].waitForExistence(timeout: 10),
+        identifier
+      )
+    }
+
+    var app = launch(fixture: "signed-out")
+    waitRoot(app, "connect.root")
+    attachScreenshot(app, name: "connect-signed-out")
+
+    app = launch(fixture: "confirm-account")
+    waitRoot(app, "confirm.root")
+    attachScreenshot(app, name: "confirm-account")
+
+    app = launch(fixture: "content")
+    waitRoot(app, "overview.root")
+    attachScreenshot(app, name: "overview-content")
+
+    app.tabBars.buttons["Usage"].tap()
+    waitRoot(app, "usage.root")
+    attachScreenshot(app, name: "usage-content")
+
+    app.tabBars.buttons["Overview"].tap()
+    waitRoot(app, "overview.root")
+    let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
+    XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
+    card.tap()
+    waitRoot(app, "subscription.detail")
+    attachScreenshot(app, name: "subscription-detail")
+
+    app = launch(fixture: "content")
+    waitRoot(app, "overview.root")
+    app.tabBars.buttons["Devices"].tap()
+    waitRoot(app, "devices.root")
+    attachScreenshot(app, name: "devices-content")
+
+    func settingsShot(link: String, root: String, name: String, hub: Bool = false) {
+      let settings = launch(fixture: "content")
+      waitRoot(settings, "overview.root")
+      settings.tabBars.buttons["Settings"].tap()
+      waitRoot(settings, "settings.root")
+      if hub {
+        attachScreenshot(settings, name: name)
+        return
+      }
+      openSettingsDestination(settings, link: link, root: root)
+      attachScreenshot(settings, name: name)
+    }
+
+    settingsShot(link: "", root: "", name: "settings-main", hub: true)
+    settingsShot(
+      link: "settings.notifications", root: "settings.notifications.root",
+      name: "settings-notifications")
+    settingsShot(
+      link: "settings.appearance", root: "settings.appearance.root", name: "settings-appearance")
+    settingsShot(link: "settings.about", root: "settings.about.root", name: "settings-about")
   }
 
   func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
@@ -451,9 +537,46 @@ final class QuotaUITests: XCTestCase {
 
   private func launch(fixture: String) -> XCUIApplication {
     let app = XCUIApplication()
-    app.launchArguments = ["--visual-fixture", fixture]
+    var arguments = ["--visual-fixture", fixture]
+    if let size = uitestEnvironment("QUOTA_IOS_TEXT_SIZE") {
+      arguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategoryName(size)]
+    }
+    app.launchArguments = arguments
     app.launch()
     return app
+  }
+
+  private func uitestEnvironment(_ key: String) -> String? {
+    if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty {
+      return value
+    }
+    let file: String
+    switch key {
+    case "QUOTA_IOS_APPEARANCE": file = "/tmp/quota-ios-uitest-appearance"
+    case "QUOTA_IOS_TEXT_SIZE": file = "/tmp/quota-ios-uitest-text-size"
+    default: return nil
+    }
+    guard let raw = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private func contentSizeCategoryName(_ size: String) -> String {
+    switch size {
+    case "extraSmall": "UICTContentSizeCategoryXS"
+    case "small": "UICTContentSizeCategoryS"
+    case "medium": "UICTContentSizeCategoryM"
+    case "large": "UICTContentSizeCategoryL"
+    case "extraLarge": "UICTContentSizeCategoryXL"
+    case "extraExtraLarge": "UICTContentSizeCategoryXXL"
+    case "extraExtraExtraLarge": "UICTContentSizeCategoryXXXL"
+    case "accessibilityMedium": "UICTContentSizeCategoryAccessibilityM"
+    case "accessibilityLarge": "UICTContentSizeCategoryAccessibilityL"
+    case "accessibilityExtraLarge": "UICTContentSizeCategoryAccessibilityXL"
+    case "accessibilityExtraExtraLarge": "UICTContentSizeCategoryAccessibilityXXL"
+    case "accessibilityExtraExtraExtraLarge": "UICTContentSizeCategoryAccessibilityXXXL"
+    default: size
+    }
   }
 
   private func attachScreenshot(_ app: XCUIApplication, name: String) {
@@ -473,6 +596,12 @@ final class QuotaUITests: XCTestCase {
     root: String
   ) {
     let control = app.descendants(matching: .any)[link]
+    if !control.waitForExistence(timeout: 2) {
+      for _ in 0..<8 {
+        app.swipeUp()
+        if control.exists { break }
+      }
+    }
     XCTAssertTrue(control.waitForExistence(timeout: 5), link)
     control.tap()
     XCTAssertTrue(
@@ -485,10 +614,14 @@ final class QuotaUITests: XCTestCase {
     let back = app.navigationBars.buttons["Settings"]
     XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
     back.tap()
-    XCTAssertTrue(
-      app.buttons["Log Out"].waitForExistence(timeout: 5),
-      "hub Log Out after pop"
-    )
+    let logout = app.buttons["Log Out"]
+    if !logout.waitForExistence(timeout: 2) {
+      for _ in 0..<8 {
+        app.swipeUp()
+        if logout.exists { break }
+      }
+    }
+    XCTAssertTrue(logout.waitForExistence(timeout: 5), "hub Log Out after pop")
   }
 
   /// List rows below the Activity heatmap are created lazily.
@@ -501,22 +634,57 @@ final class QuotaUITests: XCTestCase {
     return byID
   }
 
-  /// Usage List/heatmap/sheet still run hit-region and clipping. Contrast and Dynamic Type
-  /// on those screens are iOS 26 List section headers, List buttons, decorative heatmap fills,
-  /// monospaced token digits, and tab/sheet glass — documented system-owned exceptions.
-  private func usageAudit(_ app: XCUIApplication) throws {
-    try audit(app, skipping: [.contrast, .dynamicType, .textClipped])
+  private func restoreTabBar(_ app: XCUIApplication) throws {
+    XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5), "tab bar")
+    scrollContent(app, up: false)
+    scrollContent(app, up: false)
+  }
+
+  /// Scrolls Overview/Usage so the tab bar can minimize. iOS 26's tab-bar accessibility
+  /// frame does not change when the capsule minimizes, so the proof is a real List scroll
+  /// (the collection view screenshot changes) plus the screenshot attachment.
+  private func assertTabBarMinimizesOnScroll(
+    _ app: XCUIApplication,
+    screenshot: String? = nil
+  ) throws {
+    let tabBar = app.tabBars.firstMatch
+    XCTAssertTrue(tabBar.waitForExistence(timeout: 5), "tab bar")
+    let list = scrollableList(in: app)
+    XCTAssertTrue(list.exists, "scrollable list")
+    let before = list.screenshot().pngRepresentation
+    scrollContent(app, up: true)
+    scrollContent(app, up: true)
+    app.swipeUp()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    let after = list.screenshot().pngRepresentation
+    XCTAssertNotEqual(before, after, "list scrolls down so the tab bar can minimize")
+    XCTAssertTrue(tabBar.exists, "tab bar remains after scroll")
+    XCTAssertEqual(tabBar.buttons.count, 4, "tab bar still has four tabs")
+    if let screenshot {
+      attachScreenshot(app, name: screenshot)
+    }
+  }
+
+  private func scrollableList(in app: XCUIApplication) -> XCUIElement {
+    if app.collectionViews.firstMatch.exists { return app.collectionViews.firstMatch }
+    if app.tables.firstMatch.exists { return app.tables.firstMatch }
+    return app
+  }
+
+  private func scrollContent(_ app: XCUIApplication, up: Bool) {
+    let list = scrollableList(in: app)
+    let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.78 : 0.28))
+    let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.22 : 0.78))
+    start.press(forDuration: 0.05, thenDragTo: end)
   }
 
   /// Every issue is reported with the element it names, so a failure says what to fix.
   ///
   /// Connect signed-out, connecting, error, expired, first-refresh failure, loading, confirm,
   /// Overview, subscription detail, Devices, Usage, and Settings destinations run the app-owned
-  /// audit. System exceptions: unnamed tab-bar / navigation / sheet glass contrast; inset-grouped
-  /// List / Form section header and footer StaticText contrast and Dynamic Type; standard List
-  /// buttons and the sheet **Done** item on Dynamic Type; support lines under the tab bar on the
-  /// last row. Connect (primary label, no tab bar) still runs contrast. Clipping and hit-region
-  /// issues still fail this test. There is no unnamed clipping skip.
+  /// audit, including contrast. System exceptions are scoped to the named element below. Connect
+  /// (primary label, no tab bar) still runs contrast. Clipping and hit-region issues still fail
+  /// this test. There is no unnamed clipping skip and no whole-type contrast skip.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = []
@@ -572,6 +740,14 @@ final class QuotaUITests: XCTestCase {
       if isDynamicType, element.contains("Button"),
         element.contains("Retry") || element.contains("View day") || element.contains("Show")
           || element.contains("usage.day.retry") || element.contains("usage.activity")
+      {
+        return true
+      }
+      // Native List action rows that sit under tab-bar Liquid Glass.
+      if isContrast, element.contains("Button"),
+        element.contains("View day") || element.contains("Retry")
+          || element.contains("usage.activity.view-day") || element.contains("usage.day.retry")
+          || element.contains("usage.activity.retry")
       {
         return true
       }

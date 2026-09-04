@@ -104,6 +104,20 @@ struct UsageActivityChartTests {
   }
 
   @Test
+  func aOneWeekTrailingMonthKeepsItsFullAbbreviation() {
+    // 2026-09-01 is Tuesday, so a range ending 2026-09-05 places Sep on the last week.
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-09-05", input: 10, output: 0)],
+      range: (from: "2025-09-06", to: "2026-09-05"),
+      today: "2026-09-05"
+    )
+    #expect(chart.monthLabels.last?.label == "Sep")
+    #expect(chart.monthLabels.last?.span == 1)
+    #expect(chart.monthLabels.allSatisfy { $0.label.count == 3 })
+    #expect(!chart.monthLabels.map(\.label).contains("…"))
+  }
+
+  @Test
   func activityWindowIs365UtcDaysEndingToday() {
     let range = UsageActivityCalendar.range(endingOn: "2026-08-14")
     #expect(range.from == "2025-08-15")

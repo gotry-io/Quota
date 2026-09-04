@@ -189,7 +189,7 @@ Families:
 | --- | --- |
 | systemSmall | Primary (most constrained, or the configured subscription) item: remaining, provider, window, reset/updated age |
 | systemMedium | Up to two most constrained items, compact Today tokens and cost, and **Updated** age |
-| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown |
+| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown, then a trailing **Updated** age when a snapshot exists |
 | accessoryCircular | Percent windows use an `accessoryCircular` Gauge ring; balance-only shows the amount |
 | accessoryRectangular | Primary remaining, provider · window, optional reset age |
 | accessoryInline | `<Provider> <remaining>%` |
@@ -215,10 +215,13 @@ Shared rules:
 - Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
   widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole; a
   large row is a `Link` to that row's subscription.
-- Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
-  safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
-  extension never fetches. The app republishes the snapshot on a foreground refresh and on a
-  background app refresh it asks for no sooner than every thirty minutes.
+- Placeholder is a redacted/skeleton overview. Xcode previews cover content, no-data, and
+  placeholder for every supported family (small, medium, large, circular, rectangular, inline).
+  Inspect standard, accented, and vibrant rendering in those previews; do not encode those
+  rendering modes in app logic. Missing, corrupt, or oversize snapshot files show safe **No data
+  yet** copy. Timelines refresh about every fifteen minutes so ages advance; the extension never
+  fetches. The app republishes the snapshot on a foreground refresh and on a background app
+  refresh it asks for no sooner than every thirty minutes.
 
 ### Usage
 
@@ -257,8 +260,9 @@ Body, in order:
      weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
      emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
      the same mapping the website uses. Today has a primary stroke. Weekday and month labels use
-     `caption` / `caption2`. Cells are visual shapes, not buttons. The grid is one adjustable
-     control: a spatial tap or drag selects the nearest in-range day; VoiceOver
+     `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
+     last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
+     adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
      increment/decrement changes the same selection. Under the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
      that day.
@@ -451,7 +455,8 @@ Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with G
 **View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
 may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
 and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
-month labels on that grid use `caption` / `caption2`. Accessibility text sizes and widget no-data
+month labels on that grid use `caption` / `caption2` and keep the full month abbreviation.
+Accessibility text sizes and widget no-data
 layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
 truncation of the primary value).
 
@@ -490,10 +495,15 @@ provider and support, and no custom card chrome beyond the system widget contain
   System exceptions, scoped in the UI test: unnamed tab-bar Liquid Glass contrast, grouped Form
   header/footer StaticText contrast, and partial Dynamic Type on system section-header text.
   Connect (no tab bar) still runs contrast.
-- Usage runs hit-region checks. Contrast, Dynamic Type, and text-clipped audits on Usage skip iOS 26
-  List section headers, List buttons, decorative heatmap fills, monospaced token digits, and
-  tab/sheet glass. Unnamed contrast on the system tab bar / navigation glass, and Dynamic Type on the
-  system sheet **Done** confirmation item, are documented system-owned exceptions.
+- Usage runs the same app-owned audit as the other screens, including contrast. Do not skip
+  contrast, Dynamic Type, or clipping as whole audit types. Documented system-owned exceptions,
+  scoped to the named element: unnamed tab-bar / navigation / sheet glass contrast; grouped List /
+  Form section-header and footer StaticText contrast; partial Dynamic Type on system section-header
+  text, standard List buttons (**Retry**, **View day**, **Show N more** / **Show fewer**), and the
+  system sheet **Done** confirmation item; contrast on those same List action rows when they sit
+  under tab-bar Liquid Glass. A contrast pass that exceeds the iOS 26 auditor deadline on the
+  365-day heatmap may retry without contrast; that is a deadline, not a type skip.
+- Overview and Usage UI tests scroll and assert `tabBarMinimizeBehavior(.onScrollDown)`.
 
 ## Visual QA
 
@@ -503,22 +513,26 @@ Overview (quota first, Today second, system NavigationLink chevron, no device-su
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
 URL, cached content with a plain status Label, subscription detail (Account, Plan, Quota, Readings),
 Devices content and empty, Usage at 30 Days as one native scrolling List (period control, totals,
-Activity heatmap, agent sections, no glass cards), Usage empty / activity loading / activity failed,
-a single-day sheet (populated, empty, failed) with system chrome and medium/large detents, the four
-tabs, Settings hub (Notifications and Appearance links, Log Out, Delete Account), Settings ›
-Notifications, Settings › Appearance, Settings › About, and each widget family in placeholder,
-content, and no-data states. Check iPhone, light and dark, standard and accessibility text sizes,
-VoiceOver labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display
-labels only; they must never contain access tokens, refresh tokens, or production data.
+Activity heatmap with full month abbreviations, agent sections, no glass cards), Usage empty /
+activity loading / activity failed, a single-day sheet (populated, empty, failed) with system
+chrome and medium/large detents, the four tabs including a minimized tab bar after scroll, Settings
+hub (Notifications and Appearance links, Log Out, Delete Account), Settings › Notifications,
+Settings › Appearance, Settings › About, and each widget family in placeholder, content, and
+no-data states. Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver
+labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display labels
+only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `overview-content`, `overview-cached-error`,
-`overview-no-devices`, `connect-signed-out`, `connect-connecting`, `connect-error`,
-`connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`, `usage-content`,
-`usage-activity`, `usage-activity-loading`, `usage-activity-failed`, `usage-empty`, `usage-day`,
-`usage-day-empty`, `usage-day-failed`, `subscription-detail`, `devices-content`, `devices-empty`,
-`settings-main`, `settings-notifications`, `settings-appearance`, and `settings-about` fixture
-screenshots to
-`dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `connect-signed-out`, `connect-connecting`,
+`connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
+`overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
+`overview-tab-minimized`, `subscription-detail`, `devices-content`, `devices-empty`,
+`usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
+`usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
+`settings-notifications`, `settings-appearance`, and `settings-about` fixture screenshots to
+`dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
+`QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
+PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
+detail, and each Settings destination at one accessibility text size.
 
 ### DEBUG visual fixtures
 
@@ -553,7 +567,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
-| `empty` | Signed-in Overview with empty quota and **No usage today.** Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
+| `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
 | `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |
 | `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |

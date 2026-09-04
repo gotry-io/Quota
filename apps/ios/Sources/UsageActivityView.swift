@@ -126,8 +126,9 @@ struct UsageActivityHeatmap: View {
               monthRow
               weeksRow
             }
-            .padding(.trailing, 2)
+            .padding(.trailing, QuotaTheme.activityMonthLabelOverflow)
             .padding(.vertical, 3)
+            .id("activity-end")
           }
           .task {
             proxy.scrollTo("activity-end", anchor: .trailing)
@@ -173,7 +174,11 @@ struct UsageActivityHeatmap: View {
           .font(.caption2)
           .foregroundStyle(.primary)
           .lineLimit(1)
-          .frame(width: weekWidth(label.span) - QuotaTheme.activityCellGap, alignment: .leading)
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(
+            minWidth: weekWidth(label.span) - QuotaTheme.activityCellGap,
+            alignment: .leading
+          )
       }
     }
     .accessibilityHidden(true)
@@ -217,7 +222,6 @@ struct UsageActivityHeatmap: View {
     .frame(width: max(width, 0), height: max(height, 0))
     .dynamicTypeSize(...DynamicTypeSize.large)
     .contentShape(Rectangle())
-    .id("activity-end")
     .onTapGesture { location in
       select(at: location)
     }

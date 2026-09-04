@@ -223,6 +223,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.usage.today.totals.inputTokens == 0)
       #expect(model.summary?.usage.today.agents.isEmpty == true)
       #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
+      #expect(model.summary?.devices.isEmpty == false)
       #expect(model.banner == nil)
       #expect(model.activityChart == .loaded([]))
     }

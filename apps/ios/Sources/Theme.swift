@@ -18,6 +18,8 @@ enum QuotaTheme {
   static let activityCellGap: CGFloat = 4
   static let activityCellCorner: CGFloat = 3
   static let activityWeekdayWidth: CGFloat = 28
+  /// Trailing space so a one-week last month still shows its full 3-letter abbreviation.
+  static let activityMonthLabelOverflow: CGFloat = 28
 
   /// Five-step Activity fill, matching the website's emerald ramp.
   static func activityFill(_ level: Int) -> Color {

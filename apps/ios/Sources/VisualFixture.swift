@@ -128,7 +128,19 @@ enum VisualFixture: String, CaseIterable, Sendable {
         )
         model.expiredMessage = nil
         model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
-      case .empty, .noDevices:
+      case .empty:
+        model.phase = .signedIn
+        model.summary = VisualFixtureContent.emptySummary(
+          at: now,
+          devices: VisualFixtureContent.devices(at: now)
+        )
+        model.fetchedAt = now.addingTimeInterval(-60)
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+        model.activityChart = .loaded([])
+      case .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
         model.fetchedAt = now.addingTimeInterval(-60)
@@ -186,9 +198,31 @@ enum VisualFixture: String, CaseIterable, Sendable {
 
   @MainActor
   enum VisualFixtureContent {
+    static let studioDeviceID = "device_visual_fixture_01"
+    static let kitchenDeviceID = "device_visual_fixture_02"
+
+    static func devices(at date: Date) -> [AccountDevice] {
+      [
+        AccountDevice(
+          id: studioDeviceID,
+          displayName: "Studio Mac",
+          platform: .macos,
+          lastSeenAt: date.addingTimeInterval(-45),
+          lastObservedAt: date.addingTimeInterval(-90)
+        ),
+        AccountDevice(
+          id: kitchenDeviceID,
+          displayName: "Kitchen Mac",
+          platform: .macos,
+          lastSeenAt: date.addingTimeInterval(-300),
+          lastObservedAt: date.addingTimeInterval(-360)
+        ),
+      ]
+    }
+
     static func summary(at date: Date) -> AccountSummary {
-      let studioID = "device_visual_fixture_01"
-      let kitchenID = "device_visual_fixture_02"
+      let studioID = studioDeviceID
+      let kitchenID = kitchenDeviceID
       let subscriptions = [
         codexSubscription(studioID: studioID, kitchenID: kitchenID, at: date),
         subscription(
@@ -231,22 +265,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           displayLabel: "octocat",
           createdAt: date.addingTimeInterval(-30 * 86_400)
         ),
-        devices: [
-          AccountDevice(
-            id: studioID,
-            displayName: "Studio Mac",
-            platform: .macos,
-            lastSeenAt: date.addingTimeInterval(-45),
-            lastObservedAt: date.addingTimeInterval(-90)
-          ),
-          AccountDevice(
-            id: kitchenID,
-            displayName: "Kitchen Mac",
-            platform: .macos,
-            lastSeenAt: date.addingTimeInterval(-300),
-            lastObservedAt: date.addingTimeInterval(-360)
-          ),
-        ],
+        devices: devices(at: date),
         subscriptions: subscriptions,
         usage: usage(),
         pricingRevision: "pricing_visual_fixture",
@@ -254,14 +273,14 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
-    static func emptySummary(at date: Date) -> AccountSummary {
+    static func emptySummary(at date: Date, devices: [AccountDevice] = []) -> AccountSummary {
       AccountSummary(
         account: QuotaUserAccount(
           accountID: "account_visual_empty",
           displayLabel: "octocat",
           createdAt: date.addingTimeInterval(-30 * 86_400)
         ),
-        devices: [],
+        devices: devices,
         subscriptions: [],
         usage: emptyUsage(),
         pricingRevision: "pricing_visual_fixture",
