@@ -51,8 +51,13 @@ enum QuotaFormat {
     FreshnessCopy.updated(since: date, now: now)
   }
 
-  static func resetTime(_ date: Date) -> String {
-    date.formatted(date: .abbreviated, time: .shortened)
+  static func resetTime(
+    _ date: Date,
+    now: Date = Date(),
+    timeZone: TimeZone = .current,
+    calendar: Calendar = .current
+  ) -> String? {
+    FreshnessCopy.resetCopy(resetsAt: date, now: now, timeZone: timeZone, calendar: calendar)
   }
 
   static func planBadge(_ raw: String?) -> String? {

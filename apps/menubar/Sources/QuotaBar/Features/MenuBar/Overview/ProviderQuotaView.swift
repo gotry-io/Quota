@@ -101,7 +101,8 @@ private struct AccountQuotaView: View {
         QuotaWindowRow(
           window: window,
           provider: presentation.snapshot.provider,
-          isStale: presentation.state != .available
+          isStale: presentation.state != .available,
+          now: now
         )
       }
     }
@@ -137,6 +138,7 @@ struct QuotaWindowRow: View {
   let window: QuotaWindow
   let provider: ProviderID
   let isStale: Bool
+  let now: Date
 
   private var remainingLabel: String {
     window.overviewRemainingDisplayLabel(provider: provider)
@@ -169,10 +171,12 @@ struct QuotaWindowRow: View {
         QuotaProgressBar(value: window.remainingPercent, fill: meterColor)
       }
 
-      if let resetsAt = window.resetsAt {
-        Text("Resets \(ResetDateFormatter.string(from: resetsAt))")
+      if let resetsAt = window.resetsAt,
+        let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
+      {
+        Text(reset)
           .quotaMetaStyle()
-      } else if FreshnessCopy.showsNoResetTime(window) {
+      } else if window.resetsAt == nil, FreshnessCopy.showsNoResetTime(window) {
         Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
       }
@@ -198,35 +202,5 @@ private struct QuotaProgressBar: View {
     .frame(height: QuotaDesign.Layout.progressHeight)
     .accessibilityLabel("Remaining quota")
     .accessibilityValue(QuotaWindow.formattedPercent(value))
-  }
-}
-
-enum ResetDateFormatter {
-  /// Near resets keep weekday + time (5-hour / weekly windows). Monthly horizons use month + day.
-  static func string(
-    from date: Date,
-    now: Date = Date(),
-    calendar: Calendar = .current,
-    locale: Locale = .current
-  ) -> String {
-    let days = calendar.dateComponents(
-      [.day],
-      from: calendar.startOfDay(for: now),
-      to: calendar.startOfDay(for: date)
-    ).day ?? 0
-    let style = Date.FormatStyle(
-      date: .omitted,
-      time: .omitted,
-      locale: locale,
-      calendar: calendar,
-      timeZone: calendar.timeZone
-    )
-    if abs(days) <= 6 {
-      return date.formatted(style.weekday(.abbreviated).hour().minute())
-    }
-    if calendar.component(.year, from: now) == calendar.component(.year, from: date) {
-      return date.formatted(style.month(.abbreviated).day())
-    }
-    return date.formatted(style.month(.abbreviated).day().year())
   }
 }
