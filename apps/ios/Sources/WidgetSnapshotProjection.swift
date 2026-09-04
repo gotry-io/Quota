@@ -19,7 +19,7 @@ enum WidgetSnapshotProjection {
   static func projectItems(from subscriptions: [QuotaSubscription], salt: Data) -> [WidgetQuotaItem]
   {
     let candidates = subscriptions.flatMap { subscription in
-      let selectionID = SelectionIDs.make(selector: selector(for: subscription), salt: salt)
+      let selectionID = selectionID(for: subscription, salt: salt)
       return subscription.snapshot.windows.map { window in
         WidgetSnapshotCandidate(
           snapshot: subscription.snapshot,
@@ -93,7 +93,12 @@ enum WidgetSnapshotProjection {
     ProviderID(rawValue: providerID)?.sortOrder ?? Int.max
   }
 
-  private static func selector(for subscription: QuotaSubscription) -> String {
+  /// `SHA-256(selector ‖ "|" ‖ salt)` truncated to twelve lowercase hex characters.
+  static func selectionID(for subscription: QuotaSubscription, salt: Data) -> String {
+    SelectionIDs.make(selector: selector(for: subscription), salt: salt)
+  }
+
+  static func selector(for subscription: QuotaSubscription) -> String {
     SubscriptionSelector.make(
       provider: subscription.snapshot.provider.rawValue,
       fingerprint: subscription.snapshot.account.fingerprint,

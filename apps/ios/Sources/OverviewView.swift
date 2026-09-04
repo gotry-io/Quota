@@ -1,11 +1,9 @@
-import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
 struct OverviewView: View {
   @Bindable var model: AppModel
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @State private var confirmLogout = false
 
   var body: some View {
     let providerCards = model.providerCards
@@ -20,16 +18,31 @@ struct OverviewView: View {
         if providerCards.isEmpty {
           emptyCard(
             title: "No quota reported yet.",
-            detail: "Collection happens on a Mac or Linux device signed into this Account."
+            detail: "Collection happens on a Mac running QuotaBar that is signed into this Account."
           )
         } else {
           ForEach(providerCards) { card in
-            ProviderQuotaCard(model: card)
+            ForEach(card.subscriptions) { subscription in
+              NavigationLink(value: subscription.key) {
+                ProviderQuotaCard(
+                  model: ProviderQuotaCardModel(
+                    provider: card.provider,
+                    subscriptions: [subscription]
+                  )
+                )
+              }
+              .buttonStyle(.plain)
+              .contentShape(Rectangle())
+              .accessibilityHint("Opens subscription details")
+              .accessibilityIdentifier("overview.subscription")
+            }
           }
         }
 
         if let devices = model.summary?.devices, !devices.isEmpty {
-          AccountDevicesCard(devices: devices)
+          OverviewDevicesSummary(devices: devices)
+        } else if model.summary?.devices.isEmpty == true {
+          MacSetupGuideCard()
         }
 
         TodayUsageCard(summary: model.summary)
@@ -45,28 +58,6 @@ struct OverviewView: View {
     }
     .navigationTitle(model.accountLabel)
     .navigationBarTitleDisplayMode(.large)
-    .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
-        Button("Log Out", role: .destructive) {
-          confirmLogout = true
-        }
-        .accessibilityLabel("Log Out")
-      }
-    }
-    .confirmationDialog(
-      "Log out of Quota on this device?",
-      isPresented: $confirmLogout,
-      titleVisibility: .visible
-    ) {
-      Button("Log Out", role: .destructive) {
-        Task { await model.logout() }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "The remote Account stays signed in on the website. This device forgets the session and saved overview."
-      )
-    }
   }
 
   @ViewBuilder
@@ -102,6 +93,7 @@ struct OverviewView: View {
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("\(model.accountLabel), \(QuotaFormat.updated(fetchedAt))")
+      .accessibilityAddTraits(.isStaticText)
     }
   }
 
@@ -117,60 +109,6 @@ struct OverviewView: View {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .quotaSurface()
-  }
-}
-
-struct AccountDevicesCard: View {
-  let devices: [AccountDevice]
-
-  var body: some View {
-    let now = Date()
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Devices")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      ForEach(Array(devices.enumerated()), id: \.element.id) { index, device in
-        if index > 0 { Divider() }
-        deviceRow(device, now: now)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface()
-  }
-
-  private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
-    let activity = device.activity(now: now)
-    let details = deviceDetails(device, activity: activity, now: now)
-    return VStack(alignment: .leading, spacing: 5) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(device.displayName)
-          .font(.subheadline.weight(.medium))
-        Spacer(minLength: 8)
-        Text(activity.label)
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.trailing)
-      }
-      Text(details)
-        .font(.footnote.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(device.displayName), \(activity.label), \(details)")
-  }
-
-  private func deviceDetails(
-    _ device: AccountDevice,
-    activity: DeviceActivity,
-    now: Date
-  ) -> String {
-    let platform = switch device.platform {
-    case .macos: "macOS"
-    case .unknown: "Unknown"
-    }
-    return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
   }
 }
 

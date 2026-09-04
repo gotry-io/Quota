@@ -373,6 +373,29 @@ struct AppModelTests {
     #expect(model.phase == .signedOut)
     #expect(try saltStore.loadOrCreate() == Data(repeating: 0x22, count: 32))
   }
+
+  @Test
+  func presentDeleteAccountOpensNonEphemeralGitHubStartWithEncodedReturnTo() async {
+    let authenticator = ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled))
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+        summaryStore: MemoryAccountSummaryStore(),
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: authenticator
+    )
+
+    await model.presentDeleteAccount()
+    #expect(authenticator.lastPresentURL == QuotaWebLinks.deleteAccountStart)
+    #expect(authenticator.lastPresentCallbackScheme == nil)
+    #expect(authenticator.lastPresentPrefersEphemeral == false)
+    #expect(
+      authenticator.lastPresentURL?.absoluteString
+        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+    )
+  }
 }
 
 @MainActor
@@ -389,6 +412,20 @@ final class ScriptedAuthenticator: BrowserSessionAuthenticating {
     lastURL = url
     lastCallbackScheme = callbackScheme
     return try result.get()
+  }
+
+  var lastPresentURL: URL?
+  var lastPresentCallbackScheme: String?
+  var lastPresentPrefersEphemeral: Bool?
+
+  func present(
+    url: URL,
+    callbackScheme: String?,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws {
+    lastPresentURL = url
+    lastPresentCallbackScheme = callbackScheme
+    lastPresentPrefersEphemeral = prefersEphemeralWebBrowserSession
   }
 }
 

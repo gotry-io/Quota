@@ -24,9 +24,9 @@ Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 Quota iOS is not a collection Device. It does not configure Providers, collect local logs, upload
-snapshots or Usage, or add `ios` to `PlatformSchema`. Overview lists the collection Devices with
-their platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
-credentials for them. See
+snapshots or Usage, or add `ios` to `PlatformSchema`. The Devices tab lists the collection Devices
+with their platform and how recently each one spoke — Active, Idle, or Not reporting — without
+requesting credentials for them. See
 [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
@@ -82,7 +82,7 @@ open apps/ios/Quota.xcodeproj
 `pnpm generate:ios` runs the installed XcodeGen against `project.yml` and refreshes the checked-in
 Xcode project. Do not add a third-party package manager. The app has no Sparkle or analytics.
 App icon assets live in `Resources/Assets.xcassets`. App Store upload is the owner-only `ios-v*`
-workflow below.
+workflow below. Delete Account starts on the website.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and the Quota scheme tests (`QuotaTests`
 and `QuotaUITests`) on an available iPhone simulator (`QUOTA_IOS_SIMULATOR` overrides the name).
@@ -95,8 +95,10 @@ project. Pass `--no-commit` to skip the commit.
 ### UI tests
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
-`overview.root` / `overview.today` for `content` and the Connect Account control for `signed-out`,
-and runs an iOS 17+ accessibility audit on each.
+`overview.root` / `overview.today` for `content`, opens the first quota card for
+`subscription-detail`, the Mac setup card for `no-devices`, the Connect Account control for
+`signed-out`, and Settings for the Notifications switch and Log Out, and runs an iOS 17+
+accessibility audit on each. Log Out is on the Settings tab. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
@@ -114,7 +116,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | content | cached-error | empty
+# Values: signed-out | content | cached-error | empty | no-devices
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

@@ -29,3 +29,8 @@ do
     exit 1
   fi
 done
+
+if grep -F '"1,2"' apps/ios/project.yml >/dev/null; then
+  echo 'apps/ios/project.yml still targets iPad (TARGETED_DEVICE_FAMILY "1,2").' >&2
+  exit 1
+fi

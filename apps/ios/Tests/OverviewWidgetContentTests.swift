@@ -144,6 +144,7 @@ struct OverviewWidgetContentTests {
     #expect(FreshnessCopy.resetCopy(resetsAt: atInstant, now: now) == nil)
     #expect(FreshnessCopy.resetCopy(resetsAt: past, now: now) == nil)
     let item = WidgetQuotaItem(
+      selectionID: "ccfc96629357",
       providerID: "codex",
       providerDisplayName: "Codex",
       windowTitle: "Weekly",

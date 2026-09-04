@@ -20,6 +20,7 @@ struct ProviderQuotaCard: View {
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
+    .contentShape(Rectangle())
     .quotaSurface()
   }
 
@@ -70,13 +71,18 @@ struct ProviderQuotaCard: View {
       .padding(.horizontal, 8)
       .padding(.vertical, 3)
       .background(QuotaTheme.meterTrack, in: Capsule())
+      .accessibilityHidden(true)
+      .allowsHitTesting(false)
   }
 }
 
 struct QuotaWindowBlock: View {
   let window: QuotaWindow
   /// Why the reading is not current, or `nil` while it is.
-  let stateLabel: String?
+  var stateLabel: String? = nil
+  /// Detail uses a live timer under a day; Overview keeps the shared static reset copy.
+  var usesLiveCountdown: Bool = false
+  var emphasizedRemaining: Bool = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -86,7 +92,9 @@ struct QuotaWindowBlock: View {
         .fixedSize(horizontal: false, vertical: true)
 
       Text(QuotaFormat.remaining(window))
-        .font(.title2.monospacedDigit().weight(.semibold))
+        .font(
+          (emphasizedRemaining ? Font.title : Font.title2).monospacedDigit().weight(.semibold)
+        )
         .foregroundStyle(.primary)
         .lineLimit(1)
         .minimumScaleFactor(0.7)
@@ -96,9 +104,14 @@ struct QuotaWindowBlock: View {
         ProgressView(value: window.remainingPercent, total: 100)
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)
+          .allowsHitTesting(false)
       }
 
-      if let support = supportLine {
+      if usesLiveCountdown {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+          countdownRow(now: context.date)
+        }
+      } else if let support = supportLine {
         // No line limit: at accessibility text sizes a capped line clips the reset time.
         Text(support)
           .font(.footnote)
@@ -108,6 +121,26 @@ struct QuotaWindowBlock: View {
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityText)
+  }
+
+  @ViewBuilder
+  private func countdownRow(now: Date) -> some View {
+    switch QuotaFormat.countdown(resetsAt: window.resetsAt, now: now) {
+    case .live(let end):
+      // The shared reset copy says "Resets in …"; the live timer keeps the same words.
+      (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+        .font(.footnote.monospacedDigit())
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityLabel(Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+    case .copy(let text):
+      Text(text)
+        .font(.footnote)
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+    case nil:
+      EmptyView()
+    }
   }
 
   /// A reading that is not current says so even when it still carries a reset time,

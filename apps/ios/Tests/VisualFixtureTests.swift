@@ -24,6 +24,7 @@ struct VisualFixtureParserTests {
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
+      ("no-devices", VisualFixture.noDevices),
     ]
   )
   func parseRecognizesEachFixture(raw: String, expected: VisualFixture) {
@@ -45,7 +46,7 @@ struct VisualFixtureParserTests {
     }
 
     @Test
-    func contentIncludesCodexClaudeGrokAndTodayValues() {
+    func contentIncludesCodexClaudeGrokAndTodayValues() throws {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
       #expect(model.skipsRestore)
       #expect(model.phase == .signedIn)
@@ -56,6 +57,17 @@ struct VisualFixtureParserTests {
       let providers = Set(model.providerCards.map(\.provider))
       #expect(providers == [.codex, .claude, .grok])
       #expect(model.providerCards.count == 3)
+
+      let codex = try #require(model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
+      #expect(codex.sources.count == 2)
+      #expect(model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
+      let readings = SubscriptionDetailContent.make(
+        subscription: codex,
+        devices: model.summary?.devices ?? [],
+        now: VisualFixture.referenceDate
+      )
+      #expect(readings.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
+      #expect(readings.sources.map(\.isReporting) == [true, false])
 
       let usage = model.summary?.usage.today
       #expect(usage?.totals.inputTokens == 1_420_500)
@@ -120,6 +132,17 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.subscriptions.isEmpty == true)
       #expect(model.summary?.usage.today.totals.messages == 0)
       #expect(model.summary?.usage.today.totals.inputTokens == 0)
+      #expect(model.banner == nil)
+    }
+
+    @Test
+    func noDevicesIsSignedInWithoutDevicesOrSubscriptions() {
+      let model = AppModel.visualFixture(.noDevices, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedIn)
+      #expect(model.summary?.devices.isEmpty == true)
+      #expect(model.summary?.subscriptions.isEmpty == true)
+      #expect(model.providerCards.isEmpty)
       #expect(model.banner == nil)
     }
   }
