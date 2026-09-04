@@ -651,6 +651,135 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
 }
 
+@Test @MainActor
+func quotaApplyDeliversFirstSeenThresholdEventsWhenNotificationsAreEnabled() throws {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  NotificationRules(enabled: true, resetReminders: true, thresholds: [:]).save(to: defaults.store)
+  let store = InMemoryNotificationStateStore()
+  let sink = RecordingNotificationSink()
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState()),
+    notificationStore: store,
+    notificationSink: sink,
+    notificationDefaults: defaults.store
+  )
+  model.apply(overviewOnlyState(overview: [codexOverviewItem(remainingPercent: 12, now: now)]))
+
+  #expect(sink.events.count == 1)
+  #expect(
+    sink.events
+      == [
+        .thresholdCrossed(
+          selector: "ccfc96629357",
+          windowID: "weekly",
+          threshold: 20,
+          remainingPercent: 12,
+          resetsAt: nil
+        )
+      ]
+  )
+  #expect(try store.load().fired.count == 1)
+}
+
+@Test @MainActor
+func signingOutClearsNotificationDedupState() throws {
+  let defaults = notificationDefaultsSuite()
+  defer { defaults.tearDown() }
+  let store = InMemoryNotificationStateStore(
+    state: NotificationDedupState(
+      fired: [
+        NotificationDedupKey(
+          selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
+      ],
+      readings: [
+        NotificationStoredReading(
+          selector: "ccfc96629357", windowID: "weekly", remainingPercent: 18, resetsAt: nil)
+      ]
+    )
+  )
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: justSignedInState(label: "octocat")),
+    notificationStore: store,
+    notificationDefaults: defaults.store
+  )
+  model.apply(justSignedInState(label: "octocat"))
+  #expect(try store.load().fired.count == 1)
+
+  model.apply(signedOutWithSessionEndedState())
+  #expect(try store.load() == .empty)
+}
+
+private final class RecordingNotificationSink: NotificationSink, @unchecked Sendable {
+  var events: [NotificationEvent] = []
+
+  func deliver(_ events: [NotificationEvent]) {
+    self.events.append(contentsOf: events)
+  }
+}
+
+private struct NotificationDefaultsSuite {
+  let name: String
+  let store: UserDefaults
+
+  func tearDown() {
+    store.removePersistentDomain(forName: name)
+  }
+}
+
+private func notificationDefaultsSuite() -> NotificationDefaultsSuite {
+  let name = "QuotaBarTests.MenuBarNotifications.\(UUID().uuidString)"
+  let store = UserDefaults(suiteName: name)!
+  store.removePersistentDomain(forName: name)
+  return NotificationDefaultsSuite(name: name, store: store)
+}
+
+private func codexOverviewItem(remainingPercent: Double, now: Date) -> LocalServiceOverviewItem {
+  let snapshot = QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(
+      fingerprint: "account_test",
+      label: nil,
+      plan: "Plus",
+      fingerprintScope: .global
+    ),
+    windows: [
+      QuotaWindow(
+        id: "weekly",
+        title: "Weekly",
+        usedPercent: 100 - remainingPercent,
+        primaryCadence: .weekly
+      )
+    ],
+    status: .available,
+    observedAt: now
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    observedAt: now,
+    isStale: false
+  )
+  return LocalServiceOverviewItem(
+    identity: LocalServiceOverviewIdentity(
+      provider: .codex,
+      fingerprint: "account_test",
+      scope: .global,
+      sourceID: nil
+    ),
+    snapshot: snapshot,
+    sources: [source],
+    selectedSourceID: source.sourceID,
+    selectedSourceDisplayName: source.displayName,
+    automaticSourceID: source.sourceID,
+    automaticSourceDisplayName: source.displayName,
+    isStale: false
+  )
+}
+
 private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   LocalServiceUsagePeriodValues(
     today: LocalServiceUsageDetail(

@@ -54,6 +54,10 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   Counting how many readings came from this Mac and how many from the account is implementation
   detail; whether the numbers are still current is not. **This Mac** and **Account** remain valid as
   the two Usage sources a person picks between.
+- **Notification copy.** Title is **`<Provider display_name> · <Window title>`**. Body is
+  **`12% left · resets in 42m`**, using the shared reset countdown in lowercase; if that countdown
+  is nil, the body is only **`12% left`**. A window refill reads **`<Window title> quota reset`**.
+  Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
 
 ## Window and layout tokens
 
@@ -244,6 +248,7 @@ Overview
     ├── Account
     │   └── Devices
     ├── Usage
+    ├── Notifications
     ├── Menu Bar Style
     ├── Menu Bar Provider
     ├── Support
@@ -348,7 +353,7 @@ The Account group on Settings is one row deep in every state:
 The Account group is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Quota contains the **Usage** and **Agents** destinations. The Usage root summary uses account-wide
+Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
 **Style** and **Provider**: two rows that state the choice in force on the right and open a page to
 change it, never a menu that drops over the panel. General contains the native mini **Launch at
@@ -403,6 +408,22 @@ the latest state after the navigation animation is removed. Any page that can re
 empty, error, or content at its root uses this host; individual pages must not delay requests or
 guess the navigation duration. Header actions stay hidden during the transition and then reflect the
 published page state. Reduce Motion skips the transition and publishes updates immediately.
+
+### Notifications
+
+Notifications is a Settings destination under Quota. It holds the local remaining-quota rules this
+Mac evaluates itself: one master switch, remaining-percent thresholds on each subscription Overview
+is showing, and a switch for window-reset reminders.
+
+- The master switch is off until the page is opened and the system permission is granted, then it
+  turns on.
+- Each visible subscription defaults to **20** and **10**. Values are 1–99, stored descending and
+  unique.
+- Reset reminders default on.
+- Quota reminds when a refresh brings new data; it does not promise real-time.
+
+The page uses the same Settings list rows as the rest of this panel. Delivery and permission
+prompts are native.
 
 ### Account
 

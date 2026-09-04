@@ -1,0 +1,545 @@
+{
+  "$comment": "When a remaining-quota reading should fire a local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS both answer this file. Evaluation covers only each subscription's primary_cadence window, or the first percent window when none is marked. Non-available statuses neither fire nor change state. Dedup keys are (selector, window_id, resets_at or none, threshold or none): the same key fires once per reset cycle. First seeing a remaining percent already at or below a threshold fires that threshold. A window reset (old resets_at has passed, or resets_at moved later, and remaining rose) fires a reset event, clears that window's crossed keys, and starts a new cycle. Raising a threshold is a new key. Sign-out clears the store.",
+  "cases": [
+    {
+      "name": "first seen already below 20 fires that threshold",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": null,
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 12,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "threshold_crossed",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "threshold": 20,
+          "remaining_percent": 12,
+          "resets_at": "2026-03-22T12:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 12,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "crossing 20 fires that threshold",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 25,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 18,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "threshold_crossed",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "threshold": 20,
+          "remaining_percent": 18,
+          "resets_at": "2026-03-22T12:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 18,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "then crossing 10 fires that threshold",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 18,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 8,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "threshold_crossed",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "threshold": 10,
+          "remaining_percent": 8,
+          "resets_at": "2026-03-22T12:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          },
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 10
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 8,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "the same cycle does not fire again for a repeat reading",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          },
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 10
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 8,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 7,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          },
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 10
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 7,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a reset that restores remaining fires a reset event and clears crossed keys",
+      "now": "2026-03-16T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-15T12:00:00Z",
+            "threshold": 20
+          },
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-15T12:00:00Z",
+            "threshold": 10
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 8,
+            "resets_at": "2026-03-15T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 100,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "window_reset",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "resets_at": "2026-03-22T12:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": null
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 100,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "raising the threshold to 30 fires when remaining later crosses 30",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [30]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 35,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 28,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "threshold_crossed",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "threshold": 30,
+          "remaining_percent": 28,
+          "resets_at": "2026-03-22T12:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          },
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 30
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 28,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auth_required does not fire and does not change state",
+      "now": "2026-03-15T12:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 18,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "auth_required",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 8,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [],
+      "expected_state_after": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 18,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sign-out clears fired keys and readings",
+      "now": "2026-03-15T12:00:00Z",
+      "sign_out": true,
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": 20
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 18,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 18,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [],
+      "expected_state_after": {
+        "fired": [],
+        "readings": []
+      }
+    }
+  ]
+}
