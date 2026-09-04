@@ -247,4 +247,10 @@ private final class CancelledAuthenticator: BrowserSessionAuthenticating {
   func authenticate(url: URL, callbackScheme: String) async throws -> URL {
     throw AuthorizationError.cancelled
   }
+
+  func present(
+    url: URL,
+    callbackScheme: String?,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws {}
 }

@@ -465,7 +465,7 @@ func makeModel(
   alertCoordinator: AlertCoordinator? = nil,
   alertRulesStore: IOSAlertRulesStore? = nil,
   notificationCenter: (any NotificationCentering)? = nil,
-  now: @escaping () -> Date = Date.init
+  now: @escaping @Sendable () -> Date = { Date() }
 ) -> AppModel {
   AppModel(
     account: AccountClient(
