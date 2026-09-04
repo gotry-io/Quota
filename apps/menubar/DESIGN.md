@@ -54,6 +54,9 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   Counting how many readings came from this Mac and how many from the account is implementation
   detail; whether the numbers are still current is not. **This Mac** and **Account** remain valid as
   the two Usage sources a person picks between.
+- **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
+  days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
+  it **2 Years**; the accessibility name stays **Up to 2 years**.
 
 ## Window and layout tokens
 
@@ -435,7 +438,7 @@ simply **Account**, with a single-account symbol, and **This Mac**. Omit the men
 unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
 source preserves the selected period.
 
-A four-item 28pt tab control selects Today, 7 Days, 30 Days, or All; Today is the default. Its
+A four-item 28pt tab control selects Today, 7 Days, 30 Days, or 2 Years; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
 The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage

@@ -87,6 +87,15 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func usagePeriodTabsUseTheSharedPeriodNames() {
+    #expect(UsagePeriod.allCases.map(\.label) == ["Today", "7 Days", "30 Days", "2 Years"])
+    #expect(
+      UsagePeriod.allCases.map(\.accessibilityLabel)
+        == ["Today", "7 Days", "30 Days", "Up to 2 years"]
+    )
+  }
+
+  @Test
   func signingOutClosesTheAccountPageAndWhateverWasOpenedFromIt() {
     var navigation = MenuBarNavigationState()
     navigation.open(.settings)

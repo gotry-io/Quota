@@ -230,7 +230,7 @@ struct AccountUsageView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(value.label)
+        .accessibilityLabel(value.accessibilityLabel)
         .accessibilityAddTraits(value == period ? .isSelected : [])
       }
     }
@@ -431,12 +431,19 @@ struct AccountUsageView: View {
 }
 
 extension UsagePeriod {
-  fileprivate var label: String {
+  var label: String {
     switch self {
     case .today: "Today"
     case .last7Days: "7 Days"
     case .last30Days: "30 Days"
-    case .all: "All"
+    case .all: "2 Years"
+    }
+  }
+
+  var accessibilityLabel: String {
+    switch self {
+    case .all: "Up to 2 years"
+    default: label
     }
   }
 }
