@@ -1,6 +1,14 @@
 import { KNOWN_PLANS } from "./plan-display.generated.ts";
 
 export const DASHBOARD_PATH = "/my";
+export const USAGE_PATH = "/my/usage";
+export const DEVICES_PATH = "/my/devices";
+export const SETTINGS_PATH = "/my/settings";
+
+export function subscriptionPath(sel: string): string {
+  return `/my/subscriptions/${encodeURIComponent(sel)}`;
+}
+
 /** Relay's GitHub sign-in. Following it is the whole flow; the browser never fetches it. */
 export const SIGN_IN_PATH = "/api/auth/github/start";
 

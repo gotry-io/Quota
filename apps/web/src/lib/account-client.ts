@@ -13,7 +13,7 @@ import {
   storedSummaryETag,
   storeSummary,
 } from "./account-reads.ts";
-import { signInHref } from "./routes.ts";
+import { DASHBOARD_PATH, signInHref } from "./routes.ts";
 
 export type { AccountActivityResult, AccountError, AccountSummaryResult };
 export {
@@ -82,28 +82,33 @@ export async function fetchAccountSummary(): Promise<AccountSummaryResult> {
   }
 }
 
-export async function deleteDevice(deviceId: string): Promise<"ok" | AccountError> {
+export async function deleteDevice(
+  deviceId: string,
+  currentPath: string = DASHBOARD_PATH,
+): Promise<"ok" | AccountError> {
   try {
     const response = await fetch(`/api/v2/account/devices/${encodeURIComponent(deviceId)}`, {
       method: "DELETE",
       ...jsonRequest,
     });
     if (response.ok) return "ok";
-    return classifyAccountError(response, { destructive: true });
+    return classifyAccountError(response, { destructive: true, currentPath });
   } catch {
-    return classifyAccountError(null);
+    return classifyAccountError(null, { currentPath });
   }
 }
 
-export async function deleteAccount(): Promise<"ok" | AccountError> {
+export async function deleteAccount(
+  currentPath: string = DASHBOARD_PATH,
+): Promise<"ok" | AccountError> {
   try {
     const response = await fetch("/api/v2/account", {
       method: "DELETE",
       ...jsonRequest,
     });
     if (response.ok) return "ok";
-    return classifyAccountError(response, { destructive: true });
+    return classifyAccountError(response, { destructive: true, currentPath });
   } catch {
-    return classifyAccountError(null);
+    return classifyAccountError(null, { currentPath });
   }
 }

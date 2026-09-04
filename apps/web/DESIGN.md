@@ -34,24 +34,33 @@ The site has four surfaces:
    secondary install under that CTA: a Homebrew label, a short tap note, the
    `brew install gotry-io/tap/quotabar` command, and a Copy control with brief Copied feedback.
    GitHub sign-in lives only in the site header. The appearance control lives in the footer.
-2. `/my` is the signed-in dashboard, quota first: compact remaining-quota cards, then account
-   totals, Usage activity, model/agent breakdowns, Devices, and explicit Device deletion. Quota remaining
-   has no "left"/"remaining" suffix; budget windows with an amount use `71% · $3.75`, percent-only
-   windows use `71%`, and balance-only windows use **Balance** plus `$12.34`. Quota cards follow
-   the same provider / account / remaining / meter / metadata order as QuotaBar Overview, in a
-   denser web layout. Quota cards share `.quota-grid`: two columns on desktop and one column
-   below 620 px. Cursor's Other Models percentage and included-usage dollar amount are separate
-   provider meters: compact Quota cards show only the percentage while retaining the amount in the
-   typed response for a future detail surface. Empty quota states span the full row. Selecting an Activity day loads that
-   day's Usage under the grid. The header shows the GitHub username;
-   the name opens `/my`, and its menu
-   contains only **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
-   `WebDocumentPort.getViewer` on the first HTML byte. While rendering the signed-in document, the
-   Worker starts `GET /api/v6/account/summary` internally, reuses the resolved session,
-   and streams the typed result into the page. The browser fetch is only a development or retry
-   path; it is not the production first-load path. Unsigned visits to `/my` are a server redirect to
-   `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never published
-   without a session.
+2. `/my` is the signed-in account shell. An in-page `<nav aria-label="Account">` names four
+   routes; the current item is `aria-current="page"`. Below 620 px that nav scrolls horizontally
+   and does not wrap. Each route is `noindex, nofollow`.
+   - `/my` — overview: remaining-quota cards (each a link to `/my/subscriptions/<sel>`; the
+     detail page is a later task), today's Tokens and API-equivalent cost, and a Devices summary
+     (count plus one verdict line per Device).
+   - `/my/usage` — the current Totals / period tabs / breakdown table / Activity graph. Usage
+     layout and the activity keyboard model are later tasks.
+   - `/my/devices` — Device cards and Device deletion.
+   - `/my/settings` — appearance (the same ThemeToggle as the footer, as one row) and Delete
+     Account. `?delete=account` scrolls to the delete region and focuses its heading.
+   Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
+   `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
+   `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
+   as QuotaBar Overview, in a denser web layout. Quota cards share `.quota-grid`: two columns on
+   desktop and one column below 620 px. Cursor's Other Models percentage and included-usage
+   dollar amount are separate provider meters: compact Quota cards show only the percentage while
+   retaining the amount in the typed response for a future detail surface. Empty quota states
+   span the full row. Selecting an Activity day loads that day's Usage under the grid. The header
+   shows the GitHub username; the name opens `/my`, and its menu contains only **Sign out**.
+   Session cookies stay HttpOnly. SvelteKit renders the header from `WebDocumentPort.getViewer`
+   on the first HTML byte. While rendering the signed-in document, the Worker starts
+   `GET /api/v6/account/summary` internally, reuses the resolved session, and streams the typed
+   result into the page. The browser fetch is only a development or retry path; it is not the
+   production first-load path. Unsigned visits to `/my` and its sub-routes are a server redirect
+   to `/`. The shipped `/app` bookmark is a single redirect to `/my`. Account data is never
+   published without a session.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -125,7 +134,8 @@ toggle in a controls group. The toggle keeps a visible focus ring and a 42 px ta
 
 ## Account dashboard
 
-The dashboard leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
+The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
+Account nav. The overview leads with remaining quota. Under it, Usage totals lead with tokens and API-equivalent
 cost — the same headline QuotaBar and iOS show — with the input/output split as supporting detail.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
 partial cost uses a lower bound marker. It reads all retained Account Usage by default. User-facing dates, numbers, units, and
@@ -169,11 +179,11 @@ couldn't load this. Retry.** — at most one next action.
 ## Responsive behavior
 
 - At 840 px, two-column hero and architecture layouts become one column.
-- At 620 px, the page gutter reduces, navigation hides nonessential links, actions become full
-  width where useful, summary and quota grids stack to one column, and data tables remain
-  horizontally scrollable. The Activity graph scrolls horizontally inside its card; weekday
-  labels stay readable. The header account session control and the footer appearance toggle
-  stay visible.
+- At 620 px, the page gutter reduces, header navigation hides nonessential links, the Account
+  nav scrolls horizontally without wrapping, actions become full width where useful, summary
+  and quota grids stack to one column, and data tables remain horizontally scrollable. The
+  Activity graph scrolls horizontally inside its card; weekday labels stay readable. The header
+  account session control and the footer appearance toggle stay visible.
 - The layout must work from 320 px upward without clipped actions or horizontal page scrolling.
 
 ## Accessibility and motion
@@ -190,8 +200,9 @@ couldn't load this. Retry.** — at most one next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/` and `/my` (and the shipped `/app` redirect) at desktop and narrow mobile widths in
-  both light and dark appearance when browser tooling is available;
+- inspect `/` and `/my`, `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app`
+  redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
+  tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

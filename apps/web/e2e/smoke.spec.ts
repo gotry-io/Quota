@@ -43,17 +43,26 @@ function seriousOrCritical(
     }));
 }
 
-test("/my shows a subscription card, Usage totals, period switch, and Devices", async ({
-  page,
-}) => {
+test("/my shows overview, Usage period switch, and Devices", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my");
 
+  const accountNav = page.getByRole("navigation", { name: "Account" });
+  await expect(accountNav).toBeVisible();
+  await expect(accountNav.getByRole("link", { name: "Overview" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   await expect(page.locator(".quota-card")).toContainText("Plus");
 
+  await accountNav.getByRole("link", { name: "Usage" }).click();
   await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(accountNav.getByRole("link", { name: "Usage" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   const tokens = page.locator("#token-total");
   const cost = page.locator("#cost-total");
   await expect(tokens).not.toHaveText("—");
@@ -63,7 +72,12 @@ test("/my shows a subscription card, Usage totals, period switch, and Devices", 
   await page.getByRole("button", { name: "Today" }).click();
   await expect(tokens).not.toHaveText(thirtyDayTokens);
 
+  await accountNav.getByRole("link", { name: "Devices" }).click();
   await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(accountNav.getByRole("link", { name: "Devices" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(page.locator("#device-list")).toContainText("Studio");
   await expect(page.locator("#device-list")).toContainText("macOS");
 });
@@ -74,10 +88,21 @@ test("axe reports no serious or critical violations on /", async ({ page }) => {
   expect(seriousOrCritical(results.violations)).toEqual([]);
 });
 
-test("axe reports no serious or critical violations on /my", async ({ page }) => {
-  await mockV6(page);
-  await page.goto("/my");
-  await expect(page.locator(".quota-card")).toBeVisible();
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(seriousOrCritical(results.violations)).toEqual([]);
-});
+for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const) {
+  test(`axe reports no serious or critical violations on ${path}`, async ({ page }) => {
+    await mockV6(page);
+    await page.goto(path);
+    await expect(page.getByRole("navigation", { name: "Account" })).toBeVisible();
+    if (path === "/my") {
+      await expect(page.locator(".quota-card")).toBeVisible();
+    } else if (path === "/my/usage") {
+      await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+    } else if (path === "/my/devices") {
+      await expect(page.locator("#device-list")).toBeVisible();
+    } else {
+      await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
+    }
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(seriousOrCritical(results.violations)).toEqual([]);
+  });
+}

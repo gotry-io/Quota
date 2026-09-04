@@ -1,139 +1,21 @@
 <script lang="ts">
-import type {
-  AccountDeviceRead,
-  AccountSummaryRead,
-  UsageActivityDayRead,
-  UsagePeriodRead,
-} from "@gotry-io/quota-protocol";
-import {
-  agentDisplayName,
-  inferenceProviderDisplayName,
-  platformDisplayName,
-  providerDisplayName,
-} from "@gotry-io/quota-protocol";
-import {
-  type AccountError,
-  accountActivityRange,
-  deleteAccount,
-  deleteDevice,
-  fetchAccountActivity,
-  fetchAccountSummary,
-} from "$lib/account-client";
+import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
+import { providerDisplayName } from "@gotry-io/quota-protocol";
+import { observedSnapshotStatus } from "@gotry-io/quota-model";
+import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
+import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
+import DeviceSummary from "$lib/components/DeviceSummary.svelte";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
-import UsageActivity from "$lib/components/UsageActivity.svelte";
-import {
-  costBasisLabel,
-  formatCost,
-  formatCount,
-  lastReadingCopy,
-  observationFreshnessCopy,
-} from "$lib/format";
-import { deviceActivity } from "$lib/device-activity";
-import { observedSnapshotStatus } from "@gotry-io/quota-model";
-import { planDisplayName } from "$lib/routes";
+import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } from "$lib/format";
+import { planDisplayName, subscriptionPath } from "$lib/routes";
 
-const periodNames = [
-  { key: "today", label: "Today" },
-  { key: "last_7_days", label: "Last 7 days" },
-  { key: "last_30_days", label: "Last 30 days" },
-  { key: "all", label: "All time" },
-] as const;
-
-let summary = $state<AccountSummaryRead | null>(null);
-let activityDays = $state<UsageActivityDayRead[] | null>(null);
-let loadError = $state<AccountError | null>(null);
-let activityError = $state<AccountError | null>(null);
-let selectedPeriod = $state<(typeof periodNames)[number]["key"]>("last_30_days");
-
-const activityRange = accountActivityRange(new Date());
-let period = $derived<UsagePeriodRead | null>(summary ? summary.usage[selectedPeriod] : null);
+const dashboard = getAccountDashboard();
+let today = $derived(dashboard.summary?.usage.today ?? null);
 let deviceNames = $derived(
-  new Map(summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
+  new Map(dashboard.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
 );
-/** Every model leaf of the selected period, flattened for one table. */
-let modelRows = $derived(
-  (period?.agents ?? []).flatMap((agent) =>
-    agent.providers.flatMap((provider) =>
-      provider.models.map((model) => ({
-        key: `${agent.agent}/${provider.provider}/${model.model}`,
-        agent: agent.agent,
-        provider: provider.provider,
-        ...model,
-      })),
-    ),
-  ),
-);
-
-$effect(() => {
-  void loadSummary();
-  void loadActivity();
-});
-
-async function loadSummary(): Promise<void> {
-  applySummaryResult(await fetchAccountSummary());
-}
-
-async function loadActivity(): Promise<void> {
-  const result = await fetchAccountActivity(activityRange);
-  if (result.status === "ok") {
-    activityDays = result.activity.days;
-    activityError = null;
-    return;
-  }
-  activityError = result;
-}
-
-function applySummaryResult(result: Awaited<ReturnType<typeof fetchAccountSummary>>): void {
-  if (result.status === "ok") {
-    summary = result.summary;
-    loadError = null;
-    return;
-  }
-  loadError = result;
-}
-
-function noticeRetry(error: AccountError, retry: () => void): (() => void) | undefined {
-  if (error.action?.type === "sign_in") {
-    const href = error.action.href;
-    return () => {
-      window.location.assign(href);
-    };
-  }
-  if (error.action?.type === "retry") return retry;
-  return undefined;
-}
-
-async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<void> {
-  if (!window.confirm(`Delete ${device.display_name} and all of its Quota and Usage data?`)) {
-    return;
-  }
-  const button = event.currentTarget;
-  if (button instanceof HTMLButtonElement) button.disabled = true;
-  const outcome = await deleteDevice(device.id);
-  if (outcome !== "ok") {
-    if (button instanceof HTMLButtonElement) button.disabled = false;
-    loadError = outcome;
-    return;
-  }
-  await loadSummary();
-}
-
-async function onDeleteAccount(event: Event): Promise<void> {
-  if (!window.confirm("Delete this Quota Account and all of its Device, quota, and Usage data?")) {
-    return;
-  }
-  const button = event.currentTarget;
-  if (button instanceof HTMLButtonElement) button.disabled = true;
-  const outcome = await deleteAccount();
-  if (outcome !== "ok") {
-    if (button instanceof HTMLButtonElement) button.disabled = false;
-    loadError = outcome;
-    return;
-  }
-  window.location.assign("/");
-}
 
 function deviceName(deviceId: string): string {
   return deviceNames.get(deviceId) ?? "Device";
@@ -154,206 +36,132 @@ function reportingDevice(subscription: AccountSummaryRead["subscriptions"][numbe
 }
 </script>
 
-<section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title">
-  <div class="dashboard-heading">
+<svelte:head>
+  <title>Account · Quota</title>
+  <meta name="robots" content="noindex, nofollow" />
+</svelte:head>
+
+<section class="dashboard-section" aria-labelledby="quota-title">
+  <div class="dashboard-section-heading">
     <div>
-      <p class="eyebrow">Account</p>
-      <h1 id="dashboard-title">Quota</h1>
+      <p class="eyebrow">Plan limits</p>
+      <h2 id="quota-title">Subscriptions</h2>
     </div>
   </div>
-  {#if loadError}
+  {#if dashboard.loadError}
     <RetryNotice
-      id="account-error"
-      message={loadError.message}
-      actionLabel={loadError.action?.type === "sign_in" ? "Sign in" : "Retry"}
-      onRetry={noticeRetry(loadError, () => {
-        void loadSummary();
-        void loadActivity();
-      })}
+      message={dashboard.loadError.message}
+      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
+      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
     />
   {/if}
-  <section class="dashboard-section" aria-labelledby="quota-title">
-    <div class="dashboard-section-heading">
-      <div>
-        <p class="eyebrow">Plan limits</p>
-        <h2 id="quota-title">Subscriptions</h2>
-      </div>
-    </div>
+  {#if !dashboard.summary}
+    {#if !dashboard.loadError}
+      <LoadingBlock lines={4} label="Loading subscriptions" />
+    {/if}
+  {:else}
     <div id="quota-list" class="quota-grid">
-      {#if summary && summary.subscriptions.length === 0}
+      {#if dashboard.summary.subscriptions.length === 0}
         <p class="empty-state">No quota snapshots yet. Sign in from QuotaBar to add this Mac.</p>
-      {:else if summary}
-        {#each summary.subscriptions as subscription (subscription.key)}
+      {:else}
+        {#each dashboard.summary.subscriptions as subscription (subscription.key)}
           {@const snapshot = subscription.snapshot}
           {@const quotaStatus = observedSnapshotStatus(snapshot)}
           {@const alsoReporting = otherReportingDevices(subscription)}
+          {@const sel = dashboard.subscriptionSelectors[subscription.key]}
           <article class="quota-card">
-            <div class="quota-card-heading">
-              <div class="quota-card-identity">
-                <p class="quota-card-provider">{providerDisplayName(subscription.provider)}</p>
-                <p class="quota-card-account">
-                  {[snapshot.account.label, planDisplayName(snapshot.account.plan)]
-                    .filter(Boolean)
-                    .join(" · ") || "Account"}
-                </p>
+            {#snippet card()}
+              <div class="quota-card-heading">
+                <div class="quota-card-identity">
+                  <p class="quota-card-provider">{providerDisplayName(subscription.provider)}</p>
+                  <p class="quota-card-account">
+                    {[snapshot.account.label, planDisplayName(snapshot.account.plan)]
+                      .filter(Boolean)
+                      .join(" · ") || "Account"}
+                  </p>
+                </div>
               </div>
-            </div>
-            <QuotaWindows windows={snapshot.windows} provider={subscription.provider} />
-            <p class="quota-card-meta">
-              {reportingDevice(subscription)} · {observationFreshnessCopy(
-                quotaStatus,
-                snapshot.observed_at,
-              )}
-            </p>
-            {#if alsoReporting}
-              <p class="quota-card-meta">Also reporting: {alsoReporting}</p>
+              <QuotaWindows windows={snapshot.windows} provider={subscription.provider} />
+              <p class="quota-card-meta">
+                {reportingDevice(subscription)} · {observationFreshnessCopy(
+                  quotaStatus,
+                  snapshot.observed_at,
+                )}
+              </p>
+              {#if alsoReporting}
+                <p class="quota-card-meta">Also reporting: {alsoReporting}</p>
+              {/if}
+            {/snippet}
+            {#if sel}
+              <a class="quota-card-main" href={subscriptionPath(sel)}>{@render card()}</a>
+            {:else}
+              <div class="quota-card-main">{@render card()}</div>
             {/if}
           </article>
         {/each}
       {/if}
     </div>
-  </section>
-  <section class="dashboard-section" aria-labelledby="usage-title">
-    <div class="dashboard-section-heading">
-      <div>
-        <p class="eyebrow">Usage</p>
-        <h2 id="usage-title">Totals</h2>
-      </div>
-      <div class="period-tabs" role="group" aria-label="Usage period">
-        {#each periodNames as item (item.key)}
-          <button
-            class="text-button"
-            type="button"
-            aria-pressed={selectedPeriod === item.key}
-            onclick={() => {
-              selectedPeriod = item.key;
-            }}>{item.label}</button
-          >
-        {/each}
-      </div>
+  {/if}
+</section>
+
+<section class="dashboard-section" aria-labelledby="today-title">
+  <div class="dashboard-section-heading">
+    <div>
+      <p class="eyebrow">Usage</p>
+      <h2 id="today-title">Today</h2>
     </div>
+  </div>
+  {#if dashboard.loadError}
+    <RetryNotice
+      message={dashboard.loadError.message}
+      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
+      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+    />
+  {/if}
+  {#if !today}
+    {#if !dashboard.loadError}
+      <LoadingBlock lines={2} label="Loading today" />
+    {/if}
+  {:else}
     <div class="summary-grid">
       <article
-        ><span>Tokens</span><strong id="token-total"
-          >{period ? formatCount(period.totals.total_tokens) : "—"}</strong
-        ><small id="token-split"
-          >{period
-            ? `${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`
-            : ""}</small
+        ><span>Tokens</span><strong
+          >{formatCount(today.totals.total_tokens)}</strong
+        ><small
+          >{`${formatCount(today.totals.input_tokens)} in · ${formatCount(today.totals.output_tokens)} out`}</small
         ></article
       >
       <article
-        ><span>API-equivalent cost</span><strong id="cost-total"
-          >{period ? formatCost(period.cost) : "—"}</strong
-        >{#if period}<small id="cost-basis">{costBasisLabel(period.cost)}</small>{/if}</article
+        ><span>API-equivalent cost</span><strong>{formatCost(today.cost)}</strong><small
+          >{costBasisLabel(today.cost)}</small
+        ></article
       >
     </div>
-    {#if period?.partial}
-      <p class="usage-day-note">Some hours in this period were scanned incompletely.</p>
-    {/if}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Agent</th>
-            <th scope="col">Provider</th>
-            <th scope="col">Model</th>
-            <th scope="col">Input</th>
-            <th scope="col">Output</th>
-            <th scope="col">Cost</th>
-          </tr>
-        </thead>
-        <tbody id="usage-breakdown">
-          {#if period}
-            {#if modelRows.length === 0}
-              <tr><td colspan="6">No Usage has been synced for this period.</td></tr>
-            {:else}
-              {#each modelRows as row (row.key)}
-                <tr>
-                  <td>{agentDisplayName(row.agent)}</td>
-                  <td>{inferenceProviderDisplayName(row.provider)}</td>
-                  <td>{row.model}</td>
-                  <td>{formatCount(row.totals.input_tokens)}</td>
-                  <td>{formatCount(row.totals.output_tokens)}</td>
-                  <td>{formatCost(row.cost)}</td>
-                </tr>
-              {/each}
-            {/if}
-          {/if}
-        </tbody>
-      </table>
-    </div>
-  </section>
-  <section class="dashboard-section" aria-labelledby="usage-activity-title">
-    <div class="dashboard-section-heading">
-      <div>
-        <p class="eyebrow">Usage</p>
-        <h2 id="usage-activity-title">Activity</h2>
-      </div>
-      <span id="usage-activity-status" class="count-pill" aria-live="polite">
-        {activityRange.from} – {activityRange.to}
-      </span>
-    </div>
-    {#if activityDays}
-      <UsageActivity days={activityDays} range={activityRange} />
-    {:else if activityError}
-      <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
-        <RetryNotice
-          message={activityError.message}
-          actionLabel={activityError.action?.type === "sign_in" ? "Sign in" : "Retry"}
-          onRetry={noticeRetry(activityError, () => void loadActivity())}
-        />
-      </div>
-    {:else}
-      <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
-        <LoadingBlock lines={4} label="Loading Usage activity" />
-      </div>
-    {/if}
-  </section>
-  <section class="dashboard-section" aria-labelledby="devices-title">
-    <div class="dashboard-section-heading">
-      <div>
-        <p class="eyebrow">Installations</p>
-        <h2 id="devices-title">Devices</h2>
-      </div>
-      <span id="device-count" class="count-pill">{summary ? summary.devices.length : ""}</span>
-    </div>
-    <div id="device-list" class="device-grid">
-      {#if summary && summary.devices.length === 0}
-        <p class="empty-state">No devices yet. Sign in from QuotaBar to add this Mac.</p>
-      {:else if summary}
-        {#each summary.devices as device (device.id)}
-          {@const activity = deviceActivity(device)}
-          <article class="device-card">
-            <div class="device-card-heading">
-              <h3>{device.display_name}</h3>
-              <span class="status-pill status-{activity.tone}">{activity.label}</span>
-            </div>
-            <p>
-              {platformDisplayName(device.platform)} · {lastReadingCopy(activity.since)}
-            </p>
-            <button
-              class="text-button danger-button"
-              type="button"
-              onclick={(event) => void onDeleteDevice(device, event)}
-              >Delete device and data</button
-            >
-          </article>
-        {/each}
-      {/if}
-    </div>
-  </section>
-  <section class="dashboard-section danger-zone" aria-labelledby="account-actions-title">
+  {/if}
+</section>
+
+<section class="dashboard-section" aria-labelledby="devices-summary-title">
+  <div class="dashboard-section-heading">
     <div>
-      <p class="eyebrow">Danger zone</p>
-      <h2 id="account-actions-title">Delete Account</h2>
-      <p>Remove this Account, every Device, all Quota and Usage data, sessions, and deletion controls.</p>
+      <p class="eyebrow">Installations</p>
+      <h2 id="devices-summary-title">Devices</h2>
     </div>
-    <button
-      id="delete-account"
-      class="button button-danger"
-      type="button"
-      onclick={(event) => void onDeleteAccount(event)}>Delete Account and data</button
+    <span id="overview-device-count" class="count-pill"
+      >{dashboard.summary ? dashboard.summary.devices.length : ""}</span
     >
-  </section>
+  </div>
+  {#if dashboard.loadError}
+    <RetryNotice
+      message={dashboard.loadError.message}
+      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
+      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
+    />
+  {/if}
+  {#if !dashboard.summary}
+    {#if !dashboard.loadError}
+      <LoadingBlock lines={3} label="Loading devices" />
+    {/if}
+  {:else}
+    <DeviceSummary devices={dashboard.summary.devices} />
+  {/if}
 </section>
