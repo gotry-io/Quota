@@ -125,6 +125,7 @@
 		DBD50F87A92F84B0E86A5FEF /* Quota.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Quota.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC3CB5A3738E2091BBC468F4 /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
 		DC5478A05E6828597AB9A50C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		E0BDFE1B62C3623D044CD0D8 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		EC67366D6301AC5644D841EB /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		F6B54F7C252C278A3CF53123 /* WidgetSnapshotPublishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublishing.swift; sourceTree = "<group>"; };
 		FD6AEB03C55BFF99F77BD429 /* BackgroundRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefreshTests.swift; sourceTree = "<group>"; };
@@ -225,6 +226,7 @@
 		6FE6CC62390F194ADFDC54B7 = {
 			isa = PBXGroup;
 			children = (
+				F41F63031B348188C43F2AB7 /* ios */,
 				435449E674241D1E241ACF4C /* Packages */,
 				E16289B2188186A6F909A422 /* Resources */,
 				11AF0ED22C478EC73885BA9E /* Sources */,
@@ -282,6 +284,15 @@
 				4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */,
 			);
 			path = WidgetSupport;
+			sourceTree = "<group>";
+		};
+		F41F63031B348188C43F2AB7 /* ios */ = {
+			isa = PBXGroup;
+			children = (
+				E0BDFE1B62C3623D044CD0D8 /* Signing.xcconfig */,
+			);
+			name = ios;
+			path = .;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -505,6 +516,7 @@
 /* Begin XCBuildConfiguration section */
 		0499EF2C27F6203663976123 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E0BDFE1B62C3623D044CD0D8 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -581,6 +593,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = io.gotry.quota.widgets;
 				PRODUCT_NAME = QuotaWidgets;
+				PROVISIONING_PROFILE_SPECIFIER = "$(QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -619,6 +632,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.gotry.quota;
 				PRODUCT_NAME = Quota;
+				PROVISIONING_PROFILE_SPECIFIER = "$(QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER)";
 				SDKROOT = iphoneos;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -635,6 +649,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = io.gotry.quota.widgets;
 				PRODUCT_NAME = QuotaWidgets;
+				PROVISIONING_PROFILE_SPECIFIER = "$(QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -643,6 +658,7 @@
 		};
 		5ACA0BEE7D7DBD960B238883 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E0BDFE1B62C3623D044CD0D8 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -734,6 +750,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.gotry.quota;
 				PRODUCT_NAME = Quota;
+				PROVISIONING_PROFILE_SPECIFIER = "$(QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER)";
 				SDKROOT = iphoneos;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";

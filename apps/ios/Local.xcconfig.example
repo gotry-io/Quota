@@ -1,0 +1,19 @@
+// Local signing overlay for device and App Store builds.
+// Copy to Local.xcconfig (gitignored). Signing.xcconfig includes it when present.
+//
+// XcodeGen 2.46 refuses configFiles whose path is not on disk, so project.yml
+// points at committed Signing.xcconfig rather than this file. settingGroups plus
+// environment substitution would stamp DEVELOPMENT_TEAM into the generated
+// project.pbxproj at `pnpm generate:ios` time and is not used.
+//
+// CI and `pnpm build:ios` / `pnpm test:ios` / `pnpm check:ios` still pass
+// CODE_SIGNING_ALLOWED=NO, so this file is not required to generate or build.
+
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+CODE_SIGN_STYLE = Manual
+
+// Quota app (io.gotry.quota). Mapped to PROVISIONING_PROFILE_SPECIFIER in project.yml.
+QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER = YOUR_APP_PROFILE_NAME
+
+// QuotaWidgets extension (io.gotry.quota.widgets). Mapped the same way.
+QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER = YOUR_WIDGETS_PROFILE_NAME

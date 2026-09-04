@@ -67,7 +67,8 @@ open apps/ios/Quota.xcodeproj
 
 `pnpm generate:ios` runs the installed XcodeGen against `project.yml` and refreshes the checked-in
 Xcode project. Do not add a third-party package manager. The app has no Sparkle or analytics.
-App icon assets live in `Resources/Assets.xcassets`.
+App icon assets live in `Resources/Assets.xcassets`. App Store upload is the owner-only `ios-v*`
+workflow below.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and the Quota scheme tests (`QuotaTests`
 and `QuotaUITests`) on an available iPhone simulator (`QUOTA_IOS_SIMULATOR` overrides the name).
@@ -103,3 +104,43 @@ Keychain restore):
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.
+
+## Release
+
+Local signing values live in `apps/ios/Local.xcconfig`, which is gitignored. Copy
+`Local.xcconfig.example` to that path and fill `DEVELOPMENT_TEAM`, `CODE_SIGN_STYLE`, and the app
+and widget `PROVISIONING_PROFILE_SPECIFIER` keys. XcodeGen 2.46 refuses a `configFiles` path that is
+not on disk, so `project.yml` points at committed `Signing.xcconfig`, which optionally includes
+`Local.xcconfig`. `settingGroups` plus environment substitution would stamp the team id into the
+generated `project.pbxproj` at `pnpm generate:ios` time and is not used. Simulator verification
+(`pnpm build:ios`, `pnpm test:ios`, `pnpm check:ios`) still passes `CODE_SIGNING_ALLOWED=NO` and
+does not need the file.
+
+The marketing version is `MARKETING_VERSION` in `project.yml`. Publishing is the tag alone:
+
+```bash
+git tag ios-vX.Y.Z
+```
+
+`.github/workflows/release-ios.yml` runs on `ios-v*` tags. `scripts/check-ios-version.sh` fails the
+job unless the tag's `X.Y.Z` equals `MARKETING_VERSION`. The archive's `CURRENT_PROJECT_VERSION` is
+`github.run_number`. The owner (not CI on an unsigned pull request) creates the tag after the
+version is committed.
+
+Repository secrets, all required before export:
+
+| Secret | Contents |
+| --- | --- |
+| `IOS_DISTRIBUTION_CERT_P12` | Base64-encoded Apple Distribution `.p12` |
+| `IOS_DISTRIBUTION_CERT_PASSWORD` | Password for that `.p12` |
+| `IOS_PROFILE_APP` | Base64-encoded App Store `.mobileprovision` for `io.gotry.quota` |
+| `IOS_PROFILE_WIDGETS` | Base64-encoded App Store `.mobileprovision` for `io.gotry.quota.widgets` |
+| `ASC_KEY_ID` | App Store Connect API key id |
+| `ASC_ISSUER_ID` | App Store Connect issuer id |
+| `ASC_KEY_P8` | App Store Connect API key `.p8` PEM |
+
+The workflow imports those into a temporary keychain, writes `Local.xcconfig` from the profile
+metadata, archives, exports with `apps/ios/ExportOptions.plist` (`method` `app-store-connect`,
+manual signing), and uploads with `xcrun altool --upload-app --apiKey --apiIssuer`. If any secret is
+unset, the job fails before export. Do not put team ids, certificates, or profile names in tracked
+files.
