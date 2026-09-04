@@ -258,6 +258,15 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   @ObservationIgnored
   private let shutdownDeadline: Duration
 
+  @ObservationIgnored
+  private let notificationStore: any NotificationStateStore
+
+  @ObservationIgnored
+  private let notificationSink: any NotificationSink
+
+  @ObservationIgnored
+  private let notificationDefaults: UserDefaults
+
   init(
     client: (any LocalServiceServing)? = nil,
     browserSessionImporter: any BrowserSessionImporting = BrowserSessionImporter(),
@@ -265,6 +274,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     accessProbe: (any BrowserAccessProbing)? = nil,
     grantPresenter: (any BrowserAccessGrantPresenting)? = nil,
     relauncher: (any QuotaBarRelaunching)? = nil,
+    notificationStore: (any NotificationStateStore)? = nil,
+    notificationSink: (any NotificationSink)? = nil,
+    notificationDefaults: UserDefaults = .standard,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     let injectedClient = client != nil
@@ -277,6 +289,15 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       ? NoOpQuotaBarRelauncher()
       : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
+    self.notificationDefaults = notificationDefaults
+    self.notificationSink = notificationSink ?? NoOpNotificationSink()
+    if let notificationStore {
+      self.notificationStore = notificationStore
+    } else if injectedClient {
+      self.notificationStore = InMemoryNotificationStateStore()
+    } else {
+      self.notificationStore = FileNotificationStateStore.applicationSupport()
+    }
     if let client {
       self.client = client
       initializationError = nil
@@ -310,6 +331,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       relauncher = NoOpQuotaBarRelauncher()
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
+      notificationStore = InMemoryNotificationStateStore()
+      notificationSink = NoOpNotificationSink()
+      notificationDefaults = .standard
       initializationError = nil
       self.errorMessage = errorMessage
       self.lastCheckedAt = lastCheckedAt
@@ -1149,6 +1173,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     let incomingAuth =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)
+    let previouslySignedIn = authStatus == .signedIn || authStatus == .logoutPending
     if incomingAuth == .signedIn {
       if !browserOpenFailed {
         accountActionErrorMessage = nil
@@ -1201,6 +1226,53 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
     } else {
       accountErrorMessage = nil
+    }
+
+    if previouslySignedIn && incomingAuth == .signedOut {
+      try? notificationStore.clear()
+    } else {
+      evaluateNotifications(overview: state.overview, now: Date())
+    }
+  }
+
+  /// Compare the latest Overview readings against the last available ones and hand any events
+  /// to the sink. Rules that are off leave state untouched. A later change replaces the no-op
+  /// sink with `UNUserNotificationCenter` delivery.
+  private func evaluateNotifications(overview: [LocalServiceOverviewItem], now: Date) {
+    let rules = NotificationRules.load(from: notificationDefaults)
+    let previous = (try? notificationStore.load()) ?? .empty
+    let current = overview.map { item in
+      NotificationSubscriptionReading(
+        selector: SubscriptionSelector.make(
+          provider: item.identity.provider.rawValue,
+          fingerprint: item.identity.fingerprint,
+          fingerprintScope: item.identity.scope.rawValue,
+          sourceID: item.identity.sourceID
+        ),
+        status: item.snapshot.status.rawValue,
+        windows: item.snapshot.windows.compactMap { window in
+          guard window.showsPercentMeter else { return nil }
+          return NotificationWindowReading(
+            id: window.id,
+            title: window.title,
+            remainingPercent: window.remainingPercent,
+            resetsAt: window.resetsAt,
+            primaryCadence: window.primaryCadenceKind?.rawValue
+          )
+        }
+      )
+    }
+    let result = NotificationEvaluator.evaluate(
+      rules: rules,
+      previous: previous,
+      current: current,
+      now: now
+    )
+    if result.state != previous {
+      try? notificationStore.save(result.state)
+    }
+    if !result.events.isEmpty {
+      notificationSink.deliver(result.events)
     }
   }
 
