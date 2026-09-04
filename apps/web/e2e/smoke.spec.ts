@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { accountActivity, accountSummary } from "./account-fixture.ts";
 
 async function mockV6(page: Page): Promise<void> {
@@ -80,6 +80,24 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   );
   await expect(page.locator("#device-list")).toContainText("Studio");
   await expect(page.locator("#device-list")).toContainText("macOS");
+});
+
+test("subscription card opens the detail page with windows and Reporting", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my");
+  await page.locator("a.quota-card-main").first().click();
+
+  await expect(page).toHaveURL(/\/my\/subscriptions\/[a-f0-9]{12}$/);
+  expect(page.url()).not.toContain("codex_account_1");
+  expect(page.url()).not.toContain("device_1");
+  await expect(page.getByRole("link", { name: "← Overview" })).toBeVisible();
+  await expect(page.getByText("Weekly")).toBeVisible();
+  await expect(page.getByText("Reporting")).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("codex_account_1");
+  await expect(page.locator("body")).not.toContainText("device_1");
+
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(seriousOrCritical(results.violations)).toEqual([]);
 });
 
 test("axe reports no serious or critical violations on /", async ({ page }) => {
