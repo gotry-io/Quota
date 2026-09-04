@@ -37,9 +37,16 @@ The site has four surfaces:
 2. `/my` is the signed-in account shell. An in-page `<nav aria-label="Account">` names four
    routes; the current item is `aria-current="page"`. Below 620 px that nav scrolls horizontally
    and does not wrap. Each route is `noindex, nofollow`.
-   - `/my` — overview: remaining-quota cards (each a link to `/my/subscriptions/<sel>`; the
-     detail page is a later task), today's Tokens and API-equivalent cost, and a Devices summary
-     (count plus one verdict line per Device).
+   - `/my` — overview: remaining-quota cards (each a link to `/my/subscriptions/<sel>`),
+     today's Tokens and API-equivalent cost, and a Devices summary (count plus one verdict
+     line per Device).
+   - `/my/subscriptions/<sel>` — one subscription: provider display name, masked account
+     label, plan badge, and the shared freshness line; each window with remaining quota, a
+     meter, and the reset countdown (`resets_at` re-read every 60 seconds); per-device
+     readings from `sources[]`, newest first, with the selected source labelled **Reporting**.
+     A selector with no current match reads **This subscription is no longer reported.** The
+     page never prints a device id, fingerprint, or subscription key. **← Overview** returns
+     to `/my`.
    - `/my/usage` — the current Totals / period tabs / breakdown table / Activity graph. Usage
      layout and the activity keyboard model are later tasks.
    - `/my/devices` — Device cards and Device deletion.
@@ -50,9 +57,9 @@ The site has four surfaces:
    `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
    as QuotaBar Overview, in a denser web layout. Quota cards share `.quota-grid`: two columns on
    desktop and one column below 620 px. Cursor's Other Models percentage and included-usage
-   dollar amount are separate provider meters: compact Quota cards show only the percentage while
-   retaining the amount in the typed response for a future detail surface. Empty quota states
-   span the full row. Selecting an Activity day loads that day's Usage under the grid. The header
+   dollar amount are separate provider meters: compact Quota cards show only the percentage; the
+   subscription detail page shows both. Empty quota states span the full row. Selecting an
+   Activity day loads that day's Usage under the grid. The header
    shows the GitHub username; the name opens `/my`, and its menu contains only **Sign out**.
    Session cookies stay HttpOnly. SvelteKit renders the header from `WebDocumentPort.getViewer`
    on the first HTML byte. While rendering the signed-in document, the Worker starts
@@ -167,6 +174,14 @@ line below it and the other reporting devices named on a second line. That line 
 sentence — a reading that aged out reads **Not current — last reading 2d ago** rather than as a
 current number — so the card needs no separate status pill.
 
+The subscription detail page is `/my/subscriptions/<sel>`. It names the provider from the catalog,
+the masked account label, the plan, and the shared freshness line, then each window with remaining
+quota, a meter, and the reset countdown. A passed refill instant prints no Resets line. `sources[]`
+are listed newest first as the Device display name (or **Device** when that Device is gone), that
+reading's primary remaining figure, and freshness; the selected source is labelled **Reporting**.
+Nothing on the page prints a device id, fingerprint, or subscription key. A selector that matches
+no current row reads **This subscription is no longer reported.** **← Overview** returns to `/my`.
+
 Device cards show display name, an **Active** / **Idle** / **Not reporting** pill, and one line of
 platform plus the age that verdict came from. Never a claim that a sleeping or closed app failed,
 never raw Device IDs, and never a request that the viewing browser fix another Device's provider
@@ -200,9 +215,9 @@ couldn't load this. Retry.** — at most one next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/` and `/my`, `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app`
-  redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
-  tooling is available;
+- inspect `/` and `/my`, `/my/subscriptions/<sel>`, `/my/usage`, `/my/devices`, `/my/settings`
+  (and the shipped `/app` redirect) at desktop and narrow mobile widths in both light and dark
+  appearance when browser tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

@@ -37,12 +37,12 @@ Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than
 worker. Install Chromium with
 `pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
-`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
-(overview), `/my/usage`, `/my/devices`, and `/my/settings`. Unsigned visits to any of them are a
-server redirect home. Every page requires a session; Quota Web publishes no account data
-anonymously. `/app` shipped in 0.0.4, so it and anything under it stay a redirect to `/my`; new
-links and OAuth callbacks name `/my` directly. Subscription cards on overview link to
-`/my/subscriptions/<sel>`; that detail page is not in this package yet.
+`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four nav routes: `/my`
+(overview), `/my/usage`, `/my/devices`, and `/my/settings`. Unsigned visits to any of them — and to
+`/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session; Quota Web
+publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under it stay a
+redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview cards link to
+`/my/subscriptions/<sel>` for that subscription's windows, reset countdown, and per-device readings.
 Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
 a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
 `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion

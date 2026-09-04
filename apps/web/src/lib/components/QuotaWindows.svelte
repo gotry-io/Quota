@@ -1,6 +1,6 @@
 <script lang="ts">
 import { isBalanceOnly, remainingPercent, showsPercentMeter } from "@gotry-io/quota-model";
-import { NO_RESET_TIME_COPY, formatQuotaRemaining, resetCopy, showsNoResetTime } from "$lib/format";
+import { formatQuotaRemaining, NO_RESET_TIME_COPY, resetCopy, showsNoResetTime } from "$lib/format";
 
 type WindowItem = {
   id?: string | undefined;
@@ -12,7 +12,15 @@ type WindowItem = {
   resets_at?: string | undefined;
 };
 
-let { windows, provider }: { windows: readonly WindowItem[]; provider?: string } = $props();
+let {
+  windows,
+  provider,
+  now,
+}: {
+  windows: readonly WindowItem[];
+  provider?: string;
+  now?: Date;
+} = $props();
 </script>
 
 <div class="quota-window-list">
@@ -22,7 +30,7 @@ let { windows, provider }: { windows: readonly WindowItem[]; provider?: string }
     {#each windows as window (window.title)}
       {@const balanceOnly = isBalanceOnly(window)}
       {@const remaining = remainingPercent(window.used_percent)}
-      {@const reset = window.resets_at ? resetCopy(window.resets_at) : null}
+      {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}
       <div class="quota-window-card">
         <div class="quota-window-heading">
           <span>{balanceOnly ? "Balance" : window.title}</span>
