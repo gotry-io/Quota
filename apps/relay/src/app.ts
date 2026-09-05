@@ -49,6 +49,7 @@ import type {
   DeviceWriterPrincipal,
   SessionPrincipal,
   SessionScope,
+  StoredEntitlement,
   StoredQuotaSnapshot,
   UsageState,
 } from "@gotry-io/relay-core";
@@ -76,7 +77,20 @@ import {
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
+import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
+import {
+  type BillingBindings,
+  foldWebhookEvent,
+  isPaidSyncStatus,
+  parseRevenueCatWebhookBody,
+  purchaseWebUrl,
+  readEntitlement,
+  sanitizeRevenueCatEvent,
+  transferSourceIds,
+  webhookAppUserId,
+  webhookEventId,
+  webhookEventType,
+} from "./entitlement.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
@@ -164,6 +178,7 @@ export interface RelayAppOptions {
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
   modelCatalog?: ModelCatalog;
+  billing?: BillingBindings;
   /** Test override for the Usage fold/representation version in the activity ETag. */
   usageFoldVersion?: number;
 }
@@ -214,6 +229,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const modelCatalogETag = options.modelCatalog
     ? '"' + options.modelCatalog.revision + '"'
     : '"' + modelCatalog.revision + '"';
+  const billing: BillingBindings = {
+    webhookSecret: options.billing?.webhookSecret ?? "",
+    restSecret: options.billing?.restSecret ?? "",
+    webPurchaseUrl: options.billing?.webPurchaseUrl || "https://pay.rev.cat/unconfigured",
+    ...(options.billing?.fetch === undefined ? {} : { fetch: options.billing.fetch }),
+  };
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
@@ -224,6 +245,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/device/*",
     "/api/v6/account/*",
     "/api/v6/device/*",
+    "/api/billing/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -245,6 +267,72 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/device/profile",
     bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
   );
+  app.use(
+    "/api/billing/revenuecat/webhook",
+    bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
+  );
+
+  app.post("/api/billing/revenuecat/webhook", async (context) => {
+    if (
+      billing.webhookSecret.length === 0 ||
+      !constantTimeEqual(context.req.header("Authorization") ?? "", billing.webhookSecret)
+    ) {
+      return relayError(context, 401, "unauthorized", "A valid authorization header is required.");
+    }
+    const checkedAt = now();
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) {
+      return context.body(null, 200);
+    }
+    const event = parseRevenueCatWebhookBody(raw);
+    const eventId = event ? webhookEventId(event) : null;
+    const accountId = event ? webhookAppUserId(event) : null;
+    const type = event ? webhookEventType(event) : null;
+    if (event === null || eventId === null || accountId === null || type === null) {
+      return context.body(null, 200);
+    }
+    const account = await options.state.getAccount(accountId);
+    const folded = foldWebhookEvent(event, checkedAt);
+    const entitlement =
+      account && folded
+        ? {
+            account_id: accountId,
+            ...folded,
+            source: "webhook" as const,
+            last_event_id: eventId,
+            updated_at: checkedAt.toISOString(),
+          }
+        : null;
+    const transferSources: StoredEntitlement[] = [];
+    if (type === "TRANSFER") {
+      for (const sourceId of transferSourceIds(event)) {
+        if (sourceId === accountId) continue;
+        const source = await options.state.getAccount(sourceId);
+        if (!source) continue;
+        transferSources.push({
+          account_id: sourceId,
+          status: "none",
+          product_id: null,
+          store: null,
+          expires_at: null,
+          will_renew: false,
+          source: "webhook",
+          last_event_id: eventId,
+          updated_at: checkedAt.toISOString(),
+        });
+      }
+    }
+    await options.state.applyRevenueCatWebhook({
+      event_id: eventId,
+      account_id: accountId,
+      type,
+      received_at: checkedAt.toISOString(),
+      payload_json: JSON.stringify(sanitizeRevenueCatEvent(event)),
+      entitlement,
+      transfer_sources: transferSources,
+    });
+    return context.body(null, account ? 200 : 202);
+  });
 
   app.get("/readyz", async (context) => {
     try {
@@ -583,10 +671,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!account) {
       return unauthorized(context);
     }
+    const entitlement = await readEntitlement(options.state, billing, principal.account_id, now());
     return context.json(
       AccountResponseSchema.parse({
         protocol_version: PROTOCOL_VERSION,
         account: publicAccount(account),
+        entitlement,
+        purchase: { web_url: purchaseWebUrl(billing.webPurchaseUrl, principal.account_id) },
       }),
     );
   });
@@ -598,6 +689,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!hasOnlyQueryKeys(context, ["tz"])) return invalidRequest(context);
     const timezone = requestedTimezone(context);
     if (timezone === null) return invalidRequest(context);
+    const entitlement = await readEntitlement(
+      options.state,
+      billing,
+      principal.account_id,
+      checkedAt,
+    );
     // A local day begins at local midnight, so the caller's calendar decides where the three
     // trailing periods start and end — and, one local midnight at a time, when this answer stops
     // being the one they already hold.
@@ -666,6 +763,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         usage,
         pricing_revision: catalog.revision,
         model_catalog_revision: modelCatalog.revision,
+        entitlement,
       }),
     );
   });
@@ -793,6 +891,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const control = await options.state.getDeviceSyncControl(
       principal.device_id,
       principal.device_generation,
@@ -817,6 +917,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const raw = await parseRawJSON(context);
     if (raw instanceof Response) {
       return raw;
@@ -849,6 +951,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const envelope = await parseJSON(context, QuotaSnapshotEnvelopeSchema);
     if (envelope instanceof Response) {
       return envelope;
@@ -873,6 +977,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const upload = await parseJSON(context, UsageUploadSchema);
     if (upload instanceof Response) {
       return upload;
@@ -1403,9 +1509,30 @@ function browserSignInFailure(
   return htmlOrJsonSignInError(context.req.header("Accept"), json, reason);
 }
 
+async function requirePaidSync(
+  context: Context,
+  state: AccountState,
+  billing: BillingBindings,
+  principal: SessionPrincipal,
+  checkedAt: Date,
+): Promise<Response | null> {
+  const entitlement = await readEntitlement(state, billing, principal.account_id, checkedAt);
+  if (isPaidSyncStatus(entitlement.status)) return null;
+  console.error(
+    JSON.stringify({
+      event: "relay_write_refused",
+      path: new URL(context.req.url).pathname,
+      status: 402,
+      code: "subscription_required",
+      account_id: principal.account_id,
+    }),
+  );
+  return relayError(context, 402, "subscription_required", "A paid sync subscription is required.");
+}
+
 function relayError(
   context: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
+  status: 400 | 401 | 402 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
   code: RelayErrorCode,
   message: string,
 ): Response {

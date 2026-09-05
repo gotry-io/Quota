@@ -49,6 +49,8 @@ beforeEach(async () => {
   await env.DB.batch(
     [
       "account_usage_folds",
+      "entitlement_events",
+      "entitlements",
       "usage_daily",
       "usage_hourly",
       "usage_hour_scans",
@@ -61,6 +63,17 @@ beforeEach(async () => {
     `INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)`,
   )
     .bind(accountId, now.toISOString())
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO entitlements (
+       account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
+     ) VALUES (?1, 'active', 'quota_sync_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
+  )
+    .bind(
+      accountId,
+      new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      now.toISOString(),
+    )
     .run();
 });
 

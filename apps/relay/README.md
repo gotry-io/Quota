@@ -28,7 +28,8 @@ The v6 data contract is four routes
   body. The same D1 batch rewrites `usage_daily` for the UTC dates it touched.
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
-  and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
+  the pricing and model-catalog revisions, and the paid-sync `entitlement` object. The summary ETag
+  includes `entitlements.updated_at`. A local day begins at local midnight, so `tz` decides
   where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
@@ -58,8 +59,20 @@ The Worker requires these secrets:
 - `GITHUB_SUBJECT_KEY`
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
+- `REVENUECAT_WEBHOOK_SECRET` — the Authorization header value configured on the RevenueCat
+  webhook
+- `REVENUECAT_SECRET_KEY` — RevenueCat REST API v1 secret key
+- `REVENUECAT_WEB_PURCHASE_URL` — Web Purchase Link base (`https://pay.rev.cat/<token>`), also
+  acceptable as a Cloudflare var
 
-That is the whole list. The extra signing secret the retired browser-auth framework required is
+`POST /api/billing/revenuecat/webhook` is the RevenueCat webhook. It compares the `Authorization`
+header to `REVENUECAT_WEBHOOK_SECRET`, records the event, and folds the `sync` entitlement.
+`GET /api/v2/account` carries `entitlement` and `purchase.web_url` (the base with the Account id
+appended). `PUT /api/v6/device/snapshots`, `PUT /api/v6/device/usage`, `GET /api/v2/device/sync`,
+and `PUT /api/v2/device/profile` answer 402 `subscription_required` unless that entitlement is
+`active` or `grace`. See [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
+
+The extra signing secret the retired browser-auth framework required is
 not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is
 named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 

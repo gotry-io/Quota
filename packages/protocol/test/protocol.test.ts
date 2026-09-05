@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
@@ -622,6 +623,31 @@ describe("quota protocol", () => {
     expect(protocol.exceedsContractBound(undefined)).toBe(false);
   });
 
+  it("states the paid-sync entitlement on the Account read and the summary", () => {
+    const summary = accountSummary();
+    expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
+    expect(AccountSummarySchema.safeParse({ ...summary, entitlement: undefined }).success).toBe(
+      false,
+    );
+    expect(
+      AccountSummarySchema.safeParse({
+        ...summary,
+        entitlement: { ...summary.entitlement, status: "complimentary" },
+      }).success,
+    ).toBe(false);
+
+    const account = {
+      protocol_version: 2 as const,
+      account: summary.account,
+      entitlement: summary.entitlement,
+      purchase: { web_url: "https://pay.rev.cat/token/account_01" },
+    };
+    expect(AccountResponseSchema.safeParse(account).success).toBe(true);
+    expect(AccountResponseSchema.safeParse({ ...account, purchase: undefined }).success).toBe(
+      false,
+    );
+  });
+
   it("validates subscriptions and Usage as one normalized read summary", () => {
     expect(AccountSummarySchema.safeParse(accountSummary()).success).toBe(true);
     expect(
@@ -969,6 +995,14 @@ function accountSummary() {
     },
     pricing_revision: "pricing_2026_08_02",
     model_catalog_revision: "model_2026_08_02",
+    entitlement: {
+      status: "active" as const,
+      expires_at: "2026-09-12T00:00:00Z",
+      will_renew: true,
+      product_id: "quota_sync_monthly",
+      store: "app_store",
+      stale: false,
+    },
   };
 }
 

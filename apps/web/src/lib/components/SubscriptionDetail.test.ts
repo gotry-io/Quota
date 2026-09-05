@@ -71,6 +71,14 @@ function makeSummary(
     },
     pricing_revision: "price_1",
     model_catalog_revision: "model_1",
+    entitlement: {
+      status: "none",
+      expires_at: null,
+      will_renew: false,
+      product_id: null,
+      store: null,
+      stale: false,
+    },
     ...overrides,
   };
 }

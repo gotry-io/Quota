@@ -443,6 +443,14 @@ export function screenshotAccountSummary(): unknown {
     },
     pricing_revision: PRICING_REVISION,
     model_catalog_revision: "models_visual_fixture",
+    entitlement: {
+      status: "active",
+      expires_at: isoFrom(now, 30 * 86_400_000),
+      will_renew: true,
+      product_id: "quota_sync_monthly",
+      store: "app_store",
+      stale: false,
+    },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);

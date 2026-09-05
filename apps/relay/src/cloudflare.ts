@@ -17,6 +17,9 @@ export interface CloudflareBindings {
   GITHUB_SUBJECT_KEY: string;
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
+  REVENUECAT_WEBHOOK_SECRET?: string;
+  REVENUECAT_SECRET_KEY?: string;
+  REVENUECAT_WEB_PURCHASE_URL?: string;
 }
 
 export default {
@@ -41,6 +44,11 @@ export default {
       accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
       webSessions,
       hasher,
+      billing: {
+        webhookSecret: environment.REVENUECAT_WEBHOOK_SECRET ?? "",
+        restSecret: environment.REVENUECAT_SECRET_KEY ?? "",
+        webPurchaseUrl: environment.REVENUECAT_WEB_PURCHASE_URL ?? "",
+      },
     });
 
     if (isRelayApiPath(pathname)) {

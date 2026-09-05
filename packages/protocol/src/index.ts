@@ -340,12 +340,46 @@ const AccountDeviceSchema = z
   .strict();
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
 
+export const EntitlementStatusSchema = z.enum(["active", "grace", "expired", "none"]);
+export type EntitlementStatus = z.infer<typeof EntitlementStatusSchema>;
+
+/**
+ * The paid-sync entitlement Relay last observed for this Account.
+ *
+ * `stale` is a read-time flag: the row could not be refreshed from RevenueCat and the
+ * stored values are what Relay still has. See
+ * [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
+ */
+export const EntitlementSchema = z
+  .object({
+    status: EntitlementStatusSchema,
+    expires_at: Rfc3339InstantSchema.nullable(),
+    will_renew: z.boolean(),
+    product_id: z.string().min(1).max(256).nullable(),
+    store: z.string().min(1).max(64).nullable(),
+    stale: z.boolean(),
+  })
+  .strict();
+export type Entitlement = z.infer<typeof EntitlementSchema>;
+
+const EntitlementReadSchema = EntitlementSchema.loose();
+
+export const PurchaseSchema = z
+  .object({
+    web_url: z.string().url().max(2_048),
+  })
+  .strict();
+export type Purchase = z.infer<typeof PurchaseSchema>;
+
 export const AccountResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     account: AccountSchema,
+    entitlement: EntitlementSchema,
+    purchase: PurchaseSchema,
   })
   .strict();
+export type AccountResponse = z.infer<typeof AccountResponseSchema>;
 
 const NativeClientSchema = z.literal("quotabar");
 const InstallationIdSchema = z.string().uuid();
@@ -1135,6 +1169,7 @@ export const AccountSummarySchema = z
     usage: AccountUsageSchema,
     pricing_revision: OpaqueIdSchema,
     model_catalog_revision: OpaqueIdSchema,
+    entitlement: EntitlementSchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
@@ -1254,6 +1289,7 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   devices: z.array(AccountDeviceReadSchema).max(256),
   subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
   usage: AccountUsageReadSchema,
+  entitlement: EntitlementReadSchema,
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
@@ -1391,6 +1427,7 @@ const RelayErrorCodeSchema = z.enum([
   "device_deleted",
   "client_upgrade_required",
   "conflict",
+  "subscription_required",
   "internal_error",
 ]);
 export type RelayErrorCode = z.infer<typeof RelayErrorCodeSchema>;

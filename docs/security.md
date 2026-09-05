@@ -277,7 +277,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
   appear only in the one successful issuance response, never in D1, and browser session tokens only
   in their `Set-Cookie`.
-- Retained business data is limited to Account and Device lifecycle metadata, normalized quota
+- Retained business data is limited to Account and Device lifecycle metadata, the paid-sync
+  entitlement cache and webhook event log, normalized quota
   observations, sparse hourly Usage rows, the daily rollup, and bounded rate limits. Nothing is kept
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
