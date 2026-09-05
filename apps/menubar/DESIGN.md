@@ -109,6 +109,8 @@ Production inherits the menu extra's system material. Add only adaptive semantic
 Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
 supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
 `critical` only for failure or destructive meaning. Native system red remains the destructive color.
+Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15; `critical` on text
+stays failure-only.
 
 Do not add decorative gradients, oversized cards, colored page backgrounds, or custom window chrome.
 

@@ -1,15 +1,16 @@
 <script lang="ts">
 import { page } from "$app/state";
-import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
+import { getAccountStore } from "$lib/account-store.svelte.ts";
 import SubscriptionDetail from "$lib/components/SubscriptionDetail.svelte";
 
-const dashboard = getAccountDashboard();
+const store = getAccountStore();
 </script>
 
 <SubscriptionDetail
   sel={page.params.sel ?? ""}
-  summary={dashboard.summary}
-  loadError={dashboard.loadError}
-  subscriptionSelectors={dashboard.subscriptionSelectors}
-  onRetry={() => void dashboard.loadSummary()}
+  summary={store.summary}
+  loadError={store.loadError}
+  subscriptionSelectors={store.subscriptionSelectors}
+  now={store.now}
+  onRetry={() => void store.refresh()}
 />

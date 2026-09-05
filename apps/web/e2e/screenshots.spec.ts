@@ -67,7 +67,9 @@ for (const appearance of appearances) {
     test(`overview ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
+      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
@@ -77,15 +79,19 @@ for (const appearance of appearances) {
       await expect(page.getByText("84%").first()).toBeVisible();
       await expect(page.getByText("53%").first()).toBeVisible();
       await expect(page.getByText("27%").first()).toBeVisible();
+      await expect(page.locator("a.today-strip")).toBeVisible();
+      await expect(page.locator("a.devices-strip")).toBeVisible();
       await shot(page, `web-overview-${appearance}-desktop.png`);
     });
 
     test(`usage ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my/usage");
-      await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
       await expect(page.locator("#token-total")).toHaveText("11.4M");
       await expect(page.locator("#cost-total")).toHaveText("$8.50");
+      await expect(page.locator("#message-total")).toBeVisible();
+      await expect(page.locator(".usage-columns")).toBeVisible();
       await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
@@ -103,6 +109,7 @@ for (const appearance of appearances) {
     test(`overview ${appearance} mobile`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
+      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
       await expect(page.getByText("octocat").first()).toBeVisible();

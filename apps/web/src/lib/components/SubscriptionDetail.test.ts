@@ -1,6 +1,5 @@
 import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
-import { tick } from "svelte";
 import { afterEach, expect, it, vi } from "vitest";
 import { type AccountError, UNAVAILABLE_COPY } from "$lib/account-errors";
 import SubscriptionDetail from "./SubscriptionDetail.svelte";
@@ -131,6 +130,7 @@ function renderDetail(
     loadError: AccountError | null;
     subscriptionSelectors: Record<string, string>;
     onRetry: () => void;
+    now: Date;
   }> = {},
 ) {
   return render(SubscriptionDetail, {
@@ -247,16 +247,22 @@ it("shows Retry when the summary failed to load", () => {
   expect(screen.queryByText("Weekly")).toBeNull();
 });
 
-it("refreshes the reset countdown every 60 seconds", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-  vi.setSystemTime(new Date("2026-08-12T09:30:00Z"));
-
-  renderDetail();
+it("refreshes the reset countdown when the shared now advances", () => {
+  const summary = makeSummary();
+  const { rerender } = renderDetail({
+    summary,
+    now: new Date("2026-08-12T09:30:00Z"),
+  });
   expect(screen.getByText("Resets in 42m")).toBeTruthy();
 
-  vi.advanceTimersByTime(60_000);
-  await tick();
-
+  rerender({
+    sel: SEL,
+    summary,
+    loadError: null,
+    subscriptionSelectors: { [KEY]: SEL },
+    onRetry: vi.fn(),
+    now: new Date("2026-08-12T09:31:00Z"),
+  });
   expect(screen.getByText("Resets in 41m")).toBeTruthy();
   expect(screen.queryByText("Resets in 42m")).toBeNull();
 });

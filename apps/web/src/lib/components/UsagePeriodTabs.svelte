@@ -13,7 +13,7 @@ let {
 <div class="period-tabs" role="group" aria-label="Usage period">
   {#each USAGE_PERIODS as item (item.query)}
     <button
-      class="text-button"
+      class="period-tab"
       type="button"
       aria-pressed={selectedQuery === item.query}
       onclick={() => onSelectQuery(item.query)}>{item.label}</button

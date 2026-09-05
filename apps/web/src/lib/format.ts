@@ -12,6 +12,18 @@ import {
 
 export const WEB_LOCALE = "en-US";
 
+/** A UTC `YYYY-MM-DD` pair as English copy, e.g. `Sep 5, 2025 – Sep 4, 2026`. */
+export function formatUtcDateRange(from: string, to: string): string {
+  const format = (iso: string): string =>
+    new Intl.DateTimeFormat(WEB_LOCALE, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${iso}T00:00:00Z`));
+  return `${format(from)} – ${format(to)}`;
+}
+
 export function formatCount(value: number): string {
   return new Intl.NumberFormat(WEB_LOCALE, {
     notation: "compact",

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatQuotaRemaining } from "../src/lib/format.ts";
 import { KNOWN_PLANS } from "../src/lib/plan-display.generated.ts";
 import {
+  accountPageTitle,
   DASHBOARD_PATH,
   DEVICES_PATH,
+  isAccountShellPath,
+  isDevicesPath,
+  isSettingsPath,
+  isSubscriptionPath,
+  isUsagePath,
   planDisplayName,
   SETTINGS_PATH,
   SIGN_IN_PATH,
@@ -11,7 +18,6 @@ import {
   subscriptionPath,
   USAGE_PATH,
 } from "../src/lib/routes.ts";
-import { formatQuotaRemaining } from "../src/lib/format.ts";
 
 test("sends a signed-out visitor to Relay, and back to the page they wanted", () => {
   assert.equal(SIGN_IN_PATH, "/api/auth/github/start");
@@ -28,6 +34,19 @@ test("names the account sub-routes and hashes a selector into the subscription p
   assert.equal(DEVICES_PATH, "/my/devices");
   assert.equal(SETTINGS_PATH, "/my/settings");
   assert.equal(subscriptionPath("ccfc96629357"), "/my/subscriptions/ccfc96629357");
+  assert.equal(isAccountShellPath("/my"), true);
+  assert.equal(isAccountShellPath("/my/usage"), true);
+  assert.equal(isAccountShellPath("/"), false);
+  assert.equal(isSubscriptionPath("/my/subscriptions/ccfc96629357"), true);
+  assert.equal(isSubscriptionPath("/my"), false);
+  assert.equal(isUsagePath("/my/usage"), true);
+  assert.equal(isUsagePath("/my"), false);
+  assert.equal(isDevicesPath("/my/devices"), true);
+  assert.equal(isSettingsPath("/my/settings"), true);
+  assert.equal(accountPageTitle("/my"), "Overview");
+  assert.equal(accountPageTitle("/my/usage"), "Usage");
+  assert.equal(accountPageTitle("/my/devices"), "Devices");
+  assert.equal(accountPageTitle("/my/settings"), "Settings");
 });
 
 test("matches QuotaBar plan capitalization", () => {

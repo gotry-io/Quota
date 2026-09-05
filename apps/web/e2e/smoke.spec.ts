@@ -46,39 +46,144 @@ function seriousOrCritical(
     }));
 }
 
+test("Overview does not prefetch activity", async ({ page }) => {
+  let activityListRequests = 0;
+  await page.route("**/api/v6/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/v6/account/summary")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountSummary),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/activity")) {
+      const asked = new URL(url);
+      if (asked.searchParams.get("detail") !== "agents") activityListRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountActivity),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/my");
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+  expect(activityListRequests).toBe(0);
+});
+
+test("switching account tabs does not refetch summary or activity", async ({ page }) => {
+  let summaryRequests = 0;
+  let activityListRequests = 0;
+  await page.route("**/api/v6/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/v6/account/summary")) {
+      summaryRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountSummary),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/activity")) {
+      const asked = new URL(url);
+      if (asked.searchParams.get("detail") !== "agents") activityListRequests += 1;
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const detailed = asked.searchParams.get("detail") === "agents";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/my");
+  const accountNav = page.getByRole("navigation", { name: "Account" });
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Usage" }).click();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Devices" }).click();
+  await expect(page.locator("#device-list")).toContainText("Studio");
+
+  await accountNav.getByRole("link", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Overview" }).click();
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+  await expect(page.locator(".loading-block")).toHaveCount(0);
+
+  await accountNav.getByRole("link", { name: "Usage" }).click();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  await expect(page.locator(".loading-block")).toHaveCount(0);
+
+  expect(summaryRequests).toBe(1);
+  expect(activityListRequests).toBe(1);
+});
+
 test("/my shows overview, Usage period switch, and Devices", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my");
 
-  const accountNav = page.getByRole("navigation", { name: "Account" });
+  const header = page.getByRole("banner");
+  const accountNav = header.getByRole("navigation", { name: "Account" });
   await expect(accountNav).toBeVisible();
   await expect(accountNav.getByRole("link", { name: "Overview" })).toHaveAttribute(
     "aria-current",
     "page",
   );
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   await expect(page.locator(".quota-card")).toContainText("Plus");
+  await expect(page.locator("a.today-strip")).toHaveAttribute("href", "/my/usage?period=today");
+  await expect(page.locator("a.devices-strip")).toBeVisible();
+  await expect(page.locator("a.devices-strip")).toHaveAttribute("href", "/my/devices");
+
+  const accountMenu = page.locator("#header-account-menu");
+  await accountMenu.locator("summary").click();
+  await expect(accountMenu.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(accountMenu.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await accountMenu.locator("summary").click();
 
   await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
   await expect(accountNav.getByRole("link", { name: "Usage" })).toHaveAttribute(
     "aria-current",
     "page",
   );
   const tokens = page.locator("#token-total");
   const cost = page.locator("#cost-total");
+  const messages = page.locator("#message-total");
   await expect(tokens).not.toHaveText("—");
   await expect(cost).not.toHaveText("—");
+  await expect(messages).not.toHaveText("—");
+  await expect(page.getByText("Messages", { exact: true })).toBeVisible();
 
   const thirtyDayTokens = await tokens.innerText();
   await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toHaveCount(0);
   await page.getByRole("button", { name: "Show 1 more" }).click();
+  const fewer = page.getByRole("button", { name: "Show fewer" });
+  await expect(fewer).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toBeVisible();
+  await fewer.click();
   await expect(page.getByRole("button", { name: "Show 1 more" })).toHaveAttribute(
     "aria-expanded",
-    "true",
+    "false",
   );
-  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toBeVisible();
   await page.getByRole("button", { name: "Today" }).click();
   await expect(tokens).not.toHaveText(thirtyDayTokens);
   await expect(page).toHaveURL(/[?&]period=today(?:&|$)/);
@@ -90,7 +195,11 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
     "page",
   );
   await expect(page.locator("#device-list")).toContainText("Studio");
-  await expect(page.locator("#device-list")).toContainText("macOS");
+  await expect(page.getByRole("img", { name: "macOS" }).first()).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Last contact" })).toBeVisible();
+  const deviceNames = page.locator("#device-list tbody th");
+  await expect(deviceNames.nth(0)).toHaveText("Studio");
+  await expect(deviceNames.nth(1)).toHaveText("Kitchen");
 });
 
 test("subscription card opens the detail page with windows and Reporting", async ({ page }) => {
@@ -109,6 +218,57 @@ test("subscription card opens the detail page with windows and Reporting", async
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(seriousOrCritical(results.violations)).toEqual([]);
+});
+
+test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
+  await mockV6(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/my/usage");
+  await expect(page.locator(".usage-columns")).toBeVisible();
+  await expect(page.locator("#token-total")).not.toHaveText("—");
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  const headingRow = await page.evaluate(() => {
+    const h1 = document.querySelector(".usage-heading h1")?.getBoundingClientRect();
+    const tabs = document.querySelector(".period-tabs")?.getBoundingClientRect();
+    if (!h1 || !tabs) return false;
+    return Math.abs(h1.top - tabs.top) < 48;
+  });
+  expect(headingRow).toBe(true);
+  const sideBySide = await page.evaluate(() => {
+    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
+    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
+    if (!tree || !activity) return false;
+    return activity.left >= tree.right - 1;
+  });
+  expect(sideBySide).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const stacked = await page.evaluate(() => {
+    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
+    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
+    if (!tree || !activity) return false;
+    return activity.top >= tree.bottom - 1;
+  });
+  expect(stacked).toBe(true);
+});
+
+test("Settings groups Appearance, Account, and Legal", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my/settings");
+  await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Notifications" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Legal" })).toBeVisible();
+  await expect(
+    page.locator(".settings-links").getByRole("link", { name: "Privacy" }),
+  ).toHaveAttribute("href", "/privacy");
+  await expect(
+    page.locator(".settings-links").getByRole("link", { name: "Terms" }),
+  ).toHaveAttribute("href", "/terms");
+  await expect(
+    page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
 });
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
@@ -151,7 +311,13 @@ for (const viewport of [
   test(`landing does not overflow horizontally at ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Know what you have left." })).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "See what's left across your coding-agent plans.",
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Download for macOS" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with GitHub" }).first()).toBeVisible();
     await expect(page.locator(".hero-preview img").first()).toBeVisible();
     await page.evaluate(async () => {
       await Promise.all(
@@ -169,6 +335,12 @@ for (const viewport of [
       () => document.documentElement.scrollWidth <= window.innerWidth,
     );
     expect(fits).toBe(true);
+    if (viewport.width === 390) {
+      const width = await page
+        .locator(".preview-web")
+        .evaluate((element) => element.getBoundingClientRect().width);
+      expect(width).toBeGreaterThanOrEqual(280);
+    }
   });
 }
 
@@ -180,7 +352,7 @@ for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const)
     if (path === "/my") {
       await expect(page.locator(".quota-card")).toBeVisible();
     } else if (path === "/my/usage") {
-      await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
     } else if (path === "/my/devices") {
       await expect(page.locator("#device-list")).toBeVisible();
     } else {
@@ -190,3 +362,115 @@ for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const)
     expect(seriousOrCritical(results.violations)).toEqual([]);
   });
 }
+
+async function chooseAppearance(page: Page, name: "Light" | "Dark"): Promise<void> {
+  const toggle = page.locator("#theme-toggle");
+  await toggle.scrollIntoViewIfNeeded();
+  await toggle.click();
+  const option = page.getByRole("button", { name, exact: true });
+  await expect(option).toBeVisible();
+  await option.click();
+}
+
+test("landing screenshots follow an explicit Dark theme on a light OS", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await expect(page.locator(".preview-web .shot-light")).toBeVisible();
+  await expect(page.locator(".preview-web .shot-dark")).toBeHidden();
+  await chooseAppearance(page, "Dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator(".preview-web .shot-dark")).toBeVisible();
+  await expect(page.locator(".preview-web .shot-light")).toBeHidden();
+});
+
+test("landing screenshots follow an explicit Light theme on a dark OS", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  await expect(page.locator(".preview-web .shot-dark")).toBeVisible();
+  await expect(page.locator(".preview-web .shot-light")).toBeHidden();
+  await chooseAppearance(page, "Light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator(".preview-web .shot-light")).toBeVisible();
+  await expect(page.locator(".preview-web .shot-dark")).toBeHidden();
+});
+
+test("a recent device heartbeat does not make stale quota look fresh", async ({ page }) => {
+  const summary = structuredClone(accountSummary) as typeof accountSummary & {
+    devices: Array<{ last_seen_at: string | null }>;
+    subscriptions: Array<{ snapshot: { observed_at: string } }>;
+  };
+  const firstDevice = summary.devices[0];
+  const firstSubscription = summary.subscriptions[0];
+  if (!firstDevice || !firstSubscription) throw new Error("account fixture is missing rows");
+  firstDevice.last_seen_at = new Date().toISOString();
+  firstSubscription.snapshot.observed_at = "2020-01-01T00:00:00Z";
+  await page.route("**/api/v6/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/v6/account/summary")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(summary),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+  await page.goto("/my");
+  const status = page.locator(".dashboard-status");
+  await expect(status).toContainText("Latest quota updated");
+  await expect(status).not.toContainText("just now");
+});
+
+test("unknown Device platforms use a generic icon", async ({ page }) => {
+  const summary = structuredClone(accountSummary) as typeof accountSummary & {
+    devices: Array<{
+      id: string;
+      display_name: string;
+      platform: string;
+      last_seen_at: string | null;
+      last_observed_at: string | null;
+    }>;
+  };
+  summary.devices.push({
+    id: "device_linux",
+    display_name: "Lab Box",
+    platform: "linux",
+    last_seen_at: "2026-08-10T09:31:00Z",
+    last_observed_at: "2026-08-10T09:00:00Z",
+  });
+  await page.route("**/api/v6/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/v6/account/summary")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(summary),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+  await page.goto("/my/devices");
+  await expect(page.getByRole("img", { name: "Unknown" }).first()).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "Lab Box" })).toBeVisible();
+});
+
+test("Devices below 620 px are two-column cards with Last contact", async ({ page }) => {
+  await mockV6(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/my/devices");
+  await expect(page.locator(".device-card-list")).toBeVisible();
+  await expect(page.locator(".device-card dt", { hasText: "Last contact" }).first()).toBeVisible();
+  await expect(page.locator(".device-table-wrap")).toBeHidden();
+});
+
+test("Support names the Notifications anchor", async ({ page }) => {
+  await page.goto("/support#notifications");
+  await expect(page.locator("#notifications")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Remaining-quota alerts and reset reminders are configured and evaluated in QuotaBar on your Mac. The website does not send notifications.",
+    ),
+  ).toBeVisible();
+});

@@ -1,5 +1,10 @@
 # Support
 
+## Notifications
+
+Remaining-quota alerts and reset reminders are configured and evaluated in QuotaBar on your Mac. The
+website does not send notifications.
+
 ## FAQ
 
 ### Where does the data come from?
@@ -11,13 +16,11 @@ Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi C
 Cursor. Local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
 
 If you sign in, QuotaBar uploads only the numbers: remaining quota and privacy-preserving Usage
-totals. Quota for iPhone and the website read that Account.
+totals. The website reads that Account.
 
-### Why is there no data on iPhone?
+### When is Quota for iPhone available?
 
-Quota for iPhone is a read-only Account viewer. It shows what a Mac running QuotaBar has already
-uploaded. Sign in to QuotaBar on a Mac with the same GitHub account; until that Mac reports, the
-iPhone has nothing to show.
+Quota for iPhone is coming soon. When it ships, it will read the Account reported by QuotaBar.
 
 ### How do I send a diagnostic report?
 

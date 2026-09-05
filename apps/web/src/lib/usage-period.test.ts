@@ -6,6 +6,7 @@ import {
   usagePeriodFromQuery,
   usagePeriodHref,
   usagePeriodKey,
+  usagePeriodLabel,
 } from "./usage-period.ts";
 
 it("reads the period query and defaults to 30 Days", () => {
@@ -22,6 +23,8 @@ it("maps query values onto the summary period keys", () => {
   expect(usagePeriodKey("7d")).toBe("last_7_days");
   expect(usagePeriodKey("30d")).toBe("last_30_days");
   expect(usagePeriodKey("all")).toBe("all");
+  expect(usagePeriodLabel("today")).toBe("Today");
+  expect(usagePeriodLabel("30d")).toBe("30 Days");
 });
 
 it("writes ?period= so a refresh keeps the selected tab", () => {

@@ -18,7 +18,7 @@ type ActivityDay = {
   outside: boolean;
   today: boolean;
   level: number;
-  requests: number;
+  messages: number;
   tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -217,7 +217,7 @@ export function buildUsageActivityModel(
       outside,
       today: !outside && date === today,
       level: activityLevel(tokens, maxTokens),
-      requests: value?.totals.messages ?? 0,
+      messages: value?.totals.messages ?? 0,
       tokens,
       input_tokens: value?.totals.input_tokens ?? 0,
       output_tokens: value?.totals.output_tokens ?? 0,
