@@ -48,6 +48,7 @@ final class QuotaUITests: XCTestCase {
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
+    try restoreTabBar(app)
 
     app.tabBars.buttons["Usage"].tap()
     XCTAssertTrue(
