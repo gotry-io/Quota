@@ -20,6 +20,9 @@ pub const SOURCE: &str = "chatgpt_web_usage_api";
 const ORIGIN: &str = "https://chatgpt.com";
 const SESSION_PATH: &str = "/api/auth/session";
 const ME_PATH: &str = "/backend-api/me";
+/// The usage document, relative to the same origin. [`super::USAGE_URL`] is that path on
+/// [`ORIGIN`], and `the_usage_path_is_the_usage_url` holds the two together.
+const USAGE_PATH: &str = "/backend-api/wham/usage";
 
 /// Proves the cookie belongs to a signed-in ChatGPT account before anything is stored.
 ///
@@ -58,7 +61,15 @@ pub fn collect(
     context: &CollectionContext,
     cookie_header: &str,
 ) -> Result<QuotaSnapshot, ProviderError> {
-    let session = fetch_web_session(cookie_header, context, ORIGIN, HTTP_TIMEOUT)?;
+    collect_at(cookie_header, context, ORIGIN)
+}
+
+fn collect_at(
+    cookie_header: &str,
+    context: &CollectionContext,
+    origin: &str,
+) -> Result<QuotaSnapshot, ProviderError> {
+    let session = fetch_web_session(cookie_header, context, origin, HTTP_TIMEOUT)?;
     // The session document often carries a bearer the WHAM endpoint accepts. Spending that is
     // the same request the OAuth rung makes, so it reports the same windows.
     if let Some(access_token) = session.access_token.as_deref() {
@@ -75,13 +86,14 @@ pub fn collect(
             Err(_) => {}
         }
     }
-    collect_web_usage(cookie_header, &session, context)
+    collect_web_usage(cookie_header, &session, context, origin)
 }
 
 fn collect_web_usage(
     cookie_header: &str,
     session: &WebSession,
     context: &CollectionContext,
+    origin: &str,
 ) -> Result<QuotaSnapshot, ProviderError> {
     let client = HttpClient::new()?;
     let user_agent = context.user_agent();
@@ -93,7 +105,7 @@ fn collect_web_usage(
     if let Some(account_id) = session.account_id.as_deref() {
         headers.push(("ChatGPT-Account-Id", account_id));
     }
-    let (_, value) = client.get_json_session(super::USAGE_URL, &headers, SOURCE)?;
+    let (_, value) = client.get_json_session(&format!("{origin}{USAGE_PATH}"), &headers, SOURCE)?;
     let mapped = map_usage(&value);
     if mapped.malformed_success {
         return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
@@ -268,6 +280,26 @@ mod tests {
         // A context cookie on its own is not a sign-in.
         assert!(!has_chatgpt_session_cookie("_account=acct"));
         assert!(!has_chatgpt_session_cookie("cf_clearance=bot"));
+    }
+
+    /// Both runtimes answer the same cases, so a rule this collector starts reading differently
+    /// fails here rather than resolving one account into two subscriptions.
+    #[test]
+    fn the_shared_conformance_fixture_is_answered() {
+        use crate::providers::common::web_conformance;
+
+        let cases = web_conformance::cases("codex");
+        assert!(cases.len() >= 3);
+        for case in &cases {
+            web_conformance::assert_case(case, validate_at, collect_at);
+        }
+    }
+
+    /// The usage document is that path on this origin, so a reading driven against a stub asks
+    /// for the same document a reading against ChatGPT does.
+    #[test]
+    fn the_usage_path_is_the_usage_url() {
+        assert_eq!(format!("{ORIGIN}{USAGE_PATH}"), super::super::USAGE_URL);
     }
 
     /// A cookie is stored only once ChatGPT has said whose it is.
