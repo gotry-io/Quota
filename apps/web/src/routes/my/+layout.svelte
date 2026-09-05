@@ -1,6 +1,6 @@
 <script lang="ts">
 import { page } from "$app/state";
-import { accountStatusLine, devicesSummaryLine } from "$lib/account-overview";
+import { accountStatusLine, devicesSummaryLine, isPaidSyncStatus } from "$lib/account-overview";
 import { createAccountStore, setAccountStore } from "$lib/account-store.svelte.ts";
 import {
   accountPageTitle,
@@ -27,7 +27,11 @@ const status = $derived.by(() => {
   if (!store.summary) return null;
   const path = page.url.pathname;
   if (isUsagePath(path) || isSettingsPath(path) || isSubscriptionPath(path)) return null;
-  if (isDevicesPath(path)) return devicesSummaryLine(store.summary.devices, now);
+  if (isDevicesPath(path)) {
+    return devicesSummaryLine(store.summary.devices, now, {
+      subscribed: isPaidSyncStatus(store.summary.entitlement.status),
+    });
+  }
   return accountStatusLine(store.summary, now);
 });
 

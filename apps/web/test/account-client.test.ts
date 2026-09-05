@@ -3,16 +3,57 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { fetchAccountActivity, fetchAccountSummary } from "../src/lib/account-client.ts";
+import {
+  fetchAccount,
+  fetchAccountActivity,
+  fetchAccountSummary,
+} from "../src/lib/account-client.ts";
 import { classifyAccountError } from "../src/lib/account-errors.ts";
 import {
   ACTIVITY_DAYS,
   accountActivityPath,
   accountActivityRange,
+  accountPath,
   accountSummaryPath,
   clearStoredSummary,
 } from "../src/lib/account-reads.ts";
 import { SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
+
+test("asks for the Account purchase URL at /api/v2/account", () => {
+  assert.equal(accountPath(), "/api/v2/account");
+});
+
+test("reads the Account purchase URL", async () => {
+  const summary = acceptedSummaryPayload() as {
+    account: unknown;
+    entitlement: unknown;
+  };
+  const payload = {
+    protocol_version: 2,
+    account: summary.account,
+    entitlement: summary.entitlement,
+    purchase: { web_url: "https://pay.rev.cat/token/account_1" },
+  };
+  let requested = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    requested = String(input);
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const result = await fetchAccount();
+    assert.equal(requested, "/api/v2/account");
+    assert.equal(result.status, "ok");
+    if (result.status === "ok") {
+      assert.equal(result.account.purchase.web_url, "https://pay.rev.cat/token/account_1");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("asks for the summary in the calendar this browser keeps", () => {
   const url = new URL(accountSummaryPath("Asia/Singapore"), "https://quota.gotry.io");

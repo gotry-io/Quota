@@ -365,7 +365,9 @@ by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cooki
 `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the QuotaBar
 `.dmg` and Homebrew install command, GitHub sign-in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a client-rendered dashboard: the browser requests
-`GET /api/v6/account/summary` once with its own IANA timezone; the document layer does not
+`GET /api/v6/account/summary` once with its own IANA timezone. Settings also reads
+`GET /api/v2/account` for the RevenueCat Web Purchase Link and shows the paid-sync status;
+Overview and Devices say when sync is off. The document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none
 anonymously, and `/app` redirects to `/my`. Relay owns GitHub login and browser

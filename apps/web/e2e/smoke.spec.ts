@@ -1,15 +1,38 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { accountActivity, accountActivityDay, accountSummary } from "./account-fixture.ts";
+import {
+  accountActivity,
+  accountActivityDay,
+  accountReadFromSummary,
+  accountSummary,
+} from "./account-fixture.ts";
 
-async function mockV6(page: Page): Promise<void> {
+async function mockAccountRead(page: Page, summary: unknown = accountSummary): Promise<void> {
+  await page.route(
+    (url) => new URL(url).pathname === "/api/v2/account",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountReadFromSummary(summary)),
+      });
+    },
+  );
+}
+
+async function mockV6(page: Page, summary: unknown = accountSummary): Promise<void> {
+  await mockAccountRead(page, summary);
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(accountSummary),
+        body: JSON.stringify(summary),
       });
       return;
     }
@@ -79,6 +102,7 @@ test("Overview does not prefetch activity", async ({ page }) => {
 test("switching account tabs does not refetch summary or activity", async ({ page }) => {
   let summaryRequests = 0;
   let activityListRequests = 0;
+  await mockAccountRead(page);
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {
@@ -145,6 +169,9 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   );
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
+  await expect(
+    page.getByText("Sync is off. Your Macs stop uploading until you subscribe."),
+  ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
@@ -252,10 +279,20 @@ test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
   expect(stacked).toBe(true);
 });
 
-test("Settings groups Appearance, Account, and Legal", async ({ page }) => {
+test("Settings groups Appearance, Sync, Account, and Legal", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my/settings");
   await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sync" })).toBeVisible();
+  await expect(page.getByText(/Active · renews /)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Manage subscription" })).toHaveAttribute(
+    "target",
+    "_blank",
+  );
+  await expect(page.getByRole("link", { name: "Manage subscription" })).toHaveAttribute(
+    "rel",
+    "noopener",
+  );
   await expect(page.getByRole("heading", { name: "Notifications" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Legal" })).toBeVisible();
@@ -269,6 +306,45 @@ test("Settings groups Appearance, Account, and Legal", async ({ page }) => {
     page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
   ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
+});
+
+function unsubscribedSummary(): unknown {
+  const summary = structuredClone(accountSummary) as {
+    entitlement: {
+      status: string;
+      expires_at: string | null;
+      will_renew: boolean;
+      stale: boolean;
+    };
+  };
+  summary.entitlement = {
+    ...summary.entitlement,
+    status: "none",
+    expires_at: null,
+    will_renew: false,
+    stale: false,
+  };
+  return summary;
+}
+
+test("Overview warns when sync is off and Settings offers Subscribe", async ({ page }) => {
+  await mockV6(page, unsubscribedSummary());
+  await page.goto("/my");
+  const notice = page.getByRole("status").filter({
+    hasText: "Sync is off. Your Macs stop uploading until you subscribe.",
+  });
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole("link", { name: "Settings" })).toHaveAttribute(
+    "href",
+    "/my/settings",
+  );
+
+  await page.goto("/my/settings");
+  await expect(page.getByText("Not subscribed")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Subscribe" })).toHaveAttribute("target", "_blank");
+
+  await page.goto("/my/devices");
+  await expect(page.getByText("Paused (no subscription)").first()).toBeVisible();
 });
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
