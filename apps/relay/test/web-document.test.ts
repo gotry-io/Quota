@@ -73,7 +73,7 @@ describe("web document port", () => {
   it("returns a viewer only when the session and domain account both exist", async () => {
     const state = new D1AccountState(env.DB);
     await env.DB.prepare(
-      "INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at) VALUES (?1, ?1, ?2, ?3, ?3)",
+      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
     )
       .bind("account_1", "octocat", now.toISOString())
       .run();

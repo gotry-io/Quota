@@ -3593,6 +3593,106 @@
           ]
         }
       }
+    ],
+    "account_response": [
+      {
+        "name": "an account reached through two channels",
+        "accepted": true,
+        "payload": {
+          "protocol_version": 2,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "identities": [
+            {
+              "provider": "github",
+              "label": "octocat",
+              "linked_at": "2026-01-04T12:00:00Z"
+            },
+            {
+              "provider": "apple",
+              "label": null,
+              "linked_at": "2026-02-04T12:00:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "name": "an account reached through one channel",
+        "accepted": true,
+        "payload": {
+          "protocol_version": 2,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "identities": [
+            {
+              "provider": "github",
+              "label": "octocat",
+              "linked_at": "2026-01-04T12:00:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "name": "a channel this contract does not name",
+        "accepted": false,
+        "reason": "The identity providers are a closed vocabulary.",
+        "payload": {
+          "protocol_version": 2,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "identities": [
+            {
+              "provider": "carrier-pigeon",
+              "label": null,
+              "linked_at": "2026-01-04T12:00:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "name": "the subject a provider proved",
+        "accepted": false,
+        "reason": "Only the HMAC of a subject is stored, and it is never answered.",
+        "payload": {
+          "protocol_version": 2,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "identities": [
+            {
+              "provider": "github",
+              "label": "octocat",
+              "linked_at": "2026-01-04T12:00:00Z",
+              "subject": "5b2c9f0a"
+            }
+          ]
+        }
+      },
+      {
+        "name": "an account stating no channels at all",
+        "accepted": false,
+        "reason": "Every Account keeps at least one way to sign in to it.",
+        "payload": {
+          "protocol_version": 2,
+          "account": {
+            "account_id": "account_1",
+            "display_label": "octocat",
+            "created_at": "2026-01-04T12:00:00Z"
+          },
+          "identities": []
+        }
+      }
     ]
   }
 }

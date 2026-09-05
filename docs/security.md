@@ -91,14 +91,20 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 ## Account authentication
 
-- QuotaRelay is the confidential GitHub OAuth client. Local clients never embed its secret and never
+- QuotaRelay is the confidential OAuth client for every identity provider it speaks. Local clients never embed its secret and never
   receive a GitHub access token, and login requests no scope at all.
 - Relay owns the browser sign-in end to end ([ADR 0025](decisions/0025-one-session-system.md)). Both
-  cookies take the `__Host-` prefix, the ten-minute HMAC-signed handoff carries the `state` and PKCE
-  verifier, and a missing, altered, expired, or mismatched handoff — or a code GitHub will not spend
-  twice — is 400 with no session. Relay reads only the bounded public GitHub profile over fixed
-  HTTPS, HMACs the numeric subject with `GITHUB_SUBJECT_KEY` into the Account id, and never writes
-  the GitHub access token anywhere.
+  cookies take the `__Host-` prefix, the ten-minute HMAC-signed handoff carries the `state`, the PKCE
+  verifier, the provider, and whether this round trip signs in or binds a channel to a named Account,
+  and a missing, altered, expired, or mismatched handoff — or a code GitHub will not spend twice — is
+  400 with no session. Relay reads only the bounded public GitHub profile over fixed HTTPS and never
+  writes the GitHub access token anywhere.
+- An Account owns the channels it is reached through, and none of them is stored as itself
+  ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). A GitHub numeric id, an Apple
+  `sub`, and a normalized address are each HMAC'd with `IDENTITY_SUBJECT_KEY` into
+  `account_identities.subject`; the Account id is opaque and derived from none of them, and no
+  subject is ever answered on the wire. Binding a channel another Account already holds is refused
+  rather than merged, and the last channel into an Account cannot be unbound.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and

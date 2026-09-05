@@ -317,7 +317,7 @@ for (const viewport of [
       }),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: "Download for macOS" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Sign in with GitHub" }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
     await expect(page.locator(".hero-preview img").first()).toBeVisible();
     await page.evaluate(async () => {
       await Promise.all(

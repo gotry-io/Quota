@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { describe, expect, inject, it } from "vitest";
+import { ladderThroughCutover } from "./migration-ladder.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -62,7 +63,7 @@ describe("0011 zero-usage fact cleanup", () => {
       await env.DB.prepare("SELECT count(*) AS total FROM usage_hourly").first<{ total: number }>(),
     ).toMatchObject({ total: 4 });
 
-    await applyD1Migrations(env.DB, migrations.slice(cleanupIndex));
+    await applyD1Migrations(env.DB, ladderThroughCutover(migrations, cleanupIndex));
 
     const remaining = await env.DB.prepare(
       "SELECT model, billing_channel FROM usage_hourly ORDER BY model, billing_channel",

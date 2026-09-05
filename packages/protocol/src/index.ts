@@ -340,10 +340,46 @@ const AccountDeviceSchema = z
   .strict();
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
 
+/**
+ * Every channel an Account can be reached through.
+ *
+ * An Account owns its identities rather than being one
+ * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)), so this vocabulary is
+ * what a bound channel is named by, on the wire and in storage.
+ */
+export const IDENTITY_PROVIDERS = ["github", "apple", "email"] as const;
+export const IdentityProviderSchema = z.enum(IDENTITY_PROVIDERS);
+export type IdentityProvider = z.infer<typeof IdentityProviderSchema>;
+
+/** What a person calls the channel, wherever one is named to them. */
+export function identityProviderDisplayName(provider: IdentityProvider): string {
+  return provider === "github" ? "GitHub" : provider === "apple" ? "Apple" : "Email";
+}
+
+/**
+ * One channel bound to an Account: which it is, what it calls this person, and when it was bound.
+ *
+ * The subject the provider proved is never on the wire — only its HMAC is stored, and not even
+ * that is answered.
+ */
+const AccountIdentitySchema = z
+  .object({
+    provider: IdentityProviderSchema,
+    label: AccountDisplayLabelSchema,
+    linked_at: Rfc3339InstantSchema,
+  })
+  .strict();
+export type AccountIdentity = z.infer<typeof AccountIdentitySchema>;
+
 export const AccountResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     account: AccountSchema,
+    /**
+     * One per provider at most, oldest first: the first one is what the Account is called, and
+     * an Account always keeps at least one way to sign in to it.
+     */
+    identities: z.array(AccountIdentitySchema).min(1).max(IDENTITY_PROVIDERS.length),
   })
   .strict();
 

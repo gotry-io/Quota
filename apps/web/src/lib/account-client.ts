@@ -30,18 +30,24 @@ const jsonRequest = {
   headers: { Accept: "application/json" },
 } satisfies RequestInit;
 
-/** Sign-in is a navigation, not a fetch: Relay answers it with a redirect to GitHub. */
+/** Sign-in is a navigation, not a fetch: it starts on the page that asks which Account this is. */
 export function beginWebLogin(returnTo: string): void {
   window.location.assign(signInHref(returnTo));
 }
 
-export async function signOut(): Promise<void> {
+/**
+ * End this browser's session, then go where the caller says.
+ *
+ * Signing out from the sign-in page is how someone reaches it as nobody, so where it lands is
+ * the caller's to decide rather than always the landing page.
+ */
+export async function signOut(destination = "/"): Promise<void> {
   const response = await fetch("/api/auth/logout", {
     method: "POST",
     ...jsonRequest,
   });
   if (!response.ok) throw new Error("logout_failed");
-  window.location.assign("/");
+  window.location.assign(destination);
 }
 
 export async function fetchAccountActivity(

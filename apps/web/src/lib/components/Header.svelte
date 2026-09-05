@@ -59,7 +59,7 @@ async function onLogout(event: SubmitEvent): Promise<void> {
       hidden={viewer !== null}
       data-sveltekit-reload
     >
-      Sign in with GitHub
+      Sign in
     </a>
     <div id="header-account" class="header-account" hidden={viewer === null}>
       <details id="header-account-menu" class="account-menu" bind:this={menu}>

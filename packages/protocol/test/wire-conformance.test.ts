@@ -1,6 +1,7 @@
 import conformanceJson from "../fixtures/wire-conformance.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
@@ -27,6 +28,9 @@ const conformance = conformanceJson as WireConformance;
  */
 const schemas = {
   quota_snapshot_envelope: QuotaSnapshotEnvelopeSchema,
+  // Relay is the only runtime that states this one, so the schema it is answered by is the
+  // schema that produces it (ADR 0019).
+  account_response: AccountResponseSchema,
   account_summary: AccountSummaryReadSchema,
   account_usage_activity: AccountUsageActivityResponseReadSchema,
   usage_submission: UsageUploadSchema,

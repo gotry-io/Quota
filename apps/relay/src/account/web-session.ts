@@ -1,151 +1,178 @@
-import type { AccountState, SessionPrincipal } from "@gotry-io/relay-core";
+import type { AccountState, IdentityProviderId, SessionPrincipal } from "@gotry-io/relay-core";
 import { CANONICAL_ORIGIN } from "../config.ts";
+import { hmacSha256Hex, randomOpaqueSecret, type SecretHasher } from "../security.ts";
 import {
-  constantTimeEqual,
-  decodeBase64UrlJSON,
-  encodeBase64UrlJSON,
-  hmacSha256Hex,
-  randomOpaqueSecret,
-  type SecretHasher,
-  sha256Base64Url,
-} from "../security.ts";
+  clearedHandoffCookie,
+  HANDOFF_COOKIE,
+  type IdentityBegin,
+  type IdentityProvider,
+  type IdentityRefusalReason,
+  isIdentityRefusal,
+  readCookie,
+  type SignInHandoff,
+  type SignInIntent,
+} from "./identity.ts";
 
 /**
  * The browser's whole credential. It is opaque, HttpOnly, and stored only as an HMAC.
  *
- * Both cookies carry the `__Host-` prefix, which a browser honours only when the cookie is
- * `Secure`, `Path=/`, and carries no `Domain`. That last part is the point: without it, anything
- * able to write a cookie for a sibling `*.gotry.io` host could plant one of these on this origin,
- * which is how a signed handoff cookie still ends in a login-CSRF. The prefix costs a wider path
- * on the handoff cookie, which is worth it.
+ * Both this and the handoff cookie carry the `__Host-` prefix, which a browser honours only when
+ * the cookie is `Secure`, `Path=/`, and carries no `Domain`. That last part is the point: without
+ * it, anything able to write a cookie for a sibling `*.gotry.io` host could plant one of these on
+ * this origin.
  */
 export const SESSION_COOKIE = "__Host-quota_session";
-/** What one sign-in in flight needs to remember. Nothing outside the GitHub round trip reads it. */
-export const HANDOFF_COOKIE = "__Host-quota_oauth";
-/** Where the browser lands after GitHub, when the caller named nowhere safe. */
+/** Where the browser lands after a provider, when the caller named nowhere safe. */
 export const DEFAULT_RETURN_PATH = "/my";
-const handoffSeconds = 10 * 60;
 const webSessionSeconds = 90 * 24 * 60 * 60;
-const githubAuthorizeUrl = "https://github.com/login/oauth/authorize";
-const githubTokenUrl = "https://github.com/login/oauth/access_token";
-const githubUserUrl = "https://api.github.com/user";
-const githubTimeoutMilliseconds = 20_000;
-const maximumProfileBytes = 64 * 1024;
-const maximumAuthorizationCodeLength = 1_024;
 const maximumReturnPathLength = 512;
 const sessionTokenPattern = /^qw_[A-Za-z0-9_-]{43}$/;
-const authorizationCodePattern = /^[A-Za-z0-9._~-]+$/;
-
-export interface WebSignInStart {
-  /** The GitHub authorize URL to send the browser to. */
-  location: string;
-  /** The `Set-Cookie` that carries the state and verifier this sign-in will be checked against. */
-  handoff: string;
-}
 
 export interface WebCallbackRequest {
-  cookie: string | null;
-  state: string | null;
-  code: string | null;
+  headers: Headers;
+  query: URLSearchParams;
 }
 
 export type WebSignInResult =
   | { outcome: "signed_in"; session: string; handoff: string; return_to: string }
+  /** A channel was bound to the Account that asked for it. The browser keeps the session it had. */
+  | { outcome: "linked"; handoff: string; return_to: string }
   /** Nothing about this callback proves it belongs to a sign-in this browser started. */
   | { outcome: "rejected"; reason: WebSignInRejection };
 
 /** Why a callback was refused — a category for the log line, never a secret or a value. */
-export type WebSignInRejection = "handoff" | "state" | "code" | "exchange" | "profile";
+export type WebSignInRejection =
+  | IdentityRefusalReason
+  | "handoff"
+  /** The channel is already how another Account is reached, so binding it would take it away. */
+  | "identity_taken"
+  /** A link came back to a browser that is no longer signed in as the Account that started it. */
+  | "link_session";
+
+/** What a route needs to know about a provider before it dispatches to one. */
+export interface RegisteredIdentityProvider {
+  id: IdentityProviderId;
+  callbackQueryKeys: readonly string[];
+}
 
 export interface WebSessionPort {
-  beginSignIn(returnTo: string, now: Date): Promise<WebSignInStart>;
-  completeSignIn(request: WebCallbackRequest, now: Date): Promise<WebSignInResult>;
+  /** The provider registered under this id, or null when Relay speaks no such channel. */
+  identityProvider(id: string): RegisteredIdentityProvider | null;
+  beginSignIn(
+    provider: IdentityProviderId,
+    intent: SignInIntent,
+    returnTo: string,
+    now: Date,
+  ): Promise<IdentityBegin>;
+  completeSignIn(
+    provider: IdentityProviderId,
+    request: WebCallbackRequest,
+    now: Date,
+  ): Promise<WebSignInResult>;
   authorize(headers: Headers, checkedAt: Date): Promise<SessionPrincipal | null>;
 }
 
 export interface WebSessionEnvironment {
-  state: Pick<AccountState, "createWebSession" | "authorizeSession">;
+  state: Pick<
+    AccountState,
+    "createWebSession" | "authorizeSession" | "resolveSignInIdentity" | "linkIdentity"
+  >;
   hasher: SecretHasher;
-  githubClientId: string;
-  githubClientSecret: string;
-  githubSubjectKey: string;
-  origin?: string;
-  fetch?: typeof fetch;
-}
-
-interface HandoffPayload {
-  state: string;
-  verifier: string;
-  return_to: string;
-  expires_at: string;
+  handoff: SignInHandoff;
+  /** The HMAC key every provider's subject is stored under. */
+  identitySubjectKey: string;
+  providers: readonly IdentityProvider[];
 }
 
 /**
- * Quota's browser sessions, and the GitHub OAuth round trip that opens them.
+ * Quota's browser sessions, and what a proved identity means for one.
  *
- * Relay is the confidential client. A sign-in generates a 256-bit `state` and a PKCE verifier,
- * keeps both in a signed, short-lived, HttpOnly cookie rather than in a table, and checks the
- * callback against that cookie before spending the authorization code. What comes back from GitHub
- * is read once for a numeric id and a login name; the access token is used for that one request and
- * never stored. The session it opens is an ordinary `sessions` row — the same table QuotaBar and
- * the iOS viewer use, so there is one place a session can be revoked, expired, or swept.
+ * Nothing here knows GitHub. A provider proves a subject and a label; this decides which Account
+ * that reaches — the one already bound to it, a new one, or the signed-in one a link names — and
+ * writes the session. The session it opens is an ordinary `sessions` row, the same table QuotaBar
+ * and the iOS viewer use, so there is one place a session can be revoked, expired, or swept
+ * ([ADR 0032](../../../../docs/decisions/0032-an-account-owns-its-identities.md)).
  */
-export class GitHubWebSessions implements WebSessionPort {
-  readonly #origin: string;
-  readonly #fetch: typeof fetch;
+export class WebSessions implements WebSessionPort {
+  readonly #providers: Map<string, IdentityProvider>;
 
   constructor(private readonly environment: WebSessionEnvironment) {
-    this.#origin = environment.origin ?? CANONICAL_ORIGIN;
-    // `fetch` is a global that refuses to run as anyone's method: stored on this object and
-    // called as `this.#fetch(...)`, workerd throws "Illegal invocation". Call it with the
-    // global as its receiver, which is also what a test double is happy to receive.
-    const implementation = environment.fetch ?? fetch;
-    this.#fetch = (input, init) => implementation.call(globalThis, input, init);
+    this.#providers = new Map(environment.providers.map((provider) => [provider.id, provider]));
   }
 
-  async beginSignIn(returnTo: string, now: Date): Promise<WebSignInStart> {
-    const state = randomOpaqueSecret();
-    const verifier = randomOpaqueSecret();
-    const url = new URL(githubAuthorizeUrl);
-    url.searchParams.set("client_id", this.environment.githubClientId);
-    url.searchParams.set("redirect_uri", this.#callbackUrl());
-    url.searchParams.set("state", state);
-    // No scope at all: Quota reads the public profile every GitHub token can already read, and
-    // asks for nothing it would have to be trusted with.
-    url.searchParams.set("scope", "");
-    url.searchParams.set("code_challenge", await sha256Base64Url(verifier));
-    url.searchParams.set("code_challenge_method", "S256");
-    const handoff = await this.#sealHandoff({
-      state,
-      verifier,
-      return_to: returnTo,
-      expires_at: new Date(now.getTime() + handoffSeconds * 1000).toISOString(),
+  identityProvider(id: string): RegisteredIdentityProvider | null {
+    const provider = this.#providers.get(id);
+    return provider ? { id: provider.id, callbackQueryKeys: provider.callbackQueryKeys } : null;
+  }
+
+  beginSignIn(
+    provider: IdentityProviderId,
+    intent: SignInIntent,
+    returnTo: string,
+    now: Date,
+  ): Promise<IdentityBegin> {
+    return this.#require(provider).begin(intent, returnTo, now);
+  }
+
+  async completeSignIn(
+    provider: IdentityProviderId,
+    request: WebCallbackRequest,
+    now: Date,
+  ): Promise<WebSignInResult> {
+    const handoff = await this.environment.handoff.open(
+      readCookie(request.headers.get("Cookie"), HANDOFF_COOKIE),
+      now,
+    );
+    // The cookie states which provider this browser left for. A callback delivered to another
+    // provider's route is not the round trip that cookie was sealed for.
+    if (!handoff || handoff.provider !== provider) {
+      return { outcome: "rejected", reason: "handoff" };
+    }
+    const proved = await this.#require(provider).complete(
+      { query: request.query, challenge: { state: handoff.state, verifier: handoff.verifier } },
+      now,
+    );
+    if (isIdentityRefusal(proved)) {
+      return { outcome: "rejected", reason: proved.rejected };
+    }
+    const subject = await hmacSha256Hex(
+      this.environment.identitySubjectKey,
+      `${provider}:${proved.subject_raw}`,
+    );
+    if (handoff.intent.kind === "link") {
+      // The intent is sealed, but the session behind it may have ended while the browser was
+      // away, and a link writes to the Account that session names.
+      const principal = await this.authorize(request.headers, now);
+      if (!principal || principal.account_id !== handoff.intent.account_id) {
+        return { outcome: "rejected", reason: "link_session" };
+      }
+      const outcome = await this.environment.state.linkIdentity({
+        account_id: principal.account_id,
+        provider,
+        subject,
+        label: proved.label,
+        now: now.toISOString(),
+      });
+      if (outcome === "identity_taken") {
+        return { outcome: "rejected", reason: "identity_taken" };
+      }
+      return {
+        outcome: "linked",
+        handoff: clearedHandoffCookie(),
+        return_to: handoff.return_to,
+      };
+    }
+    const account = await this.environment.state.resolveSignInIdentity({
+      provider,
+      subject,
+      label: proved.label,
+      new_account_id: `account_${crypto.randomUUID()}`,
+      now: now.toISOString(),
     });
-    return { location: url.toString(), handoff };
-  }
-
-  async completeSignIn(request: WebCallbackRequest, now: Date): Promise<WebSignInResult> {
-    const handoff = await this.#openHandoff(readCookie(request.cookie, HANDOFF_COOKIE), now);
-    if (!handoff) return { outcome: "rejected", reason: "handoff" };
-    if (!request.state || !constantTimeEqual(request.state, handoff.state)) {
-      return { outcome: "rejected", reason: "state" };
-    }
-    if (
-      !request.code ||
-      request.code.length > maximumAuthorizationCodeLength ||
-      !authorizationCodePattern.test(request.code)
-    ) {
-      return { outcome: "rejected", reason: "code" };
-    }
-    const accessToken = await this.#exchangeCode(request.code, handoff.verifier);
-    if (!accessToken) return { outcome: "rejected", reason: "exchange" };
-    const profile = await this.#readGitHubProfile(accessToken);
-    if (!profile) return { outcome: "rejected", reason: "profile" };
     const token = randomOpaqueSecret("qw_");
     await this.environment.state.createWebSession({
       session_id: `session_${crypto.randomUUID()}`,
-      account_id: await hmacSha256Hex(this.environment.githubSubjectKey, `github:${profile.id}`),
-      display_label: profile.label,
+      account_id: account.id,
       access_token_hash: await this.#sessionTokenHash(token),
       authenticated_at: now.toISOString(),
       expires_at: new Date(now.getTime() + webSessionSeconds * 1000).toISOString(),
@@ -172,8 +199,10 @@ export class GitHubWebSessions implements WebSessionPort {
     return principal?.client_kind === "web" ? principal : null;
   }
 
-  #callbackUrl(): string {
-    return `${this.#origin}/api/auth/github/callback`;
+  #require(id: IdentityProviderId): IdentityProvider {
+    const provider = this.#providers.get(id);
+    if (!provider) throw new Error("No identity provider is registered under that id");
+    return provider;
   }
 
   /**
@@ -182,98 +211,6 @@ export class GitHubWebSessions implements WebSessionPort {
    */
   #sessionTokenHash(token: string): Promise<string> {
     return this.environment.hasher.hash("web-access", token);
-  }
-
-  async #sealHandoff(payload: HandoffPayload): Promise<string> {
-    const encoded = encodeBase64UrlJSON(payload);
-    const signature = await this.environment.hasher.hash("oauth-handoff", encoded);
-    return handoffCookie(`${encoded}.${signature}`);
-  }
-
-  async #openHandoff(value: string | null, now: Date): Promise<HandoffPayload | null> {
-    if (!value) return null;
-    const separator = value.lastIndexOf(".");
-    if (separator < 1) return null;
-    const encoded = value.slice(0, separator);
-    const expected = await this.environment.hasher.hash("oauth-handoff", encoded);
-    if (!constantTimeEqual(value.slice(separator + 1), expected)) return null;
-    let payload: unknown;
-    try {
-      payload = decodeBase64UrlJSON(encoded);
-    } catch {
-      return null;
-    }
-    if (payload === null || typeof payload !== "object") return null;
-    const candidate = payload as Record<string, unknown>;
-    // An unreadable instant is not an unexpired one: `Date.parse` answers NaN, and every
-    // comparison against NaN is false, so the deadline has to be proven rather than assumed.
-    const expiresAt =
-      typeof candidate.expires_at === "string" ? Date.parse(candidate.expires_at) : Number.NaN;
-    if (
-      typeof candidate.state !== "string" ||
-      typeof candidate.verifier !== "string" ||
-      typeof candidate.return_to !== "string" ||
-      typeof candidate.expires_at !== "string" ||
-      !Number.isFinite(expiresAt) ||
-      expiresAt <= now.getTime()
-    ) {
-      return null;
-    }
-    return {
-      state: candidate.state,
-      verifier: candidate.verifier,
-      return_to: candidate.return_to,
-      expires_at: candidate.expires_at,
-    };
-  }
-
-  /**
-   * Spend the authorization code once. GitHub answers a replayed or mismatched code with an
-   * `error` body rather than a failing status, so both are read the same way and both mean no.
-   */
-  async #exchangeCode(code: string, verifier: string): Promise<string | null> {
-    const response = await this.#fetch(githubTokenUrl, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "QuotaRelay",
-      },
-      body: new URLSearchParams({
-        client_id: this.environment.githubClientId,
-        client_secret: this.environment.githubClientSecret,
-        code,
-        redirect_uri: this.#callbackUrl(),
-        code_verifier: verifier,
-      }).toString(),
-      signal: AbortSignal.timeout(githubTimeoutMilliseconds),
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      return null;
-    }
-    const body = await readBoundedJSON(response);
-    return typeof body.access_token === "string" && body.access_token ? body.access_token : null;
-  }
-
-  async #readGitHubProfile(accessToken: string): Promise<{ id: number; label: string } | null> {
-    const response = await this.#fetch(githubUserUrl, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": "QuotaRelay",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      signal: AbortSignal.timeout(githubTimeoutMilliseconds),
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      return null;
-    }
-    const profile = await readBoundedJSON(response);
-    if (typeof profile.id !== "number" || !Number.isSafeInteger(profile.id)) return null;
-    const login = typeof profile.login === "string" ? profile.login.trim().slice(0, 64) : "";
-    return { id: profile.id, label: login || "GitHub account" };
   }
 }
 
@@ -286,8 +223,10 @@ export class GitHubWebSessions implements WebSessionPort {
 export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessionPort {
   let principal: Promise<SessionPrincipal | null> | undefined;
   return {
-    beginSignIn: (returnTo, now) => inner.beginSignIn(returnTo, now),
-    completeSignIn: (request, now) => inner.completeSignIn(request, now),
+    identityProvider: (id) => inner.identityProvider(id),
+    beginSignIn: (provider, intent, returnTo, now) =>
+      inner.beginSignIn(provider, intent, returnTo, now),
+    completeSignIn: (provider, request, now) => inner.completeSignIn(provider, request, now),
     authorize(headers, checkedAt) {
       principal ??= inner.authorize(headers, checkedAt);
       return principal;
@@ -298,7 +237,7 @@ export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessio
 /**
  * The same-origin path a sign-in may return to, or null when the caller named anything else.
  *
- * A redirect target that survives a round trip through GitHub is exactly the shape an open
+ * A redirect target that survives a round trip through a provider is exactly the shape an open
  * redirect takes, so only an absolute path on this origin is accepted — never a host, a scheme, or
  * a protocol-relative `//elsewhere`.
  */
@@ -323,58 +262,6 @@ export function clearedSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
 
-export function clearedHandoffCookie(): string {
-  return `${HANDOFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
-}
-
 function sessionCookie(token: string): string {
   return `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${webSessionSeconds}; HttpOnly; Secure; SameSite=Lax`;
-}
-
-function handoffCookie(value: string): string {
-  return `${HANDOFF_COOKIE}=${value}; Path=/; Max-Age=${handoffSeconds}; HttpOnly; Secure; SameSite=Lax`;
-}
-
-function readCookie(header: string | null, name: string): string | null {
-  if (!header) return null;
-  for (const pair of header.split(";")) {
-    const separator = pair.indexOf("=");
-    if (separator < 0) continue;
-    if (pair.slice(0, separator).trim() === name) {
-      return pair.slice(separator + 1).trim();
-    }
-  }
-  return null;
-}
-
-async function readBoundedJSON(response: Response): Promise<Record<string, unknown>> {
-  const reader = response.body?.getReader();
-  if (!reader) return {};
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    length += value.byteLength;
-    if (length > maximumProfileBytes) {
-      await reader.cancel();
-      return {};
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return {};
-  }
-  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
 }

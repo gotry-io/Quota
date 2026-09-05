@@ -1,4 +1,9 @@
-import type { ProviderId, QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
+import type {
+  IdentityProvider,
+  ProviderId,
+  QuotaSnapshot,
+  QuotaSnapshotEnvelope,
+} from "@gotry-io/quota-protocol";
 
 /**
  * Everything a session can be allowed to do.
@@ -16,11 +21,66 @@ export type SessionClientKind = "web" | "quotabar" | "ios";
 
 export interface AccountRecord {
   id: string;
-  identity_subject: string;
+  /**
+   * What this Account is called: the label of the identity it was opened with, kept current by
+   * whichever identity was bound first ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
   display_label: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * Every channel that can prove an identity, named the way the wire names it.
+ *
+ * The vocabulary is `packages/protocol`'s: what is stored and what is answered are the same set,
+ * so a provider cannot exist in one and not the other.
+ */
+export type IdentityProviderId = IdentityProvider;
+
+/**
+ * One channel through which an Account can be reached.
+ *
+ * `subject` is the HMAC of what the provider proved — a GitHub numeric id, an Apple `sub`, a
+ * normalized address — under `IDENTITY_SUBJECT_KEY`, so nothing here names a person. `label` is
+ * what that channel calls them, and the earliest-bound identity's label is the Account's own.
+ */
+export interface AccountIdentityRecord {
+  account_id: string;
+  provider: IdentityProviderId;
+  label: string | null;
+  created_at: string;
+}
+
+/** A sign-in that has proved an identity, on its way to the Account behind it. */
+export interface ResolveSignInIdentityInput {
+  provider: IdentityProviderId;
+  subject: string;
+  label: string;
+  /** The id the Account takes when this identity has never been seen before. */
+  new_account_id: string;
+  now: string;
+}
+
+export interface LinkIdentityInput {
+  account_id: string;
+  provider: IdentityProviderId;
+  subject: string;
+  label: string;
+  now: string;
+}
+
+/**
+ * What binding an identity to an Account did.
+ *
+ * `identity_taken` is a refusal, not a merge: the identity already belongs to another Account and
+ * nothing is changed. `already_linked` is the same identity on the same Account, which is what a
+ * repeated link is and is answered as success.
+ */
+export type LinkIdentityOutcome = "linked" | "already_linked" | "identity_taken";
+
+/** Unbinding refuses to leave an Account no one can reach. */
+export type UnlinkIdentityOutcome = "unlinked" | "not_found" | "last_identity";
 
 export interface DeviceRecord {
   id: string;
@@ -66,7 +126,7 @@ export interface DeviceWriterPrincipal extends SessionPrincipal {
  * One browser sign-in in flight, on its way to an authorization code.
  *
  * Authorization Code with PKCE over a loopback callback is the only grant Relay issues, so a
- * grant is one shape: the login token that identifies it while the browser is at GitHub, the
+ * grant is one shape: the login token that identifies it while the browser is signing in, the
  * challenge the exchange must answer, and where the code goes.
  */
 export interface CreateLoginGrantInput {
@@ -104,7 +164,6 @@ export interface CompleteIdentityLoginInput {
   grant_id: string;
   login_token_hash: string;
   completion_nonce_hash: string;
-  display_label: string | null;
   account_id: string;
   completed_at: string;
   authorization_code_hash: string | null;
@@ -113,7 +172,6 @@ export interface CompleteIdentityLoginInput {
 export interface CompleteIdentityLoginResult {
   outcome: "completed" | "not_found" | "expired" | "already_completed";
   grant: LoginGrantRecord | null;
-  account: AccountRecord | null;
 }
 
 export interface ConsumeLoginGrantInput {
@@ -141,13 +199,12 @@ export type LoginGrantConsumeResult =
 /**
  * One browser sign-in, as Relay stores it.
  *
- * The Account is found or created in the same batch: a first GitHub sign-in and a return visit
- * differ only in whether the row was already there.
+ * The Account is already resolved when this is written: the identity the sign-in proved decided
+ * which Account it belongs to, or opened one.
  */
 export interface CreateWebSessionInput {
   session_id: string;
   account_id: string;
-  display_label: string;
   access_token_hash: string;
   authenticated_at: string;
   expires_at: string;
@@ -224,8 +281,8 @@ export interface AccountVersionStamp {
  *
  * Activity answers daily Usage totals, not devices or observations, so a quota snapshot must
  * not move this stamp. Device count, summed usage revision, and generation still catch
- * deletion and a Usage upload; the Account's `updated_at` is here because a later GitHub
- * sign-in rewrites the row without touching Usage.
+ * deletion and a Usage upload; the Account's `updated_at` is here because a later sign-in can
+ * rewrite the row without touching Usage.
  */
 export interface AccountUsageVersionStamp {
   account_updated_at: string | null;
@@ -311,7 +368,22 @@ export interface AccountState {
   consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
-  createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
+  createWebSession(input: CreateWebSessionInput): Promise<void>;
+  /**
+   * The Account this identity reaches, opened when nothing has reached it before.
+   *
+   * The label the provider states now replaces the one stored for that identity, and the Account's
+   * own label follows the identity it was opened with, so a renamed GitHub login or a changed
+   * Apple address is not left frozen at whatever it was on the first sign-in.
+   */
+  resolveSignInIdentity(input: ResolveSignInIdentityInput): Promise<AccountRecord>;
+  linkIdentity(input: LinkIdentityInput): Promise<LinkIdentityOutcome>;
+  listAccountIdentities(accountId: string): Promise<AccountIdentityRecord[]>;
+  unlinkIdentity(
+    accountId: string,
+    provider: IdentityProviderId,
+    now: string,
+  ): Promise<UnlinkIdentityOutcome>;
   /**
    * Resolve a Bearer token to its session.
    *
