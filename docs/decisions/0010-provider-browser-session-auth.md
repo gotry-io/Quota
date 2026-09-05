@@ -9,6 +9,12 @@
 > Updated 2026-08-30: enabling Browser Sign-in preflights Full Disk Access and Chrome-family
 > Keychain grants, opens an independent window for what's missing, and never prompts during a
 > background refresh.
+>
+> Updated 2026-09-05: which cookies are one sign-in — whole names, complementary halves, and
+> context cookies — is now `BrowserSessionSpec.assembleCookieHeaders` in QuotaWire, so Quota iOS's
+> in-app sign-in assembles the same header from the same catalog entry
+> ([ADR 0034](./0034-ios-collects-for-itself.md)). Everything this record decides about macOS
+> acquisition is unchanged.
 
 ## Context
 

@@ -63,49 +63,32 @@ func browserCookieCandidatesUseExactHostsAndOneRecordPerHeader() throws {
       isHTTPOnly: true
     )
   }
-  let first = BrowserSessionImporter.candidate(
-    record: record(domain: ".cursor.com", value: "first"),
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(spec.cookieHosts),
-    allowedNames: Set(spec.cookieNames),
-    now: now
-  )
-  let second = BrowserSessionImporter.candidate(
-    record: record(domain: "www.cursor.com", value: "second"),
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(spec.cookieHosts),
-    allowedNames: Set(spec.cookieNames),
-    now: now
-  )
-  #expect(first?.cookieHeader == "wos-session=first")
-  #expect(second?.cookieHeader == "wos-session=second")
-  #expect(first?.headerFingerprint != second?.headerFingerprint)
-  #expect(!first!.cookieHeader.contains("private"))
-  #expect(BrowserSessionImporter.candidate(
-    record: record(domain: "evilcursor.com", value: "bad"),
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(spec.cookieHosts),
-    allowedNames: Set(spec.cookieNames),
-    now: now
-  ) == nil)
-  #expect(BrowserSessionImporter.candidate(
-    record: record(domain: "cursor.com", value: "old", expires: now),
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(spec.cookieHosts),
-    allowedNames: Set(spec.cookieNames),
-    now: now
-  ) == nil)
+  func candidates(_ records: [BrowserCookieRecord]) -> [BrowserSessionCookieCandidate] {
+    BrowserSessionImporter.candidates(
+      records: records,
+      spec: spec,
+      browserName: "Chrome",
+      profileName: "Profile 1",
+      now: now
+    )
+  }
+  let first = try #require(candidates([record(domain: ".cursor.com", value: "first")]).first)
+  let second = try #require(candidates([record(domain: "www.cursor.com", value: "second")]).first)
+  #expect(first.cookieHeader == "wos-session=first")
+  #expect(second.cookieHeader == "wos-session=second")
+  #expect(first.headerFingerprint != second.headerFingerprint)
+  #expect(!first.cookieHeader.contains("private"))
+  #expect(candidates([record(domain: "evilcursor.com", value: "bad")]).isEmpty)
+  #expect(candidates([record(domain: "cursor.com", value: "old", expires: now)]).isEmpty)
   #expect(BrowserSessionImporter.sanitizedProfileName("\n\t") == "Default profile")
   #expect(!BrowserSessionImporter.sanitizedProfileName("Personal\n/path").contains("\n"))
   #expect(BrowserSessionImporter.sanitizedProfileName(String(repeating: "x", count: 80)).count == 64)
 }
 
 /// Two whole sign-ins are two candidates to choose between, never two halves of one header,
-/// and two hosts are never merged into a single reading.
+/// and two hosts are never merged into a single reading. The rule itself is
+/// `BrowserSessionSpec.assembleCookieHeaders`, which both Apple products answer; what this
+/// asserts is that a browser jar reaches it intact.
 @Test
 func eachAllowlistedNameAndHostStaysItsOwnCandidate() throws {
   let now = Date(timeIntervalSince1970: 1_786_300_000)
@@ -121,17 +104,16 @@ func eachAllowlistedNameAndHostStaysItsOwnCandidate() throws {
     )
   }
   let spec = try #require(ProviderID.cursor.browserSession)
-  let candidates = BrowserSessionImporter.groupedCandidates(
+  let candidates = BrowserSessionImporter.candidates(
     records: [
       record(domain: "cursor.com", name: "wos-session", value: "wos"),
       record(domain: "cursor.com", name: "WorkosCursorSessionToken", value: "workos"),
       record(domain: "authenticator.cursor.sh", name: "wos-session", value: "auth-host"),
       record(domain: "cursor.com", name: "not-allowlisted", value: "ignored"),
     ],
+    spec: spec,
     browserName: "Chrome",
     profileName: "Profile 1",
-    allowedHosts: Set(spec.cookieHosts),
-    allowedNames: Set(spec.cookieNames),
     now: now
   )
   #expect(Set(candidates.map(\.cookieHeader)) == [
@@ -139,72 +121,5 @@ func eachAllowlistedNameAndHostStaysItsOwnCandidate() throws {
     "wos-session=wos",
     "wos-session=auth-host",
   ])
-}
-
-/// The two cookie jars where one sign-in is spread across several names: a chunked NextAuth
-/// token, and Grok's read-only and read-write halves. Neither half is a session on its own, so
-/// splitting them would offer the reader two candidates that both fail.
-@Test
-func complementaryCookiesShareOneHeaderAndContextRidesAlong() throws {
-  let now = Date(timeIntervalSince1970: 1_786_300_000)
-  func record(domain: String, name: String, value: String) -> BrowserCookieRecord {
-    BrowserCookieRecord(
-      domain: domain,
-      name: name,
-      path: "/",
-      value: value,
-      expires: now.addingTimeInterval(3_600),
-      isSecure: true,
-      isHTTPOnly: true
-    )
-  }
-  let codex = try #require(ProviderID.codex.browserSession)
-  let chunked = BrowserSessionImporter.groupedCandidates(
-    records: [
-      record(domain: "chatgpt.com", name: "__Secure-next-auth.session-token.0", value: "a"),
-      record(domain: "chatgpt.com", name: "__Secure-next-auth.session-token.1", value: "b"),
-      record(domain: "chatgpt.com", name: "_account", value: "acct"),
-    ],
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(codex.cookieHosts),
-    allowedNames: Set(codex.cookieNames),
-    now: now
-  )
-  #expect(chunked.map(\.cookieHeader) == [
-    "__Secure-next-auth.session-token.0=a; __Secure-next-auth.session-token.1=b; _account=acct"
-  ])
-
-  let grok = try #require(ProviderID.grok.browserSession)
-  let sso = BrowserSessionImporter.groupedCandidates(
-    records: [
-      record(domain: "grok.com", name: "sso", value: "read"),
-      record(domain: "grok.com", name: "sso-rw", value: "write"),
-    ],
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(grok.cookieHosts),
-    allowedNames: Set(grok.cookieNames),
-    now: now
-  )
-  #expect(sso.map(\.cookieHeader) == ["sso=read; sso-rw=write"])
-
-  // Claude's org hint is context, so it travels with the session rather than as a candidate.
-  let claude = try #require(ProviderID.claude.browserSession)
-  let claudeCandidates = BrowserSessionImporter.groupedCandidates(
-    records: [
-      record(domain: "claude.ai", name: "sessionKey", value: "sk-ant-ok"),
-      record(domain: "claude.ai", name: "lastActiveOrg", value: "org-2"),
-    ],
-    browserName: "Chrome",
-    profileName: "Profile 1",
-    allowedHosts: Set(claude.cookieHosts),
-    allowedNames: Set(claude.cookieNames),
-    now: now
-  )
-  #expect(claudeCandidates.map(\.cookieHeader) == ["lastActiveOrg=org-2; sessionKey=sk-ant-ok"])
-  #expect(BrowserSessionImporter.complementaryFamily(for: "wos-session") == nil)
-  #expect(BrowserSessionImporter.complementaryFamily(for: "sso-rw") == "sso")
-  #expect(BrowserSessionImporter.isOptionalContextCookie("lastActiveOrg"))
-  #expect(!BrowserSessionImporter.isOptionalContextCookie("sessionKey"))
+  #expect(candidates.allSatisfy { $0.profileName == "Profile 1" })
 }

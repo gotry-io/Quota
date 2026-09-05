@@ -312,6 +312,36 @@ picker, link, or button. Settings has no custom loading state.
 **Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
 value **System**, **Light**, or **Dark** trailing.
 
+**Providers.** One row per provider account this iPhone signed in to, then the row that adds
+another. A provider with nothing connected shows only that row, trailing **Connect**; a provider
+that already has an account shows **Add Account** instead, because a second account of one provider
+is a second row rather than a replacement. A connected row is the catalog `display_name`, then
+**Connected as <masked label>** and **Checked <age> ago** in footnote rows — primary foreground, as
+a Devices row does, because `.secondary` at that size does not clear this app's contrast bar — with
+a trailing
+**Remove**. That button is standard, not red: the system destructive red on a Form row does not
+clear this app's contrast bar, and what is destructive about it is said by the confirmation it
+opens, whose **Remove** is the destructive one. Remove confirms in a native dialog — **Remove this <Provider> sign-in?** — and says the
+cookies are deleted from this iPhone's Keychain and that Quota stops reading that provider here.
+The footer is **Sign-in cookies stay in this iPhone's Keychain. Quota never uploads them, and
+Remove deletes them.**, replaced by **Couldn't read the sign-ins saved on this iPhone.** when the
+Keychain refused the read — an empty list would say the opposite of what happened.
+
+The first Connect for a provider shows one confirmation, **Sign in to <Provider>?**, naming that
+provider's cookies and hosts from the catalog, that they stay in this iPhone's Keychain, that they
+are never uploaded, and that Remove deletes them. **Continue** opens the sheet and is remembered
+per provider; **Cancel** stores nothing. This is the iOS wording of the same paragraph as QuotaBar's
+Browser Sign-in consent ([ADR 0010](../../docs/decisions/0010-provider-browser-session-auth.md),
+[ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md)).
+
+**Provider sign-in sheet.** A full-screen sheet titled **Sign in to <Provider>** with **Cancel** in
+the leading toolbar slot, the provider's own sign-in page in a `WKWebView`, and one status line
+under it: **Sign in to <Provider> to connect this account.**, then **Checking this session…**,
+**Not signed in yet. Finish signing in on this page.**, **Couldn't reach <Provider>. Try again.**,
+or **<Provider> doesn't report quota for this account.** A proven session closes the sheet and the
+Providers row becomes **Connected as <masked label>**. The web view carries none of this app inside
+it: no injected script, no read of page content, no intercepted form or navigation.
+
 **Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
 (`https://quota.gotry.io/support`). NavigationLink **About**.
 
@@ -563,7 +593,8 @@ only; they must never contain access tokens, refresh tokens, or production data.
 `overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
 `usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
 `usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
-`settings-notifications`, `settings-appearance`, and `settings-about` fixture screenshots to
+`settings-notifications`, `settings-appearance`, `settings-about`, and `settings-providers`
+fixture screenshots to
 `dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
@@ -585,6 +616,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture cached-error
 --visual-fixture empty
 --visual-fixture no-devices
+--visual-fixture providers
 --visual-fixture activity-loading
 --visual-fixture activity-failed
 --visual-fixture activity-day-empty
@@ -604,6 +636,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
+| `providers` | Signed-in Settings with the Providers group in its three states: Codex with two connected accounts, Claude Code with one, and Grok with none. The stored fixture cookie is not a session and reaches no provider |
 | `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |
 | `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |
 | `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |

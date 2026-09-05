@@ -3,6 +3,7 @@ import Observation
 import QuotaAccount
 import QuotaAlerts
 import QuotaPresentation
+import QuotaProviderSessions
 import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
@@ -45,6 +46,10 @@ final class AppModel {
   private let activity: any ActivityLoading
   private let now: @Sendable () -> Date
 
+  /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
+  /// the rows; the sessions themselves are the Keychain store's.
+  let providers: ProvidersModel
+
   var phase: Phase = .launching
   var summary: AccountSummary?
   var fetchedAt: Date?
@@ -83,8 +88,10 @@ final class AppModel {
       try AuthorizationRequest.make()
     },
     activity: (any ActivityLoading)? = nil,
+    providerSessions: any ProviderSessionStoring = KeychainProviderSessionStore(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
+    self.providers = ProvidersModel(store: providerSessions)
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher

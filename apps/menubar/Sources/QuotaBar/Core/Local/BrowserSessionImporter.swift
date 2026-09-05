@@ -59,7 +59,6 @@ protocol BrowserSessionImporting: Sendable {
 struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
   private static let maximumStores = 64
   private static let maximumCandidates = 32
-  private static let maximumCookieHeaderBytes = 8_192
 
   func read(
     spec: BrowserSessionSpec,
@@ -77,8 +76,6 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
         includeExpired: false,
         referenceDate: now
       )
-      let allowedHosts = Set(spec.cookieHosts)
-      let allowedNames = Set(spec.cookieNames)
       var seen = Set<String>()
       var candidates: [BrowserSessionCookieCandidate] = []
       var denial: BrowserAccessDenialReason?
@@ -92,12 +89,11 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
           denial = denial ?? Self.denialReason(for: error, browser: browser)
           continue
         }
-        let grouped = Self.groupedCandidates(
+        let grouped = Self.candidates(
           records: records,
+          spec: spec,
           browserName: browser.displayName,
           profileName: store.profile.name,
-          allowedHosts: allowedHosts,
-          allowedNames: allowedNames,
           now: now
         )
         for candidate in grouped {
@@ -162,39 +158,32 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
     return (preferred + Browser.defaultImportOrder).filter { seen.insert($0).inserted }
   }
 
-  static func candidate(
-    record: BrowserCookieRecord,
+  /// Every sign-in this store holds for the provider, one candidate per header.
+  ///
+  /// Which cookies are a sign-in, and which of them travel together, is
+  /// `BrowserSessionSpec.assembleCookieHeaders` — the same rule Quota iOS applies to the web view
+  /// a reader signs in inside, so one account is one header on either device. What is added here
+  /// is what only a browser jar has: which browser and profile it came from. The record's path is
+  /// never one of them.
+  static func candidates(
+    records: [BrowserCookieRecord],
+    spec: BrowserSessionSpec,
     browserName: String,
     profileName: String,
-    allowedHosts: Set<String>,
-    allowedNames: Set<String>,
     now: Date
-  ) -> BrowserSessionCookieCandidate? {
-    guard
-      let pair = allowlistedPair(
-        record: record,
-        allowedHosts: allowedHosts,
-        allowedNames: allowedNames,
-        now: now
-      )
-    else { return nil }
-    return candidate(
-      pairs: [(pair.name, pair.value)],
-      browserName: browserName,
-      profileName: profileName
-    )
+  ) -> [BrowserSessionCookieCandidate] {
+    let cookies = records.map {
+      BrowserCookie(name: $0.name, value: $0.value, domain: $0.domain, expiresAt: $0.expires)
+    }
+    return spec.assembleCookieHeaders(cookies: cookies, now: now)
+      .map { candidate(header: $0, browserName: browserName, profileName: profileName) }
   }
 
   static func candidate(
-    pairs: [(name: String, value: String)],
+    header: String,
     browserName: String,
     profileName: String
-  ) -> BrowserSessionCookieCandidate? {
-    let header = pairs
-      .sorted { $0.name < $1.name }
-      .map { "\($0.name)=\($0.value)" }
-      .joined(separator: "; ")
-    guard !header.isEmpty, header.utf8.count <= maximumCookieHeaderBytes else { return nil }
+  ) -> BrowserSessionCookieCandidate {
     let fingerprint = SHA256.hash(data: Data(header.utf8))
       .map { String(format: "%02x", $0) }
       .joined()
@@ -204,114 +193,6 @@ struct BrowserSessionImporter: BrowserSessionImporting, Sendable {
       browserName: browserName,
       profileName: sanitizedProfileName(profileName)
     )
-  }
-
-  static func allowlistedPair(
-    record: BrowserCookieRecord,
-    allowedHosts: Set<String>,
-    allowedNames: Set<String>,
-    now: Date
-  ) -> (name: String, value: String, host: String)? {
-    let host = record.domain.hasPrefix(".") ? String(record.domain.dropFirst()) : record.domain
-    guard
-      allowedHosts.contains(host.lowercased()),
-      allowedNames.contains(record.name),
-      record.expires.map({ $0 > now }) != false,
-      !record.value.isEmpty
-    else { return nil }
-    return (record.name, record.value, host.lowercased())
-  }
-
-  /// One candidate per sign-in per host.
-  ///
-  /// Most allowlisted names are a whole session on their own, so two of them are two sign-ins
-  /// to choose between and stay separate candidates — Cursor's `wos-session` and
-  /// `WorkosCursorSessionToken` are never combined. Two exceptions travel together because
-  /// neither half is a session by itself: a cookie a browser split into numbered chunks
-  /// (`…session-token.0`, `.1`), and Grok's `sso` / `sso-rw`, which are one session's two
-  /// halves. Context cookies name the account or organization a session is currently acting
-  /// as and ride along with every candidate on their host. Hosts and browser profiles are
-  /// never combined.
-  static func groupedCandidates(
-    records: [BrowserCookieRecord],
-    browserName: String,
-    profileName: String,
-    allowedHosts: Set<String>,
-    allowedNames: Set<String>,
-    now: Date
-  ) -> [BrowserSessionCookieCandidate] {
-    var byHost: [String: [(name: String, value: String)]] = [:]
-    var seenByHost: [String: Set<String>] = [:]
-    for record in records {
-      guard
-        let pair = allowlistedPair(
-          record: record,
-          allowedHosts: allowedHosts,
-          allowedNames: allowedNames,
-          now: now
-        )
-      else { continue }
-      var seenNames = seenByHost[pair.host] ?? []
-      guard seenNames.insert(pair.name).inserted else { continue }
-      seenByHost[pair.host] = seenNames
-      byHost[pair.host, default: []].append((pair.name, pair.value))
-    }
-    var candidates: [BrowserSessionCookieCandidate] = []
-    for host in byHost.keys.sorted() {
-      let hostPairs = byHost[host] ?? []
-      let context = hostPairs.filter { isOptionalContextCookie($0.name) }
-      let sessionPairs = hostPairs.filter { !isOptionalContextCookie($0.name) }
-      var families: [String: [(name: String, value: String)]] = [:]
-      var standalones: [(name: String, value: String)] = []
-      for pair in sessionPairs {
-        if let family = complementaryFamily(for: pair.name) {
-          families[family, default: []].append(pair)
-        } else {
-          standalones.append(pair)
-        }
-      }
-      for family in families.keys.sorted() {
-        guard
-          let candidate = candidate(
-            pairs: (families[family] ?? []) + context,
-            browserName: browserName,
-            profileName: profileName
-          )
-        else { continue }
-        candidates.append(candidate)
-      }
-      for pair in standalones.sorted(by: { $0.name < $1.name }) {
-        guard
-          let candidate = candidate(
-            pairs: [pair] + context,
-            browserName: browserName,
-            profileName: profileName
-          )
-        else { continue }
-        candidates.append(candidate)
-      }
-    }
-    return candidates
-  }
-
-  /// The name of the sign-in a cookie is one half of, or `nil` when it is a whole one.
-  static func complementaryFamily(for name: String) -> String? {
-    if name == "sso" || name == "sso-rw" {
-      return "sso"
-    }
-    guard
-      let separator = name.lastIndex(of: "."),
-      separator < name.index(before: name.endIndex)
-    else { return nil }
-    let suffix = name[name.index(after: separator)...]
-    guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return nil }
-    return String(name[..<separator])
-  }
-
-  /// A cookie that says which account or organization a session is acting as. It is not a
-  /// sign-in, so it never stands alone; it rides along with the sessions on its host.
-  static func isOptionalContextCookie(_ name: String) -> Bool {
-    name == "_account" || name == "lastActiveOrg"
   }
 
   static func sanitizedProfileName(_ value: String) -> String {

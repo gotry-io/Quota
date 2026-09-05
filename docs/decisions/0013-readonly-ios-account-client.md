@@ -6,6 +6,11 @@
 - Updated 2026-08-26 by [ADR 0027](./0027-one-token-per-client.md)
 
 > Updated 2026-08-26: every client now holds one session; `quotacli` and the Device Authorization Grant are gone ([ADR 0027](./0027-one-token-per-client.md)).
+>
+> Updated 2026-09-05: the phone reads a provider's own web session for itself, signed in inside the
+> app and kept in that device's Keychain ([ADR 0034](./0034-ios-collects-for-itself.md)). What this
+> record decides is unchanged: `quota-ios` is still a read-only Account client, adds no Device, and
+> uploads nothing.
 
 ## Context
 
@@ -45,4 +50,6 @@ Quota iOS consumes the session through `packages/apple-client`.
 - Account summaries list only collection Devices; a `quota-ios` login never adds one.
 - A `quota-ios` credential can read Account quota and Usage and revoke its own session, and can write
   nothing.
-- Shipping the viewer gives Quota iOS and `packages/apple-client` no collection or upload capability.
+- Shipping the viewer gives Quota iOS and `packages/apple-client` no *upload* capability. Reading a
+  provider on the phone, added by [ADR 0034](./0034-ios-collects-for-itself.md), stays local to that
+  device.

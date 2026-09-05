@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaKeychain
 import QuotaWire
 import Security
 import Testing
@@ -115,6 +116,13 @@ final class FakeKeychain: KeychainOperating, @unchecked Sendable {
     let key = identity(query)
     guard let data = items[key] else { return (errSecItemNotFound, nil) }
     return (errSecSuccess, data)
+  }
+
+  func copyAllMatching(_ query: [String: Any]) -> (OSStatus, [[String: Any]]) {
+    let service = query[kSecAttrService as String] as? String ?? ""
+    let matches = items.filter { $0.key.hasPrefix("\(service)|") }
+    guard !matches.isEmpty else { return (errSecItemNotFound, []) }
+    return (errSecSuccess, matches.values.map { [kSecValueData as String: $0] })
   }
 
   func delete(_ query: [String: Any]) -> OSStatus {

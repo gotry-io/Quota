@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaProviderSessions
 import QuotaRelay
 import QuotaWire
 
@@ -17,6 +18,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case cachedError = "cached-error"
   case empty
   case noDevices = "no-devices"
+  case providers
   case activityLoading = "activity-loading"
   case activityFailed = "activity-failed"
   case activityDayEmpty = "activity-day-empty"
@@ -149,6 +151,9 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.activityChart = .loaded([])
+      case .providers:
+        applySignedInContent(to: model, now: now)
+        model.selectedTab = .settings
       case .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed:
         applySignedInContent(to: model, now: now)
         model.selectedTab = .usage
@@ -659,6 +664,34 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    /// The Providers group in its three states at once: a provider with two accounts, one with
+    /// a single account, and one with none.
+    static func providerSessions(for fixture: VisualFixture, at now: Date) -> [
+      StoredProviderSession
+    ] {
+      guard fixture == .providers else { return [] }
+      func session(
+        _ provider: ProviderID,
+        _ fingerprint: String,
+        _ label: String,
+        checkedSecondsAgo: TimeInterval
+      ) -> StoredProviderSession {
+        StoredProviderSession(
+          provider: provider,
+          accountFingerprint: fingerprint,
+          cookieHeader: "fixture=not-a-session",
+          accountLabel: label,
+          storedAt: now.addingTimeInterval(-86_400),
+          lastValidatedAt: now.addingTimeInterval(-checkedSecondsAgo)
+        )
+      }
+      return [
+        session(.codex, "codex_work", "o•••t@example.com", checkedSecondsAgo: 240),
+        session(.codex, "codex_personal", "k•••e@example.com", checkedSecondsAgo: 7_200),
+        session(.claude, "claude_team", "o•••t@example.com", checkedSecondsAgo: 900),
+      ]
+    }
+
     private static func window(
       id: String,
       title: String,
@@ -690,7 +723,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         .activityDayFailed:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
-        .loading, .empty, .noDevices:
+        .loading, .empty, .noDevices, .providers:
         days = []
       }
       let model = AppModel(
@@ -707,6 +740,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           days: days,
           populatedAgents: VisualFixtureContent.dayAgents()
         ),
+        providerSessions: MemoryProviderSessionStore(
+          sessions: VisualFixtureContent.providerSessions(for: fixture, at: now)),
         now: { now }
       )
       fixture.apply(to: model, now: now)
