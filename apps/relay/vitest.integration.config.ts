@@ -16,6 +16,7 @@ export default defineConfig({
           IDENTITY_SUBJECT_KEY: testSecret,
           QUOTA_INSTALLATION_KEY: testSecret,
           QUOTA_SESSION_HASH_KEY: testSecret,
+          RESEND_API_KEY: testSecret,
         },
       },
     }),

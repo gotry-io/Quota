@@ -781,6 +781,7 @@ describe("managed Relay on real Workers and D1", () => {
       "account_usage_folds",
       "accounts",
       "devices",
+      "email_challenges",
       "login_grants",
       "quota_snapshots",
       "rate_limit_counters",

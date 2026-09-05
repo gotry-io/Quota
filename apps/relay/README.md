@@ -58,6 +58,7 @@ The Worker requires these secrets:
 - `IDENTITY_SUBJECT_KEY`
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
+- `RESEND_API_KEY`
 
 That is the whole list. The extra signing secret the retired browser-auth framework required is
 not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is
@@ -70,8 +71,10 @@ an Account owns the channels it is reached through
 
 | Route | What it does |
 | --- | --- |
-| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. |
+| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. Email is not this route. |
 | `GET /api/auth/:provider/callback` | Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
+| `POST /api/auth/email/start` | JSON `{ email, return_to?, intent? }`. Writes a fifteen-minute one-time challenge, mails a link through Resend, and always answers 202. One send per address per minute and five per hour; the IP shares the `web-signin` bucket. `intent=link` requires a web session. |
+| `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the same browser error page (`expired` / `invalid_request` / `identity_taken`). |
 | `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
 | `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
 | `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
@@ -79,12 +82,13 @@ an Account owns the channels it is reached through
 | `GET /oauth/v2/authorize` | Redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…` rather than to a provider, so a native login confirms which Account it is. |
 | `GET /oauth/v2/complete` | Turns the web session into an authorization code. |
 
-GitHub is the only provider registered today; `github`, `apple`, and `email` are the channels an
-Account can hold. A browser whose `Accept` includes `text/html` and that fails on
-`/api/auth/:provider/callback` or `/oauth/v2/complete` (no session, expired grant, rate limited,
-invalid request, or a channel that already reaches another Account) gets a 200 HTML page titled
-**Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try again.** —
-never a token. Callers that do not ask for HTML still receive the original JSON status and body. See
+GitHub is the OAuth provider registered today; email is a mailed one-time link on its own routes.
+`github`, `apple`, and `email` are the channels an Account can hold. A browser whose `Accept`
+includes `text/html` and that fails on `/api/auth/:provider/callback`, `/api/auth/email/verify`, or
+`/oauth/v2/complete` (no session, expired grant, rate limited, invalid request, or a channel that
+already reaches another Account) gets a 200 HTML page titled **Sign-in didn't finish**, one
+sentence for that reason, and **Return to Quota and try again.** — never a token. Callers that do
+not ask for HTML still receive the original JSON status and body. See
 [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Every client's session is a row in that same table, and one login issues one access/refresh family

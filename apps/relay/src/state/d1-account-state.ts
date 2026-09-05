@@ -14,9 +14,12 @@ import type {
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
   ConsumeAccountLoginGrantInput,
+  ConsumeEmailChallengeResult,
   ConsumeLoginGrantInput,
+  CreateEmailChallengeInput,
   CreateLoginGrantInput,
   CreateWebSessionInput,
+  EmailChallengeRecord,
   DeleteDeviceResult,
   DeviceRecord,
   DeviceSyncControl,
@@ -107,6 +110,14 @@ export class D1AccountState implements AccountState {
         .prepare(
           `DELETE FROM login_grants WHERE id IN (
              SELECT id FROM login_grants WHERE expires_at <= ?1
+             ORDER BY expires_at ASC, id ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.grant_expired_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM email_challenges WHERE id IN (
+             SELECT id FROM email_challenges WHERE expires_at <= ?1
              ORDER BY expires_at ASC, id ASC LIMIT ?2
            )`,
         )
@@ -541,6 +552,51 @@ export class D1AccountState implements AccountState {
         input.expires_at,
       )
       .run();
+  }
+
+  async createEmailChallenge(input: CreateEmailChallengeInput): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO email_challenges (
+           id, email_hash, token_hash, intent_json, return_to, created_at, expires_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      )
+      .bind(
+        input.id,
+        input.email_hash,
+        input.token_hash,
+        input.intent_json,
+        input.return_to,
+        input.created_at,
+        input.expires_at,
+      )
+      .run();
+  }
+
+  async consumeEmailChallenge(
+    tokenHash: string,
+    now: string,
+  ): Promise<ConsumeEmailChallengeResult> {
+    const consumed = await this.database
+      .prepare(
+        `UPDATE email_challenges
+         SET consumed_at = ?2
+         WHERE token_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2
+         RETURNING id, email_hash, intent_json, return_to, created_at, expires_at, consumed_at`,
+      )
+      .bind(tokenHash, now)
+      .first<EmailChallengeRecord>();
+    if (consumed) {
+      return { outcome: "consumed", challenge: consumed };
+    }
+    const existing = await this.database
+      .prepare("SELECT expires_at FROM email_challenges WHERE token_hash = ?1")
+      .bind(tokenHash)
+      .first<{ expires_at: string }>();
+    if (existing && existing.expires_at <= now) {
+      return { outcome: "expired" };
+    }
+    return { outcome: "invalid" };
   }
 
   /**

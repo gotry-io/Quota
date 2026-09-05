@@ -39,11 +39,13 @@ The site has these routes:
    control lives in the footer.
 2. `/sign-in` is where every sign-in starts, including the one QuotaBar and Quota for iPhone
    open in a browser. Signed out, it is `Sign in to Quota`, one sentence that an Account is
-   reached the same way however you sign in, and one button per channel this build offers
-   (**Continue with GitHub** today), each linking `/api/auth/<provider>/start?return_to=…`.
-   Signed in, it asks which Account this is: **Continue as \<display label\>** and **Use a
-   different account**, which signs this browser out and comes back here. `return_to` defaults
-   to `/my`, and anything but a same-origin path is a 400. The page is `noindex, nofollow`.
+   reached the same way however you sign in, **Continue with GitHub** linking
+   `/api/auth/github/start?return_to=…`, and an email field with **Send sign-in link**. After a
+   202, the same page becomes **Check your email** with **Use another way** to return to the
+   methods. Signed in, it asks which Account this is: **Continue as \<display label\>** and
+   **Use a different account**, which signs this browser out and comes back here. `return_to`
+   defaults to `/my`, and anything but a same-origin path is a 400. The page is
+   `noindex, nofollow`.
 3. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
    that Quota for iPhone is coming soon. It does not present an App Store badge or a dead store

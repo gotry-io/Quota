@@ -50,9 +50,9 @@ quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today st
 `/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
 same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
 Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
-below 620 px. Settings groups Appearance, Account, and Legal. Sign-in is a plain navigation
-to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a signed-out
-visitor returns to the page they asked for. Sign-out posts to `/api/auth/logout` and Delete Account
+below 620 px. Settings groups Appearance, Account, and Legal. The header **Sign in** is a link to `/sign-in`.
+That page offers **Continue with GitHub** as a navigation to Relay and **Send sign-in link** as a
+fetch to `POST /api/auth/email/start`. Sign-out posts to `/api/auth/logout` and Delete Account
 is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
 request, and the destructive ones a session authenticated within ten minutes.
 

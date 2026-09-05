@@ -1,3 +1,4 @@
+import { ResendEmailSender } from "./account/email-sender.ts";
 import { GitHubIdentityProvider } from "./account/github-identity.ts";
 import { SignInHandoff } from "./account/identity.ts";
 import { AccountService } from "./account/service.ts";
@@ -19,6 +20,7 @@ export interface CloudflareBindings {
   IDENTITY_SUBJECT_KEY: string;
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
+  RESEND_API_KEY: string;
 }
 
 export default {
@@ -50,6 +52,7 @@ export default {
       accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
       webSessions,
       hasher,
+      emailSender: new ResendEmailSender({ apiKey: environment.RESEND_API_KEY }),
     });
 
     if (isRelayApiPath(pathname)) {

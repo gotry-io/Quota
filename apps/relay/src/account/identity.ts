@@ -70,7 +70,8 @@ export interface IdentityRefusal {
  * A provider owns its own round trip and nothing else: it does not know what an Account is, which
  * one is signed in, or whether this browser is signing in or binding another channel. `begin`
  * seals that decision into the handoff cookie for it, and `complete` answers with the subject and
- * label it proved, or with why it would not.
+ * label it proved, or with why it would not. Email is a mailed token rather than this port; it
+ * still ends in `WebSessions.completeProvedIdentity`.
  */
 export interface IdentityProvider {
   readonly id: IdentityProviderId;
@@ -130,7 +131,7 @@ export class SignInHandoff {
     // comparison against NaN is false, so the deadline has to be proven rather than assumed.
     const expiresAt =
       typeof candidate.expires_at === "string" ? Date.parse(candidate.expires_at) : Number.NaN;
-    const intent = readIntent(candidate.intent);
+    const intent = readSignInIntent(candidate.intent);
     if (
       !isIdentityProviderId(candidate.provider) ||
       intent === null ||
@@ -174,7 +175,8 @@ function isIdentityProviderId(value: unknown): value is IdentityProviderId {
   return IDENTITY_PROVIDERS.some((provider) => provider === value);
 }
 
-function readIntent(value: unknown): SignInIntent | null {
+/** The intent a sealed handoff or a stored email challenge is carrying, or null if it is not one. */
+export function readSignInIntent(value: unknown): SignInIntent | null {
   if (value === null || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
   if (candidate.kind === "sign_in") return { kind: "sign_in" };
