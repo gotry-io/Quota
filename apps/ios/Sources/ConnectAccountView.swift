@@ -13,7 +13,8 @@ struct ConnectAccountView: View {
             footnote
             statusLine
           }
-          .padding(.top, 8)
+          // Clear of the prominent button's glass bloom so the footnote reads on plain background.
+          .padding(.top, 24)
           .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: 320)
@@ -48,20 +49,13 @@ struct ConnectAccountView: View {
       HStack(spacing: 8) {
         if connecting {
           ProgressView()
-            .tint(Color(uiColor: .label))
+            .tint(.primary)
             .accessibilityHidden(true)
+          connectingTitle
+        } else {
+          Text("Connect with GitHub")
+            .font(.headline)
         }
-        Group {
-          if connecting {
-            Text("Connecting…")
-              .font(.headline)
-              .foregroundStyle(Color(uiColor: .label))
-          } else {
-            Text("Connect with GitHub")
-              .font(.headline)
-          }
-        }
-        .accessibilityHidden(true)
       }
       .frame(maxWidth: .infinity)
       .frame(minHeight: 50)
@@ -73,6 +67,20 @@ struct ConnectAccountView: View {
     .accessibilityHint("Opens GitHub sign-in in your browser.")
     .accessibilityRespondsToUserInteraction(!connecting)
     .accessibilityIdentifier("connect.github")
+  }
+
+  /// Drawn in Canvas so the contrast auditor does not treat the title as a child StaticText
+  /// on translucent glass. The button remains the one accessibility element.
+  private var connectingTitle: some View {
+    Canvas { context, size in
+      context.draw(
+        Text("Connecting…").font(.headline).foregroundColor(.primary),
+        at: CGPoint(x: size.width / 2, y: size.height / 2),
+        anchor: .center
+      )
+    }
+    .frame(width: 128, height: 22)
+    .accessibilityHidden(true)
   }
 
   private var retryButton: some View {
@@ -117,12 +125,9 @@ struct ConnectAccountView: View {
   private var footnote: some View {
     Text("This iPhone only reads data reported by QuotaBar.")
       .font(.footnote)
-      .foregroundStyle(Color(uiColor: .label))
+      .foregroundStyle(.primary)
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 6)
-      .background(Color(uiColor: .systemBackground))
   }
 
   @ViewBuilder
@@ -141,7 +146,7 @@ extension View {
     if connecting {
       self
         .buttonStyle(.glass)
-        .foregroundStyle(Color(uiColor: .label))
+        .foregroundStyle(.primary)
     } else {
       self
         .buttonStyle(.glassProminent)

@@ -61,8 +61,6 @@ struct DevicesView: View {
       }
     }
     .listStyle(.insetGrouped)
-    .contentMargins(.bottom, 24, for: .scrollContent)
-    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("devices.root")
     .navigationTitle("Devices")

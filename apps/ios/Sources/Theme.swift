@@ -12,8 +12,6 @@ enum QuotaTheme {
   static let meterTrack = Color(uiColor: .tertiarySystemFill)
 
   static let minimumTouchTarget: CGFloat = 44
-  /// Extra List/Form inset so the last on-screen row sits above tab-bar glass at rest.
-  static let tabBarClearance: CGFloat = 240
   static let activityCellSize: CGFloat = 14
   static let activityCellGap: CGFloat = 4
   static let activityCellCorner: CGFloat = 3
@@ -74,13 +72,5 @@ enum QuotaTheme {
           return UIColor.separator
         }
       })
-  }
-}
-
-extension View {
-  /// Keeps List/Form rows above overlay tab-bar glass at rest.
-  func quotaTabBarClearance() -> some View {
-    safeAreaPadding(.bottom, QuotaTheme.tabBarClearance)
-      .contentMargins(.bottom, QuotaTheme.tabBarClearance, for: .scrollContent)
   }
 }

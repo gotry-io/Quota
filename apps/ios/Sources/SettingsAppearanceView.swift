@@ -23,11 +23,10 @@ struct SettingsAppearanceView: View {
         .labelsHidden()
       } header: {
         Text(SettingsCopy.appearance)
-          .foregroundStyle(Color(uiColor: .label))
+          .accessibilityIdentifier("section.header.appearance")
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
-    .quotaTabBarClearance()
     .accessibilityIdentifier("settings.appearance.root")
     .navigationTitle(SettingsCopy.appearance)
   }

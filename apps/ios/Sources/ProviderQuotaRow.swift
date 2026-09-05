@@ -10,8 +10,10 @@ struct ProviderQuotaRow: View {
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
     let stateLabel = snapshot.stateLabel()
-    return VStack(alignment: .leading, spacing: 8) {
-      BodyLabel(text: provider.displayName, style: .headline, weight: .semibold)
+    return VStack(alignment: .leading, spacing: 12) {
+      Text(provider.displayName)
+        .font(.headline)
+        .foregroundStyle(.primary)
         .accessibilityAddTraits(.isHeader)
 
       let plan = QuotaFormat.planBadge(snapshot.account.plan)
@@ -35,7 +37,7 @@ struct ProviderQuotaRow: View {
       if snapshot.windows.isEmpty {
         Text("No quota windows yet.")
           .font(.subheadline)
-          .foregroundStyle(Color(uiColor: .label))
+          .foregroundStyle(.primary)
       } else {
         ForEach(snapshot.windows) { window in
           QuotaWindowBlock(window: window, stateLabel: stateLabel)
@@ -45,11 +47,16 @@ struct ProviderQuotaRow: View {
   }
 
   private func accountLabel(_ label: String) -> some View {
-    BodyLabel(text: label, style: .subheadline, weight: .medium)
+    Text(label)
+      .font(.subheadline.weight(.medium))
+      .foregroundStyle(.primary)
+      .fixedSize(horizontal: false, vertical: true)
   }
 
   private func planCapsule(_ plan: String) -> some View {
-    BodyLabel(text: plan, style: .caption1, weight: .semibold)
+    Text(plan)
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(.primary)
       .fixedSize()
       .layoutPriority(1)
       .padding(.horizontal, 8)
@@ -73,15 +80,19 @@ struct QuotaWindowBlock: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      BodyLabel(text: QuotaFormat.windowTitle(window), style: .subheadline)
+      Text(QuotaFormat.windowTitle(window))
+        .font(.subheadline)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
 
-      BodyLabel(
-        text: QuotaFormat.remaining(window),
-        style: emphasizedRemaining ? .title1 : .headline,
-        weight: .semibold,
-        monospacedDigit: true
-      )
-      .frame(maxWidth: .infinity, alignment: .leading)
+      Text(QuotaFormat.remaining(window))
+        .font(
+          (emphasizedRemaining ? Font.title : Font.title2).monospacedDigit().weight(.semibold)
+        )
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
       if !window.isBalanceOnly {
         ProgressView(value: window.remainingPercent, total: 100)
@@ -96,7 +107,10 @@ struct QuotaWindowBlock: View {
         }
       } else if let support = supportLine {
         // No line limit: at accessibility text sizes a capped line clips the reset time.
-        BodyLabel(text: support, style: .footnote)
+        Text(support)
+          .font(.footnote)
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .accessibilityElement(children: .combine)

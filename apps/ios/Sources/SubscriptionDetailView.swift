@@ -119,8 +119,6 @@ struct SubscriptionDetailView: View {
       readingsSection(content)
     }
     .listStyle(.insetGrouped)
-    .contentMargins(.bottom, 24, for: .scrollContent)
-    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("subscription.detail")
     .navigationTitle(content.providerName)
@@ -129,13 +127,18 @@ struct SubscriptionDetailView: View {
 
   private func identitySection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      labeledRow(label: "Account", value: content.accountLabel)
+      LabeledContent("Account", value: content.accountLabel)
+        .accessibilityIdentifier("subscription.account")
       if let plan = content.plan {
-        labeledRow(label: "Plan", value: plan)
+        LabeledContent("Plan", value: plan)
+          .accessibilityIdentifier("subscription.plan")
       }
     } footer: {
-      BodyLabel(text: content.freshness, style: .footnote, monospacedDigit: true)
+      Text(content.freshness)
+        .font(.footnote.monospacedDigit())
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(content.freshness)
+        .accessibilityIdentifier("section.footer.subscription-updated")
     }
   }
 
@@ -144,7 +147,7 @@ struct SubscriptionDetailView: View {
     Section {
       if content.windows.isEmpty {
         Text("No quota windows yet.")
-          .foregroundStyle(Color(uiColor: .label))
+          .foregroundStyle(.primary)
       } else {
         ForEach(content.windows) { window in
           QuotaWindowBlock(
@@ -156,7 +159,7 @@ struct SubscriptionDetailView: View {
       }
     } header: {
       Text("Quota")
-        .foregroundStyle(Color(uiColor: .label))
+        .accessibilityIdentifier("section.header.quota")
     }
   }
 
@@ -165,7 +168,7 @@ struct SubscriptionDetailView: View {
     Section {
       if content.sources.isEmpty {
         Text("No device readings yet.")
-          .foregroundStyle(Color(uiColor: .label))
+          .foregroundStyle(.primary)
       } else {
         ForEach(Array(content.sources.enumerated()), id: \.offset) { _, row in
           sourceRow(row)
@@ -173,37 +176,35 @@ struct SubscriptionDetailView: View {
       }
     } header: {
       Text("Readings")
-        .foregroundStyle(Color(uiColor: .label))
+        .accessibilityIdentifier("section.header.readings")
     }
-  }
-
-  private func labeledRow(label: String, value: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      BodyLabel(text: label)
-      Spacer(minLength: 8)
-      BodyLabel(text: value, weight: .medium)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(label), \(value)")
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       VStack(alignment: .leading, spacing: 5) {
-        BodyLabel(text: row.displayName, style: .subheadline, weight: .medium)
+        Text(row.displayName)
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
         if let remaining = row.remaining {
-          BodyLabel(
-            text: remaining,
-            style: .body,
-            weight: .medium,
-            monospacedDigit: true
-          )
+          Text(remaining)
+            .font(.body.monospacedDigit().weight(.medium))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
         }
-        BodyLabel(text: row.freshness, style: .footnote, monospacedDigit: true)
+        Text(row.freshness)
+          .font(.footnote.monospacedDigit())
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 8)
       if row.isReporting {
-        BodyLabel(text: "Reporting", style: .footnote, weight: .medium)
+        Text("Reporting")
+          .font(.footnote.weight(.medium))
+          .foregroundStyle(.primary)
+          .multilineTextAlignment(.trailing)
       }
     }
     .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))

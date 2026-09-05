@@ -9,10 +9,23 @@ struct UsageActivitySection: View {
     Section {
       switch model.activityChart {
       case .idle, .loading:
-        activityStatus("Loading activity", identifier: "usage.activity.loading")
+        ProgressView("Loading activity")
+          .foregroundStyle(Color.primary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityValue("Loading activity")
+          .accessibilityIdentifier("usage.activity.loading")
         UsageActivitySkeleton()
       case .failed:
-        activityStatus("Couldn't load activity.", identifier: "usage.activity.failed")
+        Text("Couldn't load activity.")
+          .font(.body)
+          .foregroundStyle(Color.primary)
+          .accessibilityIdentifier("usage.activity.failed")
+        Button("Retry") {
+          Task { await model.retryActivity() }
+        }
+        .tint(.primary)
+        .accessibilityLabel("Retry")
+        .accessibilityIdentifier("usage.activity.retry")
       case .loaded(let days):
         if UsageActivityChart.hasReportedActivity(days) {
           loaded(
@@ -23,55 +36,46 @@ struct UsageActivitySection: View {
             )
           )
         } else {
-          activityStatus("No activity in the last year.", identifier: "usage.activity.empty")
+          Text("No activity in the last year.")
+            .font(.body)
+            .foregroundStyle(Color.primary)
+            .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityIdentifier("usage.activity.empty")
         }
       }
     } header: {
       Text("Activity")
-        .foregroundStyle(Color(uiColor: .label))
-    }
-    if case .failed = model.activityChart {
-      Section {
-        Button("Retry") {
-          Task { await model.retryActivity() }
-        }
-        .tint(.primary)
-        .accessibilityLabel("Retry")
-        .accessibilityIdentifier("usage.activity.retry")
-      }
+        .accessibilityIdentifier("section.header.activity")
     }
   }
 
   @ViewBuilder
   private func loaded(_ chart: UsageActivityChart) -> some View {
-    Group {
-      if let day = chart.selectableDay(on: selectedDate) {
-        selectedDaySummary(day)
-        Button("View day") {
-          Task { await model.openActivityDay(date: day.date) }
-        }
-        .tint(.primary)
-        .accessibilityHint("Shows usage for \(UsageActivityCalendar.longDate(day.date)).")
-        .accessibilityIdentifier("usage.activity.view-day")
+    UsageActivityHeatmap(chart: chart, selectedDate: $selectedDate)
+      .onAppear { ensureSelection(in: chart) }
+      .onChange(of: chart.selectableDays.map(\.date)) { _, _ in
+        ensureSelection(in: chart)
       }
-      UsageActivityHeatmap(chart: chart, selectedDate: $selectedDate)
-        .padding(.bottom, QuotaTheme.tabBarClearance)
-    }
-    .onAppear { ensureSelection(in: chart) }
-    .onChange(of: chart.selectableDays.map(\.date)) { _, _ in
-      ensureSelection(in: chart)
+
+    if let day = chart.selectableDay(on: selectedDate) {
+      selectedDaySummary(day)
+      Button("View day") {
+        Task { await model.openActivityDay(date: day.date) }
+      }
+      .tint(.primary)
+      .accessibilityHint("Shows usage for \(UsageActivityCalendar.longDate(day.date)).")
+      .accessibilityIdentifier("usage.activity.view-day")
     }
   }
 
   private func selectedDaySummary(_ day: UsageActivityChart.Day) -> some View {
     let costText = QuotaFormat.cost(day.cost ?? UsageActivityChart.emptyCost())
     return VStack(alignment: .leading, spacing: 4) {
-      BodyLabel(text: UsageActivityCalendar.longDate(day.date), style: .subheadline)
-      BodyLabel(
-        text: "\(QuotaFormat.compactCount(day.tokens)) · \(costText)",
-        style: .subheadline,
-        monospacedDigit: true
-      )
+      Text(UsageActivityCalendar.longDate(day.date))
+        .font(.subheadline)
+      Text("\(QuotaFormat.compactCount(day.tokens)) · \(costText)")
+        .font(.subheadline.monospacedDigit())
+        .foregroundStyle(.primary)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityHidden(true)
@@ -83,39 +87,22 @@ struct UsageActivitySection: View {
       selectedDate = chart.defaultSelectedDate
     }
   }
-
-  @ViewBuilder
-  private func activityStatus(_ text: String, identifier: String?) -> some View {
-    let row = BodyLabel(text: text)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityElement()
-      .accessibilityLabel(text)
-    if let identifier {
-      row
-        .accessibilityValue(text)
-        .accessibilityIdentifier(identifier)
-    } else {
-      row
-    }
-  }
 }
 
 struct UsageActivitySkeleton: View {
   var body: some View {
-    let cell: CGFloat = 8
-    let gap: CGFloat = 3
-    let stride = cell + gap
+    let stride = QuotaTheme.activityCellSize + QuotaTheme.activityCellGap
     Canvas { context, _ in
-      for week in 0..<12 {
+      for week in 0..<16 {
         for day in 0..<7 {
           let rect = CGRect(
             x: CGFloat(week) * stride,
             y: CGFloat(day) * stride,
-            width: cell,
-            height: cell
+            width: QuotaTheme.activityCellSize,
+            height: QuotaTheme.activityCellSize
           )
           let path = RoundedRectangle(
-            cornerRadius: 2,
+            cornerRadius: QuotaTheme.activityCellCorner,
             style: .continuous
           ).path(in: rect)
           context.fill(path, with: .color(QuotaTheme.meterTrack))
@@ -123,9 +110,10 @@ struct UsageActivitySkeleton: View {
       }
     }
     .frame(
-      width: 12 * stride - gap,
-      height: 7 * stride - gap
+      width: 16 * stride - QuotaTheme.activityCellGap,
+      height: 7 * stride - QuotaTheme.activityCellGap
     )
+    .dynamicTypeSize(...DynamicTypeSize.large)
     .accessibilityHidden(true)
   }
 }
@@ -362,12 +350,14 @@ struct UsageDayDetailSheet: View {
     switch sheet.agents {
     case .loading:
       Section {
-        BodyLabel(text: "Loading this day's usage…")
+        Text("Loading this day's usage…")
+          .foregroundStyle(.primary)
           .accessibilityIdentifier("usage.day.loading")
       }
     case .failed:
       Section {
-        BodyLabel(text: "Couldn't load this day's usage.")
+        Text("Couldn't load this day's usage.")
+          .foregroundStyle(.primary)
         Button("Retry") {
           Task { await model.retryActivityDay() }
         }
@@ -376,7 +366,8 @@ struct UsageDayDetailSheet: View {
       }
     case .empty:
       Section {
-        BodyLabel(text: "No usage on this day.")
+        Text("No usage on this day.")
+          .foregroundStyle(.primary)
           .accessibilityIdentifier("usage.day.empty")
       }
     case .loaded(let agents):

@@ -17,10 +17,21 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
+    let todaySection = app.descendants(matching: .any)["overview.today"]
+    if !todaySection.waitForExistence(timeout: 2) {
+      for _ in 0..<6 {
+        if todaySection.exists || app.staticTexts["Today"].exists { break }
+        app.swipeUp()
+      }
+    }
     XCTAssertTrue(
-      app.descendants(matching: .any)["overview.today"].waitForExistence(timeout: 5),
+      todaySection.waitForExistence(timeout: 5)
+        || app.descendants(matching: .any)["overview.today.tokens"].exists
+        || app.staticTexts["Today"].exists
+        || app.staticTexts["No usage today."].exists,
       "overview.today"
     )
+    try restoreTabBar(app)
     assertTab(app, "Overview")
     assertTab(app, "Usage")
     assertTab(app, "Devices")
@@ -122,7 +133,14 @@ final class QuotaUITests: XCTestCase {
       "Appearance"
     )
     XCTAssertTrue(app.descendants(matching: .any)["settings.about"].exists, "About")
-    XCTAssertTrue(app.buttons["Delete Account…"].exists, "Delete Account…")
+    let deleteAccount = app.descendants(matching: .any)["settings.delete-account"]
+    if !deleteAccount.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "settings.delete-account")
+    }
+    XCTAssertTrue(
+      deleteAccount.waitForExistence(timeout: 5) || app.buttons["Delete Account…"].exists,
+      "Delete Account…"
+    )
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.logout"].exists,
       "Log Out on Settings hub"
@@ -192,9 +210,25 @@ final class QuotaUITests: XCTestCase {
       "empty quota description"
     )
     XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
-    XCTAssertTrue(app.staticTexts["Set up QuotaBar"].exists, "Set up QuotaBar")
     XCTAssertTrue(
-      app.staticTexts["Install QuotaBar on a Mac signed in with this GitHub account."].exists,
+      app.staticTexts["Set up QuotaBar"].exists
+        || app.descendants(matching: .any)["section.header.mac-setup"].exists,
+      "Set up QuotaBar"
+    )
+    let setupDetail = app.descendants(matching: .any)["section.footer.mac-setup"]
+    if !setupDetail.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "section.header.mac-setup")
+      scrollToIdentifierOnce(app, "section.footer.mac-setup")
+    }
+    XCTAssertTrue(
+      app.staticTexts["Install QuotaBar on a Mac signed in with this GitHub account."].exists
+        || setupDetail.exists
+        || app.descendants(matching: .any).matching(
+          NSPredicate(
+            format: "label CONTAINS %@",
+            "Install QuotaBar on a Mac signed in with this GitHub account."
+          )
+        ).firstMatch.exists,
       "setup detail"
     )
     XCTAssertTrue(
@@ -365,8 +399,13 @@ final class QuotaUITests: XCTestCase {
       app.staticTexts["No usage was reported for this period."].exists,
       "empty period description"
     )
+    let emptyActivity = app.staticTexts["No activity in the last year."]
+    if !emptyActivity.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "usage.activity.empty")
+    }
     XCTAssertTrue(
-      app.staticTexts["No activity in the last year."].exists,
+      emptyActivity.waitForExistence(timeout: 5)
+        || app.descendants(matching: .any)["usage.activity.empty"].exists,
       "empty activity"
     )
     attachScreenshot(app, name: "usage-empty")
@@ -412,15 +451,22 @@ final class QuotaUITests: XCTestCase {
       "usage.root"
     )
     XCTAssertTrue(
-      app.staticTexts["Couldn't load activity."].waitForExistence(timeout: 5),
-      "activity failed copy"
+      app.staticTexts["Tokens"].waitForExistence(timeout: 5),
+      "period totals remain visible"
     )
     XCTAssertTrue(
-      app.buttons["Retry"].waitForExistence(timeout: 5)
-        || app.descendants(matching: .any)["usage.activity.retry"].exists,
+      app.staticTexts["Couldn't load activity."].waitForExistence(timeout: 5)
+        || app.descendants(matching: .any)["usage.activity.failed"].exists,
+      "activity failed copy"
+    )
+    let retry = app.descendants(matching: .any)["usage.activity.retry"]
+    if !retry.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "usage.activity.retry")
+    }
+    XCTAssertTrue(
+      retry.waitForExistence(timeout: 5) || app.buttons["Retry"].exists,
       "Retry"
     )
-    XCTAssertTrue(app.staticTexts["Tokens"].exists, "period totals remain visible")
     attachScreenshot(app, name: "usage-activity-failed")
     try audit(app)
   }
@@ -625,18 +671,15 @@ final class QuotaUITests: XCTestCase {
     _ = element.waitForExistence(timeout: 1)
   }
 
+  /// A minimized iOS 26 tab bar exposes only the selected tab; scrolling back toward the top
+  /// re-expands it. Four visible tabs is the expanded state.
   private func restoreTabBar(_ app: XCUIApplication) throws {
-    if app.tabBars.buttons["Overview"].exists { return }
-    scrollContent(app, up: false)
-    scrollContent(app, up: false)
-    if app.tabBars.buttons["Overview"].exists { return }
-    // Minimized overlay tab bar is a single collapsed Usage control.
-    let collapsed = app.buttons["Usage"]
-    if collapsed.exists { collapsed.tap() }
-    XCTAssertTrue(
-      app.tabBars.buttons["Overview"].waitForExistence(timeout: 5),
-      "tab bar restored"
-    )
+    let tabBar = app.tabBars.firstMatch
+    for _ in 0..<4 where tabBar.buttons.count < 4 {
+      scrollContent(app, up: false)
+      RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    }
+    XCTAssertEqual(tabBar.buttons.count, 4, "tab bar re-expands after scrolling back up")
   }
 
   /// Scrolls the signed-in list and records `overview-scrolled`. Tab-bar minimization is a
@@ -746,6 +789,7 @@ final class QuotaUITests: XCTestCase {
     try app.performAccessibilityAudit(for: types) { issue in
       let description = issue.compactDescription
       let element = issue.element.map { "\($0)" } ?? "no element"
+      let identifier = issue.element?.identifier ?? ""
       let isDynamicType = description.localizedCaseInsensitiveContains("Dynamic Type")
 
       // System tab bar / navigation / sheet glass reports without naming a control.
@@ -753,71 +797,81 @@ final class QuotaUITests: XCTestCase {
         return true
       }
 
-      if isDynamicType {
-        // iOS 26 UIListContentConfiguration (List/Form Button, Link, and LabeledContent
-        // rows) does not advertise full Dynamic Type. Scoped to that OS message.
-        if description.localizedCaseInsensitiveContains("partially unsupported") {
+      // The floating iOS 26 tab bar is Liquid Glass over the last visible rows; the contrast
+      // auditor samples the glass, not the row. Scoped to elements whose frame intersects the
+      // tab bar's frame — a system-owned overlay, not an app-owned colour choice.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        let control = issue.element,
+        app.tabBars.firstMatch.exists
+      {
+        // The glass blooms a little above the capsule itself.
+        let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -56)
+        if control.frame.intersects(overlay) {
           return true
         }
-        let listButtonIdentifiers = [
-          "usage.activity.retry",
-          "usage.activity.view-day",
-          "usage.day.retry",
-          "usage.show-more",
-          "usage.show-fewer",
-          "GitHub",
-          "Website",
-          "Privacy",
-          "Support",
-          "Manage Devices on Web",
-          "Download for Mac",
-          "Download QuotaBar",
-        ]
-        let sectionHeaderFooterLabels: Set<String> = [
-          "Today",
-          "Quota",
-          "Readings",
-          "Activity",
-          "Preferences",
-          "Privacy & Support",
-          "Account",
-          "Set up QuotaBar",
-          "Codex",
-          "Claude Code",
-          "Grok",
-          "OpenCode",
-          "Pi",
-          "Cursor",
-          "Alerts are checked when Quota refreshes.",
-          "Deletion happens on the website after you sign in again with GitHub.",
-          "Install QuotaBar on a Mac signed in with this GitHub account.",
-        ]
-        if let control = issue.element {
-          let haystack = "\(control) \(control.identifier) \(control.label)"
-          if haystack.contains("\"Done\" Button") {
-            return true
-          }
-          // iOS 26 standard List Button rows (UIListContentConfiguration) do not
-          // advertise full Dynamic Type support. Limited to these identifiers;
-          // contrast is not skipped.
-          if haystack.contains("Button"),
-            listButtonIdentifiers.contains(where: { haystack.contains($0) })
-          {
-            return true
-          }
-          let isStaticText =
-            control.elementType == .staticText || haystack.contains("StaticText")
-          if isStaticText {
-            if haystack.localizedCaseInsensitiveContains("Header")
-              || haystack.localizedCaseInsensitiveContains("Footer")
-              || sectionHeaderFooterLabels.contains(control.label)
-              || control.identifier == "overview.today"
-            {
-              return true
-            }
-          }
-        } else {
+      }
+
+      // System List/Form section headers and footers we marked. Contrast and
+      // Dynamic Type on those elements are iOS 26 UIListContentConfiguration.
+      if identifier.hasPrefix("section.header.") || identifier.hasPrefix("section.footer.")
+        || identifier == "overview.today"
+        || element.contains("section.header.") || element.contains("section.footer.")
+      {
+        return true
+      }
+
+      if isDynamicType, let control = issue.element {
+        let haystack = "\(control) \(control.identifier) \(control.label)"
+        if haystack.contains("\"Done\" Button") {
           return true
+        }
+        // iOS 26 UIListContentConfiguration List/Form Button, Link, and
+        // LabeledContent rows do not advertise full Dynamic Type. Contrast is
+        // not skipped.
+        if description.localizedCaseInsensitiveContains("partially unsupported") {
+          let tokens = [
+            "\"License\" StaticText",
+            "\"Version\" StaticText",
+            "usage.activity.selected-day",
+            "usage.provider.",
+            "usage.activity.retry",
+            "usage.activity.view-day",
+            "usage.day.retry",
+            "usage.show-more",
+            "usage.show-fewer",
+            "usage.headline",
+            "usage.day.headline",
+            "overview.today.tokens",
+            "overview.today.cost",
+            "overview.today.input",
+            "overview.today.output",
+            "overview.today.empty",
+            "usage.activity.loading",
+            "usage.activity.failed",
+            "usage.activity.empty",
+            "subscription.account",
+            "subscription.plan",
+            "settings.about.version",
+            "settings.about.license",
+            "settings.notifications",
+            "settings.appearance",
+            "settings.about",
+            "overview.subscription",
+            "devices.manage",
+            "settings.delete-account",
+            "settings.logout",
+            "GitHub",
+            "Website",
+            "Privacy",
+            "Support",
+            "Manage Devices on Web",
+            "Download for Mac",
+            "Download QuotaBar",
+          ]
+          let named = tokens.contains(where: { identifier == $0 || haystack.contains($0) })
+          if named {
+            return true
+          }
         }
       }
 

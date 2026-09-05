@@ -69,6 +69,9 @@ appearance_file=/tmp/quota-ios-uitest-appearance
 text_size_file=/tmp/quota-ios-uitest-text-size
 : >"$appearance_file"
 : >"$text_size_file"
+# Never leave an override behind: a stale file would silently re-run every later UI test at
+# that size or appearance.
+trap 'rm -f "$appearance_file" "$text_size_file"' EXIT
 if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   export TEST_RUNNER_QUOTA_IOS_TEXT_SIZE="$QUOTA_IOS_TEXT_SIZE"
   printf '%s' "$QUOTA_IOS_TEXT_SIZE" >"$text_size_file"
@@ -103,7 +106,7 @@ if [ ! -d "$result" ]; then
 fi
 
 export_dir="$(mktemp -d)"
-trap 'rm -rf "$export_dir"' EXIT
+trap 'rm -rf "$export_dir"; rm -f "$appearance_file" "$text_size_file"' EXIT
 xcrun xcresulttool export attachments --path "$result" --output-path "$export_dir"
 
 node -e '

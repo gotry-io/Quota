@@ -20,10 +20,12 @@ struct MacSetupGuideSection: View {
       .accessibilityLabel(MacSetupGuide.overviewAction)
     } header: {
       Text(MacSetupGuide.title)
-        .foregroundStyle(Color(uiColor: .label))
+        .accessibilityIdentifier("section.header.mac-setup")
     } footer: {
       Text(MacSetupGuide.detail)
-        .foregroundStyle(Color(uiColor: .label))
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("section.footer.mac-setup")
+        .accessibilityLabel(MacSetupGuide.detail)
     }
   }
 }

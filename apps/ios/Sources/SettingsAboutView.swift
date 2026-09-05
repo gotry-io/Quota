@@ -26,7 +26,6 @@ struct SettingsAboutView: View {
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
-    .quotaTabBarClearance()
     .accessibilityIdentifier("settings.about.root")
     .navigationTitle(SettingsCopy.about)
   }

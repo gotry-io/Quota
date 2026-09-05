@@ -24,11 +24,19 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.appearance")
       } header: {
         Text(SettingsCopy.preferences)
-          .foregroundStyle(Color(uiColor: .label))
+          .accessibilityIdentifier("section.header.preferences")
       }
       Section {
-        Link(SettingsCopy.privacy, destination: QuotaWebLinks.privacy)
-        Link(SettingsCopy.support, destination: QuotaWebLinks.support)
+        Link(destination: QuotaWebLinks.privacy) {
+          Text(SettingsCopy.privacy)
+            .foregroundStyle(Color.primary)
+        }
+        .buttonStyle(.plain)
+        Link(destination: QuotaWebLinks.support) {
+          Text(SettingsCopy.support)
+            .foregroundStyle(Color.primary)
+        }
+        .buttonStyle(.plain)
         NavigationLink {
           SettingsAboutView()
         } label: {
@@ -37,13 +45,9 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.about")
       } header: {
         Text(SettingsCopy.privacyAndSupport)
-          .foregroundStyle(Color(uiColor: .label))
+          .accessibilityIdentifier("section.header.privacy-and-support")
       }
       Section {
-        Text(SettingsCopy.deleteAccountExplanation)
-          .font(.body)
-          .foregroundStyle(Color(uiColor: .label))
-          .fixedSize(horizontal: false, vertical: true)
         Link(SettingsCopy.manageDevices, destination: QuotaWebLinks.manageDevices)
         Button(SettingsCopy.deleteAccount, role: .destructive) {
           Task {
@@ -52,6 +56,7 @@ struct SettingsView: View {
           }
         }
         .accessibilityLabel(SettingsCopy.deleteAccount)
+        .accessibilityIdentifier("settings.delete-account")
         Button(SettingsCopy.logOut, role: .destructive) {
           confirmLogout = true
         }
@@ -59,12 +64,13 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.logout")
       } header: {
         Text(SettingsCopy.account)
-          .foregroundStyle(Color(uiColor: .label))
+          .accessibilityIdentifier("section.header.account")
+      } footer: {
+        Text(SettingsCopy.deleteAccountExplanation)
+          .accessibilityIdentifier("section.footer.account")
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
-    .contentMargins(.bottom, 24, for: .scrollContent)
-    .quotaTabBarClearance()
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.large)

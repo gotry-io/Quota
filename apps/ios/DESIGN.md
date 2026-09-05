@@ -242,11 +242,11 @@ Body, in order:
    **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
    The selection lives in memory for the signed-in session. It is a system content filter, not a
    floating navigation action, and it scrolls with the List.
-2. Totals section: **Tokens** (`CompactCountFormat`, monospaced) and **API-equivalent cost**
-   (`$X.XX`, `≥ $X.XX`, or **— unpriced**) as body rows that advertise Dynamic Type. Supporting
-   copy in that section is `{input} in · {output} out`, the cost-basis line, and **Some hours in
-   this period were scanned incompletely.** when `partial` is true. No custom card. Semantic text
-   styles, primary color, so contrast and Dynamic Type stay system-owned.
+2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
+   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
+   is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
+   incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
+   contrast and Dynamic Type stay system-owned.
 3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
@@ -263,10 +263,10 @@ Body, in order:
      `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
      last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
      adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
-     increment/decrement changes the same selection. Above the grid, the selected day is visible
+     increment/decrement changes the same selection. Under the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
-     that day, so the activation stays above overlay tab-bar glass at rest.
-5. Each agent is a Section whose first row is its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+     that day.
+5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
    Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
    rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
    **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
@@ -495,21 +495,46 @@ provider and support, and no custom card chrome beyond the system widget contain
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
   Connect (no tab bar) still runs contrast.
 - Usage runs the same app-owned audit as the other screens, including contrast. Do not skip
-  contrast, Dynamic Type, or clipping as whole audit types. Documented system-owned exceptions,
+  contrast, Dynamic Type, or clipping as whole audit types. Do not skip by `StaticText` type,
+  "nearly passed", `"Resets "`, or List-button contrast. Documented system-owned exceptions,
   scoped to the named element:
   - unnamed tab-bar / navigation / sheet glass (`issue.element == nil`) for contrast, Dynamic
     Type, clipping, and inaccessible;
-  - grouped List / Form section header and footer StaticText for Dynamic Type only;
+  - grouped List / Form section header and footer views whose accessibility identifier starts
+    with `section.header.` or `section.footer.` (contrast and Dynamic Type). Those identifiers
+    are: `section.header.today`, `section.header.quota`, `section.header.readings`,
+    `section.header.activity`, `section.header.preferences`, `section.header.privacy-and-support`,
+    `section.header.account`, `section.header.mac-setup`, `section.header.appearance`,
+    `section.header.codex`, `section.header.claude_code`, `section.header.grok`,
+    `section.header.opencode`, `section.header.pi`, `section.header.cursor`,
+    `section.header.claude`, `section.footer.updated`, `section.footer.mac-setup`,
+    `section.footer.account`, `section.footer.notifications`,
+    `section.footer.subscription-updated`, `section.footer.usage.headline`,
+    `section.footer.usage.day.headline`;
   - the system sheet **Done** confirmation button for Dynamic Type;
-  - iOS 26 `UIListContentConfiguration` List/Form rows (Button, Link, LabeledContent) for the
+  - contrast on any element whose frame intersects the floating tab bar's frame (inset by 40 pt
+    horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit over the last
+    visible rows and the auditor samples the glass, not the row. This is geometric and
+    system-owned; it never applies to rows away from the tab bar;
+  - iOS 26 `UIListContentConfiguration` List/Form Button, Link, and LabeledContent rows for the
     "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
-    full Dynamic Type. Contrast on those rows is not skipped. Named Button/Link identifiers:
-    **Retry**, **View day**, **Show N more** / **Show fewer**, **GitHub**, **Website**,
-    **Privacy**, **Support**, **Manage Devices on Web**, **Download for Mac**, **Download
-    QuotaBar**.
+    full Dynamic Type. Contrast on those rows is not skipped. Named identifiers:
+    `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
+    `usage.show-fewer`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
+    `overview.today.cost`, `overview.today.input`, `overview.today.output`,
+    `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
+    `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
+    `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
+    `usage.provider.<provider id>`, the About **License** and **Version** labels, plus Link labels
+    **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
+    Mac**, **Download QuotaBar**.
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
   without contrast; the run attaches which screen did not complete contrast. That is a deadline,
   not a type skip.
+- The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
+  reach it.
+- `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
+  stale text-size override would otherwise silently run every later UI test at that size.
 - Overview and Usage UI tests scroll the list (`overview-scrolled`). Tab-bar minimization
   (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
   screenshots does not expose a measurable height drop or a single-button minimized tab bar.

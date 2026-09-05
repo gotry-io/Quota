@@ -31,8 +31,6 @@ struct UsageView: View {
       }
     }
     .listStyle(.insetGrouped)
-    .contentMargins(.bottom, 24, for: .scrollContent)
-    .quotaTabBarClearance()
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
       await model.loadActivity()
@@ -103,47 +101,47 @@ struct UsageTotalsSection: View {
 
   var body: some View {
     Section {
-      metricRow(
-        label: "Tokens",
-        value: QuotaFormat.compactCount(totals.totalTokens),
-        accessibility:
-          "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
+      LabeledContent("Tokens") {
+        Text(QuotaFormat.compactCount(totals.totalTokens))
+          .font(.body.monospacedDigit().weight(.medium))
+          .foregroundStyle(.primary)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
       )
       .accessibilityIdentifier(identifier)
 
-      metricRow(
-        label: "API-equivalent cost",
-        value: QuotaFormat.cost(cost),
-        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
+      LabeledContent("API-equivalent cost") {
+        Text(QuotaFormat.cost(cost))
+          .font(.body.monospacedDigit().weight(.medium))
+          .foregroundStyle(.primary)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
       )
+      .accessibilityIdentifier("\(identifier).cost")
 
       VStack(alignment: .leading, spacing: 4) {
         Text(
           "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
         )
-        .font(.footnote)
+        .font(.body)
+        .foregroundStyle(Color.primary)
+        .accessibilityIdentifier("section.footer.\(identifier)")
         Text(QuotaFormat.costBasis(cost))
-          .font(.footnote)
+          .font(.body)
+          .foregroundStyle(Color.primary)
         if partial {
           Text(partialCopy)
-            .font(.footnote)
+            .font(.body)
+            .foregroundStyle(Color.primary)
         }
       }
-      .foregroundStyle(.primary)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityElement(children: .combine)
       .accessibilityLabel(footerAccessibilityLabel)
     }
-  }
-
-  private func metricRow(label: String, value: String, accessibility: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      BodyLabel(text: label)
-      Spacer(minLength: 8)
-      BodyLabel(text: value, weight: .medium, monospacedDigit: true)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(accessibility)
   }
 
   private var footerAccessibilityLabel: String {
@@ -162,13 +160,12 @@ struct UsageAgentListSections: View {
   var body: some View {
     ForEach(sections) { section in
       Section {
-        Text(section.displayName)
-          .font(.headline)
-          .foregroundStyle(Color(uiColor: .label))
-          .accessibilityAddTraits(.isHeader)
         ForEach(section.providers) { provider in
           providerRows(provider, agentID: section.id)
         }
+      } header: {
+        Text(section.displayName)
+          .accessibilityIdentifier("section.header.\(section.id)")
       }
     }
   }
@@ -183,10 +180,11 @@ struct UsageAgentListSections: View {
     let visible = provider.visibleModels(expanded: expanded)
     let hidden = provider.hiddenCount(expanded: expanded)
 
-    HStack {
-      BodyLabel(text: provider.displayName)
-      Spacer(minLength: 0)
-    }
+    Text(provider.displayName)
+      .font(.subheadline)
+      .foregroundStyle(.primary)
+      .accessibilityAddTraits(.isHeader)
+      .accessibilityIdentifier("usage.provider.\(provider.id)")
 
     ForEach(visible) { row in
       modelRow(row)
@@ -215,13 +213,13 @@ struct UsageAgentListSections: View {
     let tokens = QuotaFormat.compactCount(row.totals.totalTokens)
     let cost = QuotaFormat.cost(row.cost)
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
-      BodyLabel(text: row.displayName, style: .subheadline)
+      Text(row.displayName)
+        .font(.subheadline)
       Spacer(minLength: 8)
-      BodyLabel(
-        text: "\(tokens) · \(cost)",
-        style: .subheadline,
-        monospacedDigit: true
-      )
+      Text("\(tokens) · \(cost)")
+        .font(.subheadline.monospacedDigit())
+        .foregroundStyle(.primary)
+        .multilineTextAlignment(.trailing)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(

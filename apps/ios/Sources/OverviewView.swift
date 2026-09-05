@@ -22,8 +22,6 @@ struct OverviewView: View {
       }
     }
     .listStyle(.insetGrouped)
-    .contentMargins(.bottom, 24, for: .scrollContent)
-    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("overview.root")
     .refreshable {
@@ -37,9 +35,6 @@ struct OverviewView: View {
   private var quotaSection: some View {
     let providerCards = model.providerCards
     Section {
-      if let fetchedAt = model.fetchedAt {
-        BodyLabel(text: QuotaFormat.updated(fetchedAt), style: .body, monospacedDigit: true)
-      }
       if providerCards.isEmpty {
         ContentUnavailableView {
           Label("No quota yet", systemImage: "gauge.with.dots.needle.33percent")
@@ -63,14 +58,22 @@ struct OverviewView: View {
                 snapshot: subscription.snapshot,
                 accountIndex: index
               )
-              .foregroundStyle(Color(uiColor: .label))
+              .foregroundStyle(.primary)
             }
-            .tint(Color(uiColor: .label))
+            .buttonStyle(.plain)
+            .tint(.primary)
             .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityHint("Opens subscription details")
             .accessibilityIdentifier("overview.subscription")
           }
         }
+      }
+    } footer: {
+      if let fetchedAt = model.fetchedAt {
+        Text(QuotaFormat.updated(fetchedAt))
+          .font(.footnote.monospacedDigit())
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("section.footer.updated")
       }
     }
   }
@@ -81,9 +84,11 @@ struct TodayUsageSection: View {
 
   var body: some View {
     Section {
-      BodyLabel(text: "Today", style: .subheadline, weight: .semibold)
-        .accessibilityAddTraits(.isHeader)
       todayContent
+    } header: {
+      Text("Today")
+        .accessibilityIdentifier("section.header.today")
+        .accessibilityAddTraits(.isHeader)
     }
     .accessibilityIdentifier("overview.today")
   }
@@ -97,35 +102,51 @@ struct TodayUsageSection: View {
       todayRow(
         label: "Tokens",
         value: QuotaFormat.compactCount(usage.totals.totalTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens"
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens",
+        identifier: "overview.today.tokens"
       )
       todayRow(
         label: "API-equivalent cost",
         value: QuotaFormat.cost(usage.cost),
-        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))"
+        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))",
+        identifier: "overview.today.cost"
       )
       todayRow(
         label: "Input",
         value: QuotaFormat.compactCount(usage.totals.inputTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens"
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens",
+        identifier: "overview.today.input"
       )
       todayRow(
         label: "Output",
         value: QuotaFormat.compactCount(usage.totals.outputTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens"
+        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens",
+        identifier: "overview.today.output"
       )
     } else {
-      BodyLabel(text: "No usage today.")
+      Text("No usage today.")
+        .font(.body)
+        .foregroundStyle(.primary)
+        .accessibilityIdentifier("overview.today.empty")
     }
   }
 
-  private func todayRow(label: String, value: String, accessibility: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      BodyLabel(text: label)
-      Spacer(minLength: 8)
-      BodyLabel(text: value, weight: .medium, monospacedDigit: true)
+  private func todayRow(
+    label: String,
+    value: String,
+    accessibility: String,
+    identifier: String
+  ) -> some View {
+    LabeledContent {
+      Text(value)
+        .font(.body.monospacedDigit().weight(.medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    } label: {
+      Text(label)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibility)
+    .accessibilityIdentifier(identifier)
   }
 }

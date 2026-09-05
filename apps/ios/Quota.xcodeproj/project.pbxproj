@@ -94,7 +94,6 @@
 		E83E20523B31256BDC034CAE /* SelectionSalt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */; };
 		E9CF2CCB8FC6AD1CF83A99EA /* UsageBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97CC275AFB0771C0C27763E /* UsageBreakdownTests.swift */; };
 		F7C0E34B3ACF4FAF4B9CDB31 /* AlertCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE24F23209102B4AEFA59594 /* AlertCoordinatorTests.swift */; };
-		F899DF6814B06AF0CC19B162 /* BodyLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39866A4DA46777246DF95FB9 /* BodyLabel.swift */; };
 		F9EAD472C5490F4C9F6233CB /* QuotaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8243A68073C5E5DD8FA5BD70 /* QuotaUITests.swift */; };
 		FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 338CCAA9EF4ECD7B12AA34A0 /* QuotaPresentation */; };
 		FB843AB27849EB3C728F1A6E /* DeviceRowContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD4891FD9DE7B855890535B /* DeviceRowContentTests.swift */; };
@@ -151,7 +150,6 @@
 		33ACBBE813B58AD8D69A4C28 /* SelectionSalt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionSalt.swift; sourceTree = "<group>"; };
 		383D78AB5F09A4248D36752A /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
 		385D217111F48BCCA8EEBDFB /* SettingsNotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNotificationsView.swift; sourceTree = "<group>"; };
-		39866A4DA46777246DF95FB9 /* BodyLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyLabel.swift; sourceTree = "<group>"; };
 		3E4399D77F34E72CF73E1C64 /* SettingsAppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAppearanceView.swift; sourceTree = "<group>"; };
 		408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		45A10738A7D52B7BA49B8427 /* IOSResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSResetReminderScheduler.swift; sourceTree = "<group>"; };
@@ -274,7 +272,6 @@
 				7EB6890AA6B3532E0089CAE0 /* ActivityLoading.swift */,
 				50438DF74EFAC847E8BA5A01 /* AppModel.swift */,
 				A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */,
-				39866A4DA46777246DF95FB9 /* BodyLabel.swift */,
 				582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */,
 				4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */,
 				032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */,
@@ -631,7 +628,6 @@
 				BBACF39AE0F13EF7DDC2E995 /* AlertSink.swift in Sources */,
 				E7D6D0B08F4795420BC6713F /* AppModel.swift in Sources */,
 				D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */,
-				F899DF6814B06AF0CC19B162 /* BodyLabel.swift in Sources */,
 				BCC41879989EFE8E246E42F1 /* BrowserAuthenticator.swift in Sources */,
 				5D8D1FD4F1902E5A3AA78E66 /* ConfirmAccountView.swift in Sources */,
 				8E2336FC11600A345D6A4817 /* ConnectAccountView.swift in Sources */,
