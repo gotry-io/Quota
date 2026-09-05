@@ -35,10 +35,10 @@ struct UserFacingAuthMessageTests {
         == AuthorizationError.unexpectedBrowserResponseMessage
     )
     #expect(
-      AccountClientError.relay(.unavailable).userFacingMessage == "Could not reach quota.gotry.io."
+      AccountClientError.relay(.unavailable).userFacingMessage == "Couldn't reach quota.gotry.io."
     )
     #expect(
-      AccountClientError.relay(.timeout).userFacingMessage == "Could not reach quota.gotry.io."
+      AccountClientError.relay(.timeout).userFacingMessage == "Couldn't reach quota.gotry.io."
     )
     #expect(
       AccountClientError.relay(.invalidGrant).userFacingMessage

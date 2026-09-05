@@ -10,10 +10,8 @@ struct ProviderQuotaRow: View {
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
     let stateLabel = snapshot.stateLabel()
-    return VStack(alignment: .leading, spacing: 12) {
-      Text(provider.displayName)
-        .font(.headline)
-        .foregroundStyle(Color(uiColor: .label))
+    return VStack(alignment: .leading, spacing: 8) {
+      BodyLabel(text: provider.displayName, style: .headline, weight: .semibold)
         .accessibilityAddTraits(.isHeader)
 
       let plan = QuotaFormat.planBadge(snapshot.account.plan)
@@ -47,21 +45,20 @@ struct ProviderQuotaRow: View {
   }
 
   private func accountLabel(_ label: String) -> some View {
-    Text(label)
-      .font(.subheadline.weight(.medium))
-      .foregroundStyle(Color(uiColor: .label))
-      .fixedSize(horizontal: false, vertical: true)
+    BodyLabel(text: label, style: .subheadline, weight: .medium)
   }
 
   private func planCapsule(_ plan: String) -> some View {
-    Text(plan)
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(Color(uiColor: .label))
+    BodyLabel(text: plan, style: .caption1, weight: .semibold)
+      .fixedSize()
       .layoutPriority(1)
       .padding(.horizontal, 8)
       .padding(.vertical, 3)
-      .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+      .overlay {
+        Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1)
+      }
       .accessibilityHidden(true)
+      .accessibilityElement(children: .ignore)
       .allowsHitTesting(false)
   }
 }
@@ -76,19 +73,15 @@ struct QuotaWindowBlock: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(QuotaFormat.windowTitle(window))
-        .font(.subheadline)
-        .foregroundStyle(Color(uiColor: .label))
-        .fixedSize(horizontal: false, vertical: true)
+      BodyLabel(text: QuotaFormat.windowTitle(window), style: .subheadline)
 
-      Text(QuotaFormat.remaining(window))
-        .font(
-          (emphasizedRemaining ? Font.title : Font.title2).monospacedDigit().weight(.semibold)
-        )
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      BodyLabel(
+        text: QuotaFormat.remaining(window),
+        style: emphasizedRemaining ? .title1 : .headline,
+        weight: .semibold,
+        monospacedDigit: true
+      )
+      .frame(maxWidth: .infinity, alignment: .leading)
 
       if !window.isBalanceOnly {
         ProgressView(value: window.remainingPercent, total: 100)
@@ -103,10 +96,7 @@ struct QuotaWindowBlock: View {
         }
       } else if let support = supportLine {
         // No line limit: at accessibility text sizes a capped line clips the reset time.
-        Text(support)
-          .font(.footnote)
-          .foregroundStyle(Color(uiColor: .label))
-          .fixedSize(horizontal: false, vertical: true)
+        BodyLabel(text: support, style: .footnote)
       }
     }
     .accessibilityElement(children: .combine)
@@ -120,14 +110,14 @@ struct QuotaWindowBlock: View {
       // The shared reset copy says "Resets in …"; the live timer keeps the same words.
       (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
         .font(.footnote.monospacedDigit())
-        .foregroundStyle(Color(uiColor: .label))
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(
           Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
     case .copy(let text):
       Text(text)
         .font(.footnote)
-        .foregroundStyle(Color(uiColor: .label))
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
     case nil:
       EmptyView()

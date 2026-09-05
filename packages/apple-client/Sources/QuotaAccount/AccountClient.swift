@@ -348,7 +348,7 @@ extension AccountClientError {
     case .callbackMismatch, .stateMismatch, .missingAuthorizationCode, .unexpectedCallbackToken:
       AuthorizationError.unexpectedBrowserResponseMessage
     case .relay(.unavailable), .relay(.timeout):
-      "Could not reach quota.gotry.io."
+      "Couldn't reach quota.gotry.io."
     case .relay(.invalidGrant), .relay(.unauthorized), .sessionExpired:
       AuthorizationError.expiredSignInMessage
     case .relay(.rejected(code: _, status: let status)) where (400...499).contains(status):

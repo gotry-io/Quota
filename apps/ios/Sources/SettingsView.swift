@@ -8,7 +8,7 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
-      Section(SettingsCopy.preferences) {
+      Section {
         NavigationLink {
           SettingsNotificationsView(model: model, settings: settings)
         } label: {
@@ -22,9 +22,11 @@ struct SettingsView: View {
           LabeledContent(SettingsCopy.appearance, value: settings.appearance.title)
         }
         .accessibilityIdentifier("settings.appearance")
+      } header: {
+        Text(SettingsCopy.preferences)
+          .foregroundStyle(Color(uiColor: .label))
       }
-
-      Section(SettingsCopy.privacyAndSupport) {
+      Section {
         Link(SettingsCopy.privacy, destination: QuotaWebLinks.privacy)
         Link(SettingsCopy.support, destination: QuotaWebLinks.support)
         NavigationLink {
@@ -33,9 +35,15 @@ struct SettingsView: View {
           Text(SettingsCopy.about)
         }
         .accessibilityIdentifier("settings.about")
+      } header: {
+        Text(SettingsCopy.privacyAndSupport)
+          .foregroundStyle(Color(uiColor: .label))
       }
-
       Section {
+        Text(SettingsCopy.deleteAccountExplanation)
+          .font(.body)
+          .foregroundStyle(Color(uiColor: .label))
+          .fixedSize(horizontal: false, vertical: true)
         Link(SettingsCopy.manageDevices, destination: QuotaWebLinks.manageDevices)
         Button(SettingsCopy.deleteAccount, role: .destructive) {
           Task {
@@ -51,11 +59,12 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.logout")
       } header: {
         Text(SettingsCopy.account)
-      } footer: {
-        Text(SettingsCopy.deleteAccountExplanation)
+          .foregroundStyle(Color(uiColor: .label))
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
+    .contentMargins(.bottom, 24, for: .scrollContent)
+    .quotaTabBarClearance()
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.large)

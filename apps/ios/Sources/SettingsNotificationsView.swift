@@ -12,6 +12,8 @@ struct SettingsNotificationsView: View {
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
+    .quotaTabBarClearance()
+    .contentMargins(.bottom, QuotaTheme.tabBarClearance + 120, for: .scrollContent)
     .accessibilityIdentifier("settings.notifications.root")
     .navigationTitle(SettingsCopy.notifications)
     .task { await settings.refreshAuthorization() }
@@ -58,48 +60,59 @@ struct SettingsNotificationsView: View {
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
-    } footer: {
       Text(SettingsCopy.footer)
+        .font(.body)
+        .foregroundStyle(Color(uiColor: .label))
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
   private func subscriptionSection(_ row: SettingsNotificationSubscription) -> some View {
     Section {
-      Text(row.accountLabel)
-        .foregroundStyle(.secondary)
+      BodyLabel(text: row.providerDisplayName, style: .subheadline, weight: .semibold)
+        .accessibilityAddTraits(.isHeader)
+      BodyLabel(text: row.accountLabel, style: .body)
         .accessibilityLabel("\(row.providerDisplayName), \(row.accountLabel)")
 
-      Picker(
-        SettingsCopy.alertAt,
-        selection: Binding(
-          get: { row.firstThreshold },
-          set: { settings.setFirstThreshold($0, for: row.selector) }
-        )
-      ) {
-        ForEach(SettingsModel.thresholdChoices, id: \.self) { value in
-          Text(SettingsCopy.thresholdLabel(value)).tag(value)
-        }
-      }
-      .accessibilityLabel(SettingsCopy.alertAt)
-
-      Picker(
-        SettingsCopy.thenAt,
-        selection: Binding(
-          get: { ThenThresholdChoice(row.secondThreshold) },
-          set: { choice in
-            settings.setSecondThreshold(choice.value, for: row.selector)
+      HStack {
+        BodyLabel(text: SettingsCopy.alertAt)
+        Spacer(minLength: 8)
+        Picker(
+          SettingsCopy.alertAt,
+          selection: Binding(
+            get: { row.firstThreshold },
+            set: { settings.setFirstThreshold($0, for: row.selector) }
+          )
+        ) {
+          ForEach(SettingsModel.thresholdChoices, id: \.self) { value in
+            Text(SettingsCopy.thresholdLabel(value)).tag(value)
           }
-        )
-      ) {
-        Text(SettingsCopy.off).tag(ThenThresholdChoice.off)
-        ForEach(SettingsModel.secondThresholdChoices(first: row.firstThreshold), id: \.self) {
-          value in
-          Text(SettingsCopy.thresholdLabel(value)).tag(ThenThresholdChoice.value(value))
         }
+        .labelsHidden()
+        .accessibilityLabel(SettingsCopy.alertAt)
       }
-      .accessibilityLabel(SettingsCopy.thenAt)
-    } header: {
-      Text(row.providerDisplayName)
+
+      HStack {
+        BodyLabel(text: SettingsCopy.thenAt)
+        Spacer(minLength: 8)
+        Picker(
+          SettingsCopy.thenAt,
+          selection: Binding(
+            get: { ThenThresholdChoice(row.secondThreshold) },
+            set: { choice in
+              settings.setSecondThreshold(choice.value, for: row.selector)
+            }
+          )
+        ) {
+          Text(SettingsCopy.off).tag(ThenThresholdChoice.off)
+          ForEach(SettingsModel.secondThresholdChoices(first: row.firstThreshold), id: \.self) {
+            value in
+            Text(SettingsCopy.thresholdLabel(value)).tag(ThenThresholdChoice.value(value))
+          }
+        }
+        .labelsHidden()
+        .accessibilityLabel(SettingsCopy.thenAt)
+      }
     }
   }
 }

@@ -5,13 +5,8 @@ struct SettingsAboutView: View {
     Form {
       Section {
         VStack(alignment: .leading, spacing: 16) {
-          Image(systemName: "gauge.with.dots.needle.33percent")
-            .font(.system(size: 28, weight: .semibold))
-            .foregroundStyle(QuotaTheme.emerald)
-            .frame(width: 56, height: 56)
+          QuotaAppMark()
             .frame(maxWidth: .infinity)
-            .accessibilityLabel("Quota")
-            .accessibilityAddTraits(.isImage)
 
           Text(SettingsCopy.productSentence)
             .fixedSize(horizontal: false, vertical: true)
@@ -31,6 +26,7 @@ struct SettingsAboutView: View {
       }
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
+    .quotaTabBarClearance()
     .accessibilityIdentifier("settings.about.root")
     .navigationTitle(SettingsCopy.about)
   }

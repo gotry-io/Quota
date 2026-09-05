@@ -479,7 +479,7 @@ struct AppModelTests {
 
     let unreachable = model(throwing: AccountClientError.relay(.unavailable))
     await unreachable.connectAccount()
-    #expect(unreachable.banner?.text == "Could not reach quota.gotry.io.")
+    #expect(unreachable.banner?.text == "Couldn't reach quota.gotry.io.")
 
     let expired = model(throwing: AccountClientError.relay(.invalidGrant))
     await expired.connectAccount()
@@ -619,7 +619,7 @@ struct AppModelTests {
     )
     await connected.model.connectAccount()
     #expect(connected.model.phase == .pendingRefreshFailed)
-    #expect(connected.model.banner?.text == "Could not reach quota.gotry.io.")
+    #expect(connected.model.banner?.text == "Couldn't reach quota.gotry.io.")
     #expect(try sessions.load()?.activation == .pending)
     #expect(connected.model.phase != .confirmingAccount(label: "Account"))
   }

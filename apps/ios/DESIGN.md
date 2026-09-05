@@ -110,7 +110,7 @@ Connect failures use a specific sentence when one is known, otherwise the defaul
 | Cause | Copy |
 | --- | --- |
 | Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
-| Network (`unavailable` / timeout) | **Could not reach quota.gotry.io.** |
+| Network (`unavailable` / timeout) | **Couldn't reach quota.gotry.io.** |
 | Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
 | Malformed summary or blank `displayLabel` | **Couldn't connect. Try again.** |
 | Anything else | **Couldn't connect. Try again.** |
@@ -242,11 +242,11 @@ Body, in order:
    **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
    The selection lives in memory for the signed-in session. It is a system content filter, not a
    floating navigation action, and it scrolls with the List.
-2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
-   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
-   is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
-   incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
-   contrast and Dynamic Type stay system-owned.
+2. Totals section: **Tokens** (`CompactCountFormat`, monospaced) and **API-equivalent cost**
+   (`$X.XX`, `≥ $X.XX`, or **— unpriced**) as body rows that advertise Dynamic Type. Supporting
+   copy in that section is `{input} in · {output} out`, the cost-basis line, and **Some hours in
+   this period were scanned incompletely.** when `partial` is true. No custom card. Semantic text
+   styles, primary color, so contrast and Dynamic Type stay system-owned.
 3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
@@ -263,10 +263,10 @@ Body, in order:
      `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
      last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
      adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
-     increment/decrement changes the same selection. Under the grid, the selected day is visible
+     increment/decrement changes the same selection. Above the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
-     that day.
-5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+     that day, so the activation stays above overlay tab-bar glass at rest.
+5. Each agent is a Section whose first row is its display name (Codex, Claude Code, Grok, OpenCode, Pi,
    Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
    rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
    **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
@@ -294,8 +294,8 @@ verdict. VoiceOver speaks name, verdict, platform, and age. Never infer failure 
 shutdown, or a closed app, and never show raw Device IDs or request a remote Device's credentials.
 
 A top-trailing system toolbar `Link` uses the `arrow.up.right` symbol. Visible and accessibility
-label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my`. The toolbar supplies
-its own Liquid Glass.
+label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my/devices`, the same
+URL Settings uses. The toolbar supplies its own Liquid Glass.
 
 Empty state is `ContentUnavailableView`: title **No Macs connected**, image `desktopcomputer`,
 description **Install QuotaBar on a Mac signed in with this GitHub account.**, action **Download
@@ -455,7 +455,8 @@ Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with G
 **View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
 may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
 and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
-month labels on that grid use `caption` / `caption2` and keep the full month abbreviation.
+month labels on that grid use `caption` / `caption2`, keep the full month abbreviation, and cap
+at `DynamicTypeSize.large` with the grid so they stay aligned at accessibility sizes.
 Accessibility text sizes and widget no-data
 layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
 truncation of the primary value).
@@ -492,18 +493,26 @@ provider and support, and no custom card chrome beyond the system widget contain
   audit with no skip.
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
-  System exceptions, scoped in the UI test: unnamed tab-bar Liquid Glass contrast, grouped Form
-  header/footer StaticText contrast, and partial Dynamic Type on system section-header text.
   Connect (no tab bar) still runs contrast.
 - Usage runs the same app-owned audit as the other screens, including contrast. Do not skip
   contrast, Dynamic Type, or clipping as whole audit types. Documented system-owned exceptions,
-  scoped to the named element: unnamed tab-bar / navigation / sheet glass contrast; grouped List /
-  Form section-header and footer StaticText contrast; partial Dynamic Type on system section-header
-  text, standard List buttons (**Retry**, **View day**, **Show N more** / **Show fewer**), and the
-  system sheet **Done** confirmation item; contrast on those same List action rows when they sit
-  under tab-bar Liquid Glass. A contrast pass that exceeds the iOS 26 auditor deadline on the
-  365-day heatmap may retry without contrast; that is a deadline, not a type skip.
-- Overview and Usage UI tests scroll and assert `tabBarMinimizeBehavior(.onScrollDown)`.
+  scoped to the named element:
+  - unnamed tab-bar / navigation / sheet glass (`issue.element == nil`) for contrast, Dynamic
+    Type, clipping, and inaccessible;
+  - grouped List / Form section header and footer StaticText for Dynamic Type only;
+  - the system sheet **Done** confirmation button for Dynamic Type;
+  - iOS 26 `UIListContentConfiguration` List/Form rows (Button, Link, LabeledContent) for the
+    "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
+    full Dynamic Type. Contrast on those rows is not skipped. Named Button/Link identifiers:
+    **Retry**, **View day**, **Show N more** / **Show fewer**, **GitHub**, **Website**,
+    **Privacy**, **Support**, **Manage Devices on Web**, **Download for Mac**, **Download
+    QuotaBar**.
+- A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
+  without contrast; the run attaches which screen did not complete contrast. That is a deadline,
+  not a type skip.
+- Overview and Usage UI tests scroll the list (`overview-scrolled`). Tab-bar minimization
+  (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
+  screenshots does not expose a measurable height drop or a single-button minimized tab bar.
 
 ## Visual QA
 
@@ -515,7 +524,7 @@ URL, cached content with a plain status Label, subscription detail (Account, Pla
 Devices content and empty, Usage at 30 Days as one native scrolling List (period control, totals,
 Activity heatmap with full month abbreviations, agent sections, no glass cards), Usage empty /
 activity loading / activity failed, a single-day sheet (populated, empty, failed) with system
-chrome and medium/large detents, the four tabs including a minimized tab bar after scroll, Settings
+chrome and medium/large detents, the four tabs (tab-bar minimization is a manual gate), Settings
 hub (Notifications and Appearance links, Log Out, Delete Account), Settings › Notifications,
 Settings › Appearance, Settings › About, and each widget family in placeholder, content, and
 no-data states. Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver
@@ -525,7 +534,7 @@ only; they must never contain access tokens, refresh tokens, or production data.
 `scripts/ios-ui-screenshots.sh` exports the `connect-signed-out`, `connect-connecting`,
 `connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
 `overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
-`overview-tab-minimized`, `subscription-detail`, `devices-content`, `devices-empty`,
+`overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
 `usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
 `usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
 `settings-notifications`, `settings-appearance`, and `settings-about` fixture screenshots to
@@ -562,7 +571,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
 | `expired` | Connect with GitHub plus **Session expired. Connect again.** |
-| `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Could not reach quota.gotry.io.** No Continue |
+| `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
 | `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |

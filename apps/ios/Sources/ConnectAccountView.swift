@@ -15,7 +15,6 @@ struct ConnectAccountView: View {
           }
           .padding(.top, 8)
           .frame(maxWidth: .infinity)
-          .background(Color(uiColor: .systemBackground))
         }
         .frame(maxWidth: 320)
         .padding()
@@ -121,6 +120,9 @@ struct ConnectAccountView: View {
       .foregroundStyle(Color(uiColor: .label))
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+      .background(Color(uiColor: .systemBackground))
   }
 
   @ViewBuilder
@@ -130,20 +132,6 @@ struct ConnectAccountView: View {
     } else if let banner = model.banner {
       StatusMessage(symbolName: banner.symbolName, text: banner.text)
     }
-  }
-
-  private func statusLabel(text: String, symbolName: String) -> some View {
-    Label {
-      Text(text)
-        .foregroundStyle(Color(uiColor: .label))
-        .fixedSize(horizontal: false, vertical: true)
-    } icon: {
-      Image(systemName: symbolName)
-        .foregroundStyle(Color(uiColor: .label))
-    }
-    .font(.subheadline)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
   }
 }
 

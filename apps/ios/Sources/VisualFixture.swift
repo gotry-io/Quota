@@ -102,7 +102,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = AppModel.Banner(
           kind: .refreshFailed,
-          text: "Could not reach quota.gotry.io.",
+          text: "Couldn't reach quota.gotry.io.",
           symbolName: "exclamationmark.triangle"
         )
         model.expiredMessage = nil

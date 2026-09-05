@@ -37,8 +37,6 @@ struct DeviceRowContent: Equatable {
 struct DevicesView: View {
   @Bindable var model: AppModel
 
-  private static let manageURL = URL(string: "https://quota.gotry.io/my")!
-
   var body: some View {
     List {
       if let devices = model.summary?.devices, !devices.isEmpty {
@@ -48,10 +46,9 @@ struct DevicesView: View {
       } else {
         ContentUnavailableView {
           Label(MacSetupGuide.emptyDevicesTitle, systemImage: "desktopcomputer")
-            .foregroundStyle(Color(uiColor: .label))
         } description: {
           Text(MacSetupGuide.detail)
-            .foregroundStyle(Color(uiColor: .label))
+            .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
         } actions: {
           Link(MacSetupGuide.devicesAction, destination: MacSetupGuide.downloadURL)
@@ -64,13 +61,15 @@ struct DevicesView: View {
       }
     }
     .listStyle(.insetGrouped)
+    .contentMargins(.bottom, 24, for: .scrollContent)
+    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("devices.root")
     .navigationTitle("Devices")
     .navigationBarTitleDisplayMode(.large)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Link(destination: Self.manageURL) {
+        Link(destination: QuotaWebLinks.manageDevices) {
           Label("Manage Devices on Web", systemImage: "arrow.up.right")
         }
         .accessibilityIdentifier("devices.manage")
@@ -97,7 +96,7 @@ struct DeviceRow: View {
       }
       Text(content.details)
         .font(.footnote.monospacedDigit())
-        .foregroundStyle(Color(uiColor: .label))
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .ignore)

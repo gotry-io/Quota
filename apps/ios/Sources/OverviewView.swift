@@ -22,6 +22,8 @@ struct OverviewView: View {
       }
     }
     .listStyle(.insetGrouped)
+    .contentMargins(.bottom, 24, for: .scrollContent)
+    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("overview.root")
     .refreshable {
@@ -35,13 +37,15 @@ struct OverviewView: View {
   private var quotaSection: some View {
     let providerCards = model.providerCards
     Section {
+      if let fetchedAt = model.fetchedAt {
+        BodyLabel(text: QuotaFormat.updated(fetchedAt), style: .body, monospacedDigit: true)
+      }
       if providerCards.isEmpty {
         ContentUnavailableView {
           Label("No quota yet", systemImage: "gauge.with.dots.needle.33percent")
-            .foregroundStyle(Color(uiColor: .label))
         } description: {
           Text("Set up QuotaBar on a Mac to start reporting.")
-            .foregroundStyle(Color(uiColor: .label))
+            .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -61,18 +65,12 @@ struct OverviewView: View {
               )
               .foregroundStyle(Color(uiColor: .label))
             }
+            .tint(Color(uiColor: .label))
             .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityHint("Opens subscription details")
             .accessibilityIdentifier("overview.subscription")
           }
         }
-      }
-    } footer: {
-      if let fetchedAt = model.fetchedAt {
-        Text(QuotaFormat.updated(fetchedAt))
-          .font(.footnote.monospacedDigit())
-          .foregroundStyle(Color(uiColor: .label))
-          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -82,7 +80,9 @@ struct TodayUsageSection: View {
   let summary: AccountSummary?
 
   var body: some View {
-    Section("Today") {
+    Section {
+      BodyLabel(text: "Today", style: .subheadline, weight: .semibold)
+        .accessibilityAddTraits(.isHeader)
       todayContent
     }
     .accessibilityIdentifier("overview.today")
@@ -115,20 +115,15 @@ struct TodayUsageSection: View {
         accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens"
       )
     } else {
-      Text("No usage today.")
-        .font(.body)
-        .foregroundStyle(.primary)
+      BodyLabel(text: "No usage today.")
     }
   }
 
   private func todayRow(label: String, value: String, accessibility: String) -> some View {
-    LabeledContent {
-      Text(value)
-        .font(.body.monospacedDigit().weight(.medium))
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-    } label: {
-      Text(label)
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      BodyLabel(text: label)
+      Spacer(minLength: 8)
+      BodyLabel(text: value, weight: .medium, monospacedDigit: true)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibility)

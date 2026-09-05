@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The 56-point Quota mark Connect and Confirm share. The glyph fills the frame so the two
-/// screens cannot drift.
+/// The 56-point Quota mark Connect, Confirm, and About share. The glyph fills the frame so
+/// those screens cannot drift.
 struct QuotaAppMark: View {
   var body: some View {
     Image(systemName: "gauge.with.dots.needle.33percent")

@@ -123,7 +123,7 @@ const wanted = [
   "overview-no-devices",
   "overview-empty",
   "overview-cached-error",
-  "overview-tab-minimized",
+  "overview-scrolled",
   "connect-signed-out",
   "connect-connecting",
   "connect-error",

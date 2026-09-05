@@ -31,7 +31,8 @@ struct UsageView: View {
       }
     }
     .listStyle(.insetGrouped)
-    .contentMargins(.bottom, 88, for: .scrollContent)
+    .contentMargins(.bottom, 24, for: .scrollContent)
+    .quotaTabBarClearance()
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
       await model.loadActivity()
@@ -102,25 +103,18 @@ struct UsageTotalsSection: View {
 
   var body: some View {
     Section {
-      LabeledContent("Tokens") {
-        Text(QuotaFormat.compactCount(totals.totalTokens))
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
+      metricRow(
+        label: "Tokens",
+        value: QuotaFormat.compactCount(totals.totalTokens),
+        accessibility:
+          "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
       )
       .accessibilityIdentifier(identifier)
 
-      LabeledContent("API-equivalent cost") {
-        Text(QuotaFormat.cost(cost))
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
+      metricRow(
+        label: "API-equivalent cost",
+        value: QuotaFormat.cost(cost),
+        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
       )
 
       VStack(alignment: .leading, spacing: 4) {
@@ -142,6 +136,16 @@ struct UsageTotalsSection: View {
     }
   }
 
+  private func metricRow(label: String, value: String, accessibility: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      BodyLabel(text: label)
+      Spacer(minLength: 8)
+      BodyLabel(text: value, weight: .medium, monospacedDigit: true)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibility)
+  }
+
   private var footerAccessibilityLabel: String {
     "\(QuotaFormat.accessibleCount(totals.inputTokens)) in · \(QuotaFormat.accessibleCount(totals.outputTokens)) out. Cost basis, \(QuotaFormat.costBasis(cost))"
       + (partial ? ". \(partialCopy)" : "")
@@ -157,7 +161,11 @@ struct UsageAgentListSections: View {
 
   var body: some View {
     ForEach(sections) { section in
-      Section(section.displayName) {
+      Section {
+        Text(section.displayName)
+          .font(.headline)
+          .foregroundStyle(Color(uiColor: .label))
+          .accessibilityAddTraits(.isHeader)
         ForEach(section.providers) { provider in
           providerRows(provider, agentID: section.id)
         }
@@ -175,10 +183,10 @@ struct UsageAgentListSections: View {
     let visible = provider.visibleModels(expanded: expanded)
     let hidden = provider.hiddenCount(expanded: expanded)
 
-    Text(provider.displayName)
-      .font(.subheadline)
-      .foregroundStyle(.primary)
-      .accessibilityAddTraits(.isHeader)
+    HStack {
+      BodyLabel(text: provider.displayName)
+      Spacer(minLength: 0)
+    }
 
     ForEach(visible) { row in
       modelRow(row)
@@ -207,13 +215,13 @@ struct UsageAgentListSections: View {
     let tokens = QuotaFormat.compactCount(row.totals.totalTokens)
     let cost = QuotaFormat.cost(row.cost)
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(row.displayName)
-        .font(.subheadline)
+      BodyLabel(text: row.displayName, style: .subheadline)
       Spacer(minLength: 8)
-      Text("\(tokens) · \(cost)")
-        .font(.subheadline.monospacedDigit())
-        .foregroundStyle(.primary)
-        .multilineTextAlignment(.trailing)
+      BodyLabel(
+        text: "\(tokens) · \(cost)",
+        style: .subheadline,
+        monospacedDigit: true
+      )
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(

@@ -119,6 +119,8 @@ struct SubscriptionDetailView: View {
       readingsSection(content)
     }
     .listStyle(.insetGrouped)
+    .contentMargins(.bottom, 24, for: .scrollContent)
+    .quotaTabBarClearance()
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("subscription.detail")
     .navigationTitle(content.providerName)
@@ -127,22 +129,19 @@ struct SubscriptionDetailView: View {
 
   private func identitySection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      LabeledContent("Account", value: content.accountLabel)
+      labeledRow(label: "Account", value: content.accountLabel)
       if let plan = content.plan {
-        LabeledContent("Plan", value: plan)
+        labeledRow(label: "Plan", value: plan)
       }
     } footer: {
-      Text(content.freshness)
-        .font(.footnote.monospacedDigit())
-        .foregroundStyle(Color(uiColor: .label))
-        .fixedSize(horizontal: false, vertical: true)
+      BodyLabel(text: content.freshness, style: .footnote, monospacedDigit: true)
         .accessibilityLabel(content.freshness)
     }
   }
 
   @ViewBuilder
   private func quotaSection(_ content: SubscriptionDetailContent) -> some View {
-    Section("Quota") {
+    Section {
       if content.windows.isEmpty {
         Text("No quota windows yet.")
           .foregroundStyle(Color(uiColor: .label))
@@ -155,12 +154,15 @@ struct SubscriptionDetailView: View {
           )
         }
       }
+    } header: {
+      Text("Quota")
+        .foregroundStyle(Color(uiColor: .label))
     }
   }
 
   @ViewBuilder
   private func readingsSection(_ content: SubscriptionDetailContent) -> some View {
-    Section("Readings") {
+    Section {
       if content.sources.isEmpty {
         Text("No device readings yet.")
           .foregroundStyle(Color(uiColor: .label))
@@ -169,34 +171,39 @@ struct SubscriptionDetailView: View {
           sourceRow(row)
         }
       }
+    } header: {
+      Text("Readings")
+        .foregroundStyle(Color(uiColor: .label))
     }
+  }
+
+  private func labeledRow(label: String, value: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      BodyLabel(text: label)
+      Spacer(minLength: 8)
+      BodyLabel(text: value, weight: .medium)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(label), \(value)")
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       VStack(alignment: .leading, spacing: 5) {
-        Text(row.displayName)
-          .font(.subheadline.weight(.medium))
-          .foregroundStyle(Color(uiColor: .label))
-          .fixedSize(horizontal: false, vertical: true)
+        BodyLabel(text: row.displayName, style: .subheadline, weight: .medium)
         if let remaining = row.remaining {
-          Text(remaining)
-            .font(.body.monospacedDigit().weight(.medium))
-            .foregroundStyle(Color(uiColor: .label))
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+          BodyLabel(
+            text: remaining,
+            style: .body,
+            weight: .medium,
+            monospacedDigit: true
+          )
         }
-        Text(row.freshness)
-          .font(.footnote.monospacedDigit())
-          .foregroundStyle(Color(uiColor: .label))
-          .fixedSize(horizontal: false, vertical: true)
+        BodyLabel(text: row.freshness, style: .footnote, monospacedDigit: true)
       }
       Spacer(minLength: 8)
       if row.isReporting {
-        Text("Reporting")
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.primary)
-          .multilineTextAlignment(.trailing)
+        BodyLabel(text: "Reporting", style: .footnote, weight: .medium)
       }
     }
     .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))

@@ -107,7 +107,7 @@ struct VisualFixtureParserTests {
         .connectRefreshFailed, now: VisualFixture.referenceDate)
       #expect(model.skipsRestore)
       #expect(model.phase == .pendingRefreshFailed)
-      #expect(model.banner?.text == "Could not reach quota.gotry.io.")
+      #expect(model.banner?.text == "Couldn't reach quota.gotry.io.")
       #expect(model.expiredMessage == nil)
     }
 
