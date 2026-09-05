@@ -37,7 +37,7 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
         <div class="hero-actions">
           <a class="button button-primary" href={dmgUrl}>Download for macOS</a>
           <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
-            >Sign in with GitHub</a
+            >Sign in</a
           >
         </div>
         <p class="hero-meta">Free &amp; open source · MIT · macOS 14+</p>
@@ -171,7 +171,7 @@ const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
         <h3>Account</h3>
         <p>The same remaining quota, Usage, and Devices in the browser.</p>
         <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
-          >Sign in with GitHub</a
+          >Sign in</a
         >
       </article>
       <article class="platform-card">

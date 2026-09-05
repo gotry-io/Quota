@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
@@ -12,6 +13,8 @@ import {
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IDENTITY_PROVIDERS,
+  identityProviderDisplayName,
   IOS_OAUTH_CLIENT_ID,
   IOS_OAUTH_REDIRECT_URI,
   IosLoginExchangeRequestSchema,
@@ -310,6 +313,52 @@ describe("quota protocol", () => {
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       }).success,
     ).toBe(false);
+  });
+
+  it("states every channel an Account is reached through, and only known ones", () => {
+    const account = {
+      protocol_version: PROTOCOL_VERSION,
+      account: {
+        account_id: "account_01",
+        display_label: "octocat",
+        created_at: "2026-01-04T12:00:00Z",
+      },
+      identities: [
+        { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+        { provider: "apple", label: null, linked_at: "2026-02-04T12:00:00Z" },
+      ],
+    };
+    expect(AccountResponseSchema.safeParse(account).success).toBe(true);
+    // The channels are a closed vocabulary, and the subject a provider proved is never answered.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [
+          { provider: "carrier-pigeon", label: null, linked_at: "2026-01-04T12:00:00Z" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [{ ...account.identities[0], subject: "5b2c" }],
+      }).success,
+    ).toBe(false);
+    // An Account holds a channel at most once, so it can never state more than there are.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [...account.identities, ...account.identities],
+      }).success,
+    ).toBe(false);
+    expect(AccountResponseSchema.safeParse({ ...account, identities: undefined }).success).toBe(
+      false,
+    );
+    expect(IDENTITY_PROVIDERS.map(identityProviderDisplayName)).toEqual([
+      "GitHub",
+      "Apple",
+      "Email",
+    ]);
   });
 
   it("adds a strictly additive quota-ios account-only token contract", () => {

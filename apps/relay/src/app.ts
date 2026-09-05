@@ -7,6 +7,8 @@ import {
 import {
   AccountResponseSchema,
   AccountSummarySchema,
+  identityProviderDisplayName,
+  IdentityProviderSchema,
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
@@ -67,12 +69,14 @@ import {
   type BrowserSignInFailureReason,
   htmlOrJsonSignInError,
 } from "./account/browser-error-page.ts";
+import { clearedHandoffCookie, type SignInIntent } from "./account/identity.ts";
 import {
-  clearedHandoffCookie,
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
+  type RegisteredIdentityProvider,
   safeReturnPath,
   type WebSessionPort,
+  type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
@@ -80,8 +84,8 @@ import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
-/** The issuer GitHub states in its authorization-code redirect (RFC 9207). */
-const GITHUB_ISSUER = "https://github.com/login/oauth";
+/** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
+const SIGN_IN_PATH = "/sign-in";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
@@ -257,13 +261,23 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
   app.get("/api/v2/info", (context) => context.json(managedServiceInfo()));
-  // Sign-in is a plain navigation: the browser leaves for GitHub carrying a signed cookie that
-  // states which sign-in this is, and comes back to the callback below with nothing else.
-  app.get("/api/auth/github/start", async (context) => {
-    if (!hasOnlyQueryKeys(context, ["return_to"])) return invalidRequest(context);
+  // Sign-in is a plain navigation: the browser leaves for a provider carrying a signed cookie
+  // that states which round trip this is, and comes back to the callback below with nothing else.
+  app.get("/api/auth/:provider/start", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider) return unknownProvider(context);
+    if (!hasOnlyQueryKeys(context, ["return_to", "intent"])) return invalidRequest(context);
     const requested = context.req.query("return_to");
     const returnTo = requested === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(requested);
     if (returnTo === null) return invalidRequest(context);
+    const requestedIntent = context.req.query("intent");
+    if (
+      requestedIntent !== undefined &&
+      requestedIntent !== "sign_in" &&
+      requestedIntent !== "link"
+    ) {
+      return invalidRequest(context);
+    }
     const limited = await enforceRateLimit(
       context,
       options.state,
@@ -274,17 +288,23 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       now(),
     );
     if (limited) return limited;
-    return beginGitHubSignIn(context, options, returnTo, now());
+    let intent: SignInIntent = { kind: "sign_in" };
+    if (requestedIntent === "link") {
+      // Binding a channel writes to an Account, so it takes the session that names one. A
+      // signed-out browser asking to link has nothing to link to.
+      const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+      if (!principal) return unauthorized(context);
+      intent = { kind: "link", account_id: principal.account_id };
+    }
+    const started = await options.webSessions.beginSignIn(provider.id, intent, returnTo, now());
+    context.header("Set-Cookie", started.handoff, { append: true });
+    return context.redirect(started.location, 302);
   });
 
-  app.get("/api/auth/github/callback", async (context) => {
-    // GitHub names itself in the redirect (`iss`, RFC 9207). A callback that names any other
-    // issuer is not GitHub's; one that names none is an older GitHub and still is.
-    if (!hasOnlyQueryKeys(context, ["code", "state", "iss"])) {
-      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
-    }
-    const issuer = context.req.query("iss");
-    if (issuer !== undefined && issuer !== GITHUB_ISSUER) {
+  app.get("/api/auth/:provider/callback", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider) return unknownProvider(context);
+    if (!hasOnlyQueryKeys(context, provider.callbackQueryKeys)) {
       return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
     const limited = await enforceRateLimit(
@@ -300,10 +320,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
     try {
       completed = await options.webSessions.completeSignIn(
+        provider.id,
         {
-          cookie: context.req.header("Cookie") ?? null,
-          state: context.req.query("state") ?? null,
-          code: context.req.query("code") ?? null,
+          headers: context.req.raw.headers,
+          query: new URL(context.req.url).searchParams,
         },
         now(),
       );
@@ -311,6 +331,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
       // a credential; without them a production sign-in that dies mid-verification is invisible.
       console.error("web_signin_failed", {
+        provider: provider.id,
         name: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
       });
@@ -320,20 +341,33 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         "invalid_request",
       );
     }
-    if (completed.outcome !== "signed_in") {
+    if (completed.outcome === "rejected") {
       // The reason is a category, never a value: enough to tell a lost cookie from a refused
       // code when a sign-in fails in production, and nothing a log reader could replay.
-      console.warn("web_signin_rejected", { reason: completed.reason });
+      console.warn("web_signin_rejected", { provider: provider.id, reason: completed.reason });
       context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
-      const reason: BrowserSignInFailureReason =
-        completed.reason === "handoff" ? "no_session" : "invalid_request";
       return browserSignInFailure(
         context,
-        relayError(context, 400, "invalid_request", "The sign-in request could not be completed."),
-        reason,
+        completed.reason === "identity_taken"
+          ? relayError(
+              context,
+              409,
+              "conflict",
+              "That identity already belongs to another Quota account.",
+            )
+          : relayError(
+              context,
+              400,
+              "invalid_request",
+              "The sign-in request could not be completed.",
+            ),
+        signInFailureReason(completed.reason),
+        identityProviderDisplayName(provider.id),
       );
     }
-    context.header("Set-Cookie", completed.session, { append: true });
+    if (completed.outcome === "signed_in") {
+      context.header("Set-Cookie", completed.session, { append: true });
+    }
     context.header("Set-Cookie", completed.handoff, { append: true });
     // Checked here as well as where it was accepted. This value has been out of Relay's hands
     // and back — through a signed cookie, but a cookie all the same — and it is about to become
@@ -404,7 +438,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`,
       );
       if (callback === null) return invalidRequest(context);
-      return await beginGitHubSignIn(context, options, callback, now());
+      // A native login no longer leaves for a provider on its own. It goes to the page that asks
+      // which Account this is, because a browser already signed in as one would otherwise be
+      // handed silently back to whichever Account its provider session belongs to.
+      return context.redirect(`${SIGN_IN_PATH}?return_to=${encodeURIComponent(callback)}`, 302);
     } catch (error) {
       return accountFlowError(context, error);
     }
@@ -414,7 +451,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!hasOnlyQueryKeys(context, ["login_token"])) {
       return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
-    // The other end of the same browser round trip as the GitHub callback, and the only route
+    // The other end of the same browser round trip as the provider callback, and the only route
     // that turns a login token into an authorization code, so it is guessable at exactly the
     // rate that one is.
     const limited = await enforceRateLimit(
@@ -432,13 +469,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!loginToken || loginToken.length > 4_096 || !principal) {
       return browserSignInFailure(context, unauthorized(context), "no_session");
     }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) return browserSignInFailure(context, unauthorized(context), "no_session");
+    // A session naming an Account that no longer exists authenticates nothing, and a completion
+    // is the one place that would otherwise write a grant against it.
+    if (!(await options.state.getAccount(principal.account_id))) {
+      return browserSignInFailure(context, unauthorized(context), "no_session");
+    }
     try {
       const completion = await options.accountService.completeBrowserLogin(
         loginToken,
         principal.account_id,
-        account.display_label ?? "GitHub account",
         now(),
       );
       if (!isLoopbackRedirect(completion.redirect_uri) && !isIosRedirect(completion.redirect_uri)) {
@@ -579,7 +618,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
-    const account = await options.state.getAccount(principal.account_id);
+    const [account, identities] = await Promise.all([
+      options.state.getAccount(principal.account_id),
+      options.state.listAccountIdentities(principal.account_id),
+    ]);
     if (!account) {
       return unauthorized(context);
     }
@@ -587,6 +629,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       AccountResponseSchema.parse({
         protocol_version: PROTOCOL_VERSION,
         account: publicAccount(account),
+        identities: identities.map((identity) => ({
+          provider: identity.provider,
+          label: identity.label,
+          linked_at: identity.created_at,
+        })),
       }),
     );
   });
@@ -744,6 +791,48 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return notFound(context);
     }
     context.header("Set-Cookie", clearedSessionCookie(), { append: true });
+    return context.body(null, 204);
+  });
+
+  app.delete("/api/v2/account/identities/:provider", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    // Any channel an Account can hold may be unbound, whether or not Relay currently offers a
+    // round trip through it: what is stored decides this, not what can be started.
+    const provider = IdentityProviderSchema.safeParse(context.req.param("provider"));
+    if (!provider.success) return unknownProvider(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "identity-unlink",
+      principal.account_id,
+      rateLimits.destructiveMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    const unsafe = requireRecentWebMutation(context, principal, now());
+    if (unsafe) {
+      return unsafe;
+    }
+    const outcome = await options.state.unlinkIdentity(
+      principal.account_id,
+      provider.data,
+      now().toISOString(),
+    );
+    if (outcome === "not_found") return notFound(context);
+    if (outcome === "last_identity") {
+      return relayError(
+        context,
+        409,
+        "conflict",
+        "An Account keeps at least one way to sign in to it.",
+      );
+    }
     return context.body(null, 204);
   });
 
@@ -1057,15 +1146,28 @@ async function answerIfNoneMatch(
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
-async function beginGitHubSignIn(
+function unknownProvider(context: Context): Response {
+  return relayError(context, 404, "not_found", "Quota does not sign in through that provider.");
+}
+
+/** The provider this route is for, or null when Relay speaks no such channel. */
+function registeredProvider(
   context: Context,
   options: RelayAppOptions,
-  returnTo: string,
-  now: Date,
-): Promise<Response> {
-  const started = await options.webSessions.beginSignIn(returnTo, now);
-  context.header("Set-Cookie", started.handoff, { append: true });
-  return context.redirect(started.location, 302);
+): RegisteredIdentityProvider | null {
+  return options.webSessions.identityProvider(context.req.param("provider") ?? "");
+}
+
+/**
+ * What a browser is told when a round trip does not finish.
+ *
+ * Everything but a lost handoff and a taken identity is one category on purpose: a person cannot
+ * act on the difference between a refused code and a refused profile read, and the log line
+ * already carries it.
+ */
+function signInFailureReason(rejection: WebSignInRejection): BrowserSignInFailureReason {
+  if (rejection === "handoff" || rejection === "link_session") return "no_session";
+  return rejection === "identity_taken" ? "identity_taken" : "invalid_request";
 }
 
 /**
@@ -1399,8 +1501,9 @@ function browserSignInFailure(
   context: Context,
   json: Response,
   reason: BrowserSignInFailureReason,
+  providerName?: string,
 ): Response {
-  return htmlOrJsonSignInError(context.req.header("Accept"), json, reason);
+  return htmlOrJsonSignInError(context.req.header("Accept"), json, reason, providerName);
 }
 
 function relayError(

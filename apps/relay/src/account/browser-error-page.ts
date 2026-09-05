@@ -5,13 +5,16 @@ export type BrowserSignInFailureReason =
   | "no_session"
   | "expired"
   | "rate_limited"
-  | "invalid_request";
+  | "invalid_request"
+  /** The channel this browser proved is already how another Quota Account is reached. */
+  | "identity_taken";
 
 const reasonCopy: Record<BrowserSignInFailureReason, string> = {
   no_session: "This browser isn't signed in to Quota.",
   expired: "This sign-in took too long and expired.",
   rate_limited: "Too many sign-in attempts. Wait a moment and try again.",
   invalid_request: "This sign-in request couldn't be completed.",
+  identity_taken: "That account is already linked to another Quota account.",
 };
 
 export function acceptsHtml(accept: string | undefined): boolean {
@@ -41,8 +44,14 @@ export function acceptsHtml(accept: string | undefined): boolean {
  * A page a person in `ASWebAuthenticationSession` can read. JSON clients keep the original
  * status and body: only an Accept that names `text/html` gets this 200.
  */
-export function browserSignInErrorPage(reason: BrowserSignInFailureReason): Response {
-  const explanation = reasonCopy[reason];
+export function browserSignInErrorPage(
+  reason: BrowserSignInFailureReason,
+  providerName?: string,
+): Response {
+  const explanation =
+    reason === "identity_taken" && providerName
+      ? `That ${providerName} account is already linked to another Quota account.`
+      : reasonCopy[reason];
   const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -70,9 +79,10 @@ export function htmlOrJsonSignInError(
   accept: string | undefined,
   json: Response,
   reason: BrowserSignInFailureReason,
+  providerName?: string,
 ): Response {
   if (!acceptsHtml(accept)) return json;
-  const page = browserSignInErrorPage(reason);
+  const page = browserSignInErrorPage(reason, providerName);
   const retryAfter = json.headers.get("Retry-After");
   if (!retryAfter) return page;
   const headers = new Headers(page.headers);

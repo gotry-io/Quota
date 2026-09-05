@@ -31,26 +31,33 @@ The site has these routes:
 
 1. `/` is the public landing: a hero (`See what's left across your coding-agent plans.`, a
    supporting sentence that QuotaBar reads locally and Relay syncs remaining quota and Usage
-   totals, **Download for macOS**, **Sign in with GitHub**, `Free & open source · MIT · macOS
+   totals, **Download for macOS**, **Sign in**, `Free & open source · MIT · macOS
    14+`, and three product screenshots), How it works, Providers & agents, Privacy, and
    Platforms. Homebrew is the compact install in the Platforms macOS card: a Homebrew label, a
    short tap note, the `brew install gotry-io/tap/quotabar` command, and a Copy control with
-   brief Copied feedback. GitHub sign-in is in the hero and the site header. The appearance
+   brief Copied feedback. Sign in is in the hero and the site header. The appearance
    control lives in the footer.
-2. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
+2. `/sign-in` is where every sign-in starts, including the one QuotaBar and Quota for iPhone
+   open in a browser. Signed out, it is `Sign in to Quota`, one sentence that an Account is
+   reached the same way however you sign in, and one button per channel this build offers
+   (**Continue with GitHub** today), each linking `/api/auth/<provider>/start?return_to=…`.
+   Signed in, it asks which Account this is: **Continue as \<display label\>** and **Use a
+   different account**, which signs this browser out and comes back here. `return_to` defaults
+   to `/my`, and anything but a same-origin path is a 400. The page is `noindex, nofollow`.
+3. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
    that Quota for iPhone is coming soon. It does not present an App Store badge or a dead store
    link.
-3. `/support` answers FAQ from `src/content/support.md`: where data comes from, when Quota for
+4. `/support` answers FAQ from `src/content/support.md`: where data comes from, when Quota for
    iPhone will be available (Coming soon; when it ships it will read the Account QuotaBar
    reports), how to copy a diagnostic report, and how to delete an account from `/my`.
    Notifications live at `/support#notifications`: remaining-quota alerts and reset reminders
    are configured and evaluated in QuotaBar on the Mac; the website does not send notifications.
-4. `/privacy` and `/terms` render `src/content/privacy.md` and `src/content/terms.md`. Both are
+5. `/privacy` and `/terms` render `src/content/privacy.md` and `src/content/terms.md`. Both are
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
    [`docs/security.md`](../../docs/security.md).
-5. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
+6. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
    with four routes when the viewer is signed in and the path is under `/my`; the current item
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
    `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
@@ -176,7 +183,7 @@ The landing is six blocks, in this order. It does not use slogan sections.
 1. **Hero.** The `h1` is “See what's left across your coding-agent plans.” One supporting
    sentence: “QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and
    Usage totals to the web.” Dual CTAs: **Download for macOS** (the live GitHub Releases `.dmg`)
-   and **Sign in with GitHub** (`/api/auth/github/start`), with `Free & open source · MIT ·
+   and **Sign in** (`/sign-in`), with `Free & open source · MIT ·
    macOS 14+` beside them. The product preview is three real screenshots, not a hand-coded
    mock: QuotaBar overview, the account overview (desktop capture), and Quota for iPhone
    overview labelled **Preview**. Each shot has a light and dark asset switched from

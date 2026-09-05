@@ -15,6 +15,7 @@ import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { signInReturnTo } from "./native-sign-in.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
@@ -43,16 +44,13 @@ describe("quota-ios read-only account client", () => {
   it("rejects exact client and redirect mismatches before GitHub", async () => {
     const harness = await createHarness();
     const { challenge } = await pkcePair();
-    expect(
-      (
-        await authorize(harness, {
-          client_id: IOS_OAUTH_CLIENT_ID,
-          redirect_uri: IOS_OAUTH_REDIRECT_URI,
-          state: "client-state-123456789",
-          code_challenge: challenge,
-        })
-      ).status,
-    ).toBe(302);
+    const started = await authorize(harness, {
+      client_id: IOS_OAUTH_CLIENT_ID,
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      state: "client-state-123456789",
+      code_challenge: challenge,
+    });
+    expect(started.status).toBe(302);
 
     expect(
       (
@@ -135,18 +133,15 @@ describe("quota-ios read-only account client", () => {
   it("exchanges an account session without creating a Device", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
-    expect(
-      (
-        await authorize(harness, {
-          client_id: IOS_OAUTH_CLIENT_ID,
-          redirect_uri: IOS_OAUTH_REDIRECT_URI,
-          state: "client-state-123456789",
-          code_challenge: challenge,
-        })
-      ).status,
-    ).toBe(302);
+    const started = await authorize(harness, {
+      client_id: IOS_OAUTH_CLIENT_ID,
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      state: "client-state-123456789",
+      code_challenge: challenge,
+    });
+    expect(started.status).toBe(302);
 
-    const complete = await harness.app.request(harness.callbackURL);
+    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     expect(complete.status).toBe(302);
     const location = complete.headers.get("location") ?? "";
     expect(location.startsWith(`${IOS_OAUTH_REDIRECT_URI}?`)).toBe(true);
@@ -200,17 +195,14 @@ describe("quota-ios read-only account client", () => {
   it("rejects device fields, a wrong verifier, and replay", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
-    expect(
-      (
-        await authorize(harness, {
-          client_id: IOS_OAUTH_CLIENT_ID,
-          redirect_uri: IOS_OAUTH_REDIRECT_URI,
-          state: "client-state-123456789",
-          code_challenge: challenge,
-        })
-      ).status,
-    ).toBe(302);
-    const complete = await harness.app.request(harness.callbackURL);
+    const started = await authorize(harness, {
+      client_id: IOS_OAUTH_CLIENT_ID,
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      state: "client-state-123456789",
+      code_challenge: challenge,
+    });
+    expect(started.status).toBe(302);
+    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     expect(code).toBeTruthy();
 
@@ -253,17 +245,14 @@ describe("quota-ios read-only account client", () => {
   it("rejects an expired authorization code without creating a Device", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
-    expect(
-      (
-        await authorize(harness, {
-          client_id: IOS_OAUTH_CLIENT_ID,
-          redirect_uri: IOS_OAUTH_REDIRECT_URI,
-          state: "client-state-123456789",
-          code_challenge: challenge,
-        })
-      ).status,
-    ).toBe(302);
-    const complete = await harness.app.request(harness.callbackURL);
+    const started = await authorize(harness, {
+      client_id: IOS_OAUTH_CLIENT_ID,
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      state: "client-state-123456789",
+      code_challenge: challenge,
+    });
+    expect(started.status).toBe(302);
+    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     harness.checkedAt = new Date(now.getTime() + 11 * 60 * 1000);
     const expiredExchange = await exchangeIos(harness, {
@@ -479,8 +468,9 @@ describe("quota-ios read-only account client", () => {
       code_challenge: challenge,
       code_challenge_method: "S256",
     }).toString();
-    expect((await harness.app.request(authorizeUrl)).status).toBe(302);
-    const complete = await harness.app.request(harness.callbackURL);
+    const started = await harness.app.request(authorizeUrl);
+    expect(started.status).toBe(302);
+    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     expect(complete.status).toBe(302);
     const location = complete.headers.get("location") ?? "";
     expect(location.startsWith("http://127.0.0.1:43210/callback?")).toBe(true);
@@ -532,19 +522,23 @@ describe("quota-ios read-only account client", () => {
 interface TestHarness {
   app: ReturnType<typeof createRelayApp>;
   accountId: string;
-  callbackURL: string;
   checkedAt: Date;
 }
 
 async function createHarness(): Promise<TestHarness> {
   harnessSequence += 1;
   const accountId = `ios_account_${harnessSequence}`;
-  await env.DB.prepare(
-    `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-     VALUES (?1, ?1, 'iOS Tester', ?2, ?2)`,
-  )
-    .bind(accountId, now.toISOString())
-    .run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO accounts (id, display_label, created_at, updated_at)
+       VALUES (?1, 'iOS Tester', ?2, ?2)`,
+    ).bind(accountId, now.toISOString()),
+    // Every Account is reached through at least one channel, and the Account read answers them.
+    env.DB.prepare(
+      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+       VALUES (?1, 'github', ?2, 'iOS Tester', ?3)`,
+    ).bind(accountId, `subject_${accountId}`, now.toISOString()),
+  ]);
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
   const checked = { at: now };
@@ -560,9 +554,6 @@ async function createHarness(): Promise<TestHarness> {
   return {
     app,
     accountId,
-    get callbackURL() {
-      return `https://quota.gotry.io${webSessions.returnTo}`;
-    },
     get checkedAt() {
       return checked.at;
     },
@@ -583,8 +574,9 @@ async function loginQuotabar(harness: TestHarness): Promise<OAuthTokenResponse> 
     code_challenge: challenge,
     code_challenge_method: "S256",
   }).toString();
-  expect((await harness.app.request(authorizeUrl)).status).toBe(302);
-  const complete = await harness.app.request(harness.callbackURL);
+  const started = await harness.app.request(authorizeUrl);
+  expect(started.status).toBe(302);
+  const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
   expect(complete.status).toBe(302);
   const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
   const exchanged = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
@@ -608,17 +600,14 @@ async function loginQuotabar(harness: TestHarness): Promise<OAuthTokenResponse> 
 
 async function loginIos(harness: TestHarness): Promise<IosOAuthTokenResponse> {
   const { verifier, challenge } = await pkcePair();
-  expect(
-    (
-      await authorize(harness, {
-        client_id: IOS_OAUTH_CLIENT_ID,
-        redirect_uri: IOS_OAUTH_REDIRECT_URI,
-        state: "client-state-123456789",
-        code_challenge: challenge,
-      })
-    ).status,
-  ).toBe(302);
-  const complete = await harness.app.request(harness.callbackURL);
+  const started = await authorize(harness, {
+    client_id: IOS_OAUTH_CLIENT_ID,
+    redirect_uri: IOS_OAUTH_REDIRECT_URI,
+    state: "client-state-123456789",
+    code_challenge: challenge,
+  });
+  expect(started.status).toBe(302);
+  const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
   expect(complete.status).toBe(302);
   const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
   const exchanged = await exchangeIos(harness, { code: code ?? "", code_verifier: verifier });

@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { describe, expect, inject, it } from "vitest";
+import { ladderThroughCutover } from "./migration-ladder.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -88,7 +89,7 @@ describe("0018 hour-versioned facts and daily rollups", () => {
 
     await applyD1Migrations(env.DB, migrations.slice(0, index));
     await seedRetainedFacts();
-    await applyD1Migrations(env.DB, migrations.slice(index));
+    await applyD1Migrations(env.DB, ladderThroughCutover(migrations, index));
 
     const hourly = await env.DB.prepare(
       `SELECT bucket_start_utc, model, scan_version, partial, input_tokens, output_tokens,

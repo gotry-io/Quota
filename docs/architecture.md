@@ -12,7 +12,7 @@ links to it rather than restating it.
   snapshot its widgets render. It is not a collection Device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
-- **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized
+- **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Worker
@@ -24,8 +24,9 @@ pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only ent
 private macOS stdio binary. The crate itself stays platform-neutral, and its owner-only
 configuration and state live under `~/.config/quota/`.
 
-GitHub is the only account identity provider and the managed origin is fixed at
-`https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
+An Account owns the channels it is reached through — GitHub today, with Apple and Email registering
+against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the
+managed origin is fixed at `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
 document, self-hosted process, SQLite Relay adapter, or protocol v1 route. The decision records
 behind each area are indexed by [`AGENTS.md`](../AGENTS.md) and linked where they apply below.
 
@@ -240,9 +241,9 @@ Device fields and returns only an account session: it is not a collection Device
 `packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect with GitHub presents
 `ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
-stays in the system browser, not in the app. Because GitHub may silently reuse that Safari
-account, the app confirms **Use this GitHub account?** against the Account `display_label` before
-opening signed-in tabs. The Keychain session is stored with `activation: pending` at exchange and
+stays in the system browser, not in the app. `/sign-in` now asks which Account this is before the
+round trip finishes, and the app still confirms **Use this GitHub account?** against the Account
+`display_label` before opening signed-in tabs. The Keychain session is stored with `activation: pending` at exchange and
 becomes `active` only when Continue confirms it; **Use a different account** revokes the session
 just opened and repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
@@ -353,14 +354,17 @@ navigations run the Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wra
 keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first request is rendered
 by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cookie through
 `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the QuotaBar
-`.dmg` and Homebrew install command, GitHub sign-in is in the header, and `/my` is a server redirect
+`.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a client-rendered dashboard: the browser requests
 `GET /api/v6/account/summary` once with its own IANA timezone; the document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none
-anonymously, and `/app` redirects to `/my`. Relay owns GitHub login and browser
-sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition decision is
-[ADR 0011](decisions/0011-sveltekit-document-worker.md).
+anonymously, and `/app` redirects to `/my`. Every sign-in starts at `/sign-in`, which asks a
+signed-in browser to confirm which Account it is continuing as before it goes on — including the
+one QuotaBar and Quota for iPhone open, because `/oauth/v2/authorize` redirects there rather than
+to a provider ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). Relay owns identity
+login and browser sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition
+decision is [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification; production Web and Worker deploy together
