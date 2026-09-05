@@ -546,6 +546,37 @@ mod tests {
         assert!(sso_token("sessionKey=sk-ant-ok").is_none());
     }
 
+    /// Both runtimes answer the same cases, so a rule this collector starts reading differently
+    /// fails here rather than resolving one account into two subscriptions.
+    #[test]
+    fn the_shared_conformance_fixture_is_answered() {
+        use crate::providers::common::web_conformance;
+
+        const RPC_PATH: &str = "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+        let cases = web_conformance::cases("grok");
+        assert!(cases.len() >= 3);
+        for case in &cases {
+            web_conformance::assert_case(
+                case,
+                |cookie, context, base| validate_at(cookie, context, &format!("{base}{RPC_PATH}")),
+                |cookie, context, base| collect_at(cookie, context, &format!("{base}{RPC_PATH}")),
+            );
+        }
+    }
+
+    /// The RPC this collector calls is that path on grok.com, so a reading driven against a stub
+    /// asks for the same RPC a reading against grok.com does.
+    #[test]
+    fn the_rpc_path_is_the_rpc_url() {
+        assert_eq!(
+            format!(
+                "https://grok.com{}",
+                "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+            ),
+            BILLING_RPC_URL
+        );
+    }
+
     #[test]
     fn parses_grpc_web_percent_and_auth_trailer() {
         let billing =

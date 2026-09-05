@@ -4,17 +4,9 @@
 import Foundation
 import QuotaWire
 
-struct BrowserSessionSpec: Equatable, Sendable {
-  let loginURL: String
-  let cookieHosts: [String]
-  let cookieNames: [String]
-  let browserPriority: [String]
-  let exclusive: Bool
-}
-
-// The cases, id, displayName, and sortOrder come from QuotaWire's ProviderID, which is the
-// same catalog. What follows is behavior only the macOS app has: Settings fields, browser
-// session acquisition, and Agents visibility.
+// The cases, id, displayName, sortOrder, and browser-session spec come from QuotaWire's
+// ProviderID, which is the same catalog. What follows is behavior only the macOS app has:
+// Settings fields and Agents visibility.
 extension ProviderID {
   /// Menubar Agents toggle default (catalog.default_visible).
   var defaultVisible: Bool {
@@ -94,45 +86,6 @@ extension ProviderID {
     case .`litellm`: true
     case .`cursor`: false
     case .unknown: false
-    }
-  }
-
-  var browserSession: BrowserSessionSpec? {
-    switch self {
-    case .`codex`: BrowserSessionSpec(
-      loginURL: "https://chatgpt.com/",
-      cookieHosts: ["chatgpt.com", "www.chatgpt.com"],
-      cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`claude`: BrowserSessionSpec(
-      loginURL: "https://claude.ai/",
-      cookieHosts: ["claude.ai", "www.claude.ai"],
-      cookieNames: ["sessionKey", "lastActiveOrg"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`grok`: BrowserSessionSpec(
-      loginURL: "https://grok.com/",
-      cookieHosts: ["grok.com", "www.grok.com"],
-      cookieNames: ["sso", "sso-rw"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`openrouter`: nil
-    case .`deepseek`: nil
-    case .`kimi`: BrowserSessionSpec(
-      loginURL: "https://www.kimi.com/code/console",
-      cookieHosts: ["www.kimi.com", "kimi.com"],
-      cookieNames: ["kimi-auth"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: false)
-    case .`litellm`: nil
-    case .`cursor`: BrowserSessionSpec(
-      loginURL: "https://authenticator.cursor.sh/",
-      cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
-      cookieNames: ["WorkosCursorSessionToken", "wos-session", "__Secure-wos-session"],
-      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
-      exclusive: true)
-    case .unknown: nil
     }
   }
 }

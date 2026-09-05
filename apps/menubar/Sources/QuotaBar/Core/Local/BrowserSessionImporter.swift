@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+import QuotaWire
 import SweetCookieKit
 
 struct BrowserSessionCookieCandidate: Equatable, Sendable {

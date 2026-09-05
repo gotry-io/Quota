@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-08-24
 - Updated 2026-08-25 by [ADR 0023](./0023-strict-writes-tolerant-reads.md), inline below
+- Updated 2026-09-05: the provider browser-session rung answers its own conformance fixture,
+  inline below
 
 ## Decision
 
@@ -35,6 +37,11 @@ disagree about and are gone.
 **The restatements answer one judge.** `packages/protocol/fixtures/wire-conformance.json` states each
 contract as accepted and refused payloads, and the zod schema, the Rust validators in
 `packages/service`, and the Swift decoders in `packages/apple-client` and QuotaBar each answer it.
+Updated 2026-09-05: a collector is a contract with a provider, and the browser-session rung is now
+written twice — the Rust collectors in `packages/service/src/providers` and `QuotaProviderWeb` in
+`packages/apple-client`. `packages/protocol/fixtures/provider-web-conformance.json` states each
+provider's exchanges and what they answer, and both runtimes drive it, because a fingerprint the two
+compute differently resolves one account into two subscriptions.
 [ADR 0023](./0023-strict-writes-tolerant-reads.md) changed what a restatement may refuse — a write is
 checked against exactly the contract, a read takes what it names and ignores the rest — so the
 fixture answers each contract from the side it is on.
