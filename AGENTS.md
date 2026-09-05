@@ -121,7 +121,7 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
   `packages/service`; keep it private: no command parser, socket listener, daemonization, or public
   installation surface. The shared crate stays platform-neutral in style, but only macOS is built,
   tested, and released.
-- Swift code targets macOS 14+ or iOS 17+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
+- Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.

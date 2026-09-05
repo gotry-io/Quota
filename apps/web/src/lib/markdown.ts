@@ -17,8 +17,14 @@ export function renderMarkdown(source: string): string {
     const heading = /^(#{1,3})[ \t]+(.+?)\s*$/.exec(line);
     if (heading?.[1] && heading[2] !== undefined) {
       const level = heading[1].length;
-      const id = level === 1 && !assignedPageTitle ? ' id="page-title"' : "";
-      if (level === 1) assignedPageTitle = true;
+      const slug = headingSlug(heading[2]);
+      let id = "";
+      if (level === 1 && !assignedPageTitle) {
+        id = ' id="page-title"';
+        assignedPageTitle = true;
+      } else if (slug) {
+        id = ` id="${escapeAttribute(slug)}"`;
+      }
       html.push(`<h${level}${id}>${renderInline(heading[2])}</h${level}>`);
       index += 1;
       continue;
@@ -109,6 +115,13 @@ function isAllowedHref(href: string): boolean {
   } catch {
     return false;
   }
+}
+
+function headingSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function isQuoteLine(line: string): boolean {

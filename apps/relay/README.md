@@ -68,7 +68,13 @@ Register the GitHub OAuth App callback as
 `GET /api/auth/github/start` seals a 256-bit `state` and a PKCE verifier in a signed ten-minute
 `__Host-quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
 the code once, and opens one `sessions` row with `client_kind = 'web'` behind a
-`__Host-quota_session` cookie. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
+`__Host-quota_session` cookie. Native login uses the same GitHub round trip, then
+`GET /oauth/v2/complete` turns the web session into an authorization code. A browser whose
+`Accept` includes `text/html` and that fails on `/api/auth/github/callback` or
+`/oauth/v2/complete` (no session, expired grant, rate limited, invalid request) gets a 200 HTML
+page titled **Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try
+again.** — never a token. Callers that do not ask for HTML still receive the original JSON status
+and body. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
 the Account and everything stored for it in one D1 batch. See
 [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 

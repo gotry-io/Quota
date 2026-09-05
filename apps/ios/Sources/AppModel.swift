@@ -10,24 +10,27 @@ import QuotaWire
 @MainActor
 @Observable
 final class AppModel {
-  enum Phase: Equatable {
+  enum Phase: Equatable, Hashable {
     case launching
     case signedOut
     case connecting
+    case confirmingAccount(label: String)
+    case pendingRefreshFailed
     case signedIn
   }
 
   enum BannerKind: Equatable {
-    case connecting
     case offlineCached
     case refreshFailed
-    case expired
   }
 
   struct Banner: Equatable {
     var kind: BannerKind
     var text: String
     var symbolName: String
+
+    static let cachedText = "Showing saved data. Couldn't refresh."
+    static let failedText = "Couldn't refresh. Pull to try again."
   }
 
   private let account: AccountClient
@@ -59,6 +62,7 @@ final class AppModel {
   var activityChart: ActivityChartPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
+  private var sessionActivation: AccountSessionActivation?
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -126,7 +130,7 @@ final class AppModel {
     PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
   }
 
-  /// One card per provider, and inside it one row per subscription rather than per
+  /// One group per provider, and inside it one Overview row per subscription rather than per
   /// reporting device: an account collected on three Macs is one subscription, not three,
   /// and Relay has already resolved it that way.
   var providerCards: [ProviderQuotaCardModel] {
@@ -140,56 +144,138 @@ final class AppModel {
 
   func restore() async {
     let cached = try? await account.loadCachedSummary()
+    let session = try? await account.loadSession()
+    sessionActivation = session?.activation
     summary = cached?.summary
     fetchedAt = cached?.fetchedAt
     fromCache = cached != nil
-    if (try? await account.hasSession()) == true {
+    switch session?.activation {
+    case .active:
       phase = .signedIn
       if let cached {
         publishWidget(summary: cached.summary, fetchedAt: cached.fetchedAt)
       }
       resolvePendingSubscriptionSelection()
       await refresh()
-    } else {
+    case .pending:
+      if let label = PlanDisplay.accountLabel(cached?.summary.account.displayLabel) {
+        phase = .confirmingAccount(label: label)
+      } else {
+        await refresh()
+        if phase == .launching {
+          presentPendingRefreshFailure(
+            message: AuthorizationError.genericConnectFailureMessage
+          )
+        }
+      }
+    case nil:
       applySignedOut()
     }
   }
 
-  func connectAccount() async {
-    guard phase != .connecting else { return }
+  func connectAccount(switchingAccount: Bool = false) async {
+    if !switchingAccount {
+      guard phase != .connecting else { return }
+    }
     phase = .connecting
-    banner = Banner(
-      kind: .connecting,
-      text: "Continue in the browser.",
-      symbolName: "safari"
-    )
+    banner = nil
+    expiredMessage = nil
     do {
       let attempt = try makeAuthorizationAttempt()
       let callback = try await authenticator.authenticate(
         url: attempt.authorizationURL,
-        callbackScheme: QuotaIOSOAuth.callbackScheme
+        callbackScheme: QuotaIOSOAuth.callbackScheme,
+        prefersEphemeralWebBrowserSession: switchingAccount
       )
-      _ = try await account.completeLogin(callback: callback, expected: attempt)
+      let session = try await account.completeLogin(callback: callback, expected: attempt)
+      sessionActivation = session.activation
       expiredMessage = nil
-      phase = .signedIn
       banner = nil
       await refresh()
     } catch is CancellationError {
-      phase = .signedOut
-      banner = nil
+      applySignedOut()
     } catch AuthorizationError.cancelled, AccountClientError.cancelled {
-      phase = .signedOut
-      banner = nil
+      applySignedOut()
     } catch AccountClientError.sessionExpired {
       applyExpired()
-    } catch {
-      phase = .signedOut
+    } catch let error as AccountClientError {
+      applySignedOut()
       banner = Banner(
         kind: .refreshFailed,
-        text: "Could not connect this account. Try again.",
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    } catch let error as AuthorizationError {
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    } catch {
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.genericConnectFailureMessage,
         symbolName: "exclamationmark.triangle"
       )
     }
+  }
+
+  /// Keep the session this device just opened. Continue is the only promotion to `active`.
+  func confirmAccount() async {
+    guard case .confirmingAccount = phase else { return }
+    do {
+      try await account.activateSession()
+    } catch {
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.genericConnectFailureMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+      return
+    }
+    sessionActivation = .active
+    expiredMessage = nil
+    phase = .signedIn
+    if let summary, let fetchedAt {
+      banner = nil
+      publishWidget(summary: summary, fetchedAt: fetchedAt)
+      evaluateAlerts(summary: summary)
+    } else {
+      banner = failureBanner(hasCachedSummary: false, offline: false)
+      clearWidget()
+    }
+    backgroundRefresh.scheduleNextRefresh()
+    resolvePendingSubscriptionSelection()
+    pruneOverviewPath()
+  }
+
+  /// Retry the identifying Account read while the session stays pending.
+  func retryPendingIdentification() async {
+    guard phase == .pendingRefreshFailed else { return }
+    banner = nil
+    expiredMessage = nil
+    await refresh()
+  }
+
+  /// Revoke the session just opened and sign in again in an ephemeral browser session so GitHub
+  /// cannot reuse the Safari account.
+  func useDifferentAccount() async {
+    switch phase {
+    case .confirmingAccount, .pendingRefreshFailed: break
+    default: return
+    }
+    phase = .connecting
+    banner = nil
+    expiredMessage = nil
+    await account.logout()
+    sessionActivation = nil
+    summary = nil
+    fetchedAt = nil
+    fromCache = false
+    clearWidget()
+    await connectAccount(switchingAccount: true)
   }
 
   /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
@@ -207,7 +293,7 @@ final class AppModel {
     isRefreshing = true
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
-    apply(result)
+    await apply(result)
     if phase == .signedIn {
       backgroundRefresh.scheduleNextRefresh()
     }
@@ -369,10 +455,18 @@ final class AppModel {
     activityDaySheet = sheet
   }
 
-  private func apply(_ result: AccountRefreshResult) {
+  private var isPendingSession: Bool {
+    sessionActivation == .pending
+  }
+
+  private func apply(_ result: AccountRefreshResult) async {
     summary = result.summary
     fetchedAt = result.fetchedAt
     fromCache = result.fromCache
+    if isPendingSession {
+      await applyPending(result)
+      return
+    }
     switch result.error {
     case .none:
       banner = nil
@@ -405,6 +499,59 @@ final class AppModel {
     }
   }
 
+  private func applyPending(_ result: AccountRefreshResult) async {
+    switch result.error {
+    case .none:
+      if let label = PlanDisplay.accountLabel(result.summary?.account.displayLabel) {
+        banner = nil
+        expiredMessage = nil
+        phase = .confirmingAccount(label: label)
+      } else {
+        presentPendingRefreshFailure(message: AuthorizationError.genericConnectFailureMessage)
+      }
+    case .sessionExpired:
+      await revokePendingSession()
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: AuthorizationError.expiredSignInMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    case .notSignedIn:
+      sessionActivation = nil
+      applySignedOut()
+    case .some(let error) where isExpiredConnectError(error):
+      await revokePendingSession()
+      applySignedOut()
+      banner = Banner(
+        kind: .refreshFailed,
+        text: error.userFacingMessage,
+        symbolName: "exclamationmark.triangle"
+      )
+    case .some(let error):
+      presentPendingRefreshFailure(message: error.userFacingMessage)
+    }
+  }
+
+  private func isExpiredConnectError(_ error: AccountClientError) -> Bool {
+    error.userFacingMessage == AuthorizationError.expiredSignInMessage
+  }
+
+  private func revokePendingSession() async {
+    await account.logout()
+    sessionActivation = nil
+  }
+
+  private func presentPendingRefreshFailure(message: String) {
+    banner = Banner(
+      kind: .refreshFailed,
+      text: message,
+      symbolName: "exclamationmark.triangle"
+    )
+    expiredMessage = nil
+    phase = .pendingRefreshFailed
+  }
+
   private func pruneOverviewPath() {
     guard let summary else {
       overviewPath = []
@@ -426,23 +573,23 @@ final class AppModel {
     if hasCachedSummary {
       return Banner(
         kind: offline ? .offlineCached : .refreshFailed,
-        text: "Showing saved account data. Could not refresh.",
+        text: Banner.cachedText,
         symbolName: offline ? "icloud.slash" : "exclamationmark.triangle"
       )
     }
     return Banner(
       kind: .refreshFailed,
-      text: "Could not refresh account data. Pull to try again.",
+      text: Banner.failedText,
       symbolName: "exclamationmark.triangle"
     )
   }
 
   private func applyExpired() {
     applySignedOut()
-    expiredMessage = "Session expired. Connect Account to continue."
+    expiredMessage = "Session expired. Connect again."
   }
 
-  /// Connect Account with nothing said about why: no session, or one the person ended. There is
+  /// Connect with GitHub with nothing said about why: no session, or one the person ended. There is
   /// no account left to read, so the standing background-refresh ask goes with it.
   private func applySignedOut() {
     summary = nil
@@ -450,6 +597,7 @@ final class AppModel {
     fromCache = false
     banner = nil
     expiredMessage = nil
+    sessionActivation = nil
     phase = .signedOut
     selectedTab = .overview
     selectedUsagePeriod = .last30Days

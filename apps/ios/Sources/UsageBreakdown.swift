@@ -31,6 +31,10 @@ enum UsageBreakdown {
     func hiddenCount(expanded: Bool) -> Int {
       models.count - visibleModels(expanded: expanded).count
     }
+
+    var foldsModels: Bool {
+      models.count > UsageBreakdown.collapsedModelLimit
+    }
   }
 
   struct ModelRow: Identifiable, Equatable, Sendable {

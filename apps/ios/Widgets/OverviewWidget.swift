@@ -98,7 +98,6 @@ struct OverviewWidgetEntryView: View {
     .widgetURL(OverviewWidgetContent.widgetURL(for: entry.selectedItems))
     .containerBackground(for: .widget) {
       // iOS 26 system owns Liquid Glass / accented / vibrant rendering for this container.
-      // Earlier systems fall back to the platform widget material.
       Color.clear
     }
   }

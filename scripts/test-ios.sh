@@ -93,6 +93,7 @@ xcodebuild \
   -project apps/ios/Quota.xcodeproj \
   -scheme Quota \
   -destination "$destination" \
+  -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   test

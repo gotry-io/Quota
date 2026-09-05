@@ -28,7 +28,8 @@
       "!/robots.txt",
       "!/site.webmanifest",
       "!/sitemap.xml",
-      "!/screenshots/*"
+      "!/screenshots/*",
+      "!/providers/*"
     ]
   },
   "observability": {

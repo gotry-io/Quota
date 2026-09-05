@@ -261,7 +261,7 @@ $effect(() => {
           <span>Tokens</span>
           <strong>{formatCount(selected.tokens)}</strong>
           <small
-            >{`${formatCount(selected.input_tokens)} in · ${formatCount(selected.output_tokens)} out · ${formatCount(selected.requests)} requests`}</small
+            >{`${formatCount(selected.input_tokens)} in · ${formatCount(selected.output_tokens)} out · ${formatCount(selected.messages)} messages`}</small>
           >
         </article>
         <article>

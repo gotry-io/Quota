@@ -3,7 +3,7 @@
 Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io). It keeps coding-agent
 subscription quota and privacy-preserving Usage together across a user's devices.
 
-- **Quota** — native iOS 17+ read-only Account viewer. It signs in with the registered `quota-ios`
+- **Quota** — native iOS 26+ read-only Account viewer. It signs in with the registered `quota-ios`
   public client, reads remaining quota and Today Usage, and publishes a non-secret App Group
   snapshot for Home Screen and Lock Screen widgets.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
@@ -77,7 +77,7 @@ Account, so QuotaBar switches periods without collection or network work; Overvi
 ## Development
 
 Requirements: Node.js 24+, pnpm 10+, stable Rust, and Swift 6.2+ on macOS. Quota iOS also needs
-Xcode with Swift 6.2 and the iOS 17+ SDK, plus the installed XcodeGen CLI to regenerate its
+Xcode with Swift 6.2 and the iOS 26 SDK, plus the installed XcodeGen CLI to regenerate its
 checked-in project.
 
 ```bash

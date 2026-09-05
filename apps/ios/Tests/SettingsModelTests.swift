@@ -14,9 +14,13 @@ struct SettingsModelTests {
     #expect(SettingsCopy.off == "Off")
     #expect(SettingsCopy.alertAt == "Alert at")
     #expect(SettingsCopy.thenAt == "Then at")
-    #expect(SettingsCopy.footer == "Quota reminds you when a refresh brings new data.")
+    #expect(SettingsCopy.enableNotifications == "Enable Notifications")
+    #expect(SettingsCopy.resetReminders == "Reset Reminders")
+    #expect(SettingsCopy.footer == "Alerts are checked when Quota refreshes.")
     #expect(SettingsCopy.permissionDenied == "Allow notifications for Quota in Settings.")
     #expect(SettingsCopy.openSettings == "Open Settings")
+    #expect(SettingsCopy.emptyAlerts == "No quota alerts are available yet.")
+    #expect(SettingsCopy.manageDevices == "Manage Devices on Web")
     #expect(SettingsCopy.thresholdLabel(20) == "20%")
     #expect(SettingsModel.isValidThreshold(20))
     #expect(!SettingsModel.isValidThreshold(3))
@@ -101,7 +105,13 @@ struct SettingsModelTests {
 
   @Test func versionLabelIsShortVersionAndBuild() {
     #expect(SettingsCopy.versionLabel(shortVersion: "0.0.1", build: "1") == "0.0.1 (1)")
-    #expect(SettingsCopy.licenses == "Licenses: MIT")
+    #expect(SettingsCopy.license == "License")
+    #expect(SettingsCopy.licenseValue == "MIT")
+    #expect(
+      SettingsCopy.productSentence
+        == "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
+    )
+    #expect(SettingsCopy.privacySentence == "This iPhone does not collect or upload local usage.")
   }
 
   @Test func subscriptionsUseCatalogOrderMaskedLabelsAndDefaultThresholds() {
@@ -131,6 +141,8 @@ struct SettingsModelTests {
       label: "Team workspace",
       observedAt: now
     )
+
+    #expect(model.notificationSubscriptions(from: []).isEmpty)
 
     let rows = model.notificationSubscriptions(from: [grok, claude, codex])
     #expect(rows.map(\.provider) == [.codex, .claude, .grok])

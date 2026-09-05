@@ -6,21 +6,24 @@ belongs in `apps/menubar/DESIGN.md`.
 
 ## Product character
 
-Quota on iPhone is a read-only Account instrument: remaining quota first, Today Usage
-second, GitHub identity as context. It uses native SwiftUI, system materials, and a restrained
-emerald accent. It is not a compressed website and not the QuotaBar menu panel.
+Quota on iPhone is a native iOS 26 read-only Account instrument: remaining quota first, Today Usage
+second, collection/setup and account-management support third. Liquid Glass belongs to the system
+navigation and control layer. Quota data, settings rows, status text, meters, charts, and
+empty-state explanations are content and do not use glass. It is not a compressed website and not
+the QuotaBar menu panel.
 
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect Account and Log Out are the only account actions this device performs. Delete Account
+2. Connect with GitHub and Log Out are the only account actions this device performs. Delete Account
    starts on the website after a fresh GitHub sign-in.
-3. Last-good Account data stays visible across transient failures. A banner states that in words,
-   not color alone.
+3. Last-good Account data stays visible across transient failures. A status line states that in
+   words, not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
    material, raw JSON, or device identifiers.
-5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, and light or
-   dark appearance.
+5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, Reduce
+   Transparency, and light or dark appearance. System controls handle Reduce Transparency; the app
+   does not simulate transparency.
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
@@ -37,7 +40,7 @@ through `QuotaAlerts`.
 ## Surfaces
 
 ```text
-Connect Account
+Connect with GitHub
 TabView
   Overview
   Usage
@@ -46,76 +49,134 @@ TabView
 Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
+Signed-out Connect is presented directly, without an empty NavigationStack. Signed-in tabs use the
+iOS 26 `Tab` initializer and `tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
+
 ### Connect Account
 
-Shown when no Keychain account session exists, including after logout and after an expired refresh.
+Shown when no Keychain account session exists, including after logout and after an expired refresh,
+and while a session is still `pending` (issued but not confirmed).
 
-- Product name **Quota**.
-- One sentence: **See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on
-  your Mac.**
-- Primary action **Connect Account**.
-- Quiet note that this device does not collect or upload local usage.
-- Optional status line after an expired session: **Session expired. Connect Account to continue.**
+The Keychain record is one session with `activation: pending | active`. `completeLogin` writes
+`pending`. A pending session may fetch the identifying Account summary. `restore()` of a pending
+session returns to this confirmation flow (or its first-refresh failure state) and never to the
+signed-in tabs. **Continue** is the only promotion of that same session to `active`. **Use a
+different account** and Log Out revoke and clear either state.
 
-Connect Account starts `ASWebAuthenticationSession` for the Relay authorize URL. The system sheet
-owns cancel. The app never embeds a web view.
+- A 56-point Quota app mark, shared with confirmation. It is content, not glass. The glyph fills
+  the 56-point frame.
+- Primary action **Connect with GitHub**. Connecting: **Connecting…** with an inline ProgressView,
+  disabled. Minimum hit height 50pt. Idle uses `buttonStyle(.glassProminent)` and the emerald tint.
+  Connecting uses neutral system `.glass` with explicit label-color foreground so the spinner and
+  **Connecting…** stay readable. The accessibility label stays **Connect with GitHub**; the value
+  is **Connecting** and the control is not actionable.
+- Footnote: **This iPhone only reads data reported by QuotaBar.**
+- No product title, value-proposition paragraph, card, banner container, or raw URL.
+- The longer product and privacy explanation lives on Settings › About, not on Connect.
+- Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
+  - expired: **Session expired. Connect again.**
+  - connect failure default: **Couldn't connect. Try again.**
 
-Layout is a calm centered instrument: compact Quota mark, value proposition, privacy note, and the
-primary action inside one semantic surface. Status banners (connecting, failure, expired) sit
-inside that panel. Hit targets stay at least 44pt.
+Connect with GitHub starts `ASWebAuthenticationSession` for the Relay authorize URL with
+`prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
+an account already signed in in Safari; the session lives in the system browser, not in the app.
+The system sheet owns cancel and is the connecting progress presentation. Cancellation returns to
+the normal signed-out state without an error. The app never embeds a web view.
+
+After Relay issues a session the first Account refresh must succeed and name a non-blank
+`summary.account.displayLabel` before confirmation is constructed. The app does not open the
+signed-in tabs. It replaces Connect content on the same signed-out screen:
+
+- The 56-point Quota app mark (the same view Connect uses).
+- Title **Use this GitHub account?** (`title2` semibold).
+- Body **Connected as `<label>`.** with the label in bold.
+- Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — promotes the pending
+  session to `active` and enters the signed-in tabs.
+- Secondary **Use a different account** (`.bordered`) — revokes the session just opened and starts
+  Connect with GitHub again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a
+  login page. That second success confirms the same way.
+
+If that first refresh fails, the session stays `pending`. Connect is replaced by **Retry** (repeats
+the identifying read) and **Use a different account**. Continue is not shown, and the app does not
+invent a generic **Account** identity. A 401 or expired result revokes the pending session and
+shows the expired connect copy.
+
+There is no sheet, card, `presentationDetents`, or `glassEffect` on the title or body. Layout is a
+vertically centered, scroll-safe column with a maximum content width of 320 points and system
+safe-area padding. Hit targets stay at least 44pt (Connect, Retry, and Continue 50pt).
+
+Connect failures use a specific sentence when one is known, otherwise the default retry:
+
+| Cause | Copy |
+| --- | --- |
+| Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
+| Network (`unavailable` / timeout) | **Couldn't reach quota.gotry.io.** |
+| Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
+| Malformed summary or blank `displayLabel` | **Couldn't connect. Try again.** |
+| Anything else | **Couldn't connect. Try again.** |
 
 ### Overview
 
-Shown when a session exists. Content comes from the last complete Account summary, then from a
-refresh of Today.
+Shown when an `active` session exists. Content comes from the last complete Account summary, then from a
+refresh of Today. An inset-grouped `List`. Pull to refresh runs one Today fetch. A fetch in flight
+ignores additional refresh requests.
 
 Header:
 
-- Title is the account display label, or **Account** when the label is absent.
+- Title is the account display label, or **Account** when the label is absent. The body does not
+  repeat that label.
 
 Body, in order:
 
-1. Banner, when needed.
-2. Account context: display label plus the shared freshness line (`Updated 15m ago`). Standard
-   Dynamic Type keeps a single-line horizontal row; accessibility sizes stack label and age
-   vertically with full wrapping (no one-line ellipsis). VoiceOver reads the full label and the
-   same line.
-3. Provider quota cards in catalog order, one card per subscription. Each observation shows
-   provider name, optional account label and plan, remaining value as the strongest number, one
-   meter per percent window, and reset time. The whole card opens subscription detail. A reading
-   that is not current names why in place of, or ahead of, that reset time, because the reset it
-   names may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
-   refresh** for a state its device reported, and **Not current** for one that aged past its
-   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left" or
-   "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows use
-   `71%`, and balance-only windows use **Balance** plus the unit amount.
-4. Devices: when `summary.devices` is empty, the Mac setup card. When it has devices, a compact
-   summary of display names and **Active** / **Idle** / **Not reporting** verdicts. The full list
-   lives on the Devices tab.
-5. Today: tokens and API-equivalent cost as the headline — the same one QuotaBar and the website
-   show — then input and output as supporting detail. Complete cost is `$X.XX`, partial is
-   `≥ $X.XX`, unavailable is **— unpriced**.
-
-Pull to refresh runs one Today fetch. A fetch in flight ignores additional refresh requests.
+1. Status row, when a refresh or cached-data message exists: a plain `StatusMessage` Label on a
+   standard list-row background. Cached: **Showing saved data. Couldn't refresh.** No cache:
+   **Couldn't refresh. Pull to try again.** Keep provider-state and freshness vocabulary from the
+   shared formatters unchanged.
+2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
+   name, masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
+   List row background is the only content container. Remaining is the strongest number, with one
+   meter per percent window and reset copy. A reading that is not current names why in place of, or
+   ahead of, that reset time, because the reset it names may already have passed: **Sign-in
+   needed**, **Unavailable**, **Unsupported**, or **Can’t refresh** for a state its device
+   reported, and **Not current** for one that aged past its `valid_until`. Widgets apply the same
+   rule at the instant they draw. Remaining has no "left" or "remaining" suffix. Budget windows
+   with an amount use `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use
+   **Balance** plus the unit amount. Empty windows: **No quota windows yet.** The canonical
+   **Updated** age is the quota Section footer; it wraps and is spoken in full.
+3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
+   `gauge.with.dots.needle.33percent`, description **Set up QuotaBar on a Mac to start reporting.**
+4. Today, before setup or device support: Tokens, API-equivalent cost, Input, and Output, with
+   monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
+   Empty: **No usage today.**
+5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
+   Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
 then provider/window, then support ages). Do not copy Nowdex assets or layout chrome.
 
 ### Subscription detail
 
-Opened from an Overview quota card, and from `io.gotry.quota:/subscriptions/<selection_id>` when
-that id matches a current subscription. An unmatched selection stays on Overview.
+Opened from an Overview quota row, and from `io.gotry.quota:/subscriptions/<selection_id>` when
+that id matches a current subscription. An unmatched selection stays on Overview. The system back
+button is the only way back; there is no second close control.
 
-The title is the provider display name. The body is the masked account label and plan, the shared
-freshness line, each window's remaining value, meter, and reset countdown, then one row per
-reporting device.
+The title is the provider display name. An inset-grouped `List`:
+
+- Identity: `LabeledContent` rows **Account** and, when present, **Plan** as plain text. Canonical
+  freshness is the Section footer.
+- Quota: one `QuotaWindowBlock` per window as native rows. Remaining is the strongest text. Empty:
+  **No quota windows yet.**
+- Readings: one native row per source. Leading column is display name, primary remaining, then
+  freshness; trailing text is **Reporting** only on the selected source. Empty: **No device
+  readings yet.**
 
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
 
 Each device row is that device's display name (or **Device** when the name is missing), the primary
-remaining figure from that source, and freshness. The source whose reading is the one on the card
-is marked **Reporting**. The page never shows a device id, fingerprint, or subscription key.
+remaining figure from that source, and freshness. The page never shows a device id, fingerprint,
+subscription key, or a custom surface. There is no independent loading or error state on this
+pushed view; it renders the selected last-good subscription.
 
 ### Widget overview
 
@@ -128,7 +189,7 @@ Families:
 | --- | --- |
 | systemSmall | Primary (most constrained, or the configured subscription) item: remaining, provider, window, reset/updated age |
 | systemMedium | Up to two most constrained items, compact Today tokens and cost, and **Updated** age |
-| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown |
+| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown, then a trailing **Updated** age when a snapshot exists |
 | accessoryCircular | Percent windows use an `accessoryCircular` Gauge ring; balance-only shows the amount |
 | accessoryRectangular | Primary remaining, provider · window, optional reset age |
 | accessoryInline | `<Provider> <remaining>%` |
@@ -146,27 +207,30 @@ Shared rules:
   `CompactAgeFormat`, and `FreshnessCopy`. Digits are monospaced. Semantic text styles and colors
   only.
 - Mark the strongest remaining value with `widgetAccentable()`.
-- Use `containerBackground(for: .widget)`. Do not call `glassEffect`. On iOS 26 the system owns
-  widget Liquid Glass, accented, and vibrant rendering inside that container; on iOS 17–25 the
-  system material fallback applies.
+- Use `containerBackground(for: .widget)`. Do not call `glassEffect`. The system owns widget
+  Liquid Glass, accented, and vibrant rendering inside that container.
 - A future reset under 24 hours uses `Text(timerInterval:countsDown:)` so the system ticks seconds
   without a new timeline entry. Otherwise the line is static `FreshnessCopy.resetCopy`. A reset
   instant at or before the entry date prints no Resets line.
 - Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
   widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole; a
   large row is a `Link` to that row's subscription.
-- Placeholder is a redacted/skeleton overview. Missing, corrupt, or oversize snapshot files show
-  safe **No data yet** copy. Timelines refresh about every fifteen minutes so ages advance; the
-  extension never fetches. The app republishes the snapshot on a foreground refresh and on a
-  background app refresh it asks for no sooner than every thirty minutes.
+- Placeholder is a redacted/skeleton overview. Xcode previews cover content, no-data, and
+  placeholder for every supported family (small, medium, large, circular, rectangular, inline).
+  Inspect standard, accented, and vibrant rendering in those previews; do not encode those
+  rendering modes in app logic. Missing, corrupt, or oversize snapshot files show safe **No data
+  yet** copy. Timelines refresh about every fifteen minutes so ages advance; the extension never
+  fetches. The app republishes the snapshot on a foreground refresh and on a background app
+  refresh it asks for no sooner than every thirty minutes.
 
 ### Usage
 
-Shown when a session exists. Period totals come from the same Account summary as Overview: the four
-precomputed periods `today`, `last_7_days`, `last_30_days`, and `all`. Opening Usage requests the
-last 365 UTC days of activity once (`from = today-364`, `to = today`) and keeps that answer in
-memory; it does not write it to disk. A failure stays in the Activity card and does not block the
-period list.
+Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Period totals
+come from the same Account summary as Overview: the four precomputed periods `today`,
+`last_7_days`, `last_30_days`, and `all`. Opening Usage requests the last 365 UTC days of activity
+once (`from = today-364`, `to = today`) and keeps that answer in memory; it does not write it to
+disk. A failure stays in the Activity section and does not block the period totals or model
+sections.
 
 Header:
 
@@ -174,69 +238,84 @@ Header:
 
 Body, in order:
 
-1. A segmented period control: **Today**, **7 Days**, **30 Days**, and **2 Years**. The fourth
-   segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**. The selection lives in
-   memory for the signed-in session.
-2. Headline card: Tokens as the strongest number (`CompactCountFormat`) with an `in · out` support
-   line, then API-equivalent cost (`$X.XX`, `≥ $X.XX`, or **— unpriced**). When `partial` is true,
-   a footnote: **Some hours in this period were scanned incompletely.**
-3. Activity card: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
-   weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
-   steps over tokens — empty, then four equal bands of the busiest day in the response, the same
-   mapping the website uses. Today has a primary stroke. Loading is a skeleton in the card;
-   failure is **Could not load activity.** with **Retry**.
-4. Agent groups in the summary's order. Each agent uses its display name (Codex, Claude Code, Grok,
-   OpenCode, Pi, Cursor). Inside an agent, provider subheadings (`InferenceProvider.displayName`)
-   and model rows (display name · tokens · cost). The model `other` is **Other**. Each provider
-   shows at most five models until **Show N more** reveals the rest.
-5. When the selected period has no agents: **No Usage in this period.** The Activity card still
-   shows.
+1. A segmented period control in the first List row: **Today**, **7 Days**, **30 Days**, and
+   **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
+   The selection lives in memory for the signed-in session. It is a system content filter, not a
+   floating navigation action, and it scrolls with the List.
+2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
+   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
+   is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
+   incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
+   contrast and Dynamic Type stay system-owned.
+3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+   system image `chart.bar`, description **No usage was reported for this period.** The Activity
+   section still follows.
+4. Activity section, headed **Activity**:
+   - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
+     activity**.
+   - Failure: **Couldn't load activity.** plus a native **Retry** row.
+   - Loaded with zero reported tokens across the range: **No activity in the last year.** Do not
+     render 365 empty interactive cells.
+   - Loaded with data: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
+     weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
+     emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
+     the same mapping the website uses. Today has a primary stroke. Weekday and month labels use
+     `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
+     last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
+     adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
+     increment/decrement changes the same selection. Under the grid, the selected day is visible
+     text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
+     that day.
+5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
+   rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
+   **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
+   **Show fewer** collapses them again. Both are standard 44-point List buttons with expanded /
+   collapsed accessibility state.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
-accessibility text sizes. The heatmap is one adjustable control: VoiceOver reads the selected day
-as date, tokens, and cost, swiping adjusts the day, and activating opens that day. Individual cells
-are not accessibility elements.
+accessibility text sizes. Individual heatmap cells are not accessibility elements. The combined
+chart value remains date, tokens, and cost.
 
-Tapping a cell, or activating the heatmap, presents a sheet for that UTC day: the long UTC date,
-tokens, API-equivalent cost and its basis, and **Some hours on this day were scanned incompletely.**
-when `partial` is true. The sheet then asks `detail=agents` for that date. Loading is a skeleton;
-failure is **Could not load this day's usage.** with **Retry**; an empty agent tree is **No Usage on
-this day.**; a populated tree reuses the period's agent groups.
+**View day** presents a `NavigationStack` sheet for the selected UTC day: the long UTC date as the
+inline title, system **Done** as the confirmation toolbar item, `presentationDetents` medium and
+large, and the system drag indicator. The body is an inset-grouped List of totals and agent
+Sections — the same rows as the period view, including **Some hours on this day were scanned
+incompletely.** when `partial` is true. Loading text: **Loading this day's usage…**. Failure:
+**Couldn't load this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet
+asks `detail=agents` for that date. There is no custom material.
 
 ### Devices
 
-The Account's collection devices: display name, an **Active** / **Idle** / **Not reporting**
-verdict, and one line of platform plus the age that verdict came from. Never infer failure from
-sleep, shutdown, or a closed app, and never show raw Device IDs or request a remote Device's
-credentials. Empty state shows the Mac setup card rather than hiding the section. A trailing
-**Manage devices on the web** link opens `https://quota.gotry.io/my`.
+An inset-grouped `List` of the Account's collection devices. Do not repeat **Devices** inside the
+body. Each row is display name, an **Active** / **Idle** / **Not reporting** verdict, platform, and
+the last-reading age that verdict came from. Use text as well as any symbol; color cannot carry the
+verdict. VoiceOver speaks name, verdict, platform, and age. Never infer failure from sleep,
+shutdown, or a closed app, and never show raw Device IDs or request a remote Device's credentials.
+
+A top-trailing system toolbar `Link` uses the `arrow.up.right` symbol. Visible and accessibility
+label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my/devices`, the same
+URL Settings uses. The toolbar supplies its own Liquid Glass.
+
+Empty state is `ContentUnavailableView`: title **No Macs connected**, image `desktopcomputer`,
+description **Install QuotaBar on a Mac signed in with this GitHub account.**, action **Download
+QuotaBar**. No QR code or custom surface. Root loading covers summary loading. Device status is
+last-good account content.
 
 ### Settings
 
-A native `Form` of grouped rows. Every control is a standard Form toggle, picker, link, or button.
+A native `Form` hub with the system content background. Notification thresholds, appearance, and
+About are pushed destinations that share `SettingsModel`. Account actions sit on this hub so they
+are reachable without scrolling through alert groups. Every control is a standard Form toggle,
+picker, link, or button. Settings has no custom loading state.
 
-**Notifications.** A master switch, **Reset reminders**, and one group per subscription (catalog
-`display_name` as the header, masked account label as a row) with two remaining-percent pickers.
-Choices are **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first defaults to **20**; the second
-defaults to **10** and may be **Off**, which stores a single threshold. Stored values stay
-descending and unique, and the second picker only offers values below the first. Turning the master
-switch on asks `UNUserNotificationCenter` for alerts and sound. A refusal puts the switch back off
-and shows **Allow notifications for Quota in Settings.** with **Open Settings**, which opens
-`UIApplication.openSettingsURLString`. Opening the page re-reads the system permission; a later
-grant in Settings does not turn the switch on by itself. Rules are stored in `UserDefaults` under
-`alerts.*`. The group footer is **Quota reminds you when a refresh brings new data.** Quota does
-not promise real-time.
+**Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
+value **System**, **Light**, or **Dark** trailing.
 
-**Appearance.** **System**, **Light**, or **Dark**, stored as `appearance` in `UserDefaults`. The
-window uses `.preferredColorScheme`. System is the default and leaves the scheme unset.
+**Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
+(`https://quota.gotry.io/support`). NavigationLink **About**.
 
-**About.** Version is `CFBundleShortVersionString (CFBundleVersion)`. Links to
-`https://quota.gotry.io` and the GitHub repository. **Licenses: MIT**.
-
-**Privacy & Support.** Links to `https://quota.gotry.io/privacy` and
-`https://quota.gotry.io/support`.
-
-**Account.** **Manage devices on the web** opens `https://quota.gotry.io/my/devices`. **Delete
+**Account.** Link **Manage Devices on Web** (`https://quota.gotry.io/my/devices`). **Delete
 Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
 `ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
 `https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount`. The
@@ -244,12 +323,49 @@ callback scheme is nil: the sheet ending returns to the app. Quota then prompts 
 the Account, sign out here too.** **Log Out** keeps the native confirmation: remote Account data
 remains; this device forgets the session.
 
+#### Notifications
+
+Navigation title **Notifications**. Native Form. Toggle **Enable Notifications**. Toggle **Reset
+Reminders**. Footer: **Alerts are checked when Quota refreshes.** Quota does not promise real-time.
+
+Turning Enable Notifications on asks `UNUserNotificationCenter` for alerts and sound. A refusal
+puts the switch back off and shows **Allow notifications for Quota in Settings.** with **Open
+Settings**, which opens `UIApplication.openSettingsURLString`. Opening the destination re-reads
+the system permission; a later grant in Settings does not turn the switch on by itself. A
+permission-refresh failure leaves the toggle off and uses the denied-state rows. Rules are stored
+in `UserDefaults` under `alerts.*`.
+
+One Section per subscription (catalog `display_name` as the header, masked account label as a row)
+with two remaining-percent pickers **Alert at** and **Then at**. Choices are **5 / 10 / 15 / 20 /
+25 / 30 / 40 / 50**. The first defaults to **20**; the second defaults to **10** and may be **Off**,
+which stores a single threshold. Stored values stay descending and unique, and the second picker
+only offers values below the first. If there are no subscriptions, **No quota alerts are available
+yet.** appears below the master controls.
+
+#### Appearance
+
+Navigation title **Appearance**. A native inline Picker with **System**, **Light**, and **Dark**.
+Stored as `appearance` in `UserDefaults`. The window uses `.preferredColorScheme`. System is the
+default and leaves the scheme unset. No custom preview panel or glass.
+
+#### About
+
+Navigation title **About**. The Quota app mark as plain content, then:
+
+- **Quota shows remaining quota and usage reported by QuotaBar on your Mac.**
+- **This iPhone does not collect or upload local usage.**
+
+Native rows **Version** (`CFBundleShortVersionString (CFBundleVersion)`), **Website**
+(`https://quota.gotry.io`), **GitHub** (the repository), and **License** with value **MIT**. No
+glass card. Links are standard Form links.
+
 ### Mac setup
 
-Shown on Overview and Devices when `summary.devices` is empty. Title **Set up a Mac**. One sentence:
-**Quota shows what QuotaBar on your Mac reports. Install it on a Mac signed in with the same GitHub
-account.** A `Link` to `https://quota.gotry.io/download` and a QR code generated locally with
-CoreImage `CIQRCodeGenerator` for that same URL. No network.
+Shown when `summary.devices` is empty. Title **Set up QuotaBar**. Detail: **Install QuotaBar on a
+Mac signed in with this GitHub account.** Destination is `https://quota.gotry.io/download`. On
+Overview the action is a standard `Link` row **Download for Mac**. On the Devices empty state it is
+the `ContentUnavailableView` action **Download QuotaBar**. Neither receives glass inside a List.
+There is no QR code and no raw URL text.
 
 ### Deep links
 
@@ -276,59 +392,74 @@ silently ineffective.
 
 ## Liquid Glass (main app)
 
-Quota on iOS 26 uses Apple's native SwiftUI glass APIs. There is no third-party UI kit and no custom
-glass shader.
+Quota is iOS 26-only. It uses Apple's native SwiftUI glass APIs on system navigation and controls.
+There is no third-party UI kit, no custom glass shader, and no app-owned glass on content.
 
-Progressive behavior:
-
-| Surface | iOS 26 | iOS 17–25 |
-| --- | --- | --- |
-| Semantic cards, banners, Connect panel | `glassEffect(.regular, in: continuous 16pt shape)` | `.regularMaterial` in the same continuous shape |
-| Primary button | `.glassProminent` with emerald tint | `.borderedProminent` with emerald tint |
-| Navigation / toolbar | System navigation chrome | System navigation chrome |
-| Tab bar | System TabView | System TabView |
+| Surface | Treatment |
+| --- | --- |
+| Tab bar | System `Tab` chrome; `tabBarMinimizeBehavior(.onScrollDown)` |
+| Navigation / toolbar | System navigation chrome |
+| Connect with GitHub | `.glassProminent` with emerald tint |
+| Confirm Continue | `.glassProminent` with the system accent; no extra `.tint` |
+| Sheets | System sheet chrome |
+| Quota data, status, meters, charts, settings rows, empty states | Content. List/Form/Section grouping. No `glassEffect`. |
 
 Rules:
 
-1. One glass/material surface per semantic card. Nested rows, meters, and plan chips stay plain.
-2. An ambient Quota backdrop (semantic grouped fill plus a restrained emerald wash, light and dark)
-   sits behind content so glass and material read clearly.
-3. Surface and button modifiers live in `QuotaTheme` (`quotaSurface`, `quotaProminentButtonStyle`).
-   Views do not invent alternate corner radii or fills.
+1. Do not put an explicit glass effect inside another system glass control.
+2. Do not reproduce system materials with gradients, strokes, shadows, custom blur, or rounded
+   glass panels. There is no `quotaSurface`, ambient backdrop, or card token.
+3. Reduce Transparency is owned by system glass. The app does not simulate transparency.
 4. Widgets never call `glassEffect`; system widget chrome owns that rendering.
 
 ## States
 
 | State | Presentation |
 | --- | --- |
-| Loading, no cache | Centered progress and **Loading account…** |
-| Empty quota | **No quota reported yet.** Collection happens on a Mac running QuotaBar that is signed into this Account. |
-| Empty Today | **No Usage for Today.** |
-| Empty Usage period | **No Usage in this period.** |
-| Loading activity | Skeleton in the Activity card |
-| Activity failed | **Could not load activity.** with **Retry** |
-| Empty activity day | **No Usage on this day.** |
+| Loading, no cache | Centered progress and **Loading account…**. No surface. |
+| Empty quota | **No quota yet** with **Set up QuotaBar on a Mac to start reporting.** |
+| Empty Today | **No usage today.** |
+| Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
+| Loading activity | Skeleton in the Activity section. Accessibility value **Loading activity** |
+| Activity failed | **Couldn't load activity.** with **Retry** |
+| Empty activity | **No activity in the last year.** |
+| Loading activity day | **Loading this day's usage…** |
+| Activity day failed | **Couldn't load this day's usage.** with **Retry** |
+| Empty activity day | **No usage on this day.** |
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
-| Offline or failed refresh, cache present | Last-good content plus **Showing saved account data. Could not refresh.** |
-| Offline or failed refresh, no cache | Empty Overview plus **Could not refresh account data. Pull to try again.** |
-| Expired session | Connect Account with **Session expired. Connect Account to continue.** |
-| Connect running | Connect Account with **Continue in the browser.** |
+| Offline or failed refresh, cache present | Last-good content plus **Showing saved data. Couldn't refresh.** |
+| Offline or failed refresh, no cache | Empty Overview plus **Couldn't refresh. Pull to try again.** |
+| Expired session | Connect with GitHub plus **Session expired. Connect again.** |
+| Connect running | One disabled **Connecting…** button with visible progress. No status line. |
+| Connect failure | Connect with GitHub plus one plain status Label. Default **Couldn't connect. Try again.** |
+| Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
+| Notification permission denied | **Allow notifications for Quota in Settings.** with **Open Settings** |
+| No quota alerts | **No quota alerts are available yet.** below the Notifications master controls |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
 | Widget placeholder | Redacted remaining / provider skeleton |
 
-A banner always includes a symbol and a sentence. Color never carries status alone.
+A status line is a plain wrapping `StatusMessage` Label with a symbol and a sentence. Color never
+carries status alone. There is no status card or glass.
 
 ## Layout and type
 
-Use the system grouped background (under the ambient wash) and semantic text styles (`largeTitle` /
-`title2` for remaining values, `headline` for provider names, `subheadline` and `footnote` for
-support). Cards are continuous 16pt corners. Content has a readable measure: 20pt horizontal gutter
-and a maximum 720pt column.
+Signed-in tabs use the system grouped background supplied by List/Form. Overview, subscription
+detail, and Devices are inset-grouped Lists. There is no root background modifier and no ambient
+wash. Settings is a compact hub Form; Notifications, Appearance, and About are pushed destination
+Forms with the same system background. Semantic text styles (`largeTitle` / `title2` for remaining
+values, `headline` for provider names, `subheadline` and `footnote` for support). Connect content is
+a 320-point column. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no padding, corner,
+stroke, shadow, material, or glass of their own.
 
-Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt. Dynamic Type may wrap every
-label; do not clip remaining values. Accessibility text sizes and widget no-data layouts must keep
-the strongest remaining figure readable (`minimumScaleFactor` is preferred over truncation of the
-primary value).
+Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
+**View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
+may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
+and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
+month labels on that grid use `caption` / `caption2`, keep the full month abbreviation, and cap
+at `DynamicTypeSize.large` with the grid so they stay aligned at accessibility sizes.
+Accessibility text sizes and widget no-data
+layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
+truncation of the primary value).
 
 The accent is adaptive emerald (`#087456` light, `#82ddb8` dark). Ink, body, and mute follow
 `Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
@@ -340,29 +471,103 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Accessibility
 
 - Icon-only controls have accessibility labels.
+- The Connect mark is one static element named **Quota**. The button's accessibility label is
+  exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.** While
+  connecting, the value is **Connecting** and the control does not respond to interaction.
 - Remaining meters expose the remaining percent and window title, not only a graphic.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
-- The account context line is the shared freshness phrase, read in full.
-- The Usage heatmap is one adjustable element. It speaks the selected UTC date, tokens, and cost;
-  cells are not their own VoiceOver nodes.
+- The Overview quota Section footer is the shared freshness phrase, read in full.
+- Each Devices row is one VoiceOver element that speaks name, verdict, platform, and age.
+- Overview subscription rows keep the hint **Opens subscription details**.
+- The Usage heatmap is one adjustable element, not a button. It speaks the selected UTC date,
+  tokens, and cost; cells are not their own VoiceOver nodes. Direct touch, VoiceOver adjust, and
+  **View day** operate on the same selected date. **View day** is the 44-point activation that
+  presents the day sheet. **Show N more** / **Show fewer** expose expanded or collapsed state.
 - Widget entries combine provider, remaining, why the reading is not current, reset, and updated
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
-- Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes.
+- Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes. The root
+  phase replacement is an explicit `.opacity` transition; Reduce Motion only shortens it.
+- Reduce Transparency is system-owned. Do not skip Connect's contrast audit in the signed-out
+  or connecting state. Confirm is inline on the signed-out screen and runs the full accessibility
+  audit with no skip.
+- Settings account actions sit on the hub, not below per-subscription alert groups. Settings
+  destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
+  Connect (no tab bar) still runs contrast.
+- Usage runs the same app-owned audit as the other screens, including contrast. Do not skip
+  contrast, Dynamic Type, or clipping as whole audit types. Do not skip by `StaticText` type,
+  "nearly passed", `"Resets "`, or List-button contrast. Documented system-owned exceptions,
+  scoped to the named element:
+  - unnamed tab-bar / navigation / sheet glass (`issue.element == nil`) for contrast, Dynamic
+    Type, clipping, and inaccessible;
+  - grouped List / Form section header and footer views whose accessibility identifier starts
+    with `section.header.` or `section.footer.` (contrast and Dynamic Type). Those identifiers
+    are: `section.header.today`, `section.header.quota`, `section.header.readings`,
+    `section.header.activity`, `section.header.preferences`, `section.header.privacy-and-support`,
+    `section.header.account`, `section.header.mac-setup`, `section.header.appearance`,
+    `section.header.codex`, `section.header.claude_code`, `section.header.grok`,
+    `section.header.opencode`, `section.header.pi`, `section.header.cursor`,
+    `section.header.claude`, `section.footer.updated`, `section.footer.mac-setup`,
+    `section.footer.account`, `section.footer.notifications`,
+    `section.footer.subscription-updated`, `section.footer.usage.headline`,
+    `section.footer.usage.day.headline`;
+  - the system sheet **Done** confirmation button for Dynamic Type;
+  - contrast on any element whose frame intersects the floating tab bar's frame (inset by 40 pt
+    horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit over the last
+    visible rows and the auditor samples the glass, not the row. This is geometric and
+    system-owned; it never applies to rows away from the tab bar;
+  - iOS 26 `UIListContentConfiguration` List/Form Button, Link, and LabeledContent rows for the
+    "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
+    full Dynamic Type. Contrast on those rows is not skipped. Named identifiers:
+    `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
+    `usage.show-fewer`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
+    `overview.today.cost`, `overview.today.input`, `overview.today.output`,
+    `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
+    `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
+    `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
+    `usage.provider.<provider id>`, the About **License** and **Version** labels, the Notifications
+    **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
+    **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
+    Mac**, **Download QuotaBar**.
+- A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
+  without contrast; the run attaches which screen did not complete contrast. That is a deadline,
+  not a type skip.
+- The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
+  reach it.
+- `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
+  stale text-size override would otherwise silently run every later UI test at that size.
+- Overview and Usage UI tests scroll the list (`overview-scrolled`). Tab-bar minimization
+  (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
+  screenshots does not expose a measurable height drop or a single-button minimized tab bar.
 
 ## Visual QA
 
-Inspect Connect Account, loading, signed-in content, empty quota/Today, Usage at 30 Days with the
-Activity heatmap, a single-day sheet, no-devices Mac setup, cached content with a refresh banner,
-expired session, the four tabs, Settings (Notifications switch, Log Out, Appearance), subscription
-detail (windows, countdown, Reporting row), and each widget family in placeholder, content, and
+Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
+connect error, expired session, the inline GitHub account confirmation, loading, signed-in
+Overview (quota first, Today second, system NavigationLink chevron, no device-summary
+duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
+URL, cached content with a plain status Label, subscription detail (Account, Plan, Quota, Readings),
+Devices content and empty, Usage at 30 Days as one native scrolling List (period control, totals,
+Activity heatmap with full month abbreviations, agent sections, no glass cards), Usage empty /
+activity loading / activity failed, a single-day sheet (populated, empty, failed) with system
+chrome and medium/large detents, the four tabs (tab-bar minimization is a manual gate), Settings
+hub (Notifications and Appearance links, Log Out, Delete Account), Settings › Notifications,
+Settings › Appearance, Settings › About, and each widget family in placeholder, content, and
 no-data states. Check iPhone, light and dark, standard and accessibility text sizes, VoiceOver
-labels, and Reduce Motion. Synthetic fixtures may contain display labels only; they must never
-contain access tokens, refresh tokens, or production data.
+labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display labels
+only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `content`, `signed-out`, `no-devices`, `usage-content`,
-`usage-activity`, `subscription-detail`, and `settings` fixture screenshots to
-`dist/ios-ui-screenshots/`.
+`scripts/ios-ui-screenshots.sh` exports the `connect-signed-out`, `connect-connecting`,
+`connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
+`overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
+`overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
+`usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
+`usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
+`settings-notifications`, `settings-appearance`, and `settings-about` fixture screenshots to
+`dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
+`QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
+PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
+detail, and each Settings destination at one accessibility text size.
 
 ### DEBUG visual fixtures
 
@@ -370,19 +575,39 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 ```text
 --visual-fixture signed-out
+--visual-fixture connecting
+--visual-fixture connect-error
+--visual-fixture expired
+--visual-fixture confirm-account
+--visual-fixture connect-refresh-failed
+--visual-fixture loading
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
 --visual-fixture no-devices
+--visual-fixture activity-loading
+--visual-fixture activity-failed
+--visual-fixture activity-day-empty
+--visual-fixture activity-day-failed
 ```
 
 | Fixture | UI state |
 | --- | --- |
-| `signed-out` | Connect Account, no session restore |
+| `signed-out` | Connect with GitHub: mark, button, and footnote. No session restore |
+| `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
+| `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
+| `expired` | Connect with GitHub plus **Session expired. Connect again.** |
+| `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
+| `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
+| `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
-| `cached-error` | Same content plus **Showing saved account data. Could not refresh.** |
-| `empty` | Signed-in Overview with empty quota and **No Usage for Today.** Usage of every period is **No Usage in this period.** |
-| `no-devices` | Signed-in Overview with no devices and no subscriptions (Mac setup card) |
+| `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
+| `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
+| `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
+| `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |
+| `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |
+| `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |
+| `activity-day-failed` | Signed-in Usage presenting a day sheet with **Couldn't load this day's usage.** and **Retry** |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
 access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time

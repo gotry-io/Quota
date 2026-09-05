@@ -1,83 +1,62 @@
 <script lang="ts">
-import type { UsageActivityDayRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
+import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { type AccountError, accountActivityRange, fetchAccountActivity } from "$lib/account-client";
-import { getAccountDashboard } from "$lib/account-dashboard.svelte.ts";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
+import { usageStatusLine } from "$lib/account-overview";
+import { accountActivityRange } from "$lib/account-reads.ts";
+import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsagePeriodTabs from "$lib/components/UsagePeriodTabs.svelte";
-import { costBasisLabel, formatCost, formatCount } from "$lib/format";
+import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
 import {
   type UsagePeriodQuery,
   usagePeriodFromQuery,
   usagePeriodHref,
   usagePeriodKey,
+  usagePeriodLabel,
 } from "$lib/usage-period";
 
-const dashboard = getAccountDashboard();
-let activityDays = $state<UsageActivityDayRead[] | null>(null);
-let activityError = $state<AccountError | null>(null);
-let dayDetail = $state<UsageActivityDayRead | null>(null);
-let dayError = $state<AccountError | null>(null);
-let dayReady = $state(false);
-let dayRetry = $state(0);
-
-const activityRange = accountActivityRange(new Date());
+const store = getAccountStore();
+const utcDate = $derived(store.now.toISOString().slice(0, 10));
+const activityRange = $derived(accountActivityRange(new Date(`${utcDate}T00:00:00Z`)));
+const rangeKey = $derived(activityRangeKey(activityRange));
 const selectedQuery = $derived(usagePeriodFromQuery(page.url.searchParams.get("period")));
 const selectedDay = $derived(
   usageActivityDayFromQuery(page.url.searchParams.get("day"), activityRange),
 );
 let period = $derived<UsagePeriodRead | null>(
-  dashboard.summary ? dashboard.summary.usage[usagePeriodKey(selectedQuery)] : null,
+  store.summary ? store.summary.usage[usagePeriodKey(selectedQuery)] : null,
+);
+const status = $derived(
+  period ? usageStatusLine(usagePeriodLabel(selectedQuery), period.partial) : null,
+);
+const activityEntry = $derived(store.activity[rangeKey]);
+const activityDays = $derived(activityEntry?.data ?? null);
+const activityError = $derived(activityEntry?.status === "error" ? activityEntry.error : null);
+const detailEntry = $derived(selectedDay ? store.dayDetail[selectedDay] : undefined);
+const dayDetail = $derived(detailEntry?.data ?? null);
+const dayError = $derived(detailEntry?.error ?? null);
+const detailLoading = $derived(
+  selectedDay !== null &&
+    (detailEntry === undefined ||
+      detailEntry.status === "idle" ||
+      detailEntry.status === "loading"),
 );
 
 $effect(() => {
-  void loadActivity();
+  void store.ensureActivity(activityRange);
 });
 
 $effect(() => {
   const date = selectedDay;
-  void dayRetry;
-  if (!date) {
-    dayDetail = null;
-    dayError = null;
-    dayReady = false;
-    return;
-  }
-  dayReady = false;
-  dayDetail = null;
-  dayError = null;
-  let cancelled = false;
-  void fetchAccountActivity({ from: date, to: date }, "agents").then((result) => {
-    if (cancelled) return;
-    dayReady = true;
-    if (result.status === "ok") {
-      dayDetail = result.activity.days[0] ?? null;
-      dayError = null;
-      return;
-    }
-    dayError = result;
-    dayDetail = null;
-  });
-  return () => {
-    cancelled = true;
-  };
+  if (!date) return;
+  void store.ensureDay(date);
 });
-
-async function loadActivity(): Promise<void> {
-  const result = await fetchAccountActivity(activityRange);
-  if (result.status === "ok") {
-    activityDays = result.activity.days;
-    activityError = null;
-    return;
-  }
-  activityError = result;
-}
 
 function selectPeriod(query: UsagePeriodQuery): void {
   void goto(usagePeriodHref(page.url, query), {
@@ -101,78 +80,98 @@ function writeDay(day: string | null): void {
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<section class="dashboard-section" aria-labelledby="usage-title">
-  <div class="dashboard-section-heading">
-    <div>
-      <p class="eyebrow">Usage</p>
-      <h2 id="usage-title">Totals</h2>
-    </div>
-    <UsagePeriodTabs {selectedQuery} onSelectQuery={selectPeriod} />
-  </div>
-  {#if dashboard.loadError}
-    <RetryNotice
-      message={dashboard.loadError.message}
-      actionLabel={accountNoticeActionLabel(dashboard.loadError)}
-      onRetry={accountNoticeRetry(dashboard.loadError, () => void dashboard.loadSummary())}
-    />
-  {/if}
-  {#if !dashboard.summary}
-    {#if !dashboard.loadError}
-      <LoadingBlock lines={4} label="Loading Usage totals" />
+<header class="usage-heading">
+  <div>
+    <h1 id="dashboard-title">Usage</h1>
+    {#if status}
+      <p class="dashboard-status">{status}</p>
     {/if}
-  {:else if period}
-    <div class="summary-grid">
-      <article
-        ><span>Tokens</span><strong id="token-total"
-          >{formatCount(period.totals.total_tokens)}</strong
-        ><small id="token-split"
-          >{`${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`}</small
-        ></article
-      >
-      <article
-        ><span>API-equivalent cost</span><strong id="cost-total">{formatCost(period.cost)}</strong
-        ><small id="cost-basis">{costBasisLabel(period.cost)}</small></article
-      >
-    </div>
-    <UsageBreakdown {period} />
-  {/if}
-</section>
-
-<section class="dashboard-section" aria-labelledby="usage-activity-title">
-  <div class="dashboard-section-heading">
-    <div>
-      <p class="eyebrow">Usage</p>
-      <h2 id="usage-activity-title">Activity</h2>
-    </div>
-    <span id="usage-activity-status" class="count-pill" aria-live="polite">
-      {activityRange.from} – {activityRange.to}
-    </span>
   </div>
-  {#if activityDays}
-    <UsageActivity
-      days={activityDays}
-      range={activityRange}
-      selectedDate={selectedDay}
-      detail={dayDetail}
-      detailError={dayError}
-      detailLoading={selectedDay !== null && !dayReady}
-      onSelectDate={(date) => writeDay(date)}
-      onClose={() => writeDay(null)}
-      onRetryDetail={() => {
-        dayRetry += 1;
-      }}
-    />
-  {:else if activityError}
-    <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
-      <RetryNotice
-        message={activityError.message}
-        actionLabel={accountNoticeActionLabel(activityError)}
-        onRetry={accountNoticeRetry(activityError, () => void loadActivity())}
-      />
-    </div>
-  {:else}
-    <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
-      <LoadingBlock lines={4} label="Loading Usage activity" />
-    </div>
+  <UsagePeriodTabs {selectedQuery} onSelectQuery={selectPeriod} />
+</header>
+
+{#if store.loadError}
+  <RetryNotice
+    message={store.loadError.message}
+    actionLabel={accountNoticeActionLabel(store.loadError)}
+    onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
+  />
+{/if}
+
+{#if !store.summary}
+  {#if !store.loadError}
+    <LoadingBlock lines={4} label="Loading Usage totals" />
   {/if}
-</section>
+{:else if period}
+  <div class="usage-totals">
+    <article>
+      <span>Tokens</span>
+      <strong id="token-total">{formatCount(period.totals.total_tokens)}</strong>
+      <small id="token-split"
+        >{`${formatCount(period.totals.input_tokens)} in · ${formatCount(period.totals.output_tokens)} out`}</small
+      >
+    </article>
+    <article>
+      <span>API-equivalent cost</span>
+      <strong id="cost-total">{formatCost(period.cost)}</strong>
+      <small id="cost-basis">{costBasisLabel(period.cost)}</small>
+    </article>
+    <article>
+      <span>Messages</span>
+      <strong id="message-total">{formatCount(period.totals.messages)}</strong>
+    </article>
+  </div>
+
+  <div class="usage-columns">
+    <section class="usage-tree-panel" aria-labelledby="usage-tree-title">
+      <h2 id="usage-tree-title" class="visually-hidden">By model</h2>
+      <UsageBreakdown {period} />
+    </section>
+    <section class="usage-activity-panel" aria-labelledby="usage-activity-title">
+      <div class="usage-panel-heading">
+        <h2 id="usage-activity-title">Activity</h2>
+        <span id="usage-activity-status" class="count-pill" aria-live="polite">
+          {formatUtcDateRange(activityRange.from, activityRange.to)}
+        </span>
+      </div>
+      {#if activityDays}
+        {#if activityError}
+          <RetryNotice
+            message={activityError.message}
+            actionLabel={accountNoticeActionLabel(activityError)}
+            onRetry={accountNoticeRetry(activityError, () =>
+              void store.ensureActivity(activityRange, { maxAgeMs: 0 }),
+            )}
+          />
+        {/if}
+        <UsageActivity
+          days={activityDays}
+          range={activityRange}
+          selectedDate={selectedDay}
+          detail={dayDetail}
+          detailError={dayError}
+          detailLoading={detailLoading}
+          onSelectDate={(date) => writeDay(date)}
+          onClose={() => writeDay(null)}
+          onRetryDetail={() => {
+            if (selectedDay) void store.ensureDay(selectedDay, { maxAgeMs: 0 });
+          }}
+        />
+      {:else if activityError}
+        <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
+          <RetryNotice
+            message={activityError.message}
+            actionLabel={accountNoticeActionLabel(activityError)}
+            onRetry={accountNoticeRetry(activityError, () =>
+              void store.ensureActivity(activityRange, { maxAgeMs: 0 }),
+            )}
+          />
+        </div>
+      {:else}
+        <div id="usage-activity-grid" class="usage-activity-state" aria-live="polite">
+          <LoadingBlock lines={4} label="Loading Usage activity" />
+        </div>
+      {/if}
+    </section>
+  </div>
+{/if}

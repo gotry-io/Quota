@@ -37,3 +37,19 @@ export function deviceActivity(
   }
   return { label: "Not reporting", tone: "unavailable", since };
 }
+
+/** macOS glyph, or a generic device for every other platform value. */
+export function platformIconKind(platform: string): "mac" | "generic" {
+  return platform === "macos" ? "mac" : "generic";
+}
+
+/** Last-seen descending. A Device that has never called sorts last. */
+export function sortDevicesByLastSeen<T extends { last_seen_at: string | null }>(
+  devices: readonly T[],
+): T[] {
+  return devices.slice().sort((left, right) => {
+    const leftMs = left.last_seen_at ? Date.parse(left.last_seen_at) : Number.NEGATIVE_INFINITY;
+    const rightMs = right.last_seen_at ? Date.parse(right.last_seen_at) : Number.NEGATIVE_INFINITY;
+    return rightMs - leftMs;
+  });
+}

@@ -8,6 +8,7 @@ import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
   NOT_CHECKED_COPY,
+  formatUtcDateRange,
   lastReadingCopy,
   observationFreshnessCopy,
   relativeAge,
@@ -127,6 +128,10 @@ test("missing reset display matches the shared fixture", () => {
       testCase.name,
     );
   }
+});
+
+test("formats a UTC date range in English", () => {
+  assert.equal(formatUtcDateRange("2025-09-05", "2026-09-04"), "Sep 5, 2025 – Sep 4, 2026");
 });
 
 test("names the overflow model leaf Other", () => {

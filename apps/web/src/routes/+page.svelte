@@ -1,21 +1,26 @@
 <script lang="ts">
 import InstallOptions from "$lib/components/InstallOptions.svelte";
-import { AGENT_DISPLAY_NAMES, PROVIDER_DISPLAY_NAMES } from "$lib/providers.ts";
+import ProviderMark from "$lib/components/ProviderMark.svelte";
+import { IOS_AVAILABILITY, iosAvailabilityCopy } from "$lib/platforms.ts";
+import { AGENT_DISPLAY_NAMES, CATALOG_PROVIDERS } from "$lib/providers.ts";
+import { signInHref } from "$lib/routes.ts";
 
-const brewCommand = "brew install gotry-io/tap/quotabar";
+const dmgUrl =
+  "https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg";
+const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
 </script>
 
 <svelte:head>
-  <title>Quota — Know what you have left</title>
+  <title>Quota — See what's left across your coding-agent plans</title>
   <meta
     name="description"
-    content="Quota keeps remaining coding-agent quota and privacy-preserving Usage together. Install QuotaBar on macOS from a .dmg or Homebrew."
+    content="QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals to the web."
   />
   <link rel="canonical" href="https://quota.gotry.io/" />
-  <meta property="og:title" content="Quota — Know what you have left" />
+  <meta property="og:title" content="Quota — See what's left across your coding-agent plans" />
   <meta
     property="og:description"
-    content="See remaining quota for Codex, Claude, Grok, Cursor, and API keys in the menu bar."
+    content="QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals to the web."
   />
   <meta property="og:url" content="https://quota.gotry.io/" />
 </svelte:head>
@@ -23,82 +28,113 @@ const brewCommand = "brew install gotry-io/tap/quotabar";
 <div id="landing-view">
   <section class="hero" aria-labelledby="hero-title">
     <div class="hero-copy">
-      <p class="eyebrow">macOS menu bar · Your devices</p>
-      <h1 id="hero-title">Know what you have left.</h1>
+      <h1 id="hero-title">See what's left across your coding-agent plans.</h1>
       <p class="hero-summary">
-        QuotaBar shows remaining quota for eight providers from the menu bar, and keeps Usage on
-        your Mac unless you sync an account.
+        QuotaBar reads your providers on the Mac; Relay syncs only remaining quota and Usage totals
+        to the web.
       </p>
-      <InstallOptions>
-        <a class="button button-secondary" href="#product">See how it works</a>
-      </InstallOptions>
-      <p class="release-note">Apple Silicon · Open source · GitHub is the only sign-in</p>
+      <div class="hero-cta">
+        <div class="hero-actions">
+          <a class="button button-primary" href={dmgUrl}>Download for macOS</a>
+          <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
+            >Sign in with GitHub</a
+          >
+        </div>
+        <p class="hero-meta">Free &amp; open source · MIT · macOS 14+</p>
+      </div>
     </div>
 
     <div class="hero-preview">
       <figure class="preview-shot preview-quotabar">
-        <picture>
-          <source
-            srcset="/screenshots/quotabar-overview-dark.png"
-            media="(prefers-color-scheme: dark)"
-            width="640"
-            height="960"
-          />
-          <img
-            src="/screenshots/quotabar-overview-light.png"
-            width="640"
-            height="960"
-            alt="QuotaBar menu bar showing remaining Codex Plus, Claude Code Max, and Grok SuperGrok quota"
-          />
-        </picture>
+        <img
+          class="shot-light"
+          src="/screenshots/quotabar-overview-light.png"
+          width="640"
+          height="960"
+          alt="QuotaBar menu bar showing remaining Codex Plus, Claude Code Max, and Grok SuperGrok quota"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/quotabar-overview-dark.png"
+          width="640"
+          height="960"
+          alt=""
+        />
       </figure>
       <figure class="preview-shot preview-web">
-        <picture>
-          <source
-            srcset="/screenshots/web-overview-dark-desktop.png"
-            media="(min-width: 841px) and (prefers-color-scheme: dark)"
-            width="1440"
-            height="900"
-          />
-          <source
-            srcset="/screenshots/web-overview-light-desktop.png"
-            media="(min-width: 841px)"
-            width="1440"
-            height="900"
-          />
-          <source
-            srcset="/screenshots/web-overview-dark-mobile.png"
-            media="(prefers-color-scheme: dark)"
-            width="390"
-            height="844"
-          />
-          <img
-            src="/screenshots/web-overview-light-mobile.png"
-            width="390"
-            height="844"
-            alt="Quota account overview with remaining-quota cards for Codex, Claude Code, and Grok, and Studio Mac and Kitchen Mac"
-          />
-        </picture>
+        <img
+          class="shot-light"
+          src="/screenshots/web-overview-light-desktop.png"
+          width="1440"
+          height="900"
+          alt="Quota account overview with remaining-quota cards for Codex, Claude Code, and Grok"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/web-overview-dark-desktop.png"
+          width="1440"
+          height="900"
+          alt=""
+        />
+      </figure>
+      <figure class="preview-shot preview-ios">
+        <img
+          class="shot-light"
+          src="/screenshots/ios-overview-light.png"
+          width="1206"
+          height="2622"
+          alt="Quota for iPhone overview showing remaining quota on Codex, Claude Code, and Grok"
+        />
+        <img
+          class="shot-dark"
+          src="/screenshots/ios-overview-dark.png"
+          width="1206"
+          height="2622"
+          alt=""
+        />
+        <figcaption class="preview-caption">Preview</figcaption>
       </figure>
     </div>
   </section>
 
-  <section class="works-with" aria-labelledby="works-with-title">
+  <section class="landing-section" id="how-it-works" aria-labelledby="how-title">
     <div class="section-heading">
-      <p class="eyebrow">Providers · Agents</p>
-      <h2 id="works-with-title">Works with the providers and agents you already use.</h2>
+      <h2 id="how-title">How it works</h2>
     </div>
-    <div class="works-with-grid">
+    <div class="how-grid">
+      <article>
+        <h3>Install QuotaBar</h3>
+        <p>Download the macOS app and keep remaining quota in the menu bar.</p>
+      </article>
+      <article>
+        <h3>It reads your providers locally</h3>
+        <p>QuotaBar reads provider sessions and agent logs on your Mac. Credentials never upload.</p>
+      </article>
+      <article>
+        <h3>The web shows the same numbers</h3>
+        <p>Sign in to see remaining quota, Usage, and Devices in the browser.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="landing-section" aria-labelledby="catalog-title">
+    <div class="section-heading">
+      <h2 id="catalog-title">Providers &amp; agents</h2>
+    </div>
+    <div class="catalog-grid">
       <div>
-        <h3>Works with</h3>
+        <h3>Providers</h3>
         <ul class="name-list">
-          {#each PROVIDER_DISPLAY_NAMES as name (name)}
-            <li>{name}</li>
+          {#each CATALOG_PROVIDERS as provider (provider.id)}
+            <li>
+              <ProviderMark provider={provider.id} />
+              {provider.display_name}
+            </li>
           {/each}
         </ul>
       </div>
       <div>
-        <h3>Usage from</h3>
+        <h3>Agents</h3>
         <ul class="name-list">
           {#each AGENT_DISPLAY_NAMES as name (name)}
             <li>{name}</li>
@@ -109,89 +145,44 @@ const brewCommand = "brew install gotry-io/tap/quotabar";
   </section>
 
   <section class="privacy-callout" aria-labelledby="privacy-title">
-    <p class="eyebrow">Privacy</p>
-    <h2 id="privacy-title" class="visually-hidden">What never leaves your Mac</h2>
-    <p>
-      Provider credentials, prompts, and local paths never leave your Mac. Quota uploads remaining
-      quota and privacy-preserving Usage totals only. <a class="text-link" href="/privacy">Privacy</a
-      >
-    </p>
+    <h2 id="privacy-title">What never leaves your Mac</h2>
+    <ul class="privacy-points">
+      <li>Provider credentials, prompts, and local paths never leave your Mac.</li>
+      <li>Quota uploads remaining quota and privacy-preserving Usage totals only.</li>
+      <li>
+        <a class="text-link" href="/privacy">Privacy</a> states what Relay keeps and how to delete it.
+      </li>
+    </ul>
   </section>
 
-  <section class="principles" id="product" aria-labelledby="product-title">
+  <section class="landing-section" id="platforms" aria-labelledby="platforms-title">
     <div class="section-heading">
-      <p class="eyebrow">One quiet place</p>
-      <h2 id="product-title">Quota and Usage without leaking the work.</h2>
+      <h2 id="platforms-title">Platforms</h2>
     </div>
-    <div class="principle-grid">
-      <article>
-        <span class="index">01</span>
-        <h3>Local collection</h3>
-        <p>
-          Install QuotaBar from the .dmg or <code>{brewCommand}</code>. It reads eight provider
-          sessions and six agents' logs locally. Credentials, prompts, paths, and raw events never
-          upload.
-        </p>
+    <div class="platforms-grid">
+      <article class="platform-card">
+        <p class="eyebrow">macOS</p>
+        <h3>QuotaBar</h3>
+        <p>Remaining quota in the menu bar. Apple silicon, macOS 14 or later.</p>
+        <InstallOptions />
       </article>
-      <article>
-        <span class="index">02</span>
-        <h3>One account</h3>
-        <p>
-          Sign in once per installation and see every active or signed-out device, with account
-          totals and device breakdowns. Quota for iPhone: coming soon.
-        </p>
-      </article>
-      <article>
-        <span class="index">03</span>
-        <h3>Defensible cost</h3>
-        <p>
-          Effective-dated channel prices calculate API-equivalent USD. Missing prices remain visible
-          instead of becoming zero.
-        </p>
-      </article>
-    </div>
-  </section>
-
-  <section class="architecture" aria-labelledby="architecture-title">
-    <div class="architecture-copy">
-      <p class="eyebrow">Direct by design</p>
-      <h2 id="architecture-title">Account to device. Nothing in between.</h2>
-      <p>
-        QuotaBar reads eight provider sessions and six agents' logs on your Mac and uploads only the
-        numbers: what quota is left and how many tokens you spent. Your account stores those
-        totals—never provider credentials, prompts, paths, or raw logs.
-      </p>
-      <a class="text-link" href="https://github.com/gotry-io/Quota">Read the source →</a>
-    </div>
-    <div class="flow" role="img" aria-label="Quota data flow">
-      <div class="flow-node">
-        <span class="diagram-tag">Local</span><strong>Eight providers · six agents</strong><span
-          >Quota and Usage remain readable offline</span
+      <article class="platform-card">
+        <p class="eyebrow">Web</p>
+        <h3>Account</h3>
+        <p>The same remaining quota, Usage, and Devices in the browser.</p>
+        <a class="button button-secondary" href={signInHref()} data-sveltekit-reload
+          >Sign in with GitHub</a
         >
-      </div>
-      <span class="flow-arrow" aria-hidden="true">↓</span>
-      <div class="flow-node flow-node-dark">
-        <span class="diagram-tag diagram-tag-dark">QuotaBar</span><strong>Collect · persist · sync</strong
-        ><span>Your Mac reads the providers and sends only totals</span>
-      </div>
-      <span class="flow-arrow" aria-hidden="true">↓</span>
-      <div class="flow-node">
-        <span class="diagram-tag">Account</span><strong>Web + QuotaBar</strong><span
-          >Remaining quota, every device, and what it cost</span
-        >
-      </div>
+      </article>
+      <article class="platform-card">
+        <p class="eyebrow">iPhone</p>
+        <h3>Quota</h3>
+        <p class="platform-badge">{ios.label}</p>
+        <p>{ios.summary}</p>
+        {#if ios.url && ios.actionLabel}
+          <a class="button button-secondary" href={ios.url}>{ios.actionLabel}</a>
+        {/if}
+      </article>
     </div>
-  </section>
-
-  <section class="cta">
-    <div>
-      <p class="eyebrow eyebrow-dark">Ready when you are</p>
-      <h2>Bring every device into one view.</h2>
-    </div>
-    <a
-      class="button button-on-dark"
-      href="https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg"
-      >Download QuotaBar .dmg</a
-    >
   </section>
 </div>

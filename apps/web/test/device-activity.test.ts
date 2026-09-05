@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deviceActivity } from "../src/lib/device-activity.ts";
+import {
+  deviceActivity,
+  platformIconKind,
+  sortDevicesByLastSeen,
+} from "../src/lib/device-activity.ts";
 
 const now = new Date("2026-08-15T08:10:00Z");
 
@@ -30,4 +34,23 @@ test("a quiet day is idle and a longer silence stops reporting", () => {
   assert.equal(deviceActivity(device("2026-08-15T02:00:00Z"), now).label, "Idle");
   assert.equal(deviceActivity(device("2026-08-10T02:00:00Z"), now).label, "Not reporting");
   assert.equal(deviceActivity(device(null), now).label, "Not reporting");
+});
+
+test("sorts devices by last-seen, newest first, and never-seen last", () => {
+  const rows = [
+    { id: "old", last_seen_at: "2026-08-10T09:31:00Z" },
+    { id: "new", last_seen_at: "2026-08-12T09:31:00Z" },
+    { id: "none", last_seen_at: null },
+  ];
+  assert.deepEqual(
+    sortDevicesByLastSeen(rows).map((row) => row.id),
+    ["new", "old", "none"],
+  );
+});
+
+test("platform icons treat only macos as mac and everything else as generic", () => {
+  assert.equal(platformIconKind("macos"), "mac");
+  assert.equal(platformIconKind("ios"), "generic");
+  assert.equal(platformIconKind("iphone"), "generic");
+  assert.equal(platformIconKind("linux"), "generic");
 });

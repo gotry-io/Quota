@@ -37,35 +37,48 @@ Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than
 worker. Install Chromium with
 `pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
-`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four nav routes: `/my`
-(overview), `/my/usage`, `/my/devices`, and `/my/settings`. Unsigned visits to any of them — and to
-`/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session; Quota Web
-publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under it stay a
-redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview cards link to
-`/my/subscriptions/<sel>` for that subscription's windows, reset countdown, and per-device readings.
-Sign-in is a plain navigation to Relay's `/api/auth/github/start`, not a fetch: the header button is
-a link, and a signed-out visitor returns to the page they asked for. Sign-out posts to
-`/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes and Device deletion
-all require an exact same-origin request, and the destructive ones a session authenticated within
-ten minutes.
+`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
+(overview), `/my/usage`, `/my/devices`, and `/my/settings`. When the session is on `/my`, the site
+header carries that nav (Overview / Usage / Devices / Settings) and an account menu with a
+first-letter mark, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name).
+Overview's status line is `Latest quota updated <age> · <n> devices reporting`; Usage shows the
+selected period and partial state; Devices uses the Devices summary. Unsigned visits to any of
+them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session;
+Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
+it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
+quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
+`/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
+same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
+Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
+below 620 px. Settings groups Appearance, Account, and Legal. Sign-in is a plain navigation
+to Relay's `/api/auth/github/start`, not a fetch: the header button is a link, and a signed-out
+visitor returns to the page they asked for. Sign-out posts to `/api/auth/logout` and Delete Account
+is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
+request, and the destructive ones a session authenticated within ten minutes.
 
 The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
 bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
 the trailing windows start and end — and a document request has no clock, so rendering one on the
 server would answer in UTC and be thrown away by every browser keeping another calendar. The client
-makes it once, sending its own IANA timezone as `tz`.
+makes it once, sending its own IANA timezone as `tz`. One account store
+(`src/lib/account-store.svelte.ts`) holds the summary, activity keyed by `from|to`, and per-day
+detail. The `/my` layout calls `ensureSummary()` on account navigations without blocking first
+paint. Usage calls `ensureActivity()` when that route is entered; the activity range is computed
+at access time and the cache key changes at the UTC day boundary. Each tab reads that store: a
+second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup), not a new
+request. Switching the Usage period recomputes from the summary and does not refetch.
 
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
 Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from
 `GET /api/v6/account/usage/activity`, on UTC dates. All time is the last 730 days. Each Device shows
-its platform, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
-or Not reporting from the newer of the two. It is read-only, and a quiet Device is asleep or closed
-rather than broken.
+a platform icon, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
+or Not reporting from the newer of the two, newest last-seen first. It is read-only, and a quiet
+Device is asleep or closed rather than broken.
 
 New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
-`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`, and
-`screenshots/` need a matching `!/filename` (or `!/dir/*`) negation in `apps/relay/wrangler.jsonc`;
-`test/static-seo.test.ts` checks this.
+`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`,
+`screenshots/`, and `providers/` need a matching `!/filename` (or `!/dir/*`) negation in
+`apps/relay/wrangler.jsonc`; `test/static-seo.test.ts` checks this.
 
 Public pages `/download`, `/support`, `/privacy`, and `/terms` are SvelteKit routes. Support,
 Privacy, and Terms copy lives in `src/content/*.md` and is rendered by `src/lib/markdown.ts`
@@ -81,8 +94,9 @@ Regenerate the web shots with `pnpm --filter @gotry-io/quota-web screenshots` (`
 part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that hosts
 `VisualTestConfiguration` (`--route overview --fixture content --appearance light|dark`) in a
 320×480 `NSHostingView`, writes PNG @2x via `bitmapImageRepForCachingDisplay` to
-`quotabar-overview-{light,dark}.png`, then is deleted. Compress each PNG below 300 KB (`pngquant` or
-`sips`).
+`quotabar-overview-{light,dark}.png`, then is deleted. iPhone overview shots are
+`overview-content.png` from `./scripts/ios-ui-screenshots.sh`, copied to
+`ios-overview-{light,dark}.png`. Compress each PNG below 300 KB (`pngquant` or `sips`).
 
 The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
 [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
