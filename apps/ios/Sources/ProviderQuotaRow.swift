@@ -2,32 +2,20 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-struct ProviderQuotaCard: View {
-  let model: ProviderQuotaCardModel
+struct ProviderQuotaRow: View {
+  let provider: ProviderID
+  let snapshot: QuotaSnapshot
+  var accountIndex: Int = 0
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(model.provider.displayName)
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-
-      ForEach(Array(model.subscriptions.enumerated()), id: \.offset) { index, subscription in
-        if index > 0 {
-          Divider()
-        }
-        observationBlock(subscription.snapshot, index: index)
-      }
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .contentShape(Rectangle())
-    .quotaSurface()
-  }
-
-  private func observationBlock(_ snapshot: QuotaSnapshot, index: Int) -> some View {
-    let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(index + 1)"
+    let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
     let stateLabel = snapshot.stateLabel()
     return VStack(alignment: .leading, spacing: 12) {
+      Text(provider.displayName)
+        .font(.headline)
+        .foregroundStyle(.primary)
+        .accessibilityAddTraits(.isHeader)
+
       let plan = QuotaFormat.planBadge(snapshot.account.plan)
       // Label and plan share a line while they fit; at accessibility text sizes they stack so
       // neither is clipped.
@@ -47,9 +35,9 @@ struct ProviderQuotaCard: View {
       .accessibilityLabel(plan.map { "Account: \(label). Plan: \($0)" } ?? "Account: \(label)")
 
       if snapshot.windows.isEmpty {
-        Text("No quota windows reported.")
+        Text("No quota windows yet.")
           .font(.subheadline)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.primary)
       } else {
         ForEach(snapshot.windows) { window in
           QuotaWindowBlock(window: window, stateLabel: stateLabel)
@@ -61,17 +49,23 @@ struct ProviderQuotaCard: View {
   private func accountLabel(_ label: String) -> some View {
     Text(label)
       .font(.subheadline.weight(.medium))
+      .foregroundStyle(.primary)
       .fixedSize(horizontal: false, vertical: true)
   }
 
   private func planCapsule(_ plan: String) -> some View {
     Text(plan)
       .font(.caption.weight(.semibold))
+      .foregroundStyle(.primary)
+      .fixedSize()
       .layoutPriority(1)
       .padding(.horizontal, 8)
       .padding(.vertical, 3)
-      .background(QuotaTheme.meterTrack, in: Capsule())
+      .overlay {
+        Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1)
+      }
       .accessibilityHidden(true)
+      .accessibilityElement(children: .ignore)
       .allowsHitTesting(false)
   }
 }
@@ -88,7 +82,7 @@ struct QuotaWindowBlock: View {
     VStack(alignment: .leading, spacing: 6) {
       Text(QuotaFormat.windowTitle(window))
         .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
 
       Text(QuotaFormat.remaining(window))
@@ -115,7 +109,7 @@ struct QuotaWindowBlock: View {
         // No line limit: at accessibility text sizes a capped line clips the reset time.
         Text(support)
           .font(.footnote)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -130,13 +124,14 @@ struct QuotaWindowBlock: View {
       // The shared reset copy says "Resets in …"; the live timer keeps the same words.
       (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
         .font(.footnote.monospacedDigit())
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityLabel(Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+        .accessibilityLabel(
+          Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
     case .copy(let text):
       Text(text)
         .font(.footnote)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
     case nil:
       EmptyView()

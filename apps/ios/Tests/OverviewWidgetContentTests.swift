@@ -19,7 +19,8 @@ struct OverviewWidgetContentTests {
     try Data("not-json".utf8).write(to: store.fileURL)
     #expect(OverviewWidgetContent.loadSnapshot(containerURL: directory) == nil)
 
-    let oversize = Data(repeating: 0x41, count: ProtectedFileWidgetSnapshotStore.maximumLoadBytes * 2)
+    let oversize = Data(
+      repeating: 0x41, count: ProtectedFileWidgetSnapshotStore.maximumLoadBytes * 2)
     try oversize.write(to: store.fileURL)
     #expect(OverviewWidgetContent.loadSnapshot(containerURL: directory) == nil)
   }
@@ -56,7 +57,8 @@ struct OverviewWidgetContentTests {
     let items = rankedSnapshot().items
     let selected = OverviewWidgetContent.select(items: items, configuredSelectionID: nil)
     #expect(selected.map(\.selectionID) == items.map(\.selectionID))
-    #expect(OverviewWidgetContent.primaryItem(from: rankedSnapshot())?.selectionID == "aaaaaaaaaaaa")
+    #expect(
+      OverviewWidgetContent.primaryItem(from: rankedSnapshot())?.selectionID == "aaaaaaaaaaaa")
   }
 
   @Test
@@ -125,9 +127,10 @@ struct OverviewWidgetContentTests {
       )
     )
     #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 6)
-    #expect(OverviewWidgetContent.largeItems(from: snapshot).map(\.windowTitle) == [
-      "W0", "W1", "W2", "W3", "W4", "W5",
-    ])
+    #expect(
+      OverviewWidgetContent.largeItems(from: snapshot).map(\.windowTitle) == [
+        "W0", "W1", "W2", "W3", "W4", "W5",
+      ])
     let configuredID = items[7].selectionID
     #expect(
       OverviewWidgetContent.largeItems(
@@ -145,7 +148,8 @@ struct OverviewWidgetContentTests {
       OverviewWidgetContent.widgetURL(for: [first])
         == OverviewWidgetContent.subscriptionURL(for: first)
     )
-    #expect(OverviewWidgetContent.widgetURL(for: [first, second]) == OverviewWidgetContent.overviewURL)
+    #expect(
+      OverviewWidgetContent.widgetURL(for: [first, second]) == OverviewWidgetContent.overviewURL)
     #expect(OverviewWidgetContent.widgetURL(for: []) == OverviewWidgetContent.overviewURL)
   }
 
@@ -195,6 +199,16 @@ struct OverviewWidgetContentTests {
     let next = OverviewWidgetContent.nextRefreshDate(from: now)
     #expect(next.timeIntervalSince(now) == OverviewWidgetContent.refreshInterval)
     #expect(OverviewWidgetContent.refreshInterval == 15 * 60)
+  }
+
+  @Test
+  func largeUpdatedFooterUsesTheSharedPhraseWhenASnapshotExists() {
+    let snapshot = rankedSnapshot()
+    let now = date("2026-08-14T16:00:00Z")
+    #expect(
+      OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: now) == "Updated just now"
+    )
+    #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 3)
   }
 
   @Test

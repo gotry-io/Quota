@@ -177,43 +177,60 @@ public struct SessionRefreshResponse: Decodable, Equatable, Sendable {
   }
 }
 
+/// Whether this device has confirmed the GitHub account the session belongs to.
+///
+/// `pending` is the record `completeLogin` writes: it may fetch the identifying summary, but it
+/// is not a signed-in session. Only Continue promotes the same record to `active`.
+public enum AccountSessionActivation: String, Codable, Equatable, Sendable {
+  case pending
+  case active
+}
+
 public struct AccountSession: Codable, Equatable, Sendable {
   public let accountID: String
   public let accessToken: String
   public let accessExpiresAt: Date
   public let refreshToken: String
   public let refreshExpiresAt: Date
+  public let activation: AccountSessionActivation
 
   public init(
     accountID: String,
     accessToken: String,
     accessExpiresAt: Date,
     refreshToken: String,
-    refreshExpiresAt: Date
+    refreshExpiresAt: Date,
+    activation: AccountSessionActivation
   ) {
     self.accountID = accountID
     self.accessToken = accessToken
     self.accessExpiresAt = accessExpiresAt
     self.refreshToken = refreshToken
     self.refreshExpiresAt = refreshExpiresAt
+    self.activation = activation
   }
 
-  public init(accountID: String, token: SessionToken) {
+  public init(
+    accountID: String,
+    token: SessionToken,
+    activation: AccountSessionActivation
+  ) {
     self.init(
       accountID: accountID,
       accessToken: token.accessToken,
       accessExpiresAt: token.accessExpiresAt,
       refreshToken: token.refreshToken,
-      refreshExpiresAt: token.refreshExpiresAt
+      refreshExpiresAt: token.refreshExpiresAt,
+      activation: activation
     )
   }
 
   public init(_ response: IosOAuthTokenResponse) {
-    self.init(accountID: response.accountID, token: response.session)
+    self.init(accountID: response.accountID, token: response.session, activation: .pending)
   }
 
-  public init(_ response: SessionRefreshResponse) {
-    self.init(accountID: response.accountID, token: response.session)
+  public init(_ response: SessionRefreshResponse, activation: AccountSessionActivation) {
+    self.init(accountID: response.accountID, token: response.session, activation: activation)
   }
 
   public init(from decoder: Decoder) throws {
@@ -223,6 +240,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
     accessExpiresAt = try container.decode(Date.self, forKey: .accessExpiresAt)
     refreshToken = try container.decode(String.self, forKey: .refreshToken)
     refreshExpiresAt = try container.decode(Date.self, forKey: .refreshExpiresAt)
+    activation = try container.decode(AccountSessionActivation.self, forKey: .activation)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .accessToken,
@@ -238,18 +256,30 @@ public struct AccountSession: Codable, Equatable, Sendable {
       && WireValidation.isIOSRefreshToken(refreshToken)
   }
 
+  public func withActivation(_ activation: AccountSessionActivation) -> AccountSession {
+    AccountSession(
+      accountID: accountID,
+      accessToken: accessToken,
+      accessExpiresAt: accessExpiresAt,
+      refreshToken: refreshToken,
+      refreshExpiresAt: refreshExpiresAt,
+      activation: activation
+    )
+  }
+
   private enum CodingKeys: String, CodingKey {
     case accountID = "accountId"
     case accessToken
     case accessExpiresAt
     case refreshToken
     case refreshExpiresAt
+    case activation
   }
 }
 
 extension AccountSession: CustomStringConvertible, CustomDebugStringConvertible {
   public var description: String {
-    "AccountSession(accountID: \(accountID), accessToken: [redacted], refreshToken: [redacted])"
+    "AccountSession(accountID: \(accountID), activation: \(activation), accessToken: [redacted], refreshToken: [redacted])"
   }
 
   public var debugDescription: String { description }

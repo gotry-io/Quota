@@ -4,7 +4,11 @@ import UIKit
 
 @MainActor
 protocol BrowserSessionAuthenticating: AnyObject {
-  func authenticate(url: URL, callbackScheme: String) async throws -> URL
+  func authenticate(
+    url: URL,
+    callbackScheme: String,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws -> URL
   /// Present a page in `ASWebAuthenticationSession`. A nil callback scheme ends when the
   /// sheet is dismissed. Cancel is success: the person closed the session.
   func present(
@@ -20,12 +24,16 @@ final class SystemBrowserAuthenticator: NSObject, BrowserSessionAuthenticating,
 {
   private var session: ASWebAuthenticationSession?
 
-  func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+  func authenticate(
+    url: URL,
+    callbackScheme: String,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws -> URL {
     try await withCheckedThrowingContinuation { continuation in
       startSession(
         url: url,
         callbackURLScheme: callbackScheme,
-        prefersEphemeralWebBrowserSession: true
+        prefersEphemeralWebBrowserSession: prefersEphemeralWebBrowserSession
       ) { callback, error in
         if let error {
           let nsError = error as NSError

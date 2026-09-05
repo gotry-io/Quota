@@ -16,7 +16,10 @@ scoped `[account:read, device:write]`; the iOS viewer's is `[account:read]`; a b
 `[account:read, account:manage]` and carries no refresh token, because the cookie is the whole
 credential ([ADR 0025](0025-one-session-system.md)). `token_audience` is gone from the wire, and
 `OAuthTokenResponse`, both refresh responses, and the local session envelope each carry one
-`session`.
+`session`. Quota iOS's persisted `AccountSession` adds `activation: pending | active` on that
+same record: exchange writes `pending`, only Continue promotes it to `active`, and token
+rotation copies the activation it already had. QuotaBar does not use this envelope; its local
+session is the collection client's and is active once login finishes.
 
 One table means one code path. Authorization is one query whose join insists a Device-bound session
 still matches its Device's generation, so Delete Device — which advances that generation — ends every

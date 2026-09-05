@@ -1,24 +1,21 @@
 import SwiftUI
 
-struct StatusBanner: View {
+struct StatusMessage: View {
   let symbolName: String
   let text: String
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: symbolName)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(.primary)
-        .frame(minWidth: 24, minHeight: 24)
+        .foregroundStyle(Color(uiColor: .label))
         .accessibilityHidden(true)
       Text(text)
-        .font(.subheadline)
-        .foregroundStyle(.primary)
+        .foregroundStyle(Color(uiColor: .label))
+        .lineLimit(nil)
         .fixedSize(horizontal: false, vertical: true)
     }
-    .padding(12)
+    .font(.subheadline)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaSurface(showsStroke: true)
     .accessibilityElement(children: .combine)
     .accessibilityLabel(text)
   }

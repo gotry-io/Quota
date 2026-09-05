@@ -13,14 +13,16 @@ enum Fixtures {
   static func session(
     accountID: String = "account_01",
     access: String = accessToken,
-    refresh: String = refreshToken
+    refresh: String = refreshToken,
+    activation: AccountSessionActivation = .active
   ) -> AccountSession {
     AccountSession(
       accountID: accountID,
       accessToken: access,
       accessExpiresAt: date("2026-08-14T12:15:00Z"),
       refreshToken: refresh,
-      refreshExpiresAt: date("2026-11-01T12:00:00Z")
+      refreshExpiresAt: date("2026-11-01T12:00:00Z"),
+      activation: activation
     )
   }
 

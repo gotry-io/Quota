@@ -7,10 +7,20 @@ import QuotaWire
 /// Parser is always available for unit tests; UI state application is DEBUG-only.
 enum VisualFixture: String, CaseIterable, Sendable {
   case signedOut = "signed-out"
+  case connecting
+  case connectError = "connect-error"
+  case expired
+  case confirmAccount = "confirm-account"
+  case connectRefreshFailed = "connect-refresh-failed"
+  case loading
   case content
   case cachedError = "cached-error"
   case empty
   case noDevices = "no-devices"
+  case activityLoading = "activity-loading"
+  case activityFailed = "activity-failed"
+  case activityDayEmpty = "activity-day-empty"
+  case activityDayFailed = "activity-day-failed"
 
   /// Parse `--visual-fixture <name>` from process arguments. Returns nil when absent or unknown.
   static func parse(arguments: [String]) -> VisualFixture? {
@@ -39,6 +49,63 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+      case .connecting:
+        model.phase = .connecting
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .connectError:
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = AppModel.Banner(
+          kind: .refreshFailed,
+          text: AuthorizationError.genericConnectFailureMessage,
+          symbolName: "exclamationmark.triangle"
+        )
+        model.expiredMessage = nil
+      case .expired:
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = "Session expired. Connect again."
+      case .loading:
+        model.phase = .launching
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .confirmAccount:
+        let summary = VisualFixtureContent.summary(at: now)
+        model.phase = .confirmingAccount(label: summary.account.displayLabel ?? "octocat")
+        model.summary = summary
+        model.fetchedAt = now.addingTimeInterval(-90)
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+      case .connectRefreshFailed:
+        model.phase = .pendingRefreshFailed
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = AppModel.Banner(
+          kind: .refreshFailed,
+          text: "Couldn't reach quota.gotry.io.",
+          symbolName: "exclamationmark.triangle"
+        )
+        model.expiredMessage = nil
       case .content:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.summary(at: now)
@@ -56,12 +123,24 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = AppModel.Banner(
           kind: .offlineCached,
-          text: "Showing saved account data. Could not refresh.",
+          text: AppModel.Banner.cachedText,
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil
         model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
-      case .empty, .noDevices:
+      case .empty:
+        model.phase = .signedIn
+        model.summary = VisualFixtureContent.emptySummary(
+          at: now,
+          devices: VisualFixtureContent.devices(at: now)
+        )
+        model.fetchedAt = now.addingTimeInterval(-60)
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+        model.activityChart = .loaded([])
+      case .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
         model.fetchedAt = now.addingTimeInterval(-60)
@@ -70,15 +149,80 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.activityChart = .loaded([])
+      case .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed:
+        applySignedInContent(to: model, now: now)
+        model.selectedTab = .usage
+        switch self {
+        case .activityLoading:
+          model.activityChart = .loading
+        case .activityFailed:
+          model.activityChart = .failed
+        case .activityDayEmpty:
+          let date = UsageActivityCalendar.addDays(
+            -3,
+            to: UsageActivityCalendar.utcDay(from: now)
+          )
+          model.activityDaySheet = ActivityDaySheetState(
+            date: date,
+            headline: UsageActivityChart.emptyDay(date: date),
+            agents: .empty
+          )
+        case .activityDayFailed:
+          let date = UsageActivityCalendar.utcDay(from: now)
+          let headline =
+            VisualFixtureContent.activityDays(ending: now).first { $0.date == date }
+            ?? UsageActivityChart.emptyDay(date: date)
+          model.activityDaySheet = ActivityDaySheetState(
+            date: date,
+            headline: headline,
+            agents: .failed
+          )
+        default:
+          break
+        }
       }
+    }
+
+    @MainActor
+    private func applySignedInContent(to model: AppModel, now: Date) {
+      model.phase = .signedIn
+      model.summary = VisualFixtureContent.summary(at: now)
+      model.fetchedAt = now.addingTimeInterval(-90)
+      model.fromCache = false
+      model.isRefreshing = false
+      model.banner = nil
+      model.expiredMessage = nil
+      model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
     }
   }
 
   @MainActor
   enum VisualFixtureContent {
+    static let studioDeviceID = "device_visual_fixture_01"
+    static let kitchenDeviceID = "device_visual_fixture_02"
+
+    static func devices(at date: Date) -> [AccountDevice] {
+      [
+        AccountDevice(
+          id: studioDeviceID,
+          displayName: "Studio Mac",
+          platform: .macos,
+          lastSeenAt: date.addingTimeInterval(-45),
+          lastObservedAt: date.addingTimeInterval(-90)
+        ),
+        AccountDevice(
+          id: kitchenDeviceID,
+          displayName: "Kitchen Mac",
+          platform: .macos,
+          lastSeenAt: date.addingTimeInterval(-300),
+          lastObservedAt: date.addingTimeInterval(-360)
+        ),
+      ]
+    }
+
     static func summary(at date: Date) -> AccountSummary {
-      let studioID = "device_visual_fixture_01"
-      let kitchenID = "device_visual_fixture_02"
+      let studioID = studioDeviceID
+      let kitchenID = kitchenDeviceID
       let subscriptions = [
         codexSubscription(studioID: studioID, kitchenID: kitchenID, at: date),
         subscription(
@@ -121,22 +265,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           displayLabel: "octocat",
           createdAt: date.addingTimeInterval(-30 * 86_400)
         ),
-        devices: [
-          AccountDevice(
-            id: studioID,
-            displayName: "Studio Mac",
-            platform: .macos,
-            lastSeenAt: date.addingTimeInterval(-45),
-            lastObservedAt: date.addingTimeInterval(-90)
-          ),
-          AccountDevice(
-            id: kitchenID,
-            displayName: "Kitchen Mac",
-            platform: .macos,
-            lastSeenAt: date.addingTimeInterval(-300),
-            lastObservedAt: date.addingTimeInterval(-360)
-          ),
-        ],
+        devices: devices(at: date),
         subscriptions: subscriptions,
         usage: usage(),
         pricingRevision: "pricing_visual_fixture",
@@ -144,14 +273,14 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
-    static func emptySummary(at date: Date) -> AccountSummary {
+    static func emptySummary(at date: Date, devices: [AccountDevice] = []) -> AccountSummary {
       AccountSummary(
         account: QuotaUserAccount(
           accountID: "account_visual_empty",
           displayLabel: "octocat",
           createdAt: date.addingTimeInterval(-30 * 86_400)
         ),
-        devices: [],
+        devices: devices,
         subscriptions: [],
         usage: emptyUsage(),
         pricingRevision: "pricing_visual_fixture",
@@ -272,7 +401,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
               provider: .anthropic,
               models: [
                 model(
-                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18, microusd: 210_000,
+                  "claude-sonnet-4", input: 100_000, output: 20_000, messages: 18,
+                  microusd: 210_000,
                   scale: scale),
                 model(
                   "claude-opus-4", input: 50_000, output: 10_000, messages: 8, microusd: 180_000,
@@ -556,9 +686,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
     ) -> AppModel {
       let days: [UsageActivityDay]
       switch fixture {
-      case .content, .cachedError:
+      case .content, .cachedError, .activityLoading, .activityFailed, .activityDayEmpty,
+        .activityDayFailed:
         days = VisualFixtureContent.activityDays(ending: now)
-      case .signedOut, .empty, .noDevices:
+      case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
+        .loading, .empty, .noDevices:
         days = []
       }
       let model = AppModel(
@@ -600,7 +732,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     ) async -> AccountActivityResult {
       if from == to {
         let base = days.first { $0.date == from } ?? UsageActivityChart.emptyDay(date: from)
-        let agents: [UsageAgentUsage] = detail == .agents && base.totals.totalTokens > 0
+        let agents: [UsageAgentUsage] =
+          detail == .agents && base.totals.totalTokens > 0
           ? populatedAgents
           : (detail == .agents ? [] : (base.agents ?? []))
         let day = UsageActivityDay(
@@ -625,7 +758,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
 
   @MainActor
   private final class FixtureBlockedAuthenticator: BrowserSessionAuthenticating {
-    func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+    func authenticate(
+      url: URL,
+      callbackScheme: String,
+      prefersEphemeralWebBrowserSession: Bool
+    ) async throws -> URL {
       throw AuthorizationError.cancelled
     }
 

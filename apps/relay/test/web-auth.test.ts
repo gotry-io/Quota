@@ -353,6 +353,58 @@ describe("browser sign-in through GitHub", () => {
     expect(callback.headers.get("location")).toBe("/my");
   });
 
+  it("answers HTML sign-in failures when Accept names HTML and keeps JSON otherwise", async () => {
+    const relay = harness(fakeGitHub());
+    const secretToken = "guess-login-token-must-not-leak";
+
+    const jsonComplete = await relay.app.request(
+      `${origin}/oauth/v2/complete?login_token=${encodeURIComponent(secretToken)}`,
+    );
+    expect(jsonComplete.status).toBe(401);
+    expect(jsonComplete.headers.get("content-type")).toMatch(/application\/json/);
+    expect(await jsonComplete.json()).toMatchObject({ error: { code: "unauthorized" } });
+
+    const htmlComplete = await relay.app.request(
+      `${origin}/oauth/v2/complete?login_token=${encodeURIComponent(secretToken)}`,
+      { headers: { Accept: "text/html,application/xhtml+xml" } },
+    );
+    expect(htmlComplete.status).toBe(200);
+    expect(htmlComplete.headers.get("content-type")).toMatch(/text\/html/);
+    const completeBody = await htmlComplete.text();
+    expect(completeBody).toContain("Sign-in didn't finish");
+    expect(completeBody).toContain("no_session");
+    expect(completeBody).toContain("Return to Quota and try again.");
+    expect(completeBody).not.toContain(secretToken);
+
+    const jsonCallback = await relay.app.request(
+      `${origin}/api/auth/github/callback?code=first-code&state=${"z".repeat(43)}`,
+    );
+    expect(jsonCallback.status).toBe(400);
+    expect(jsonCallback.headers.get("content-type")).toMatch(/application\/json/);
+
+    const htmlCallback = await relay.app.request(
+      `${origin}/api/auth/github/callback?code=first-code&state=${"z".repeat(43)}`,
+      { headers: { Accept: "text/html" } },
+    );
+    expect(htmlCallback.status).toBe(200);
+    expect(htmlCallback.headers.get("content-type")).toMatch(/text\/html/);
+    const callbackBody = await htmlCallback.text();
+    expect(callbackBody).toContain("no_session");
+    expect(callbackBody).toContain("Sign-in didn't finish");
+
+    const jsonInvalid = await relay.app.request(
+      `${origin}/oauth/v2/complete?login_token=x&extra=1`,
+    );
+    expect(jsonInvalid.status).toBe(400);
+
+    const htmlInvalid = await relay.app.request(
+      `${origin}/oauth/v2/complete?login_token=x&extra=1`,
+      { headers: { Accept: "text/html" } },
+    );
+    expect(htmlInvalid.status).toBe(200);
+    expect(await htmlInvalid.text()).toContain("invalid_request");
+  });
+
   it("rate-limits the browser round trip at both ends", async () => {
     const relay = harness(fakeGitHub());
     const request = (path: string) =>
@@ -368,6 +420,13 @@ describe("browser sign-in through GitHub", () => {
     expect(limited?.status).toBe(429);
     expect(limited?.headers.get("Retry-After")).toMatch(/^\d+$/);
     expect((await request("/api/auth/github/start")).status).toBe(429);
+
+    const htmlLimited = await relay.app.request(`${origin}/oauth/v2/complete?login_token=guess`, {
+      headers: { Accept: "text/html", "CF-Connecting-IP": "203.0.113.7" },
+    });
+    expect(htmlLimited.status).toBe(200);
+    expect(htmlLimited.headers.get("content-type")).toMatch(/text\/html/);
+    expect(await htmlLimited.text()).toContain("rate_limited");
   });
 
   it("requires a same-origin request to sign out or delete the Account", async () => {

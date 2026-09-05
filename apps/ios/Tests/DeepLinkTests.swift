@@ -164,13 +164,6 @@ struct DeepLinkTests {
   }
 #endif
 
-struct QRCodeImageTests {
-  @Test
-  func generatesAnImageForTheDownloadURL() {
-    #expect(QRCodeImage.make(MacSetupGuideCard.downloadURL.absoluteString) != nil)
-  }
-}
-
 private func parse(_ string: String) -> DeepLink? {
   DeepLink.parse(URL(string: string)!)
 }

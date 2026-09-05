@@ -1,6 +1,6 @@
 # Quota iOS
 
-Quota is the native iOS 17+ account viewer. It signs in with the registered `quota-ios` public
+Quota is the native iOS 26+ account viewer. It signs in with the registered `quota-ios` public
 client and reads the GitHub Account's remaining quota and Today Usage from the fixed Relay origin.
 One read answers all of it: Relay resolves an account's readings into one subscription per key, so
 the app renders those rows rather than collapsing one card per reporting Mac.
@@ -97,19 +97,30 @@ project. Pass `--no-commit` to skip the commit.
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
 `overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
-`usage.root` / a model row at 30 Days / the Activity heatmap, opens the first quota card for
-`subscription-detail`, the Mac setup card for `no-devices`, the Connect Account control for
-`signed-out`, and Settings for the Notifications switch and Log Out, and runs an iOS 17+
-accessibility audit on each. Log Out is on the Settings tab. Delete Account starts on the website.
+`usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
+sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
+opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
+setup Section for `no-devices`, Devices content and empty states, the cached-error status Label, the
+Connect with GitHub control for `signed-out`, connecting / connect-error / expired / loading
+fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
+hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
+Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
+Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
+unnamed clipping skip and no whole-type contrast skip. Log Out and Delete Account sit on the
+Settings hub. Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
+QUOTA_IOS_APPEARANCE=dark ./scripts/ios-ui-screenshots.sh
+QUOTA_IOS_TEXT_SIZE=accessibilityExtraLarge ./scripts/ios-ui-screenshots.sh
 ```
 
 That script runs only `QuotaUITests`, writes `dist/ios-ui.xcresult`, and exports PNG attachments to
 `dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the first available
-iPhone from `xcrun simctl list devices available -j`. Screenshot artifacts are for local visual QA
-and are not part of CI.
+iPhone from `xcrun simctl list devices available -j`. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
+name or a `UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are
+forwarded to the UI tests; variant runs write a subdirectory. Screenshot artifacts are for local
+visual QA and are not part of CI.
 
 ### DEBUG visual fixtures
 
@@ -118,7 +129,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | content | cached-error | empty | no-devices
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | activity-loading | activity-failed | activity-day-empty | activity-day-failed
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

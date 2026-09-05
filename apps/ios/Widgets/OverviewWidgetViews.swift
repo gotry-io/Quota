@@ -104,7 +104,8 @@ struct OverviewSmallView: View {
     if let state = item.stateLabel(now: entry.date) {
       append(Text(state))
     }
-    if let resetsAt = item.resetsAt, let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
+    if let resetsAt = item.resetsAt,
+      let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
     {
       append(reset)
     }
@@ -239,6 +240,14 @@ struct OverviewLargeView: View {
           }
         }
         Spacer(minLength: 0)
+        Text(OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: entry.date))
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+          .accessibilityLabel(
+            OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: entry.date)
+          )
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     } else {
@@ -550,6 +559,12 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
 }
 
+#Preview("Small placeholder", as: .systemSmall) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
+}
+
 #Preview("Medium content", as: .systemMedium) {
   OverviewWidget()
 } timeline: {
@@ -560,6 +575,12 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidget()
 } timeline: {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
+}
+
+#Preview("Medium placeholder", as: .systemMedium) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
 }
 
 #Preview("Large content", as: .systemLarge) {
@@ -574,6 +595,12 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
 }
 
+#Preview("Large placeholder", as: .systemLarge) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
+}
+
 #Preview("Circular content", as: .accessoryCircular) {
   OverviewWidget()
 } timeline: {
@@ -584,6 +611,12 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidget()
 } timeline: {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
+}
+
+#Preview("Circular placeholder", as: .accessoryCircular) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
 }
 
 #Preview("Rectangular content", as: .accessoryRectangular) {
@@ -598,6 +631,12 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
 }
 
+#Preview("Rectangular placeholder", as: .accessoryRectangular) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
+}
+
 #Preview("Inline content", as: .accessoryInline) {
   OverviewWidget()
 } timeline: {
@@ -608,4 +647,10 @@ private enum OverviewWidgetPreviewFixtures {
   OverviewWidget()
 } timeline: {
   OverviewWidgetPreviewFixtures.entry(snapshot: nil)
+}
+
+#Preview("Inline placeholder", as: .accessoryInline) {
+  OverviewWidget()
+} timeline: {
+  OverviewWidgetPreviewFixtures.entry(snapshot: nil, isPlaceholder: true)
 }

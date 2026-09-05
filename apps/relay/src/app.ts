@@ -64,6 +64,10 @@ import {
   refreshTokenDomain,
 } from "./account/service.ts";
 import {
+  type BrowserSignInFailureReason,
+  htmlOrJsonSignInError,
+} from "./account/browser-error-page.ts";
+import {
   clearedHandoffCookie,
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
@@ -276,9 +280,13 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.get("/api/auth/github/callback", async (context) => {
     // GitHub names itself in the redirect (`iss`, RFC 9207). A callback that names any other
     // issuer is not GitHub's; one that names none is an older GitHub and still is.
-    if (!hasOnlyQueryKeys(context, ["code", "state", "iss"])) return invalidRequest(context);
+    if (!hasOnlyQueryKeys(context, ["code", "state", "iss"])) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
     const issuer = context.req.query("iss");
-    if (issuer !== undefined && issuer !== GITHUB_ISSUER) return invalidRequest(context);
+    if (issuer !== undefined && issuer !== GITHUB_ISSUER) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
     const limited = await enforceRateLimit(
       context,
       options.state,
@@ -288,7 +296,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       rateLimits.webSignIn,
       now(),
     );
-    if (limited) return limited;
+    if (limited) return browserSignInFailure(context, limited, "rate_limited");
     let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
     try {
       completed = await options.webSessions.completeSignIn(
@@ -306,18 +314,23 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         name: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
       });
-      return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
+      return browserSignInFailure(
+        context,
+        relayError(context, 502, "internal_error", "Identity verification is unavailable."),
+        "invalid_request",
+      );
     }
     if (completed.outcome !== "signed_in") {
       // The reason is a category, never a value: enough to tell a lost cookie from a refused
       // code when a sign-in fails in production, and nothing a log reader could replay.
       console.warn("web_signin_rejected", { reason: completed.reason });
       context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
-      return relayError(
+      const reason: BrowserSignInFailureReason =
+        completed.reason === "handoff" ? "no_session" : "invalid_request";
+      return browserSignInFailure(
         context,
-        400,
-        "invalid_request",
-        "The sign-in request could not be completed.",
+        relayError(context, 400, "invalid_request", "The sign-in request could not be completed."),
+        reason,
       );
     }
     context.header("Set-Cookie", completed.session, { append: true });
@@ -398,7 +411,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   app.get("/oauth/v2/complete", async (context) => {
-    if (!hasOnlyQueryKeys(context, ["login_token"])) return invalidRequest(context);
+    if (!hasOnlyQueryKeys(context, ["login_token"])) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
     // The other end of the same browser round trip as the GitHub callback, and the only route
     // that turns a login token into an authorization code, so it is guessable at exactly the
     // rate that one is.
@@ -411,12 +426,14 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       rateLimits.webSignIn,
       now(),
     );
-    if (limited) return limited;
+    if (limited) return browserSignInFailure(context, limited, "rate_limited");
     const loginToken = context.req.query("login_token");
     const principal = await options.webSessions.authorize(context.req.raw.headers, now());
-    if (!loginToken || loginToken.length > 4_096 || !principal) return unauthorized(context);
+    if (!loginToken || loginToken.length > 4_096 || !principal) {
+      return browserSignInFailure(context, unauthorized(context), "no_session");
+    }
     const account = await options.state.getAccount(principal.account_id);
-    if (!account) return unauthorized(context);
+    if (!account) return browserSignInFailure(context, unauthorized(context), "no_session");
     try {
       const completion = await options.accountService.completeBrowserLogin(
         loginToken,
@@ -432,7 +449,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       redirect.searchParams.set("state", completion.client_state);
       return context.redirect(redirect.toString(), 302);
     } catch (error) {
-      return accountFlowError(context, error);
+      return browserSignInFailure(
+        context,
+        accountFlowError(context, error),
+        accountFlowReason(error),
+      );
     }
   });
 
@@ -1362,6 +1383,24 @@ function accountFlowError(context: Context, error: unknown): Response {
     return relayError(context, 400, code, "The account request could not be completed.");
   }
   return relayError(context, 502, "internal_error", "Identity verification is unavailable.");
+}
+
+function accountFlowReason(error: unknown): BrowserSignInFailureReason {
+  if (
+    error instanceof AccountFlowError &&
+    (error.code === "expired_token" || error.code === "expired_state")
+  ) {
+    return "expired";
+  }
+  return "invalid_request";
+}
+
+function browserSignInFailure(
+  context: Context,
+  json: Response,
+  reason: BrowserSignInFailureReason,
+): Response {
+  return htmlOrJsonSignInError(context.req.header("Accept"), json, reason);
 }
 
 function relayError(

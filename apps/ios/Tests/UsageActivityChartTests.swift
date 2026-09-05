@@ -104,6 +104,20 @@ struct UsageActivityChartTests {
   }
 
   @Test
+  func aOneWeekTrailingMonthKeepsItsFullAbbreviation() {
+    // 2026-09-01 is Tuesday, so a range ending 2026-09-05 places Sep on the last week.
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-09-05", input: 10, output: 0)],
+      range: (from: "2025-09-06", to: "2026-09-05"),
+      today: "2026-09-05"
+    )
+    #expect(chart.monthLabels.last?.label == "Sep")
+    #expect(chart.monthLabels.last?.span == 1)
+    #expect(chart.monthLabels.allSatisfy { $0.label.count == 3 })
+    #expect(!chart.monthLabels.map(\.label).contains("…"))
+  }
+
+  @Test
   func activityWindowIs365UtcDaysEndingToday() {
     let range = UsageActivityCalendar.range(endingOn: "2026-08-14")
     #expect(range.from == "2025-08-15")
@@ -130,6 +144,100 @@ struct UsageActivityChartTests {
     #expect(spoken?.contains("August 14, 2026") == true)
     #expect(spoken?.contains("tokens") == true)
     #expect(spoken?.contains("complete") == true)
+  }
+
+  @Test
+  func emptyActivityIsZeroReportedTokensAcrossTheRange() {
+    #expect(UsageActivityChart.hasReportedActivity([]) == false)
+    #expect(
+      UsageActivityChart.hasReportedActivity([
+        day("2026-08-14", input: 0, output: 0),
+        day("2026-08-13", input: 0, output: 0),
+      ]) == false
+    )
+    #expect(
+      UsageActivityChart.hasReportedActivity([
+        day("2026-08-14", input: 0, output: 0),
+        day("2026-08-13", input: 1, output: 0),
+      ])
+    )
+  }
+
+  @Test
+  func defaultSelectedDatePrefersTodayThenTheLastInRangeDay() {
+    let withToday = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+    #expect(withToday.defaultSelectedDate == "2026-01-16")
+
+    let withoutToday = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-20"
+    )
+    #expect(withoutToday.defaultSelectedDate == "2026-01-16")
+  }
+
+  @Test
+  func adjacentSelectionStopsAtTheFirstAndLastInRangeDay() {
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+
+    #expect(chart.adjacentSelectableDay(from: "2026-01-15", increment: true)?.date == "2026-01-16")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-16", increment: true)?.date == "2026-01-16")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-16", increment: false)?.date == "2026-01-15")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-15", increment: false)?.date == "2026-01-15")
+    #expect(chart.adjacentSelectableDay(from: "2026-01-11", increment: true)?.date == "2026-01-16")
+  }
+
+  @Test
+  func spatialSelectionMapsToTheNearestInRangeDayAndIgnoresPaddingCells() {
+    let chart = UsageActivityChart.build(
+      reported: [day("2026-01-15", input: 10, output: 0)],
+      range: (from: "2026-01-15", to: "2026-01-16"),
+      today: "2026-01-16"
+    )
+    let cellSize = 14.0
+    let cellGap = 4.0
+    let stride = cellSize + cellGap
+
+    // One Sunday-first week: in-range Thursday (index 4) and Friday (index 5).
+    let thursday = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 4 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let friday = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 5 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let sundayPadding = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+    let betweenThuFri = chart.nearestSelectableDay(
+      atX: cellSize / 2,
+      atY: 4.6 * stride + cellSize / 2,
+      cellSize: cellSize,
+      cellGap: cellGap
+    )
+
+    #expect(thursday?.date == "2026-01-15")
+    #expect(friday?.date == "2026-01-16")
+    #expect(sundayPadding?.date == "2026-01-15")
+    #expect(betweenThuFri?.date == "2026-01-16")
+    #expect(chart.selectableDay(on: "2026-01-11") == nil)
+    #expect(chart.selectableDay(on: "2026-01-15")?.outside == false)
   }
 }
 

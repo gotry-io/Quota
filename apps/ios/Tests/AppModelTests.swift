@@ -54,8 +54,8 @@ struct AppModelTests {
     #expect(scheduler.cancelCount == 1)
   }
 
-  /// A deliberate logout, or a first launch, is not an expiry. Connect Account says only what it
-  /// always says, and the background window nobody can use any more is withdrawn.
+  /// A deliberate logout, or a first launch, is not an expiry. Connect with GitHub says only what
+  /// it always says, and the background window nobody can use any more is withdrawn.
   @Test
   func refreshWithoutASessionIsPlainSignedOutAndWithdrawsTheBackgroundWindow() async throws {
     let publisher = RecordingWidgetSnapshotPublisher()
@@ -116,7 +116,7 @@ struct AppModelTests {
     #expect(model.phase == .signedIn)
     #expect(model.summary?.account.displayLabel == "octocat")
     #expect(model.banner?.kind == .offlineCached)
-    #expect(model.banner?.text.contains("saved account data") == true)
+    #expect(model.banner?.text == AppModel.Banner.cachedText)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 0)
     #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T15:00:00Z"))
@@ -135,8 +135,8 @@ struct AppModelTests {
     #expect(model.phase == .signedIn)
     #expect(model.summary == nil)
     #expect(model.banner?.kind == .refreshFailed)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
-    #expect(model.banner?.text.contains("saved account data") != true)
+    #expect(model.banner?.text == AppModel.Banner.failedText)
+    #expect(model.banner?.text.contains("saved") != true)
     #expect(publisher.clearCount == 1)
     #expect(publisher.publishCount == 0)
   }
@@ -175,7 +175,7 @@ struct AppModelTests {
     #expect(model.summary == nil)
     #expect(model.fetchedAt == nil)
     #expect(model.fromCache == false)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
+    #expect(model.banner?.text == AppModel.Banner.failedText)
     #expect(publisher.clearCount == 1)
     #expect(publisher.lastPublished == nil)
   }
@@ -199,12 +199,12 @@ struct AppModelTests {
     await model.restore()
     #expect(model.phase == .signedIn)
     #expect(model.summary == nil)
-    #expect(model.banner?.text == "Could not refresh account data. Pull to try again.")
+    #expect(model.banner?.text == AppModel.Banner.failedText)
     #expect(publisher.publishCount == 0)
     #expect(publisher.clearCount == 1)
   }
 
-  /// An expired session still says so — it is the one status line Connect Account has — and the
+  /// An expired session still says so — it is the one status line Connect with GitHub has — and the
   /// standing background window goes with the session behind it.
   @Test
   func expiredSessionReturnsToConnect() async throws {
@@ -230,7 +230,7 @@ struct AppModelTests {
     )
     await model.restore()
     #expect(model.phase == .signedOut)
-    #expect(model.expiredMessage == "Session expired. Connect Account to continue.")
+    #expect(model.expiredMessage == "Session expired. Connect again.")
     #expect(model.summary == nil)
     #expect(publisher.publishCount == 1)
     #expect(publisher.clearCount == 1)
@@ -332,11 +332,19 @@ struct AppModelTests {
     await model.connectAccount()
     #expect(authenticator.lastURL == attempt.authorizationURL)
     #expect(authenticator.lastCallbackScheme == QuotaIOSOAuth.callbackScheme)
-    #expect(model.phase == .signedIn)
+    #expect(authenticator.lastPrefersEphemeral == false)
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
+    #expect(try await account.loadSession()?.activation == .pending)
     #expect(model.summary?.account.displayLabel == "octocat")
     #expect(model.fromCache == false)
-    #expect(publisher.publishCount == 1)
+    #expect(publisher.publishCount == 0)
     #expect(publisher.clearCount == 0)
+
+    await model.confirmAccount()
+    #expect(model.phase == .signedIn)
+    #expect(try await account.loadSession()?.activation == .active)
+    #expect(publisher.publishCount == 1)
+    #expect(scheduler.scheduleCount == 1)
 
     await model.logout()
     #expect(model.phase == .signedOut)
@@ -396,22 +404,388 @@ struct AppModelTests {
         == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
   }
+
+  @Test
+  func useDifferentAccountRevokesThenReauthenticatesEphemerally() async throws {
+    let attempt = AuthorizationAttempt(
+      authorizationURL: URL(
+        string:
+          "https://quota.gotry.io/oauth/v2/authorize?response_type=code&client_id=quota-ios&redirect_uri=io.gotry.quota:/oauth/callback&state=client-state-123456789&code_challenge=challenge&code_challenge_method=S256"
+      )!,
+      state: "client-state-123456789",
+      verifier: String(repeating: "a", count: 43),
+      challenge: "challenge"
+    )
+    let callback = URL(
+      string:
+        "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+    )!
+    let authenticator = ScriptedAuthenticator(results: [.success(callback), .success(callback)])
+    let transport = ScriptedHTTPTransport([
+      .init(status: 200, body: try tokenResponse()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 204, body: Data()),
+      .init(status: 200, body: try tokenResponse()),
+      .init(status: 200, body: try mutatedSummaryLabel("othercat")),
+    ])
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { attempt }
+    )
+
+    await model.connectAccount()
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
+    #expect(authenticator.prefersEphemeralHistory == [false])
+
+    await model.useDifferentAccount()
+    #expect(authenticator.prefersEphemeralHistory == [false, true])
+    #expect(model.phase == .confirmingAccount(label: "othercat"))
+    #expect(try await account.hasSession())
+  }
+
+  @Test
+  func connectAccountFailureCopyNamesTheCause() async {
+    let attempt = AuthorizationAttempt(
+      authorizationURL: URL(string: "https://quota.gotry.io/oauth/v2/authorize")!,
+      state: "client-state-123456789",
+      verifier: String(repeating: "a", count: 43),
+      challenge: "challenge"
+    )
+
+    func model(throwing error: Error) -> AppModel {
+      AppModel(
+        account: AccountClient(
+          relay: RelayClient(transport: ScriptedHTTPTransport([])),
+          sessionStore: MemoryAccountSessionStore(),
+          summaryStore: MemoryAccountSummaryStore(),
+          now: { Fixtures.date("2026-08-14T16:00:00Z") }
+        ),
+        authenticator: ScriptedAuthenticator(result: .failure(error)),
+        makeAuthorizationAttempt: { attempt }
+      )
+    }
+
+    let unexpected = model(throwing: AuthorizationError.stateMismatch)
+    await unexpected.connectAccount()
+    #expect(unexpected.phase == .signedOut)
+    #expect(unexpected.banner?.text == AuthorizationError.unexpectedBrowserResponseMessage)
+
+    let unreachable = model(throwing: AccountClientError.relay(.unavailable))
+    await unreachable.connectAccount()
+    #expect(unreachable.banner?.text == "Couldn't reach quota.gotry.io.")
+
+    let expired = model(throwing: AccountClientError.relay(.invalidGrant))
+    await expired.connectAccount()
+    #expect(expired.banner?.text == AuthorizationError.expiredSignInMessage)
+
+    let generic = model(throwing: AccountClientError.accountMismatch)
+    await generic.connectAccount()
+    #expect(generic.banner?.text == "Couldn't connect. Try again.")
+  }
+
+  @Test
+  func restorePendingSessionReopensConfirmationAndDoesNotSignIn() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let first = connectModel(
+      sessions: sessions,
+      cache: cache,
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      ],
+      widgetPublisher: publisher
+    )
+    await first.model.connectAccount()
+    #expect(first.model.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(publisher.publishCount == 0)
+
+    let restored = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([
+            .init(status: 200, body: try Fixtures.accountSummaryJSON())
+          ])
+        ),
+        sessionStore: sessions,
+        summaryStore: cache,
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      widgetPublisher: publisher
+    )
+    await restored.restore()
+    #expect(restored.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(publisher.publishCount == 0)
+
+    await restored.refresh()
+    #expect(restored.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+  }
+
+  @Test
+  func continueAfterRestorePromotesTheSamePendingSession() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let first = connectModel(
+      sessions: sessions,
+      cache: cache,
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      ]
+    )
+    await first.model.connectAccount()
+
+    let restored = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: sessions,
+        summaryStore: cache,
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled))
+    )
+    await restored.restore()
+    await restored.confirmAccount()
+    #expect(restored.phase == .signedIn)
+    #expect(try sessions.load()?.activation == .active)
+  }
+
+  @Test
+  func useDifferentAccountAfterRestoreRevokesPendingAndDoesNotActivate() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let callback = URL(
+      string:
+        "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+    )!
+    let authenticator = ScriptedAuthenticator(results: [.success(callback), .success(callback)])
+    let first = connectModel(
+      sessions: sessions,
+      cache: cache,
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      ],
+      authenticator: authenticator
+    )
+    await first.model.connectAccount()
+
+    let restored = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([
+            .init(status: 204, body: Data()),
+            .init(status: 200, body: try tokenResponse()),
+            .init(status: 200, body: try mutatedSummaryLabel("othercat")),
+          ])
+        ),
+        sessionStore: sessions,
+        summaryStore: cache,
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    await restored.restore()
+    #expect(restored.phase == .confirmingAccount(label: "octocat"))
+    await restored.useDifferentAccount()
+    #expect(restored.phase == .confirmingAccount(label: "othercat"))
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(authenticator.prefersEphemeralHistory == [false, true])
+  }
+
+  @Test
+  func firstRefreshNetworkFailureKeepsPendingAndShowsRetryCopy() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: MemoryAccountSummaryStore(),
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 503, body: Data()),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(connected.model.phase == .pendingRefreshFailed)
+    #expect(connected.model.banner?.text == "Couldn't reach quota.gotry.io.")
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(connected.model.phase != .confirmingAccount(label: "Account"))
+  }
+
+  @Test
+  func firstRefreshRelayExpiredClearsPending() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: MemoryAccountSummaryStore(),
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(
+          status: 401,
+          body: try JSONSerialization.data(withJSONObject: [
+            "error": ["code": "unauthorized", "message": "Rejected."]
+          ])
+        ),
+        .init(
+          status: 400,
+          body: try JSONSerialization.data(withJSONObject: [
+            "error": ["code": "invalid_grant", "message": "Rejected."]
+          ])
+        ),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(connected.model.phase == .signedOut)
+    #expect(connected.model.banner?.text == AuthorizationError.expiredSignInMessage)
+    #expect(try sessions.load() == nil)
+  }
+
+  @Test
+  func firstRefreshMalformedResponseKeepsPending() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: MemoryAccountSummaryStore(),
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: Data("{\"unexpected\":true}".utf8)),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(connected.model.phase == .pendingRefreshFailed)
+    #expect(connected.model.banner?.text == AuthorizationError.genericConnectFailureMessage)
+    #expect(try sessions.load()?.activation == .pending)
+  }
+
+  @Test
+  func firstRefreshBlankLabelKeepsPendingAndDoesNotConfirm() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: MemoryAccountSummaryStore(),
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: try summaryWithNullDisplayLabel()),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(connected.model.phase == .pendingRefreshFailed)
+    #expect(connected.model.banner?.text == AuthorizationError.genericConnectFailureMessage)
+    #expect(try sessions.load()?.activation == .pending)
+    if case .confirmingAccount = connected.model.phase {
+      Issue.record("blank display label must not open confirmation")
+    }
+  }
+
+  @Test
+  func retryPendingIdentificationThenContinue() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: cache,
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 503, body: Data()),
+        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(connected.model.phase == .pendingRefreshFailed)
+    await connected.model.retryPendingIdentification()
+    #expect(connected.model.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+    await connected.model.confirmAccount()
+    #expect(connected.model.phase == .signedIn)
+    #expect(try sessions.load()?.activation == .active)
+  }
+
+  @Test
+  func logoutRevokesAPendingSession() async throws {
+    let sessions = MemoryAccountSessionStore()
+    let connected = connectModel(
+      sessions: sessions,
+      cache: MemoryAccountSummaryStore(),
+      exchanges: [
+        .init(status: 200, body: try tokenResponse()),
+        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+        .init(status: 204, body: Data()),
+      ]
+    )
+    await connected.model.connectAccount()
+    #expect(try sessions.load()?.activation == .pending)
+    await connected.model.logout()
+    #expect(connected.model.phase == .signedOut)
+    #expect(try sessions.load() == nil)
+  }
+
+  @Test
+  func restorePendingWithoutLabelRetriesIdentification() async throws {
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session(activation: .pending))
+    let cache = MemoryAccountSummaryStore()
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([
+            .init(status: 200, body: try Fixtures.accountSummaryJSON())
+          ])
+        ),
+        sessionStore: sessions,
+        summaryStore: cache,
+        now: { Fixtures.date("2026-08-14T16:00:00Z") }
+      ),
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      widgetPublisher: publisher
+    )
+    await model.restore()
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(publisher.publishCount == 0)
+  }
 }
 
 @MainActor
 final class ScriptedAuthenticator: BrowserSessionAuthenticating {
-  var result: Result<URL, Error>
+  private var results: [Result<URL, Error>]
   var lastURL: URL?
   var lastCallbackScheme: String?
+  var lastPrefersEphemeral: Bool?
+  var prefersEphemeralHistory: [Bool] = []
 
   init(result: Result<URL, Error>) {
-    self.result = result
+    self.results = [result]
   }
 
-  func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+  init(results: [Result<URL, Error>]) {
+    self.results = results
+  }
+
+  func authenticate(
+    url: URL,
+    callbackScheme: String,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws -> URL {
     lastURL = url
     lastCallbackScheme = callbackScheme
-    return try result.get()
+    lastPrefersEphemeral = prefersEphemeralWebBrowserSession
+    prefersEphemeralHistory.append(prefersEphemeralWebBrowserSession)
+    guard !results.isEmpty else {
+      throw AuthorizationError.cancelled
+    }
+    return try results.removeFirst().get()
   }
 
   var lastPresentURL: URL?
@@ -500,6 +874,56 @@ private func mutatedSummaryLabel(_ label: String) throws -> Data {
   return try JSONSerialization.data(withJSONObject: object)
 }
 
+private func connectAttempt() -> AuthorizationAttempt {
+  AuthorizationAttempt(
+    authorizationURL: URL(
+      string:
+        "https://quota.gotry.io/oauth/v2/authorize?response_type=code&client_id=quota-ios&redirect_uri=io.gotry.quota:/oauth/callback&state=client-state-123456789&code_challenge=challenge&code_challenge_method=S256"
+    )!,
+    state: "client-state-123456789",
+    verifier: String(repeating: "a", count: 43),
+    challenge: "challenge"
+  )
+}
+
+@MainActor
+private func connectModel(
+  sessions: MemoryAccountSessionStore,
+  cache: MemoryAccountSummaryStore,
+  exchanges: [ScriptedHTTPTransport.Exchange],
+  authenticator: ScriptedAuthenticator? = nil,
+  widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher()
+) -> (model: AppModel, account: AccountClient) {
+  let callback = URL(
+    string:
+      "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+  )!
+  let account = AccountClient(
+    relay: RelayClient(transport: ScriptedHTTPTransport(exchanges)),
+    sessionStore: sessions,
+    summaryStore: cache,
+    now: { Fixtures.date("2026-08-14T16:00:00Z") }
+  )
+  let model = AppModel(
+    account: account,
+    authenticator: authenticator
+      ?? ScriptedAuthenticator(result: .success(callback)),
+    widgetPublisher: widgetPublisher,
+    makeAuthorizationAttempt: { connectAttempt() }
+  )
+  return (model, account)
+}
+
+private func summaryWithNullDisplayLabel() throws -> Data {
+  var object =
+    try JSONSerialization.jsonObject(with: try Fixtures.accountSummaryJSON())
+    as! [String: Any]
+  var account = object["account"] as! [String: Any]
+  account["display_label"] = NSNull()
+  object["account"] = account
+  return try JSONSerialization.data(withJSONObject: object)
+}
+
 private func tokenResponse() throws -> Data {
   try JSONSerialization.data(
     withJSONObject: [
@@ -520,13 +944,14 @@ enum Fixtures {
   static let accessToken = "qia_synthetic_access_token"
   static let refreshToken = "qiar_synthetic_refresh_token"
 
-  static func session() -> AccountSession {
+  static func session(activation: AccountSessionActivation = .active) -> AccountSession {
     AccountSession(
       accountID: "account_01",
       accessToken: accessToken,
       accessExpiresAt: date("2026-08-14T12:15:00Z"),
       refreshToken: refreshToken,
-      refreshExpiresAt: date("2026-11-01T12:00:00Z")
+      refreshExpiresAt: date("2026-11-01T12:00:00Z"),
+      activation: activation
     )
   }
 
