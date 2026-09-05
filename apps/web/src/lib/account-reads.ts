@@ -1,4 +1,6 @@
 import {
+  type AccountResponse,
+  AccountResponseSchema,
   type AccountSummaryRead,
   type AccountUsageActivityResponseRead,
   AccountUsageActivityResponseReadSchema,
@@ -17,9 +19,17 @@ export const ACTIVITY_DAYS = 365;
 
 export type AccountSummaryResult = { status: "ok"; summary: AccountSummaryRead } | AccountError;
 
+export type AccountResult = { status: "ok"; account: AccountResponse } | AccountError;
+
 export type AccountActivityResult =
   | { status: "ok"; activity: AccountUsageActivityResponseRead }
   | AccountError;
+
+const AccountResponseReadSchema = AccountResponseSchema.extend({
+  account: AccountResponseSchema.shape.account.loose(),
+  entitlement: AccountResponseSchema.shape.entitlement.loose(),
+  purchase: AccountResponseSchema.shape.purchase.loose(),
+}).loose();
 
 type CachedSummary = { etag: string; summary: AccountSummaryRead };
 
@@ -62,6 +72,19 @@ export function accountActivityPath(
 /** The summary path, carrying the calendar this browser keeps. */
 export function accountSummaryPath(timezone: string): string {
   return `/api/v6/account/summary?${new URLSearchParams({ tz: timezone }).toString()}`;
+}
+
+/** Account metadata, paid-sync entitlement, and the Web Purchase Link. */
+export function accountPath(): string {
+  return "/api/v2/account";
+}
+
+export function parseAccountResponse(status: number, body: unknown): AccountResult {
+  if (status < 200 || status >= 300) {
+    return classifyAccountError(new Response(null, { status }));
+  }
+  const parsed = AccountResponseReadSchema.safeParse(body);
+  return parsed.success ? { status: "ok", account: parsed.data } : classifyAccountError(null);
 }
 
 export function browserTimezone(): string {

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import {
+  accountReadFromSummary,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
   screenshotAccountSummary,
@@ -18,6 +19,20 @@ test.skip(!enabled, "gated by SCREENSHOTS=1");
 mkdirSync(outputDir, { recursive: true });
 
 async function mockV6(page: Page): Promise<void> {
+  await page.route(
+    (url) => new URL(url).pathname === "/api/v2/account",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountReadFromSummary(accountSummary)),
+      });
+    },
+  );
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {

@@ -198,6 +198,13 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.doesNotMatch(settings, /notifications-title/);
   assert.doesNotMatch(settings, /Sign out/);
   assert.match(settings, /id="appearance-title"/);
+  assert.match(settings, /id="sync-title"/);
   assert.match(settings, /id="account-title"/);
   assert.match(settings, /id="legal-title"/);
+  assert.match(settings, /target="_blank"/);
+  assert.match(settings, /rel="noopener"/);
+  assert.ok(settings.indexOf('id="appearance-title"') < settings.indexOf('id="sync-title"'));
+  assert.match(overview, /SYNC_OFF_COPY/);
+  assert.match(overview, /showSyncOff/);
+  assert.match(devices, /Paused|subscribed/);
 });

@@ -104,6 +104,21 @@ function retoken(
 }
 
 export const accountSummary = structuredClone(accepted.payload) as AccountSummary;
+
+export function accountReadFromSummary(summary: unknown = accountSummary): {
+  protocol_version: 2;
+  account: unknown;
+  entitlement: unknown;
+  purchase: { web_url: string };
+} {
+  const body = summary as { account: { account_id: string }; entitlement: unknown };
+  return {
+    protocol_version: 2,
+    account: body.account,
+    entitlement: body.entitlement,
+    purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
+  };
+}
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
 

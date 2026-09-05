@@ -2,23 +2,27 @@ import { AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   type AccountActivityResult,
+  type AccountResult,
   type AccountSummaryResult,
   accountActivityPath,
   accountActivityRange,
+  accountPath,
   accountSummaryPath,
   ACTIVITY_DAYS,
   browserTimezone,
   parseAccountActivityResponse,
+  parseAccountResponse,
   storedSummary,
   storedSummaryETag,
   storeSummary,
 } from "./account-reads.ts";
 import { DASHBOARD_PATH, signInHref } from "./routes.ts";
 
-export type { AccountActivityResult, AccountError, AccountSummaryResult };
+export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
 export {
   accountActivityPath,
   accountActivityRange,
+  accountPath,
   accountSummaryPath,
   ACTIVITY_DAYS,
   browserTimezone,
@@ -55,6 +59,16 @@ export async function fetchAccountActivity(
     const response = await fetch(accountActivityPath(range, detail), jsonRequest);
     if (!response.ok) return classifyAccountError(response);
     return parseAccountActivityResponse(response.status, await response.json());
+  } catch {
+    return classifyAccountError(null);
+  }
+}
+
+export async function fetchAccount(): Promise<AccountResult> {
+  try {
+    const response = await fetch(accountPath(), jsonRequest);
+    if (!response.ok) return classifyAccountError(response);
+    return parseAccountResponse(response.status, await response.json());
   } catch {
     return classifyAccountError(null);
   }

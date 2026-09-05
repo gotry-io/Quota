@@ -58,10 +58,12 @@ The site has these routes:
    devices are reporting. Usage's status line is the selected period and whether that period is
    partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
-   - `/my` — overview: remaining quota. A Subscriptions grid (each card a link to
-     `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and today's
-     top model, linking `/my/usage?period=today`), and a one-line Devices summary linking
-     `/my/devices`. Overview does not repeat a cost block or an Installations list.
+   - `/my` — overview: remaining quota. When the paid-sync entitlement is not `active` or
+     `grace`, a static notice `Sync is off. Your Macs stop uploading until you subscribe.`
+     links to Settings; it is absent while subscribed. A Subscriptions grid (each card a
+     link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
+     today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
+     linking `/my/devices`. Overview does not repeat a cost block or an Installations list.
    - `/my/subscriptions/<sel>` — one subscription, visually the same card as Overview: provider
      mark, provider display name, masked account label, plan badge, and the shared freshness
      line; each window with remaining quota, a remaining-percent meter in the shared threshold
@@ -78,10 +80,14 @@ The site has these routes:
      the grid and writes `?day=YYYY-MM-DD`. The selected period is `?period=today|7d|30d|all`.
    - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
      (macOS, or a generic device for any other value), Active / Idle / Not reporting (semantic
-     color plus the label), Last contact, and Delete (danger color, existing confirmation).
+     color plus the label; Not reporting reads `Paused (no subscription)` when the Account is
+     not subscribed), Last contact, and Delete (danger color, existing confirmation).
      Below 620 px each row is a labeled two-column card with Status and Last contact. Empty
      state is the Mac setup card.
-   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Account
+   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Sync
+     (status `Active · renews Oct 5` / `Active · ends Oct 5` / `Grace period · update your
+     payment` / `Not subscribed`, with `· last checked <relative>` when the entitlement is
+     stale; Subscribe or Manage subscription opens `purchase.web_url` in a new tab); Account
      (GitHub login and Delete Account). `?delete=account` scrolls to the delete region and
      focuses its heading. Legal links Privacy, Terms, and Support. Sign out stays in the
      header account menu.
@@ -209,10 +215,12 @@ The landing is six blocks, in this order. It does not use slogan sections.
 ## Account dashboard
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
-Account nav in the site header. The overview leads with remaining quota: subscription cards, then a
-Today strip (tokens, API-equivalent cost, today's top model), then a Devices summary line
-(`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's verdict). It does not
-repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as the
+Account nav in the site header. The overview leads with remaining quota: when sync is off, a static
+notice `Sync is off. Your Macs stop uploading until you subscribe.` with a Settings link, then
+subscription cards, then a Today strip (tokens, API-equivalent cost, today's top model), then a
+Devices summary line (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's
+verdict). It does not repeat a cost block or an Installations list. The notice is absent while the
+entitlement is `active` or `grace`. Under Usage, period tabs sit on the same row as the
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
@@ -267,13 +275,17 @@ no current row reads **This subscription is no longer reported.** **← Overview
 
 The Devices table is sorted by last-seen, newest first. Each row is display name, a macOS platform
 icon (or a generic device for any other value), an **Active** / **Idle** / **Not reporting** pill
-(semantic color plus the label), Last contact, and Delete. Below 620 px each row is a labeled
+(semantic color plus the label; **Paused (no subscription)** in place of Not reporting when the
+Account is not subscribed), Last contact, and Delete. Below 620 px each row is a labeled
 two-column card. Never a claim that a sleeping or closed app failed, never raw Device IDs, and
 never a request that the viewing browser fix another Device's provider credentials. Deletion copy
 must say that both the Device and its Quota/Usage data are removed. Empty Devices is the Mac setup
-card. Settings is a grouped form: Appearance; Account (GitHub login and Delete Account, with
-`?delete=account` focusing the delete heading); Legal (Privacy, Terms, Support). Sign out stays in
-the header account menu. Notification rules are documented at `/support#notifications`.
+card. Settings is a grouped form: Appearance; Sync (status `Active · renews Oct 5` / `Active ·
+ends Oct 5` / `Grace period · update your payment` / `Not subscribed`, plus `· last checked
+<relative>` when stale; **Subscribe** or **Manage subscription** opens the RevenueCat Web Purchase
+Link in a new tab); Account (GitHub login and Delete Account, with `?delete=account` focusing the
+delete heading); Legal (Privacy, Terms, Support). Sign out stays in the header account menu.
+Notification rules are documented at `/support#notifications`.
 
 Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
 column headers, and one `<tbody>` per agent. Group title rows (`<th scope="rowgroup">`) name the

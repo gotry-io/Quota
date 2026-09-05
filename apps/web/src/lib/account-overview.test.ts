@@ -4,10 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   accountStatusLine,
   devicesSummaryLine,
+  entitlementStatusLine,
+  isPaidSyncStatus,
   meterTone,
   meterToneForUsedPercent,
   providerMarkHue,
+  subscribeActionLabel,
   subscriptionCardMeta,
+  SYNC_OFF_COPY,
   topUsageModel,
   usageStatusLine,
 } from "./account-overview.ts";
@@ -177,5 +181,119 @@ it("turns Active into Idle as the shared clock advances", () => {
   );
   expect(devicesSummaryLine([studio], new Date("2026-08-12T10:02:00Z"))).toBe(
     "1 device · all reporting · Studio Mac · Idle",
+  );
+});
+
+it("names paid-sync status the way Settings prints it", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const zone = "UTC";
+  expect(
+    entitlementStatusLine(
+      {
+        status: "active",
+        expires_at: "2026-10-05T12:00:00Z",
+        will_renew: true,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Active · renews Oct 5");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "active",
+        expires_at: "2026-10-05T12:00:00Z",
+        will_renew: false,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Active · ends Oct 5");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "grace",
+        expires_at: "2026-10-05T12:00:00Z",
+        will_renew: true,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Grace period · update your payment");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "none",
+        expires_at: null,
+        will_renew: false,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Not subscribed");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "expired",
+        expires_at: "2026-09-01T12:00:00Z",
+        will_renew: false,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Not subscribed");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "active",
+        expires_at: "2026-10-05T12:00:00Z",
+        will_renew: true,
+        stale: true,
+        updated_at: "2026-09-29T12:00:00Z",
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Active · renews Oct 5 · last checked 2d ago");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "none",
+        expires_at: null,
+        will_renew: false,
+        stale: true,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Not subscribed");
+  expect(isPaidSyncStatus("active")).toBe(true);
+  expect(isPaidSyncStatus("grace")).toBe(true);
+  expect(isPaidSyncStatus("expired")).toBe(false);
+  expect(isPaidSyncStatus("none")).toBe(false);
+  expect(subscribeActionLabel("active")).toBe("Manage subscription");
+  expect(subscribeActionLabel("none")).toBe("Subscribe");
+  expect(SYNC_OFF_COPY).toBe("Sync is off. Your Macs stop uploading until you subscribe.");
+});
+
+it("renames a quiet device when the Account is not subscribed", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T09:40:00Z"));
+  const silent = deviceRow("silent", "Silent Mac", null, null);
+  const stale = deviceRow("stale", "Attic Mac", "2026-08-10T09:31:00Z");
+  const studio = deviceRow("studio", "Studio Mac", "2026-08-12T09:31:00Z");
+  expect(devicesSummaryLine([silent, studio], undefined, { subscribed: false })).toBe(
+    "1 of 2 reporting · Silent Mac · Paused (no subscription)",
+  );
+  expect(devicesSummaryLine([stale], undefined, { subscribed: false })).toBe(
+    "0 of 1 reporting · Attic Mac · Paused (no subscription)",
+  );
+  expect(devicesSummaryLine([studio], undefined, { subscribed: false })).toBe(
+    "1 device · all reporting · Studio Mac · Active",
   );
 });
