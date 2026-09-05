@@ -525,7 +525,8 @@ provider and support, and no custom card chrome beyond the system widget contain
     `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
     `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
     `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
-    `usage.provider.<provider id>`, the About **License** and **Version** labels, plus Link labels
+    `usage.provider.<provider id>`, the About **License** and **Version** labels, the Notifications
+    **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
     **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
     Mac**, **Download QuotaBar**.
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry

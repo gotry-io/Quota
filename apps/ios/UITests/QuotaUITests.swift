@@ -831,6 +831,10 @@ final class QuotaUITests: XCTestCase {
         // not skipped.
         if description.localizedCaseInsensitiveContains("partially unsupported") {
           let tokens = [
+            "\"Enable Notifications\" StaticText",
+            "\"Reset Reminders\" StaticText",
+            "settings.notifications.enable",
+            "settings.notifications.reset-reminders",
             "\"License\" StaticText",
             "\"Version\" StaticText",
             "usage.activity.selected-day",
