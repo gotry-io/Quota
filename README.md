@@ -3,9 +3,10 @@
 Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io). It keeps coding-agent
 subscription quota and privacy-preserving Usage together across a user's devices.
 
-- **Quota** — native iOS 26+ read-only Account viewer. It signs in with the registered `quota-ios`
-  public client, reads remaining quota and Today Usage, and publishes a non-secret App Group
-  snapshot for Home Screen and Lock Screen widgets.
+- **Quota** — native iOS 26+ Account viewer. It signs in with the registered `quota-ios` public
+  client, reads remaining quota and Today Usage, publishes a non-secret App Group snapshot for
+  Home Screen and Lock Screen widgets, and writes nothing to Relay. Settings › Providers also signs
+  in to a provider's own web session inside the app; those cookies stay in that iPhone's Keychain.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
@@ -54,7 +55,7 @@ apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI
-packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, and provider web-session modules
+packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, and provider web-session and Keychain modules
 packages/apple-shared/    Foundation-only Apple presentation semantics for QuotaBar, Quota iOS, and widgets
 packages/provider/        Language-neutral provider catalog and JSON Schema
 packages/protocol/        Runtime schemas and exported network JSON Schemas

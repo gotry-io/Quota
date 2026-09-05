@@ -36,6 +36,15 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   the accepted headers plus irreversible fingerprints and masked labels. Turning Browser Sign-in
   off deletes those rows transactionally.
 - Quota Web and Quota iOS receive normalized account data only, never local credentials or logs.
+- Quota iOS holds one credential of its own beyond the Account session: a provider web session the
+  reader signed in for inside the app ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). It is
+  acquired only through a visible `WKWebView` on the provider's own sign-in page, in a
+  `WKWebsiteDataStore.nonPersistent()` made for that sheet and discarded with it, after a
+  per-provider consent naming the catalog's cookies and hosts. The app injects no script, reads no
+  page content, and intercepts no form or navigation; it reads that store's cookies, assembles the
+  header the catalog declares, and keeps it only if the provider validates it. Cookies stay in this
+  device's Keychain, one item per provider and account fingerprint, and reach only that provider's
+  fixed endpoints — never Relay, the App Group snapshot, a file, a log, or a diagnostic.
 
 - The local service's HTTP client follows no redirects and caps bodies at 1 MiB. On macOS it
   speaks TLS through Secure Transport (`reqwest` `native-tls`) rather than rustls: cursor.com's
@@ -115,12 +124,16 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   before keeping the session and why switching accounts uses an ephemeral sheet. The Quota
   session is one Keychain item with `activation: pending | active` and
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; a pending record may identify the account but
-  is not a signed-in session until Continue promotes it. UserDefaults holds UI preferences only,
-  and the client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
-  summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
-  the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
-  iOS alert dedup file (`Application Support/alert-state.json`) and pending reset reminders hold
-  only subscription selectors and remaining percents, never credentials. The app target alone
+  is not a signed-in session until Continue promotes it. A provider web session is a separate item
+  per provider and account fingerprint under `io.gotry.quota.provider-session`, with
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and `kSecAttrSynchronizable` false so iCloud
+  never carries it to another device, and Remove deletes it. UserDefaults holds UI preferences and
+  the provider consent answer only, and the client makes one single-flight refresh after 401. Its
+  last-good cache holds only the decoded summary, its fetch time, and its ETag in protected storage,
+  is offered back only for the Account the current Keychain session owns, and is cleared when
+  orphaned, mismatched, or signed out. The iOS alert dedup file
+  (`Application Support/alert-state.json`) and pending reset reminders hold only subscription
+  selectors and remaining percents, never credentials. The app target alone
   performs OAuth, holds the session, and calls Relay; the extension has no network, Keychain,
   Security, or account modules. The widget snapshot may carry a locally salted `selection_id`; the
   32-byte salt lives in the app-private Keychain with
@@ -189,7 +202,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
-  import browser Cookies, and hidden WebView state is never an authentication source.
+  import browser Cookies, and hidden WebView state is never an authentication source. Quota iOS's
+  sign-in sheet is the visible opposite of that: the reader is looking at the page whose session is
+  being taken, and the sheet's store holds nothing else.
 - A refresh starts three kinds of process and no others, and no collector starts any of them: the
   two that drive a provider CLI run on the refresh worker before collection, so nothing on the
   five-minute timer can spawn on its own account.

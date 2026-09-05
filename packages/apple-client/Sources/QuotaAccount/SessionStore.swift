@@ -1,4 +1,5 @@
 import Foundation
+import QuotaKeychain
 import QuotaWire
 import Security
 
@@ -12,35 +13,6 @@ public enum AccountStoreError: Error, Equatable, Sendable {
   case unreadable
   case unwritable
   case invalidSession
-}
-
-public protocol KeychainOperating: Sendable {
-  func add(_ attributes: [String: Any]) -> OSStatus
-  func update(query: [String: Any], attributes: [String: Any]) -> OSStatus
-  func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?)
-  func delete(_ query: [String: Any]) -> OSStatus
-}
-
-public struct SecurityKeychain: KeychainOperating {
-  public init() {}
-
-  public func add(_ attributes: [String: Any]) -> OSStatus {
-    SecItemAdd(attributes as CFDictionary, nil)
-  }
-
-  public func update(query: [String: Any], attributes: [String: Any]) -> OSStatus {
-    SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-  }
-
-  public func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?) {
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(query as CFDictionary, &item)
-    return (status, item as? Data)
-  }
-
-  public func delete(_ query: [String: Any]) -> OSStatus {
-    SecItemDelete(query as CFDictionary)
-  }
 }
 
 public final class MemoryAccountSessionStore: AccountSessionStore, @unchecked Sendable {

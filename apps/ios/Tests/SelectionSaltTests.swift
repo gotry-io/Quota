@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaKeychain
 import QuotaPresentation
 import Security
 import Testing
@@ -134,6 +135,10 @@ final class SelectionSaltFakeKeychain: KeychainOperating, @unchecked Sendable {
     let key = identity(query)
     guard let data = items[key] else { return (errSecItemNotFound, nil) }
     return (errSecSuccess, data)
+  }
+
+  func copyAllMatching(_ query: [String: Any]) -> (OSStatus, [[String: Any]]) {
+    (errSecItemNotFound, [])
   }
 
   func delete(_ query: [String: Any]) -> OSStatus {

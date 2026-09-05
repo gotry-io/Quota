@@ -55,12 +55,19 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaKeychain
+      - package: QuotaAppleClient
+        product: QuotaProviderWeb
+      - package: QuotaAppleClient
+        product: QuotaProviderSessions
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
+      - sdk: WebKit.framework
       - sdk: WidgetKit.framework
       - sdk: AppIntents.framework
       - target: QuotaWidgets
@@ -120,6 +127,12 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaKeychain
+      - package: QuotaAppleClient
+        product: QuotaProviderWeb
+      - package: QuotaAppleClient
+        product: QuotaProviderSessions
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared
