@@ -105,6 +105,16 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `account_identities.subject`; the Account id is opaque and derived from none of them, and no
   subject is ever answered on the wire. Binding a channel another Account already holds is refused
   rather than merged, and the last channel into an Account cannot be unbound.
+- Email sign-in is a one-time link, not a password and not a handoff cookie. `POST
+  /api/auth/email/start` always answers 202 so it does not say whether the address is an identity.
+  The mailed token is the credential: D1 stores only hashes of the address and of the token, the
+  row lasts fifteen minutes, spending it twice is a refusal, and expired rows leave with the grant
+  sweep. Opening a `sign_in` on another device is allowed. Completing a `link` still requires the
+  opening browser to hold the Account that asked, so a mailed link cannot bind the addressee to
+  whoever sent the mail. The same address is limited to one send per minute and five per hour;
+  those limits also answer 202. The IP shares the `web-signin` bucket and still 429s. Resend sees
+  the address for the send (`RESEND_API_KEY`, from `Quota <login@gotry.io>`); a failed send logs
+  `email_send_failed` with the first eight characters of the address hash, never the mailbox.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
@@ -294,10 +304,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
   eligible at once; expired or revoked sessions remain seven days so logout retries stay
   diagnosable.
-- Production keys (`GITHUB_CLIENT_SECRET` and the subject, installation, and session HMAC keys) are
-  Cloudflare secrets, are never tracked, and are never reused across purposes.
-  `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser session token
-  and `__Host-quota_oauth` signature included — each under its own domain label.
+- Production keys (`GITHUB_CLIENT_SECRET`, `RESEND_API_KEY`, and the subject, installation, and
+  session HMAC keys) are Cloudflare secrets, are never tracked, and are never reused across
+  purposes. `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser
+  session token, `__Host-quota_oauth` signature, and email challenge token included — each under
+  its own domain label.
 
 ## Failure behavior
 

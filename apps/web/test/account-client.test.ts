@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { fetchAccountActivity, fetchAccountSummary } from "../src/lib/account-client.ts";
+import {
+  fetchAccountActivity,
+  fetchAccountSummary,
+  requestEmailSignInLink,
+} from "../src/lib/account-client.ts";
 import { classifyAccountError } from "../src/lib/account-errors.ts";
 import {
   ACTIVITY_DAYS,
@@ -60,6 +64,28 @@ test("asks a single UTC day for its agent tree", async () => {
     assert.equal(asked.searchParams.get("from"), "2026-08-12");
     assert.equal(asked.searchParams.get("to"), "2026-08-12");
     assert.equal(asked.searchParams.get("detail"), "agents");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("asks Relay to mail a sign-in link and treats 202 as accepted", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  let body = "";
+  globalThis.fetch = (async (input, init) => {
+    requested = String(input);
+    body = String(init?.body ?? "");
+    return new Response("{}", { status: 202 });
+  }) as typeof fetch;
+  try {
+    const result = await requestEmailSignInLink({
+      email: "person@example.test",
+      returnTo: "/my",
+    });
+    assert.equal(result, "accepted");
+    assert.equal(requested, "/api/auth/email/start");
+    assert.equal(body, JSON.stringify({ email: "person@example.test", return_to: "/my" }));
   } finally {
     globalThis.fetch = originalFetch;
   }

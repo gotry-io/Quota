@@ -7,8 +7,6 @@ import {
 import {
   AccountResponseSchema,
   AccountSummarySchema,
-  identityProviderDisplayName,
-  IdentityProviderSchema,
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
@@ -18,10 +16,13 @@ import {
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   IanaTimezoneSchema,
+  type IdentityProvider,
+  IdentityProviderSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
+  identityProviderDisplayName,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
@@ -56,6 +57,18 @@ import type {
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import {
+  type BrowserSignInFailureReason,
+  htmlOrJsonSignInError,
+} from "./account/browser-error-page.ts";
+import {
+  EmailMagicLink,
+  hashEmailAddress,
+  normalizeEmailAddress,
+  readEmailStartBody,
+} from "./account/email-identity.ts";
+import type { EmailSender } from "./account/email-sender.ts";
+import { clearedHandoffCookie, type SignInIntent } from "./account/identity.ts";
 import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
@@ -66,11 +79,6 @@ import {
   refreshTokenDomain,
 } from "./account/service.ts";
 import {
-  type BrowserSignInFailureReason,
-  htmlOrJsonSignInError,
-} from "./account/browser-error-page.ts";
-import { clearedHandoffCookie, type SignInIntent } from "./account/identity.ts";
-import {
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
   type RegisteredIdentityProvider,
@@ -79,9 +87,9 @@ import {
   type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
+import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
-import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 /** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
@@ -151,6 +159,8 @@ const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
   token: { limit: 180, windowSeconds: 10 * 60 },
   webSignIn: { limit: 30, windowSeconds: 10 * 60 },
+  emailStartMinute: { limit: 1, windowSeconds: 60 },
+  emailStartHour: { limit: 5, windowSeconds: 60 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
 } as const;
@@ -165,6 +175,8 @@ export interface RelayAppOptions {
   accountService: AccountService;
   webSessions: WebSessionPort;
   hasher: SecretHasher;
+  /** When omitted, Relay does not send sign-in mail and `POST /api/auth/email/start` is 404. */
+  emailSender?: EmailSender;
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
   modelCatalog?: ModelCatalog;
@@ -261,6 +273,119 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
   app.get("/api/v2/info", (context) => context.json(managedServiceInfo()));
+  const email =
+    options.emailSender === undefined
+      ? null
+      : new EmailMagicLink({
+          state: options.state,
+          hasher: options.hasher,
+          sender: options.emailSender,
+        });
+  app.post("/api/auth/email/start", async (context) => {
+    if (!email) return unknownProvider(context);
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) return raw;
+    const body = readEmailStartBody(raw);
+    if (!body) return invalidRequest(context);
+    const address = normalizeEmailAddress(body.email);
+    if (!address) return invalidRequest(context);
+    const returnTo =
+      body.return_to === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(body.return_to);
+    if (returnTo === null) return invalidRequest(context);
+    const requestedIntent = body.intent ?? "sign_in";
+    let intent: SignInIntent = { kind: "sign_in" };
+    if (requestedIntent === "link") {
+      const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+      if (!principal) return unauthorized(context);
+      intent = { kind: "link", account_id: principal.account_id };
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
+    const emailHash = await hashEmailAddress(options.hasher, address);
+    const minute = await consumeNamedRateLimit(
+      options.state,
+      options.hasher,
+      "email-start-minute",
+      emailHash,
+      rateLimits.emailStartMinute,
+      now(),
+    );
+    // A per-address limit is not a 429: that would say this mailbox is being asked for, which
+    // is the existence leak this route exists not to make. The IP bucket above still 429s.
+    if (minute.allowed) {
+      const hour = await consumeNamedRateLimit(
+        options.state,
+        options.hasher,
+        "email-start-hour",
+        emailHash,
+        rateLimits.emailStartHour,
+        now(),
+      );
+      if (hour.allowed) {
+        await email.issue(address, intent, returnTo, now());
+      }
+    }
+    return context.json({ status: "accepted" }, 202);
+  });
+  app.get("/api/auth/email/verify", async (context) => {
+    if (!hasOnlyQueryKeys(context, ["token"])) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return browserSignInFailure(context, limited, "rate_limited");
+    if (!email) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    const consumed = await email.consume(context.req.query("token") ?? "", now());
+    if (consumed.outcome !== "proved") {
+      return browserSignInFailure(
+        context,
+        consumed.outcome === "expired"
+          ? relayError(context, 400, "expired_token", "This sign-in link has expired.")
+          : invalidRequest(context),
+        consumed.outcome === "expired" ? "expired" : "invalid_request",
+      );
+    }
+    let completed: Awaited<ReturnType<WebSessionPort["completeProvedIdentity"]>>;
+    try {
+      completed = await options.webSessions.completeProvedIdentity(
+        "email",
+        consumed.proof,
+        consumed.intent,
+        consumed.return_to,
+        context.req.raw.headers,
+        now(),
+      );
+    } catch (error) {
+      console.error("web_signin_failed", {
+        provider: "email",
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+      });
+      return browserSignInFailure(
+        context,
+        relayError(context, 502, "internal_error", "Identity verification is unavailable."),
+        "invalid_request",
+      );
+    }
+    return answerWebSignIn(context, completed, "email");
+  });
   // Sign-in is a plain navigation: the browser leaves for a provider carrying a signed cookie
   // that states which round trip this is, and comes back to the callback below with nothing else.
   app.get("/api/auth/:provider/start", async (context) => {
@@ -341,38 +466,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         "invalid_request",
       );
     }
-    if (completed.outcome === "rejected") {
-      // The reason is a category, never a value: enough to tell a lost cookie from a refused
-      // code when a sign-in fails in production, and nothing a log reader could replay.
-      console.warn("web_signin_rejected", { provider: provider.id, reason: completed.reason });
-      context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
-      return browserSignInFailure(
-        context,
-        completed.reason === "identity_taken"
-          ? relayError(
-              context,
-              409,
-              "conflict",
-              "That identity already belongs to another Quota account.",
-            )
-          : relayError(
-              context,
-              400,
-              "invalid_request",
-              "The sign-in request could not be completed.",
-            ),
-        signInFailureReason(completed.reason),
-        identityProviderDisplayName(provider.id),
-      );
-    }
-    if (completed.outcome === "signed_in") {
-      context.header("Set-Cookie", completed.session, { append: true });
-    }
-    context.header("Set-Cookie", completed.handoff, { append: true });
-    // Checked here as well as where it was accepted. This value has been out of Relay's hands
-    // and back — through a signed cookie, but a cookie all the same — and it is about to become
-    // a `Location` on an authenticated response, which is the exact shape of an open redirect.
-    return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
+    return answerWebSignIn(context, completed, provider.id);
   });
 
   app.post("/api/auth/logout", async (context) => {
@@ -1144,6 +1238,45 @@ async function answerIfNoneMatch(
   context.header("ETag", etag);
   context.header("Cache-Control", "private, no-cache");
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
+}
+
+function answerWebSignIn(
+  context: Context,
+  completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>,
+  provider: IdentityProvider,
+): Response {
+  if (completed.outcome === "rejected") {
+    // The reason is a category, never a value: enough to tell a lost cookie from a refused
+    // code when a sign-in fails in production, and nothing a log reader could replay.
+    console.warn("web_signin_rejected", { provider, reason: completed.reason });
+    context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+    return browserSignInFailure(
+      context,
+      completed.reason === "identity_taken"
+        ? relayError(
+            context,
+            409,
+            "conflict",
+            "That identity already belongs to another Quota account.",
+          )
+        : relayError(
+            context,
+            400,
+            "invalid_request",
+            "The sign-in request could not be completed.",
+          ),
+      signInFailureReason(completed.reason),
+      identityProviderDisplayName(provider),
+    );
+  }
+  if (completed.outcome === "signed_in") {
+    context.header("Set-Cookie", completed.session, { append: true });
+  }
+  context.header("Set-Cookie", completed.handoff, { append: true });
+  // Checked here as well as where it was accepted. This value has been out of Relay's hands
+  // and back — through a signed cookie, but a cookie all the same — and it is about to become
+  // a `Location` on an authenticated response, which is the exact shape of an open redirect.
+  return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
 }
 
 function unknownProvider(context: Context): Response {

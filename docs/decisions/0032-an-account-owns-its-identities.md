@@ -21,8 +21,8 @@ states a new one.
 return_to, now)` and `complete(request, now)`, which answers a subject and a label or a category of
 refusal. `WebSessions` owns what that means: a sign-in resolves `(provider, subject)` to the Account
 already bound to it, or opens one; a link binds the channel to the Account the browser is signed in
-as. GitHub is the first implementation and the only one this ADR ships; Apple and Email register
-against the same port.
+as. GitHub is the first OAuth implementation; Apple registers against the same port. Email proves
+the address with a mailed token and calls the same completion without a handoff cookie.
 
 **The intent travels in the sealed handoff, not in a query.** `__Host-quota_oauth` still carries the
 `state`, the PKCE verifier, and where to return to, and now also the provider and whether this round
@@ -42,6 +42,21 @@ a signed-in browser to continue as the Account it holds or to use a different on
 /api/v2/account` answers `identities[]` — provider, label, and when it was bound — so a client can
 show what reaches this Account.
 
+**Email is a mailed token, not a cookie round trip.** `POST /api/auth/email/start` writes a
+fifteen-minute one-time row in `email_challenges` and Resend delivers a link to
+`/api/auth/email/verify?token=…`. The address and the token are stored only as hashes. The token
+itself is the credential, so a `sign_in` may be opened on another device — the mail client is often
+a phone — and that browser receives the session. There is no `__Host-quota_oauth` cookie on this
+path, because a cookie the mail client does not have would refuse the usual case. `intent=link`
+still names the Account that asked in the challenge, and completing it still requires the opening
+browser to hold that Account's session, so a mailed link cannot bind the addressee to whoever sent
+the mail. Start always answers 202, whether the address is already an identity, whether a
+per-address limit skipped the send, and whether Resend accepted the mail; the IP still shares the
+`web-signin` bucket with the other channels.
+
+GitHub is the first OAuth implementation of `IdentityProvider`. Email does not implement that port:
+it has no authorize URL and no handoff. Apple registers against the same OAuth port.
+
 ## Why
 
 GitHub was the Account: `accounts.id` was the HMAC of a GitHub numeric id, so there was exactly one
@@ -52,7 +67,9 @@ beside it is the change that stops each new channel from being a second kind of 
 
 The cookie handoff is kept because it is still true that a sign-in nobody finishes should cost
 nothing to forget: state in a table would need writing, sweeping, and a story for the rows a
-half-finished sign-in leaves. The `__Host-` prefix is what makes a signed cookie enough.
+half-finished sign-in leaves. The `__Host-` prefix is what makes a signed cookie enough. Email
+cannot use that cookie: the person who asked is often not the browser that opens the mail, so the
+token is stored (as a hash, one-time, fifteen minutes) and swept with the other expired grants.
 
 Silent reuse is what `/sign-in` exists to end. A browser already holding a provider session was
 handed straight back to whichever Account that session belonged to, which is the wrong answer as

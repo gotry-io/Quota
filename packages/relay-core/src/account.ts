@@ -210,6 +210,38 @@ export interface CreateWebSessionInput {
   expires_at: string;
 }
 
+/**
+ * One mailed sign-in in flight.
+ *
+ * The address and the token are stored only as hashes. `intent_json` is the sealed decision
+ * this challenge will complete — a sign-in, or a link on a named Account — and `return_to` is
+ * the same-origin path the browser that opens the link is sent to.
+ */
+export interface CreateEmailChallengeInput {
+  id: string;
+  email_hash: string;
+  token_hash: string;
+  intent_json: string;
+  return_to: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface EmailChallengeRecord {
+  id: string;
+  email_hash: string;
+  intent_json: string;
+  return_to: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+export type ConsumeEmailChallengeResult =
+  | { outcome: "consumed"; challenge: EmailChallengeRecord }
+  | { outcome: "expired" }
+  | { outcome: "invalid" };
+
 export interface ConsumeAccountLoginGrantInput {
   grant_id: string;
   credential_hash: string;
@@ -369,6 +401,12 @@ export interface AccountState {
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
   createWebSession(input: CreateWebSessionInput): Promise<void>;
+  createEmailChallenge(input: CreateEmailChallengeInput): Promise<void>;
+  /**
+   * Spend a mailed token once. An unknown, already-spent, or unreadable hash is `invalid`; a
+   * hash whose row has passed `expires_at` is `expired`, even if it was never opened.
+   */
+  consumeEmailChallenge(tokenHash: string, now: string): Promise<ConsumeEmailChallengeResult>;
   /**
    * The Account this identity reaches, opened when nothing has reached it before.
    *

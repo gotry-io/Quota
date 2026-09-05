@@ -29,6 +29,10 @@ export class SignedInWebSessionStub implements WebSessionPort {
     return { outcome: "rejected", reason: "handoff" };
   }
 
+  async completeProvedIdentity(): Promise<{ outcome: "rejected"; reason: "handoff" }> {
+    return { outcome: "rejected", reason: "handoff" };
+  }
+
   async authorize(): Promise<SessionPrincipal | null> {
     return {
       session_id: `web_${this.accountId}`,
@@ -55,6 +59,9 @@ export const signedOutWebSessions: WebSessionPort = {
     };
   },
   async completeSignIn() {
+    return { outcome: "rejected", reason: "handoff" };
+  },
+  async completeProvedIdentity() {
     return { outcome: "rejected", reason: "handoff" };
   },
   async authorize() {
