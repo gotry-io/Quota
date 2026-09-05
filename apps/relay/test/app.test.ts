@@ -779,6 +779,8 @@ describe("managed Relay on real Workers and D1", () => {
       "account_usage_folds",
       "accounts",
       "devices",
+      "entitlement_events",
+      "entitlements",
       "login_grants",
       "quota_snapshots",
       "rate_limit_counters",
@@ -953,6 +955,7 @@ describe("managed Relay on real Workers and D1", () => {
     )
       .bind(now.toISOString())
       .run();
+    await seedPaidEntitlement("identity_subject");
     const webSessions = new SignedInWebSessionStub("identity_subject", now);
     const app = createRelayApp({
       state,
@@ -1784,6 +1787,20 @@ function recordingD1(statements: string[]): D1Database {
   });
 }
 
+async function seedPaidEntitlement(accountId: string, at: Date = now): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO entitlements (
+       account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
+     ) VALUES (?1, 'active', 'quota_sync_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
+  )
+    .bind(
+      accountId,
+      new Date(at.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      at.toISOString(),
+    )
+    .run();
+}
+
 async function quotabarHarness(accountId: string, clock: { now: Date }) {
   await env.DB.prepare(
     `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
@@ -1791,6 +1808,7 @@ async function quotabarHarness(accountId: string, clock: { now: Date }) {
   )
     .bind(accountId, clock.now.toISOString())
     .run();
+  await seedPaidEntitlement(accountId, clock.now);
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
   const webSessions = new SignedInWebSessionStub(accountId, clock.now);

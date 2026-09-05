@@ -217,6 +217,35 @@ export interface AccountVersionStamp {
   device_signed_out_at: string | null;
   snapshots: number;
   snapshot_updated_at: string | null;
+  /** When the paid-sync entitlement row last changed, or null when none is stored. */
+  entitlement_updated_at: string | null;
+}
+
+export type EntitlementStatus = "active" | "grace" | "expired" | "none";
+export type EntitlementSource = "webhook" | "rest";
+
+export interface StoredEntitlement {
+  account_id: string;
+  status: EntitlementStatus;
+  product_id: string | null;
+  store: string | null;
+  expires_at: string | null;
+  will_renew: boolean;
+  source: EntitlementSource;
+  last_event_id: string | null;
+  updated_at: string;
+}
+
+export interface ApplyRevenueCatWebhookInput {
+  event_id: string;
+  account_id: string;
+  type: string;
+  received_at: string;
+  payload_json: string;
+  /** Folded entitlement for this account, or null when the account is unknown. */
+  entitlement: StoredEntitlement | null;
+  /** Accounts that lost the subscription in a TRANSFER. */
+  transfer_sources: StoredEntitlement[];
 }
 
 /**
@@ -353,6 +382,9 @@ export interface AccountState {
   ): Promise<boolean>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
+  getEntitlement(accountId: string): Promise<StoredEntitlement | null>;
+  putEntitlement(row: StoredEntitlement): Promise<void>;
+  applyRevenueCatWebhook(input: ApplyRevenueCatWebhookInput): Promise<"applied" | "duplicate">;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

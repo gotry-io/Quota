@@ -137,6 +137,14 @@ it("names latest quota freshness from subscriptions, not device heartbeats", () 
     },
     pricing_revision: "p",
     model_catalog_revision: "m",
+    entitlement: {
+      status: "none",
+      expires_at: null,
+      will_renew: false,
+      product_id: null,
+      store: null,
+      stale: false,
+    },
   } as AccountSummaryRead;
 
   expect(accountStatusLine(summary)).toBe("Latest quota updated 8h ago · 2 devices reporting");

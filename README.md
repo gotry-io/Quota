@@ -163,8 +163,9 @@ without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-a
 Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
 and file failures are isolated.
 
-Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
-configuration. The checked-in deployment workflow is the only authorized production path.
+Production GitHub OAuth, RevenueCat (`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_SECRET_KEY`,
+`REVENUECAT_WEB_PURCHASE_URL`), and D1 deployment require the secrets documented by the managed
+Relay configuration. The checked-in deployment workflow is the only authorized production path.
 
 ## License
 

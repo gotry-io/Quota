@@ -211,6 +211,16 @@ provider ids that resolve each channel.
 
 ## Managed account and sync
 
+Multi-device sync is paid. RevenueCat is the billing system of record: iOS purchases through
+the RevenueCat SDK, Mac opens a RevenueCat Web Purchase Link, and Relay neither verifies Apple
+receipts nor talks to Stripe. The Account id is the RevenueCat `app_user_id`. Relay stores the
+`sync` entitlement from the webhook and, when that row is older than 24 hours or an
+`active`/`grace` grant has expired, from `GET /v1/subscribers/{app_user_id}`. Writes of snapshots,
+Usage, the device profile, and device sync answer 402 `subscription_required` unless status is
+`active` or `grace`; Account and summary reads are not gated and carry the entitlement so a
+client can show the paywall. Expired rows are kept. See
+[ADR 0033](decisions/0033-entitlement-is-read-from-revenuecat.md).
+
 The shared Rust service is the collection OAuth public client behind QuotaBar, and Authorization
 Code with PKCE over a temporary loopback callback is the only grant it uses. Device `display_name`
 is the host computer name (macOS ComputerName, otherwise hostname), reconciled by authenticated
@@ -255,7 +265,7 @@ written to the App Group.
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
-and observation rows the response projects; the activity stamp is usage-only (device count, usage
+and observation rows the response projects, plus `entitlements.updated_at`; the activity stamp is usage-only (device count, usage
 revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
 keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,

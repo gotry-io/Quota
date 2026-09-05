@@ -36,6 +36,8 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM usage_hourly"),
     env.DB.prepare("DELETE FROM usage_hour_scans"),
     env.DB.prepare("DELETE FROM quota_snapshots"),
+    env.DB.prepare("DELETE FROM entitlement_events"),
+    env.DB.prepare("DELETE FROM entitlements"),
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM login_grants"),
     env.DB.prepare("DELETE FROM devices"),
@@ -524,6 +526,8 @@ describe("browser sign-in through GitHub", () => {
       "usage_hour_scans",
       "usage_daily",
       "login_grants",
+      "entitlements",
+      "entitlement_events",
     ]) {
       expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).first("count")).toBe(
         0,
