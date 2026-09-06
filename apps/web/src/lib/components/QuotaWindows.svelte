@@ -1,5 +1,5 @@
 <script lang="ts">
-import { isBalanceOnly, remainingPercent, showsPercentMeter } from "@gotry-io/quota-model";
+import { formatWindowTitle, remainingPercent, showsPercentMeter } from "@gotry-io/quota-model";
 import { meterTone } from "$lib/account-overview";
 import { formatQuotaRemaining, NO_RESET_TIME_COPY, resetCopy, showsNoResetTime } from "$lib/format";
 
@@ -29,13 +29,12 @@ let {
     <p class="empty-state">No quota windows reported.</p>
   {:else}
     {#each windows as window (window.id)}
-      {@const balanceOnly = isBalanceOnly(window)}
       {@const remaining = remainingPercent(window.used_percent)}
       {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}
       {@const tone = meterTone(remaining)}
       <div class="quota-window-card">
         <div class="quota-window-heading">
-          <span>{balanceOnly ? "Balance" : window.title}</span>
+          <span>{formatWindowTitle(window.title, window)}</span>
           {#if showsPercentMeter(window)}
             <div class="quota-track meter-{tone}">
               <span style:width={`${remaining}%`} aria-hidden="true"></span>

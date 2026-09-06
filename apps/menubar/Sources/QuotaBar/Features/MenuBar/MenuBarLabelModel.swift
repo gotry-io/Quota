@@ -2,6 +2,19 @@ import Foundation
 import QuotaPresentation
 import QuotaWire
 
+extension BillingAgent {
+  /// The Overview provider this Usage agent belongs to, when it has one.
+  var menuBarProvider: ProviderID? {
+    switch self {
+    case .codex: .codex
+    case .claudeCode: .claude
+    case .grok: .grok
+    case .cursor: .cursor
+    case .opencode, .pi, .unknown: nil
+    }
+  }
+}
+
 /// One status item's label and the identity macOS uses to keep its position.
 struct MenuBarStatusItemSpec: Equatable, Sendable {
   let id: MenuBarStatusItemID
@@ -13,6 +26,53 @@ struct MenuBarStatusItemSpec: Equatable, Sendable {
 enum MenuBarLabelIcon: Equatable, Hashable, Sendable {
   case quota
   case provider(ProviderID)
+}
+
+/// Today's spend or token count as the menu bar can show it.
+struct MenuBarTodayReading: Equatable, Hashable, Sendable {
+  let text: String
+  let spoken: String
+}
+
+struct MenuBarTodayUsage: Equatable, Hashable, Sendable {
+  var cost: MenuBarTodayReading?
+  var tokens: MenuBarTodayReading?
+
+  static let empty = MenuBarTodayUsage()
+
+  static func make(tokens: Int, cost: UsageCostOutcome) -> MenuBarTodayUsage {
+    let priced = cost.status != .unavailable && cost.amountMicrousd != nil
+    return MenuBarTodayUsage(
+      cost: priced
+        ? MenuBarTodayReading(
+          text: UsageValueFormatter.compactCost(cost),
+          spoken: UsageCostFormat.compact(
+            status: UsageCostCoverage(cost.status),
+            amountMicrousd: cost.amountMicrousd
+          )
+        )
+        : nil,
+      tokens: tokens > 0
+        ? MenuBarTodayReading(
+          text: UsageValueFormatter.count(tokens),
+          spoken: "\(UsageValueFormatter.accessibleCount(tokens)) tokens"
+        )
+        : nil
+    )
+  }
+}
+
+/// Today's Usage the menu-bar item can show: the total, and each agent's own.
+struct MenuBarTodaySnapshot: Equatable, Hashable, Sendable {
+  var total: MenuBarTodayUsage
+  var byProvider: [ProviderID: MenuBarTodayUsage]
+
+  static let empty = MenuBarTodaySnapshot(total: .empty, byProvider: [:])
+
+  func usage(for provider: ProviderID?) -> MenuBarTodayUsage {
+    if let provider { return byProvider[provider] ?? .empty }
+    return total
+  }
 }
 
 /// One remaining percent in a cell, with the cadence it meters when the cell names one.
@@ -135,7 +195,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     provider: MenuBarProviderPreference,
     arrangement: MenuBarArrangementPreference = .combined,
     now: Date,
-    visibleProviders: [ProviderID]? = nil
+    visibleProviders: [ProviderID]? = nil,
+    today: MenuBarTodaySnapshot = .empty
   ) -> MenuBarLabelModel {
     specs(
       overview: overview,
@@ -143,7 +204,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       provider: provider,
       arrangement: arrangement,
       visibleProviders: visibleProviders ?? provider.selected,
-      now: now
+      now: now,
+      today: today
     ).first?.label ?? .empty
   }
 
@@ -153,7 +215,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     provider: MenuBarProviderPreference,
     arrangement: MenuBarArrangementPreference,
     visibleProviders: [ProviderID],
-    now: Date
+    now: Date,
+    today: MenuBarTodaySnapshot = .empty
   ) -> [MenuBarStatusItemSpec] {
     specs(
       overview: overview,
@@ -163,7 +226,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         arrangement: arrangement,
         visibleProviders: visibleProviders
       ),
-      now: now
+      now: now,
+      today: today
     )
   }
 
@@ -172,7 +236,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     overview: [LocalServiceOverviewItem],
     style: MenuBarStylePreference,
     layout: MenuBarLayout,
-    now: Date
+    now: Date,
+    today: MenuBarTodaySnapshot = .empty
   ) -> [MenuBarStatusItemSpec] {
     let style = layout.effectiveStyle(style)
     switch layout {
@@ -184,7 +249,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
             overview: overview,
             style: style,
             allowed: nil,
-            now: now
+            now: now,
+            today: today
           )
         )
       ]
@@ -192,7 +258,13 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       return [
         MenuBarStatusItemSpec(
           id: .combined,
-          label: packedLabel(overview: overview, style: style, providers: providers, now: now)
+          label: packedLabel(
+            overview: overview,
+            style: style,
+            providers: providers,
+            now: now,
+            today: today
+          )
         )
       ]
     case .items(let providers):
@@ -203,7 +275,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
             overview: overview,
             style: style,
             allowed: id,
-            now: now
+            now: now,
+            today: today
           )
         )
       }
@@ -214,7 +287,8 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     overview: [LocalServiceOverviewItem],
     style: MenuBarStylePreference,
     providers: [ProviderID],
-    now: Date
+    now: Date,
+    today: MenuBarTodaySnapshot
   ) -> MenuBarLabelModel {
     var cells: [MenuBarLabelCell] = []
     var spoken: [String] = ["QuotaBar"]
@@ -224,12 +298,22 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
         style: style,
         allowed: id,
         absentIcon: .provider(id),
-        now: now
+        now: now,
+        today: today
       )
       cells.append(contentsOf: part.cells)
       // Each part already phrased its own reading; the packed item says whose it is and keeps
-      // the rest, so a stacked pair is spoken as a pair here too.
-      spoken.append(part.spokenReading(of: id))
+      // the rest, so a stacked pair is spoken as a pair here too. Today cost/tokens already
+      // name the provider in that phrase.
+      if style.showsTodayCost || style.showsTodayTokens {
+        let phrase = part.accessibilityLabel
+        spoken.append(
+          phrase.hasPrefix("QuotaBar, ")
+            ? String(phrase.dropFirst("QuotaBar, ".count)) : phrase
+        )
+      } else {
+        spoken.append(part.spokenReading(of: id))
+      }
     }
     return MenuBarLabelModel(cells: cells, accessibilityLabel: spoken.joined(separator: ", "))
   }
@@ -239,8 +323,17 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     style: MenuBarStylePreference,
     allowed: ProviderID?,
     absentIcon: MenuBarLabelIcon = .quota,
-    now: Date
+    now: Date,
+    today: MenuBarTodaySnapshot
   ) -> MenuBarLabelModel {
+    if style.showsTodayCost || style.showsTodayTokens {
+      return todayLabel(
+        style: style,
+        allowed: allowed,
+        absentIcon: absentIcon,
+        today: today.usage(for: allowed)
+      )
+    }
     if !style.showsPercent {
       return .empty
     }
@@ -266,6 +359,34 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
       item: tightest.item,
       icon: icon,
       fallbackPercent: tightest.remainingPercent
+    )
+  }
+
+  /// Icon plus today's cost or tokens. Automatic answers with the total; a named cell answers
+  /// with that agent's own. No number falls back to the mark alone, the way Percent does.
+  private static func todayLabel(
+    style: MenuBarStylePreference,
+    allowed: ProviderID?,
+    absentIcon: MenuBarLabelIcon,
+    today: MenuBarTodayUsage
+  ) -> MenuBarLabelModel {
+    let reading = style.showsTodayCost ? today.cost : today.tokens
+    let icon: MenuBarLabelIcon? = style.showsIcon ? (allowed.map(MenuBarLabelIcon.provider) ?? .quota) : nil
+    guard let reading else {
+      return MenuBarLabelModel(
+        icon: icon ?? absentIcon,
+        text: nil,
+        accessibilityLabel: "QuotaBar"
+      )
+    }
+    let name = allowed?.displayName
+    let spoken =
+      name.map { "QuotaBar, \($0) today \(reading.spoken)" }
+      ?? "QuotaBar, today \(reading.spoken)"
+    return MenuBarLabelModel(
+      icon: icon ?? absentIcon,
+      text: reading.text,
+      accessibilityLabel: spoken
     )
   }
 

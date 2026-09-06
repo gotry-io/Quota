@@ -139,6 +139,8 @@ struct QuotaWindowRow: View {
   let provider: ProviderID
   let isStale: Bool
   let now: Date
+  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
+    ResetCopyStylePreference.fallback
 
   private var remainingLabel: String {
     window.overviewRemainingDisplayLabel(provider: provider)
@@ -172,7 +174,8 @@ struct QuotaWindowRow: View {
       }
 
       if let resetsAt = window.resetsAt,
-        let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
+        let reset = FreshnessCopy.resetCopy(
+          resetsAt: resetsAt, now: now, style: resetCopyStyle.style)
       {
         Text(reset)
           .quotaMetaStyle()

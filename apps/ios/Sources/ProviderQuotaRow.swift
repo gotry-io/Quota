@@ -94,7 +94,7 @@ struct QuotaWindowBlock: View {
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
 
-      if !window.isBalanceOnly {
+      if window.showsPercentMeter {
         ProgressView(value: window.remainingPercent, total: 100)
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)

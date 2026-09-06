@@ -21,7 +21,9 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, period names, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
+and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, reset copy is
+`packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
+`packages/protocol/fixtures/remaining-copy-conformance.json`, which
 `src/lib/format.ts` answers in its tests. The site does not restate those rules and does not keep a
 provider or agent name table of its own.
 
@@ -85,9 +87,10 @@ The site has these routes:
      (GitHub login and Delete Account). `?delete=account` scrolls to the delete region and
      focuses its heading. Legal links Privacy, Terms, and Support. Sign out stays in the
      header account menu.
-   Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
-   `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
-   `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
+   Quota remaining has no "left"/"remaining" suffix; usd/credits remaining of a cap use
+   `$12.50 of $40.00` without a meter; other budget windows with an amount use `71% · $3.75`;
+   percent-only windows use `71%`; and balance-only windows use **Balance** plus `$12.34`.
+   Quota cards follow the same provider / account / remaining / meter / metadata order
    as QuotaBar Overview, in a denser web layout. The card head is the provider mark
    (`/providers/*.svg`, or a first-letter color block), provider name, plan badge, and masked
    account; each window is a row of name, remaining-percent meter, percent, and `Resets in 45m`;

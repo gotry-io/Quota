@@ -48,6 +48,7 @@
       ("notifications", "Notifications", 2),
       ("menu-bar-style", "Menu Bar Style", 2),
       ("menu-bar-provider", "Menu Bar Provider", 2),
+      ("reset-time", "Reset time", 2),
       ("support", "Support", 2),
       ("diagnostics", "Diagnostics", 3),
     ]

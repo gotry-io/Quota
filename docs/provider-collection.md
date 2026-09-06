@@ -235,7 +235,12 @@ Acquisition happens in QuotaBar, never during a refresh:
    not, even when they share a duration. Additional `limit_name` values are Title Case
    (`gpt-reserve` → **GPT Reserve**). Spark is **Codex Spark 5 Hours** / **Codex Spark Weekly**;
    Code Review is **Code Review 5 Hours** / **Code Review Weekly**. A null code-review object is
-   absent, not malformed.
+   absent, not malformed. When WHAM includes `credits` with `has_credits` and a finite
+   `balance` (string or number), emit a balance-only **Balance (USD)** window
+   (`remaining_value` / `value_unit: usd`). Unlimited or `has_credits: false` is omitted.
+   `rate_limit_reset_credits.available_count` is a count of earned rate-limit resets, mapped as
+   **Reset Credits** (`remaining_value` / `value_unit: count`); it is not a dollar wallet and is
+   not redeemed here.
 6. Do not fall back after a successful but malformed response; report the parser failure instead.
 7. If neither credential exists or both answer `auth_required`, and a stored ChatGPT
    [browser session](#browser-session) exists, read `GET https://chatgpt.com/api/auth/session`
@@ -317,7 +322,11 @@ reset-credit redemption are not used.
    windows are the headline meters (`primary_cadence` `five_hour` and `weekly`); model-scoped
    weeklies, Daily Routines, and Extra Usage are not. Every weekly limit meters one
    seven-day cycle, so a weekly window that reports no reset of its own — model-scoped or not —
-   takes the seven-day window's reset.
+   takes the seven-day window's reset. Extra Usage is a monthly USD spend cap: when
+   `is_enabled` is not false and `used_credits` / `monthly_limit` are present, they are cents,
+   mapped to `remaining_value` / `limit_value` / `value_unit: usd`. Utilization may be null when
+   the cap is on; used/limit then supplies `used_percent`. A utilization-only extra_usage object
+   still maps as a percent window. Extra usage that is off is omitted.
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
@@ -519,7 +528,9 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    token. HTTP 401/403 is `auth_required`. A valid cached token works without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
-   new period that omits those usage fields is 0% used, not malformed.
+   new period that omits those usage fields is 0% used, not malformed. When those money fields are
+   present, also emit `remaining_value` / `limit_value` / `value_unit: credits` — Grok credits are
+   not dollars. Unified accounts that only report `creditUsagePercent` stay percent-only.
 6. When the proxy is unreachable (not rejected, not malformed), `POST
    https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` as gRPC-web with the same
    OAuth token as `Authorization: Bearer`. This is CodexBar's last Automatic step; Quota runs it

@@ -597,7 +597,35 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     layout: MenuBarLayout,
     now: Date
   ) -> [MenuBarStatusItemSpec] {
-    MenuBarLabelModel.specs(overview: overview, style: style, layout: layout, now: now)
+    MenuBarLabelModel.specs(
+      overview: overview,
+      style: style,
+      layout: layout,
+      now: now,
+      today: menuBarTodaySnapshot()
+    )
+  }
+
+  /// Today's spend the menu bar can show, using the same Usage source the footer would.
+  func menuBarTodaySnapshot() -> MenuBarTodaySnapshot {
+    guard let detail = usageDetail(source: effectiveUsageSource(.account), period: .today) else {
+      return .empty
+    }
+    return MenuBarTodaySnapshot(
+      total: MenuBarTodayUsage.make(
+        tokens: detail.usage.totals.totalTokens,
+        cost: detail.usage.cost
+      ),
+      byProvider: Dictionary(
+        uniqueKeysWithValues: detail.usage.agents.compactMap { agent in
+          guard let provider = agent.agent.menuBarProvider else { return nil }
+          return (
+            provider,
+            MenuBarTodayUsage.make(tokens: agent.totals.totalTokens, cost: agent.cost)
+          )
+        }
+      )
+    )
   }
 
   func isPreparingUsage(source: UsageSource) -> Bool {

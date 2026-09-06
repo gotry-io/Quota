@@ -169,6 +169,7 @@ private struct WidgetSnapshotCandidate {
       windowTitle: windowTitle,
       remainingPercent: remainingPercent,
       remainingValue: window.remainingValue,
+      limitValue: window.limitValue,
       unit: window.valueUnit.flatMap(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,

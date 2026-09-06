@@ -73,6 +73,7 @@
     case notifications
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
+    case resetCopy = "reset-time"
     case support
     case diagnostics
 
@@ -102,6 +103,7 @@
       case .notifications: [.settings, .notifications]
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
+      case .resetCopy: [.settings, .resetCopy]
       case .support: [.settings, .support]
       case .diagnostics: [.settings, .support, .diagnostics]
       }
@@ -478,6 +480,20 @@
                   usedPercent: 16,
                   resetsAt: date.addingTimeInterval(4 * 86_400)
                 ),
+                QuotaWindow(
+                  id: "credits",
+                  title: "Balance (USD)",
+                  usedPercent: 0,
+                  remainingValue: 45.25,
+                  valueUnit: .usd
+                ),
+                QuotaWindow(
+                  id: "reset_credits",
+                  title: "Reset Credits",
+                  usedPercent: 0,
+                  remainingValue: 2,
+                  valueUnit: .count
+                ),
               ],
               observedAt: date.addingTimeInterval(-90)
             )
@@ -497,6 +513,14 @@
                   title: "5 Hours",
                   usedPercent: 47,
                   resetsAt: date.addingTimeInterval(7_200)
+                ),
+                QuotaWindow(
+                  id: "extra_usage",
+                  title: "Extra Usage",
+                  usedPercent: 12.5,
+                  remainingValue: 87.5,
+                  limitValue: 100,
+                  valueUnit: .usd
                 )
               ],
               observedAt: date.addingTimeInterval(-120)

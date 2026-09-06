@@ -7,8 +7,9 @@ enum QuotaFormat {
     RemainingQuotaFormat.remaining(
       remainingPercent: window.remainingPercent,
       remainingValue: window.remainingValue,
+      limitValue: window.limitValue,
       hasLimit: window.limitValue != nil,
-      unit: window.valueUnit.flatMap(\.remainingUnit)
+      unit: window.remainingUnit
     )
   }
 
@@ -87,7 +88,13 @@ enum QuotaFormat {
     timeZone: TimeZone = .current,
     calendar: Calendar = .current
   ) -> String? {
-    FreshnessCopy.resetCopy(resetsAt: date, now: now, timeZone: timeZone, calendar: calendar)
+    FreshnessCopy.resetCopy(
+      resetsAt: date,
+      now: now,
+      timeZone: timeZone,
+      calendar: calendar,
+      style: .relative
+    )
   }
 
   /// Live countdown under a day; shared reset copy at a day or more; `nil` once the instant has passed.

@@ -93,7 +93,16 @@ struct AccountSettingsPageTests {
 
   @Test
   func theStylePageOffersEveryStyleAndTheProviderPageOverviewsOwnOrder() {
-    #expect(MenuBarStylePreference.allCases.map(\.label) == ["Icon", "Percent", "Icon and percent"])
+    #expect(
+      MenuBarStylePreference.allCases.map(\.label)
+        == [
+          "Icon",
+          "Percent",
+          "Icon and percent",
+          "Icon and today cost",
+          "Icon and today tokens",
+        ]
+    )
 
     let choices = MenuBarProviderPreference.choices(visibleProviders: [.grok, .codex, .claude])
     #expect(choices.first == .automatic)

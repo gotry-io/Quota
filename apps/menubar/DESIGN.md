@@ -37,13 +37,20 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
   so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
 - **A future reset is a countdown or a local date, never an age.** All of it is relative to the
-  reader’s time zone, and the English is fixed: it does not follow the device locale. Under an
-  hour: **Resets in 42m** (minutes round up; anything under a minute is still **Resets in 1m**).
-  From one hour to a day: **Resets in 3h 12m**, or **Resets in 3h** when the minutes are zero. From
-  a day to a week: **Resets Tue 14:00** (weekday abbreviation and 24-hour `HH:mm`). A week or more:
-  **Resets Sep 12** (month abbreviation and day). A reset that has already passed prints no Resets
-  line; the reading is **Not current**, or the status word the source reported. The `reset` array in
-  the same fixture is the shared statement of these thresholds.
+  reader’s time zone, and the English is fixed: it does not follow the device locale. Relative
+  (the default): under an hour **Resets in 42m** (minutes round up; anything under a minute is
+  still **Resets in 1m**); from one hour to a day **Resets in 3h 12m**, or **Resets in 3h** when
+  the minutes are zero; from a day to a week **Resets Tue 14:00** (weekday abbreviation and
+  24-hour `HH:mm`); a week or more **Resets Sep 12** (month abbreviation and day). Absolute always
+  uses that local date, even under a day. A reset that has already passed prints no Resets line;
+  the reading is **Not current**, or the status word the source reported.
+  `packages/protocol/fixtures/reset-copy-conformance.json` is the shared statement; QuotaBar
+  Settings → Menu Bar → **Reset time** switches relative and absolute. iOS and the website stay
+  on relative.
+- **usd and credits remaining of a cap print `$12.50 of $40.00` (or `80.00 of 100.00 credits`)
+  and drop the percent bar**, when remaining/limit describes the same quantity as `used_percent`.
+  Included dollars that are a different quantity keep `36.9% · $14.55` and the meter.
+  `packages/protocol/fixtures/remaining-copy-conformance.json` is the shared statement.
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
   window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
@@ -209,21 +216,33 @@ image and measures the drawn pixels: the mark's ink and the digits' ink share a 
 quarter point, every mark lands at the same size, and a stacked pair stays the standard item
 height.
 
-Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default).
+Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, **Icon and percent** (the default),
+**Icon and today cost**, or **Icon and today tokens**.
 → **Provider** chooses **Automatic** — the tightest current subscription — or any set of providers
 Overview is showing. Two or three named providers can be **Combined** into one item or **Separate**
 as one item each; Combined is the default arrangement for that size, and a fourth named provider
-makes the bar Separate. More than one named provider always draws as Icon and percent, because
-Icon-only and Percent-only cannot say whose number it is. The stored Style is left alone and
+makes the bar Separate. More than one named provider cannot be Icon-only or Percent-only and still
+say whose number it is, so those two fall back to Icon and percent; Icon and today cost/tokens
+keep their style because each cell still wears a mark. The stored Style is left alone and
 applies again when the bar is back to one reading. Style choosing takes effect and returns;
 Provider is a set of toggles and stays until Back. Both the named set and the arrangement persist
 in UserDefaults. A chosen provider with no current reading shows the mark alone and never borrows
-another provider's number, and **Percent** likewise falls back to the mark alone when there is no
-percent to show, because an item with no content cannot be clicked. VoiceOver announces
-**QuotaBar**, the provider each number belongs to, and the remaining percent — or, for a stacked
-pair, the full window titles: **QuotaBar, Claude Code, 5 Hours 68% remaining, Weekly 27% remaining**.
-Clicking a Separate item opens the shared panel on that provider; Combined and Automatic open the
-same panel without changing page.
+another provider's number, and **Percent**, **Icon and today cost**, and **Icon and today tokens**
+likewise fall back to the mark alone when there is no number to show, because an item with no
+content cannot be clicked.
+
+**Icon and today cost** and **Icon and today tokens** use the same 14.5pt mark, 4pt gap, and
+menu-bar font with monospaced digits as a single remaining percent. They are one line, never a
+stack: cost is the compact Usage format (`$1.49`, or `≥ $1.49` when the day is partial), tokens
+are the compact count (`1.23M`). Automatic answers with Quota's own mark and the same today total
+the footer would show; a named cell answers with that provider's mark and that agent's today.
+Packed cells sit 8pt apart, the same as percents. VoiceOver announces **QuotaBar, today $1.49**
+or **QuotaBar, Claude Code today 1,234,567 tokens**.
+
+VoiceOver for remaining-percent styles announces **QuotaBar**, the provider each number belongs
+to, and the remaining percent — or, for a stacked pair, the full window titles: **QuotaBar, Claude
+Code, 5 Hours 68% remaining, Weekly 27% remaining**. Clicking a Separate item opens the shared
+panel on that provider; Combined and Automatic open the same panel without changing page.
 
 ## Shell
 
@@ -266,6 +285,7 @@ Overview
     ├── Notifications
     ├── Menu Bar Style
     ├── Menu Bar Provider
+    ├── Reset time
     ├── Support
     │   └── Diagnostics
     └── Agents
@@ -296,9 +316,12 @@ Each quota observation shows:
 - provider brand and name;
 - optional masked account label and normalized plan badge;
 - remaining value as the strongest number, with no "left" or "remaining" suffix;
-- budget windows that also have an absolute remaining amount as `71% · $3.75`;
+- usd/credits windows whose remaining and limit are that same quantity as `$12.50 of $40.00`,
+  with no meter;
+- other budget windows that also have an absolute remaining amount as `71% · $3.75`;
 - percent-only windows as `71%`;
-- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
+- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title when the
+  collector titled them Balance; **Reset Credits** keeps its title;
 - one meter per quota window when a percent is meaningful;
 - reset time as quiet metadata, in the shared reset copy; it does not imply the window period.
 
@@ -369,16 +392,17 @@ service operations; there are no embedded web views.
 
 Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
-**Style** and **Provider**: two rows that state the choice in force on the right and open a page to
-change it, never a menu that drops over the panel. General contains the native mini **Launch at
-Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes, default 5),
-then the **Support** destination. Choosing an interval takes effect and returns, like Menu Bar
-Style. It is how often this Mac collects provider quota; Account summary still polls every
+**Style**, **Provider**, and **Reset time**: rows that state the choice in force on the right and
+open a page to change it, never a menu that drops over the panel. General contains the native mini
+**Launch at Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes,
+default 5), then the **Support** destination. Choosing an interval takes effect and returns, like
+Menu Bar Style. It is how often this Mac collects provider quota; Account summary still polls every
 minute, and a window reset can collect quota once before the next interval.
 
 **Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
 ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
-returns, because there is nothing else on the page to confirm. **Menu Bar Provider** lists
+returns, because there is nothing else on the page to confirm. **Reset time** is the same kind of
+list: **Relative** (`Resets in 3h 12m`) or **Absolute** (`Resets Mon 17:12`). **Menu Bar Provider** lists
 **Automatic** first, without a mark because it is not a provider, then the providers Overview is
 showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
 named set; named rows toggle and the page stays. When two or more are named, **Combined** and
@@ -706,7 +730,7 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
 setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
-Style, Menu Bar Provider, Support, and Diagnostics. Inspect
+Style, Menu Bar Provider, Reset time, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

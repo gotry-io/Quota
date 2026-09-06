@@ -60,6 +60,51 @@ struct QuotaWindowRemainingLabelTests {
   }
 
   @Test
+  func extraUsagePrintsRemainingOfTheUsdCap() {
+    let window = QuotaWindow(
+      id: "extra_usage",
+      title: "Extra Usage",
+      usedPercent: 12.5,
+      remainingValue: 87.5,
+      limitValue: 100,
+      valueUnit: .usd
+    )
+    #expect(window.remainingDisplayLabel == "$87.50 of $100.00")
+    #expect(window.showsPercentMeter == false)
+    #expect(window.displayTitle == "Extra Usage")
+  }
+
+  @Test
+  func grokCreditsPrintRemainingOfTheCap() {
+    let window = QuotaWindow(
+      id: "billing_cycle",
+      title: "Weekly",
+      usedPercent: 20,
+      remainingValue: 80,
+      limitValue: 100,
+      valueUnit: .credits
+    )
+    #expect(window.remainingDisplayLabel == "80.00 of 100.00 credits")
+    #expect(window.showsPercentMeter == false)
+    #expect(window.displayTitle == "Weekly")
+  }
+
+  @Test
+  func resetCreditsKeepTheirTitleAndPrintTheCount() {
+    let window = QuotaWindow(
+      id: "reset_credits",
+      title: "Reset Credits",
+      usedPercent: 0,
+      remainingValue: 2,
+      valueUnit: .count
+    )
+    #expect(window.remainingDisplayLabel == "2")
+    #expect(window.isBalanceOnly)
+    #expect(window.showsPercentMeter == false)
+    #expect(window.displayTitle == "Reset Credits")
+  }
+
+  @Test
   func countBudgetShowsPercentThenCount() {
     let window = QuotaWindow(
       id: "weekly",

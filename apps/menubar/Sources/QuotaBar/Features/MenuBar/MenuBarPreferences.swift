@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 /// What each menu-bar item shows. Persisted in UserDefaults so the choice survives relaunch.
@@ -6,6 +7,8 @@ enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
   case icon
   case percent
   case iconAndPercent = "icon_and_percent"
+  case iconAndTodayCost = "icon_and_today_cost"
+  case iconAndTodayTokens = "icon_and_today_tokens"
 
   static let storageKey = "menubar.style"
   static let fallback = MenuBarStylePreference.iconAndPercent
@@ -17,11 +20,47 @@ enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
     case .icon: "Icon"
     case .percent: "Percent"
     case .iconAndPercent: "Icon and percent"
+    case .iconAndTodayCost: "Icon and today cost"
+    case .iconAndTodayTokens: "Icon and today tokens"
     }
   }
 
   var showsIcon: Bool { self != .percent }
-  var showsPercent: Bool { self != .icon }
+  var showsPercent: Bool { self == .percent || self == .iconAndPercent }
+  var showsTodayCost: Bool { self == .iconAndTodayCost }
+  var showsTodayTokens: Bool { self == .iconAndTodayTokens }
+}
+
+/// How Overview window rows name a future refill.
+enum ResetCopyStylePreference: String, CaseIterable, Identifiable, Sendable {
+  case relative
+  case absolute
+
+  static let storageKey = "quota.resetCopy.style"
+  static let fallback = ResetCopyStylePreference.relative
+
+  var id: Self { self }
+
+  var label: String {
+    switch self {
+    case .relative: "Relative"
+    case .absolute: "Absolute"
+    }
+  }
+
+  var summary: String {
+    switch self {
+    case .relative: "Resets in 3h 12m"
+    case .absolute: "Resets Mon 17:12"
+    }
+  }
+
+  var style: ResetCopyStyle {
+    switch self {
+    case .relative: .relative
+    case .absolute: .absolute
+    }
+  }
 }
 
 /// How several chosen providers occupy the menu bar: one packed item, or one item each.
@@ -189,7 +228,11 @@ enum MenuBarLayout: Equatable, Sendable {
   }
 
   func effectiveStyle(_ style: MenuBarStylePreference) -> MenuBarStylePreference {
-    usesMultiReadingStyle ? .iconAndPercent : style
+    guard usesMultiReadingStyle else { return style }
+    switch style {
+    case .icon, .percent: return .iconAndPercent
+    case .iconAndPercent, .iconAndTodayCost, .iconAndTodayTokens: return style
+    }
   }
 
   var settingsSummary: String {

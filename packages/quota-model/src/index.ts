@@ -31,10 +31,15 @@ export function remainingPercent(usedPercent: number): number {
 }
 
 /** Remaining and limit as a window carries them. */
-type RemainingQuotaWindow = {
+export type RemainingQuotaWindow = {
+  used_percent?: number | undefined;
   remaining_value?: number | undefined;
   limit_value?: number | undefined;
+  value_unit?: string | undefined;
 };
+
+/** How far remaining/limit may drift from used_percent and still be the same quantity. */
+export const AMOUNT_OF_LIMIT_PERCENT_TOLERANCE = 1;
 
 /**
  * Wallet-style window: absolute remaining only, no budget/limit ratio.
@@ -44,10 +49,146 @@ export function isBalanceOnly(window: RemainingQuotaWindow): boolean {
 }
 
 /**
- * Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+ * A usd or credits window whose remaining and limit describe the same quantity as used_percent.
+ * Those print remaining of limit and drop the meter. Included dollars that are a different
+ * quantity keep the percent meter.
+ */
+export function isAmountOfLimit(window: RemainingQuotaWindow): boolean {
+  const remaining = window.remaining_value;
+  const limit = window.limit_value;
+  const unit = window.value_unit;
+  if (remaining === undefined || limit === undefined || !(limit > 0)) return false;
+  if (unit !== "usd" && unit !== "credits") return false;
+  if (window.used_percent === undefined) return true;
+  const remainingPct = remainingPercent(window.used_percent);
+  const fromAmount = Math.max(0, Math.min(100, (remaining / limit) * 100));
+  return Math.abs(fromAmount - remainingPct) < AMOUNT_OF_LIMIT_PERCENT_TOLERANCE;
+}
+
+/**
+ * Rate-limit / budget meters need a percent bar. Balance-only wallets and amount-of-limit
+ * usd/credits windows do not.
  */
 export function showsPercentMeter(window: RemainingQuotaWindow): boolean {
-  return !isBalanceOnly(window);
+  return !isBalanceOnly(window) && !isAmountOfLimit(window);
+}
+
+export function formatPercent(value: number): string {
+  const remaining = Math.max(0, Math.min(100, value));
+  if (Math.abs(Math.round(remaining) - remaining) < 0.05) {
+    return `${Math.round(remaining)}%`;
+  }
+  return `${remaining.toFixed(1)}%`;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function formatCreditsAmount(value: number): string {
+  return value.toFixed(2);
+}
+
+/**
+ * Remaining copy for one window: remaining percent, a wallet amount, or remaining of limit.
+ */
+export function formatWindowTitle(title: string, window: RemainingQuotaWindow): string {
+  if (isBalanceOnly(window) && title.toLowerCase().startsWith("balance")) return "Balance";
+  return title;
+}
+
+export function formatRemaining(window: RemainingQuotaWindow): string {
+  const remainingPct = remainingPercent(window.used_percent ?? 0);
+  if (
+    isAmountOfLimit(window) &&
+    window.remaining_value !== undefined &&
+    window.limit_value !== undefined
+  ) {
+    if (window.value_unit === "usd") {
+      return `${formatUsd(window.remaining_value)} of ${formatUsd(window.limit_value)}`;
+    }
+    return `${formatCreditsAmount(window.remaining_value)} of ${formatCreditsAmount(window.limit_value)} credits`;
+  }
+  const absolute = formatAbsoluteRemaining(window);
+  if (absolute === undefined) return formatPercent(remainingPct);
+  if (isBalanceOnly(window)) return absolute;
+  return `${formatPercent(remainingPct)} · ${absolute}`;
+}
+
+function formatAbsoluteRemaining(window: RemainingQuotaWindow): string | undefined {
+  if (window.remaining_value === undefined) return undefined;
+  if (window.value_unit === "usd") return formatUsd(window.remaining_value);
+  if (window.value_unit === "credits")
+    return `${formatCreditsAmount(window.remaining_value)} credits`;
+  if (window.value_unit === "count") return window.remaining_value.toFixed(0);
+  if (isBalanceOnly(window)) return window.remaining_value.toFixed(2);
+  return undefined;
+}
+
+export type ResetCopyStyle = "relative" | "absolute";
+
+/**
+ * The line under a window that still has a future refill, or `null` once that instant has passed.
+ *
+ * English is fixed; `timeZone` is the IANA zone the reader is in. Minutes round up, and a
+ * duration under a minute still reads as `Resets in 1m`. Absolute always uses the local date
+ * the relative rule would fall back to after a day.
+ */
+export function resetCopy(
+  resetsAt: string | number | Date,
+  now: Date = new Date(),
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  style: ResetCopyStyle = "relative",
+): string | null {
+  const resetDate = new Date(resetsAt);
+  const seconds = (resetDate.getTime() - now.getTime()) / 1000;
+  if (!(seconds > 0)) return null;
+  if (style === "relative") {
+    const wholeMinutes = Math.max(1, Math.ceil(seconds / 60));
+    if (wholeMinutes < 60) {
+      return `Resets in ${wholeMinutes}m`;
+    }
+    if (seconds < 86_400) {
+      let hours = Math.floor(seconds / 3_600);
+      let minutes = Math.ceil((seconds - hours * 3_600) / 60);
+      if (minutes === 60) {
+        hours += 1;
+        minutes = 0;
+      }
+      if (minutes === 0) return `Resets in ${hours}h`;
+      return `Resets in ${hours}h ${minutes}m`;
+    }
+  }
+  const parts = zonedDateParts(resetDate, timeZone);
+  if (seconds < 604_800) {
+    return `Resets ${parts.weekday} ${parts.hour}:${parts.minute}`;
+  }
+  return `Resets ${parts.month} ${parts.day}`;
+}
+
+function zonedDateParts(
+  date: Date,
+  timeZone: string,
+): { weekday: string; month: string; day: string; hour: string; minute: string } {
+  const values = new Map<string, string>();
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") values.set(part.type, part.value);
+  }
+  return {
+    weekday: values.get("weekday") ?? "",
+    month: values.get("month") ?? "",
+    day: values.get("day") ?? "",
+    hour: (values.get("hour") ?? "00").padStart(2, "0"),
+    minute: (values.get("minute") ?? "00").padStart(2, "0"),
+  };
 }
 
 /**

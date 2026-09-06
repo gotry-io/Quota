@@ -271,7 +271,7 @@ struct OverviewLargeView: View {
           .lineLimit(1)
           .minimumScaleFactor(0.65)
       }
-      if !OverviewWidgetContent.isBalanceOnly(item) {
+      if OverviewWidgetContent.showsPercentMeter(item) {
         ProgressView(value: item.remainingPercent, total: 100)
           .accessibilityHidden(true)
       }
