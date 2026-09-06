@@ -17,10 +17,10 @@ import {
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   IanaTimezoneSchema,
+  IdentityLinkResponseSchema,
   type IdentityProvider,
   IdentityProviderSchema,
   IosLoginExchangeRequestSchema,
-  IdentityLinkResponseSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
@@ -50,11 +50,11 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
-  PublicProfileRecord,
   AccountUsageVersionStamp,
   AccountVersionStamp,
   DeviceRecord,
   DeviceWriterPrincipal,
+  PublicProfileRecord,
   SessionPrincipal,
   SessionScope,
   StoredEntitlement,
@@ -63,7 +63,9 @@ import type {
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import {
+  acceptsHtml,
   type BrowserSignInFailureReason,
   htmlOrJsonSignInError,
 } from "./account/browser-error-page.ts";
@@ -84,20 +86,16 @@ import {
   isLoopbackRedirect,
   refreshTokenDomain,
 } from "./account/service.ts";
-import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import {
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
+  linkedTakenReturnPath,
   type RegisteredIdentityProvider,
   safeReturnPath,
   type WebSessionPort,
   type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
-import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
-import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
-import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import {
   type BillingBindings,
   foldWebhookEvent,
@@ -111,6 +109,10 @@ import {
   webhookEventId,
   webhookEventType,
 } from "./entitlement.ts";
+import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
+import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
+import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 /** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
@@ -1580,21 +1582,21 @@ function answerWebSignIn(
     // code when a sign-in fails in production, and nothing a log reader could replay.
     console.warn("web_signin_rejected", { provider, reason: completed.reason });
     context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+    if (completed.reason === "identity_taken") {
+      // A JSON client still sees the 409. A browser that asked to link is sent back to the
+      // page it named so that page can say the channel is already how another Account is reached.
+      const json = relayError(
+        context,
+        409,
+        "conflict",
+        "That identity already belongs to another Quota account.",
+      );
+      if (!acceptsHtml(context.req.header("Accept"))) return json;
+      return context.redirect(linkedTakenReturnPath(completed.return_to), 302);
+    }
     return browserSignInFailure(
       context,
-      completed.reason === "identity_taken"
-        ? relayError(
-            context,
-            409,
-            "conflict",
-            "That identity already belongs to another Quota account.",
-          )
-        : relayError(
-            context,
-            400,
-            "invalid_request",
-            "The sign-in request could not be completed.",
-          ),
+      relayError(context, 400, "invalid_request", "The sign-in request could not be completed."),
       signInFailureReason(completed.reason),
       identityProviderDisplayName(provider),
     );

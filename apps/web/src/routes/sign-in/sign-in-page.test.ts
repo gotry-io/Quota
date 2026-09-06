@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { afterEach, expect, it } from "vitest";
-import SignInPage from "./+page.svelte";
 import { load } from "./+page.server.ts";
+import SignInPage from "./+page.svelte";
 
 afterEach(cleanup);
 
@@ -27,13 +27,13 @@ it("offers the channels this build signs in through when nobody is signed in", (
   render(SignInPage, { data: { returnTo: "/my", viewer: null } });
 
   expect(screen.getByRole("heading", { name: "Sign in to Quota" })).toBeDefined();
-  const github = screen.getByRole("link", { name: "Continue with GitHub" });
-  expect(github.getAttribute("href")).toBe("/api/auth/github/start?return_to=%2Fmy");
   const apple = screen.getByRole("link", { name: "Continue with Apple" });
+  const github = screen.getByRole("link", { name: "Continue with GitHub" });
   expect(apple.getAttribute("href")).toBe("/api/auth/apple/start?return_to=%2Fmy");
+  expect(github.getAttribute("href")).toBe("/api/auth/github/start?return_to=%2Fmy");
+  expect(apple.compareDocumentPosition(github) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // Apple's mark is drawn on its button and named nowhere: the link already says Apple.
   expect(apple.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
-  // Email is a channel an Account can hold, but this build does not start one.
   expect(screen.queryByRole("link", { name: /Continue with Email/ })).toBeNull();
   expect(screen.getByLabelText("Email")).toBeDefined();
   expect(screen.getByRole("button", { name: "Send sign-in link" })).toBeDefined();
@@ -52,6 +52,23 @@ it("asks a signed-in browser to confirm the Account before it continues", () => 
   expect(screen.queryByRole("link", { name: "Continue with GitHub" })).toBeNull();
   expect(screen.queryByRole("link", { name: "Continue with Apple" })).toBeNull();
   expect(screen.queryByLabelText("Email")).toBeNull();
+});
+
+it("asks to sign in again when Delete Account needs a fresh session", () => {
+  render(SignInPage, {
+    data: {
+      returnTo: "/my/settings?delete=account",
+      viewer: { displayLabel: "octocat" },
+    },
+  });
+
+  expect(
+    screen.getByRole("heading", { name: "Sign in again to delete your account" }),
+  ).toBeDefined();
+  expect(screen.queryByRole("link", { name: /Continue as/ })).toBeNull();
+  expect(screen.getByRole("link", { name: "Continue with Apple" })).toBeDefined();
+  expect(screen.getByRole("link", { name: "Continue with GitHub" })).toBeDefined();
+  expect(screen.getByLabelText("Email")).toBeDefined();
 });
 
 it("shows Check your email after a sign-in link is accepted, and can go back", async () => {

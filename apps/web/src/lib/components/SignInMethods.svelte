@@ -1,19 +1,12 @@
 <script lang="ts">
-import { IDENTITY_PROVIDERS, identityProviderDisplayName } from "@gotry-io/quota-protocol";
+import { identityProviderDisplayName } from "@gotry-io/quota-protocol";
 import { requestEmailSignInLink } from "$lib/account-client";
-import { identityStartHref } from "$lib/routes";
+import { identityStartHref, SIGN_IN_METHOD_ORDER } from "$lib/routes";
 
 let { returnTo }: { returnTo: string } = $props();
 
-/**
- * The channels this build can start a sign-in through.
- *
- * Relay answers a GitHub round trip it does not sign in through with 404, so that button is
- * only shown when GitHub is offered. Email is a form on this page rather than a navigation.
- */
-const offered = IDENTITY_PROVIDERS.filter(
-  (provider) => provider === "github" || provider === "apple" || provider === "email",
-);
+/** Apple, GitHub, then Email — Email is a form on this page rather than a navigation. */
+const offered = SIGN_IN_METHOD_ORDER;
 
 let email = $state("");
 let sent = $state(false);

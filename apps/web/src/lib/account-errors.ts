@@ -18,6 +18,10 @@ export const SESSION_ENDED_COPY = "Your session ended. Sign in again.";
 export const RECENT_AUTH_COPY = "Sign in again to confirm this change.";
 export const FORBIDDEN_COPY = "You don't have permission to do that.";
 export const UNAVAILABLE_COPY = "Quota couldn't load this. Retry.";
+/** A link that would take a channel from another Account. Same sentence Relay used to print. */
+export const IDENTITY_TAKEN_COPY = "That account is already linked to another Quota account.";
+export const KEEP_ONE_SIGN_IN_COPY = "Keep at least one way to sign in";
+export const DELETE_ACCOUNT_SIGN_IN_COPY = "Sign in again to delete your account";
 
 /**
  * Classify a Relay response (or a failed fetch) into the dashboard's four error states.
