@@ -145,6 +145,11 @@ func alertSummaryJSON(usedPercent: Double = 88, resetsAt: String = "2026-08-18T0
       "assumptions": ["agent_default_channel"],
       "unpriced": [],
     ] as [String: Any],
+    "cache_saved": [
+      "amount_microusd": "0",
+      "status": "complete",
+      "unpriced_rows": 0,
+    ] as [String: Any],
     "partial": false,
     "agents": [],
   ]

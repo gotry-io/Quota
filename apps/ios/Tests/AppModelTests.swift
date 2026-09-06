@@ -1035,6 +1035,11 @@ enum Fixtures {
         "assumptions": ["agent_default_channel"],
         "unpriced": [],
       ] as [String: Any],
+      "cache_saved": [
+        "amount_microusd": "0",
+        "status": "complete",
+        "unpriced_rows": 0,
+      ] as [String: Any],
       "partial": false,
       "agents": [],
     ]

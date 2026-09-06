@@ -62,9 +62,29 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(period.buttons["30 Days"].exists, "30 Days segment")
     period.buttons["30 Days"].tap()
     XCTAssertTrue(
+      app.descendants(matching: .any)["usage.daily.chart"].waitForExistence(timeout: 5),
+      "Daily chart"
+    )
+    XCTAssertTrue(app.staticTexts["Cache hit"].exists, "Cache hit row")
+    attachScreenshot(app, name: "usage-content")
+    // Daily sits above Activity, so the heatmap and its selected day are a scroll away rather
+    // than on the first screen. Once the heatmap is on screen a middle-of-the-list drag lands on
+    // it and scrolls it sideways, so the drag is anchored on the section header beside it.
+    for _ in 0..<8 where !app.buttons["View day"].exists {
+      let header = app.staticTexts["Activity"]
+      if header.exists {
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+          .press(
+            forDuration: 0.05,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
+          )
+      } else {
+        scrollContent(app, up: true)
+      }
+    }
+    XCTAssertTrue(
       app.staticTexts["Activity"].waitForExistence(timeout: 5), "Activity section title")
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
-    attachScreenshot(app, name: "usage-content")
     attachScreenshot(app, name: "usage-activity")
     try audit(app)
     app.buttons["View day"].tap()

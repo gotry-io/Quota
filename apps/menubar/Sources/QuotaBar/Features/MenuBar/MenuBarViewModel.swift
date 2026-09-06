@@ -443,10 +443,65 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         usage: LocalUsagePeriodSummary(
           totals: period.totals,
           cost: period.cost,
-          agents: agents
+          cacheSaved: period.cacheSaved,
+          agents: agents,
+          days: fixtureDays(period.totals, cost: period.cost),
+          hoursOfDay: fixtureHours(period.totals)
         ),
         incomplete: period.partial,
         detailsTruncated: period.hasTruncatedDetails
+      )
+    }
+
+    /// Fourteen local days carrying a fixed share of the period, so the Daily bars have a shape.
+    private static let dayWeights = [4, 7, 9, 3, 0, 6, 11, 8, 5, 12, 9, 2, 10, 14]
+
+    /// A working day: quiet overnight, busiest late morning and mid afternoon.
+    private static let hourWeights = [
+      0, 0, 0, 0, 0, 1, 3, 6, 9, 12, 14, 13, 8, 11, 15, 13, 10, 7, 5, 4, 3, 2, 1, 0,
+    ]
+
+    private static func fixtureDays(
+      _ totals: UsageSummaryTotals,
+      cost: UsageCostOutcome
+    ) -> [LocalUsageDay] {
+      let sum = dayWeights.reduce(0, +)
+      return dayWeights.enumerated().map { index, weight in
+        LocalUsageDay(
+          date: "2026-08-\(String(format: "%02d", index + 1))",
+          totals: scaled(totals, numerator: weight, denominator: sum),
+          cost: cost
+        )
+      }
+    }
+
+    private static func fixtureHours(_ totals: UsageSummaryTotals) -> [LocalUsageHourOfDay] {
+      let sum = hourWeights.reduce(0, +)
+      return hourWeights.enumerated().map { hour, weight in
+        LocalUsageHourOfDay(
+          hour: hour,
+          totalTokens: totals.totalTokens * weight / sum,
+          costMicrousd: nil
+        )
+      }
+    }
+
+    private static func scaled(
+      _ totals: UsageSummaryTotals,
+      numerator: Int,
+      denominator: Int
+    ) -> UsageSummaryTotals {
+      let part = { (value: Int) in value * numerator / denominator }
+      let input = part(totals.inputTokens)
+      let output = part(totals.outputTokens)
+      return UsageSummaryTotals(
+        totalTokens: input + output,
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadInputTokens: part(totals.cacheReadInputTokens),
+        cacheWriteInputTokens: part(totals.cacheWriteInputTokens),
+        reasoningTokens: min(output, part(totals.reasoningTokens)),
+        messages: part(totals.messages)
       )
     }
   #endif

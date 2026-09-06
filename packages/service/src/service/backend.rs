@@ -1924,8 +1924,17 @@ impl NativeBackend {
                     .map(|span| (span.start.as_str(), span.end.as_str())),
             )
             .map_err(|_| BackendError::unavailable())?;
-        let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
+        let mut summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
             .map_err(|_| BackendError::unavailable())?;
+        if let Some(span) = span.as_ref() {
+            let (days, hours) = usage::build_local_usage_rhythm(
+                &self.local_hour_usage(timezone, span)?,
+                pricing_catalog,
+            )
+            .map_err(|_| BackendError::unavailable())?;
+            summary.days = Some(days);
+            summary.hours_of_day = Some(hours);
+        }
         let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
         let (from, to) = span
             .map(|span| span.dates)
@@ -1936,6 +1945,34 @@ impl NativeBackend {
             "incomplete": incomplete || partial,
             "details_truncated": details_truncated
         }))
+    }
+
+    /// This period's facts, each placed on the local clock the period is bounded by.
+    ///
+    /// Only the three trailing periods reach here. `all` is every retained day, and the per-day
+    /// shape of that history is what the activity chart answers, so folding it on every scan
+    /// would cost more than any reader asks for.
+    fn local_hour_usage(
+        &self,
+        timezone: &str,
+        span: &LocalPeriodSpan,
+    ) -> Result<Vec<usage::LocalHourUsage>, BackendError> {
+        let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
+        self.state
+            .usage_period_hour_rows(Some((span.start.as_str(), span.end.as_str())))
+            .map_err(|_| BackendError::unavailable())?
+            .into_iter()
+            .map(|(bucket_start_utc, row)| {
+                let local = DateTime::parse_from_rfc3339(&bucket_start_utc)
+                    .map_err(|_| BackendError::unavailable())?
+                    .with_timezone(&timezone);
+                Ok(usage::LocalHourUsage {
+                    date: local.date_naive().format("%Y-%m-%d").to_string(),
+                    hour: u8::try_from(local.hour()).map_err(|_| BackendError::unavailable())?,
+                    row,
+                })
+            })
+            .collect()
     }
 
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
@@ -3779,6 +3816,10 @@ fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
+    let cache_saved = object
+        .get("cache_saved")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
     let incomplete = object.get("partial").and_then(Value::as_bool) == Some(true);
     let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
     let agents = object
@@ -3793,6 +3834,7 @@ fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value
         "usage": {
             "totals": totals,
             "cost": cost,
+            "cache_saved": cache_saved,
             "agents": agents
         },
         "incomplete": incomplete,
@@ -4404,6 +4446,11 @@ mod tests {
                 "unpriced_rows": 0,
                 "assumptions": [],
                 "unpriced": []
+            },
+            "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
             },
             "partial": false,
             "agents": []
@@ -5408,6 +5455,11 @@ mod tests {
         let period = json!({
             "totals": totals(30, 6, 3),
             "cost": cost("300", 3),
+            "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+            },
             "partial": true,
             "agents": [{
                 "agent": "codex",
@@ -5472,6 +5524,11 @@ mod tests {
                     "unpriced_rows": 0,
                     "assumptions": [],
                     "unpriced": []
+                },
+                "cache_saved": {
+                    "amount_microusd": "0",
+                    "status": "complete",
+                    "unpriced_rows": 0
                 },
                 "partial": false,
                 "agents": []

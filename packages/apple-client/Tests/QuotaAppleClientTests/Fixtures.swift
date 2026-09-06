@@ -96,15 +96,29 @@ enum Fixtures {
     return try JSONSerialization.data(withJSONObject: object)
   }
 
+  static func cacheSaved(
+    amountMicrousd: String? = "190",
+    status: String = "complete",
+    unpricedRows: Int = 0
+  ) -> [String: Any] {
+    [
+      "amount_microusd": amountMicrousd as Any,
+      "status": status,
+      "unpriced_rows": unpricedRows,
+    ]
+  }
+
   static func usagePeriod(
     totals: [String: Any]? = nil,
     cost: [String: Any]? = nil,
+    cacheSaved saved: [String: Any]? = nil,
     partial: Bool = false,
     agents: [[String: Any]] = []
   ) -> [String: Any] {
     [
       "totals": totals ?? summaryTotals(),
       "cost": cost ?? completeCost(),
+      "cache_saved": saved ?? cacheSaved(),
       "partial": partial,
       "agents": agents,
     ]

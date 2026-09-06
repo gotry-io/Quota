@@ -57,6 +57,16 @@ export const MAXIMUM_USAGE_PERIOD_LEAVES = 200;
 /** The model that every leaf past {@link MAXIMUM_USAGE_PERIOD_LEAVES} folds into. */
 export const USAGE_OTHER_MODEL = "other";
 const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
+/**
+ * The most local days one bounded local period can name.
+ *
+ * A local period runs from a local midnight to a local midnight, so the widest of the three —
+ * the last 30 days — names exactly 30 dates. The bound leaves one spare so a reader refusing
+ * the array is refusing a producer that lost count, not a calendar.
+ */
+const MAXIMUM_LOCAL_USAGE_DAYS = 31;
+/** A day has 24 hours, and a rhythm names every one of them. */
+const HOURS_OF_DAY = 24;
 const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 const MAXIMUM_PRICING_ENTRIES = 4_096;
@@ -1054,6 +1064,24 @@ const UsageSummaryTotalsSchema = z
 export type UsageSummaryTotals = z.infer<typeof UsageSummaryTotalsSchema>;
 
 /**
+ * What reading from a cache saved, against paying the uncached input price for the same tokens.
+ *
+ * Only a row that carries cache reads can save anything, so a period with none is `complete` at
+ * zero. A row whose price the catalog cannot resolve is counted rather than guessed at, which is
+ * what separates `partial` from `complete`. See
+ * [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export const UsageCacheSavedSchema = z
+  .object({
+    amount_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+    status: UsageCostStatusSchema,
+    unpriced_rows: SafeNonnegativeIntegerSchema,
+  })
+  .strict()
+  .superRefine(validateCacheSaved);
+export type UsageCacheSaved = z.infer<typeof UsageCacheSavedSchema>;
+
+/**
  * One model's share of a period: its totals and what they cost.
  *
  * The private local report and the managed Account period both carry this leaf, and they carry
@@ -1088,14 +1116,78 @@ const LocalUsageAgentSummarySchema = z
   .strict();
 export type LocalUsageAgentSummary = z.infer<typeof LocalUsageAgentSummarySchema>;
 
+/** One local calendar day of a bounded period, on the same midnights the period itself keeps. */
+const LocalUsageDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+  })
+  .strict();
+export type LocalUsageDay = z.infer<typeof LocalUsageDaySchema>;
+
+/**
+ * One hour of the local clock, summed over every day of the period that reached it.
+ *
+ * Cost is the amount alone: a rhythm compares hours against each other, and the basis and
+ * coverage that qualify an amount are already stated once for the period above it.
+ */
+const LocalUsageHourOfDaySchema = z
+  .object({
+    hour: z
+      .number()
+      .int()
+      .min(0)
+      .max(HOURS_OF_DAY - 1),
+    total_tokens: SafeNonnegativeIntegerSchema,
+    cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+  })
+  .strict();
+export type LocalUsageHourOfDay = z.infer<typeof LocalUsageHourOfDaySchema>;
+
+/**
+ * One period of this Mac's own Usage.
+ *
+ * `days` and `hours_of_day` describe a period bounded by two local midnights, so the three
+ * trailing periods carry them and `all` — every retained day — does not: the per-day shape of
+ * two years of history is what the activity heatmap answers, and folding it on every scan would
+ * cost more than any reader asks for.
+ */
 const LocalUsagePeriodSummarySchema = z
   .object({
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
+    cache_saved: UsageCacheSavedSchema,
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length),
+    days: z.array(LocalUsageDaySchema).max(MAXIMUM_LOCAL_USAGE_DAYS).optional(),
+    hours_of_day: z.array(LocalUsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
     models_truncated: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((summary, context) => {
+    const days = summary.days;
+    if (days?.some((day, index) => index > 0 && day.date <= (days[index - 1]?.date ?? ""))) {
+      context.addIssue({
+        code: "custom",
+        path: ["days"],
+        message: "Days must be distinct and in ascending date order.",
+      });
+    }
+    if (summary.hours_of_day?.some((hour, index) => hour.hour !== index)) {
+      context.addIssue({
+        code: "custom",
+        path: ["hours_of_day"],
+        message: "Hours of the day must name 0 through 23 in order.",
+      });
+    }
+    if ((summary.days === undefined) !== (summary.hours_of_day === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["hours_of_day"],
+        message: "A period bounded by local midnights carries both folds, or neither.",
+      });
+    }
+  });
 export type LocalUsagePeriodSummary = z.infer<typeof LocalUsagePeriodSummarySchema>;
 
 /** A range of calendar dates. `to` names the last day it covers, inclusive. */
@@ -1199,13 +1291,14 @@ const UsageAgentUsageSchema = z
 export type UsageAgentUsage = z.infer<typeof UsageAgentUsageSchema>;
 
 /**
- * One period of Usage: its totals, its cost, whether any hour behind it was scanned
- * incompletely, and the agent tree that makes up the difference.
+ * One period of Usage: its totals, its cost, what its cache reads saved, whether any hour
+ * behind it was scanned incompletely, and the agent tree that makes up the difference.
  */
 export const UsagePeriodSchema = z
   .object({
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
+    cache_saved: UsageCacheSavedSchema,
     partial: z.boolean(),
     agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length),
   })
@@ -1363,9 +1456,14 @@ const UsageAgentUsageReadSchema = UsageAgentUsageSchema.extend({
   providers: z.array(UsageProviderUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
 
+const UsageCacheSavedReadSchema = z
+  .looseObject({ ...UsageCacheSavedSchema.shape })
+  .superRefine(validateCacheSaved);
+
 const UsagePeriodReadSchema = UsagePeriodSchema.extend({
   totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
+  cache_saved: UsageCacheSavedReadSchema,
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
 export type UsagePeriodRead = z.infer<typeof UsagePeriodReadSchema>;
@@ -1683,6 +1781,27 @@ function validateUsageCounts(
       code: "custom",
       path: ["source_cost_microusd"],
       message: "Source cost is present exactly when it covers at least one request.",
+    });
+  }
+}
+
+/** A saving says how much of what it describes it could price, the way a cost outcome does. */
+function validateCacheSaved(
+  saved: { amount_microusd: string | null; status: string; unpriced_rows: number },
+  context: z.RefinementCtx,
+) {
+  if ((saved.status === "unavailable") !== (saved.amount_microusd === null)) {
+    context.addIssue({
+      code: "custom",
+      path: ["amount_microusd"],
+      message: "An unavailable saving states no amount, and every other one states an amount.",
+    });
+  }
+  if ((saved.status === "complete") !== (saved.unpriced_rows === 0)) {
+    context.addIssue({
+      code: "custom",
+      path: ["unpriced_rows"],
+      message: "A saving is complete exactly when it priced every row that read from a cache.",
     });
   }
 }

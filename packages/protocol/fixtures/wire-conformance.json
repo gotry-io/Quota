@@ -860,6 +860,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -919,6 +924,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -980,6 +990,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1039,6 +1054,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1169,6 +1189,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1228,6 +1253,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1289,6 +1319,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1348,6 +1383,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1497,6 +1537,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1556,6 +1601,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1617,6 +1667,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1676,6 +1731,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1810,6 +1870,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1869,6 +1934,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -1930,6 +2000,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -1989,6 +2064,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2119,6 +2199,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2178,6 +2263,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2239,6 +2329,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2298,6 +2393,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2428,6 +2528,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2487,6 +2592,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2548,6 +2658,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2607,6 +2722,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2736,6 +2856,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2795,6 +2920,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -2856,6 +2986,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -2915,6 +3050,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -3217,6 +3357,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -3276,6 +3421,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [
@@ -3337,6 +3487,11 @@
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
               },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+              },
               "partial": false,
               "agents": [
                 {
@@ -3396,6 +3551,11 @@
                 "unpriced_rows": 0,
                 "assumptions": ["wildcard_speed"],
                 "unpriced": []
+              },
+              "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
               },
               "partial": false,
               "agents": [

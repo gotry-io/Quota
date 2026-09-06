@@ -621,6 +621,7 @@ describe("quota protocol", () => {
     const period = {
       totals: emptyTotals(),
       cost: emptyCost(),
+      cache_saved: emptySaving(),
       partial: false,
       agents: [
         {
@@ -1074,8 +1075,18 @@ function emptyCost() {
   };
 }
 
+function emptySaving() {
+  return { amount_microusd: "0", status: "complete" as const, unpriced_rows: 0 };
+}
+
 function emptyPeriod() {
-  return { totals: emptyTotals(), cost: emptyCost(), partial: false, agents: [] };
+  return {
+    totals: emptyTotals(),
+    cost: emptyCost(),
+    cache_saved: emptySaving(),
+    partial: false,
+    agents: [],
+  };
 }
 
 function accountSummary() {

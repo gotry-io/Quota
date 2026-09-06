@@ -605,11 +605,45 @@ pub struct LocalUsageAgentSummary {
     pub providers: Vec<LocalUsageProviderSummary>,
 }
 
+/// One local calendar day of a bounded period, on the same midnights the period itself keeps.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageDay {
+    pub date: String,
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+}
+
+/// One hour of the local clock, summed over every day of the period that reached it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageHourOfDay {
+    pub hour: u8,
+    pub total_tokens: u64,
+    pub cost_microusd: Option<String>,
+}
+
+/// One period's facts, each placed on the local clock by the caller that knows the zone.
+#[derive(Clone, Debug)]
+pub struct LocalHourUsage {
+    /// The local calendar date the hour began in.
+    pub date: String,
+    /// The local hour of that date, 0 through 23.
+    pub hour: u8,
+    pub row: DatedUsageRow,
+}
+
+/// A day has 24 hours, and a rhythm names every one of them.
+pub const HOURS_OF_DAY: usize = 24;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LocalUsagePeriodSummary {
     pub totals: UsageSummaryTotals,
     pub cost: crate::pricing::UsageCostOutcome,
+    pub cache_saved: crate::pricing::UsageCacheSaved,
     pub agents: Vec<LocalUsageAgentSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<Vec<LocalUsageDay>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hours_of_day: Option<Vec<LocalUsageHourOfDay>>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub models_truncated: bool,
 }
@@ -817,9 +851,67 @@ pub fn build_local_usage_summary(
     Ok(LocalUsagePeriodSummary {
         totals,
         cost,
+        cache_saved: crate::pricing::calculate_usage_cache_saved(rows, pricing_catalog)?,
         agents,
+        days: None,
+        hours_of_day: None,
         models_truncated,
     })
+}
+
+/// The per-day table and the 24-hour rhythm of one period bounded by two local midnights.
+///
+/// Both folds read the same facts the period's totals read, grouped by where the local clock
+/// puts them rather than by the UTC date that prices them. Every hour of the day is named,
+/// including the ones nothing reached, because a rhythm with holes in it is not a rhythm.
+pub fn build_local_usage_rhythm(
+    entries: &[LocalHourUsage],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+) -> Result<(Vec<LocalUsageDay>, Vec<LocalUsageHourOfDay>), UsageError> {
+    let mut by_date: BTreeMap<&str, Vec<DatedUsageRow>> = BTreeMap::new();
+    let mut by_hour: BTreeMap<u8, Vec<DatedUsageRow>> = BTreeMap::new();
+    for entry in entries {
+        if entry.hour as usize >= HOURS_OF_DAY {
+            return Err(UsageError("Usage hour is not an hour of the day".into()));
+        }
+        by_date
+            .entry(entry.date.as_str())
+            .or_default()
+            .push(entry.row.clone());
+        by_hour
+            .entry(entry.hour)
+            .or_default()
+            .push(entry.row.clone());
+    }
+
+    let mut days = Vec::with_capacity(by_date.len());
+    for (date, rows) in by_date {
+        days.push(LocalUsageDay {
+            date: date.to_owned(),
+            totals: summary_totals(&rows)?,
+            cost: crate::pricing::calculate_usage_cost(
+                &rows,
+                pricing_catalog,
+                crate::pricing::UsageCostMode::Auto,
+            )?,
+        });
+    }
+
+    let mut hours = Vec::with_capacity(HOURS_OF_DAY);
+    for hour in 0..HOURS_OF_DAY {
+        let rows = by_hour.remove(&(hour as u8)).unwrap_or_default();
+        let cost = crate::pricing::calculate_usage_cost(
+            &rows,
+            pricing_catalog,
+            crate::pricing::UsageCostMode::Auto,
+        )?;
+        hours.push(LocalUsageHourOfDay {
+            hour: hour as u8,
+            total_tokens: summary_totals(&rows)?.total_tokens,
+            cost_microusd: cost.amount_microusd,
+        });
+    }
+    Ok((days, hours))
 }
 
 fn summary_totals(rows: &[DatedUsageRow]) -> Result<UsageSummaryTotals, UsageError> {

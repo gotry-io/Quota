@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { UsageActivityDayRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
+import type { UsageActivityDayRead } from "@gotry-io/quota-protocol";
 import {
   type AccountError,
   accountNoticeActionLabel,
@@ -51,14 +51,9 @@ const selectedCost = $derived(
   selected?.cost ?? { amount_microusd: null, status: "unavailable", basis: "none" },
 );
 const detailAgents = $derived(detail?.agents ?? []);
-const detailPeriod = $derived.by((): UsagePeriodRead | null => {
+const detailPeriod = $derived.by(() => {
   if (!detail || detailAgents.length === 0) return null;
-  return {
-    totals: detail.totals,
-    cost: detail.cost,
-    partial: false,
-    agents: detailAgents,
-  };
+  return { totals: detail.totals, partial: false, agents: detailAgents };
 });
 
 let roverOverride = $state<string | null>(null);

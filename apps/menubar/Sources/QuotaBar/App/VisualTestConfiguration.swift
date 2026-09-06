@@ -651,6 +651,11 @@
     let period = QuotaWire.UsagePeriod(
       totals: totals,
       cost: cost,
+      cacheSaved: UsageCacheSaved(
+        amountMicrousd: "412500",
+        status: .complete,
+        unpricedRows: 0
+      ),
       partial: true,
       agents: [
         UsageAgentUsage(

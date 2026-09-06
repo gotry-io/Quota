@@ -158,7 +158,7 @@
           "maxItems": 400,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema36"
+            "$ref": "#/$defs/__schema37"
           }
         }
       },
@@ -177,10 +177,10 @@
           "const": "authorization_code"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema37"
+          "$ref": "#/$defs/__schema38"
         },
         "code": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         },
         "code_verifier": {
           "type": "string",
@@ -231,7 +231,7 @@
           "$ref": "#/$defs/__schema8"
         },
         "code": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         },
         "code_verifier": {
           "type": "string",
@@ -270,7 +270,7 @@
           "$ref": "#/$defs/__schema2"
         },
         "session": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema40"
         }
       },
       "required": ["protocol_version", "token_type", "account_id", "display_label", "session"],
@@ -291,7 +291,7 @@
           "$ref": "#/$defs/__schema8"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -312,7 +312,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "session": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema40"
         }
       },
       "required": ["protocol_version", "token_type", "account_id", "session"],
@@ -355,7 +355,7 @@
           "$ref": "#/$defs/__schema16"
         },
         "session": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema40"
         }
       },
       "required": [
@@ -383,10 +383,10 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema37"
+          "$ref": "#/$defs/__schema38"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -413,7 +413,7 @@
           "$ref": "#/$defs/__schema31"
         },
         "session": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema40"
         }
       },
       "required": [
@@ -974,6 +974,22 @@
         "cost": {
           "$ref": "#/$defs/__schema20"
         },
+        "cache_saved": {
+          "type": "object",
+          "properties": {
+            "amount_microusd": {
+              "$ref": "#/$defs/__schema33"
+            },
+            "status": {
+              "$ref": "#/$defs/__schema23"
+            },
+            "unpriced_rows": {
+              "$ref": "#/$defs/__schema16"
+            }
+          },
+          "required": ["amount_microusd", "status", "unpriced_rows"],
+          "additionalProperties": false
+        },
         "partial": {
           "type": "boolean"
         },
@@ -981,11 +997,11 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema33"
+            "$ref": "#/$defs/__schema34"
           }
         }
       },
-      "required": ["totals", "cost", "partial", "agents"],
+      "required": ["totals", "cost", "cache_saved", "partial", "agents"],
       "additionalProperties": false
     },
     "__schema19": {
@@ -1193,6 +1209,18 @@
       "const": true
     },
     "__schema33": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(?:0|[1-9]\\d*)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema34": {
       "type": "object",
       "properties": {
         "agent": {
@@ -1203,14 +1231,14 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema34"
+            "$ref": "#/$defs/__schema35"
           }
         }
       },
       "required": ["agent", "providers"],
       "additionalProperties": false
     },
-    "__schema34": {
+    "__schema35": {
       "type": "object",
       "properties": {
         "provider": {
@@ -1230,14 +1258,14 @@
           "maxItems": 200,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema35"
+            "$ref": "#/$defs/__schema36"
           }
         }
       },
       "required": ["provider", "models"],
       "additionalProperties": false
     },
-    "__schema35": {
+    "__schema36": {
       "type": "object",
       "properties": {
         "model": {
@@ -1253,7 +1281,7 @@
       "required": ["model", "totals", "cost"],
       "additionalProperties": false
     },
-    "__schema36": {
+    "__schema37": {
       "type": "object",
       "properties": {
         "date": {
@@ -1273,33 +1301,33 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema33"
+            "$ref": "#/$defs/__schema34"
           }
         }
       },
       "required": ["date", "totals", "cost", "partial"],
       "additionalProperties": false
     },
-    "__schema37": {
+    "__schema38": {
       "type": "string",
       "const": "quotabar"
     },
-    "__schema38": {
+    "__schema39": {
       "type": "string",
       "minLength": 16,
       "maxLength": 2048
     },
-    "__schema39": {
+    "__schema40": {
       "type": "object",
       "properties": {
         "access_token": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         },
         "access_expires_at": {
           "$ref": "#/$defs/__schema3"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema38"
+          "$ref": "#/$defs/__schema39"
         },
         "refresh_expires_at": {
           "$ref": "#/$defs/__schema3"

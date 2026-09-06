@@ -255,14 +255,27 @@ Body, in order:
    **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
    The selection lives in memory for the signed-in session. It is a system content filter, not a
    floating navigation action, and it scrolls with the List.
-2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
-   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
-   is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
-   incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
-   contrast and Dynamic Type stay system-owned.
+2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
+   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
+   **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
+   section is `{input} in · {output} out`, the cost-basis line, `Cache hit {percent} · saved $X.XX`
+   when the period's cache reads could be priced, and **Some hours in this period were scanned
+   incompletely.** when `partial` is true. Cache hit and its saving follow
+   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text
+   styles, primary color, so contrast and Dynamic Type stay system-owned.
 3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
+3a. Daily section, headed **Daily**, for any period but 2 Years and only when those days reported
+   something. A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
+   bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
+   is one fill. The bars are `Color.primary` at 25% / 55% / 90%, and a day with nothing in it is
+   drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
+   days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
+   messages` beneath. The section footer names the calendar: **UTC days.** The 2 Years period has no
+   Daily section, and neither has any period a Rhythm — Relay stores hours on UTC keys and does not
+   fold a local clock, so the hour-of-day view is QuotaBar's alone
+   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
 4. Activity section, headed **Activity**:
    - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
      activity**.
@@ -279,9 +292,12 @@ Body, in order:
      increment/decrement changes the same selection. Under the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
      that day.
+4a. Top models section, headed **Top models**, when the period has more than one model leaf: the
+   three largest, each as `{share} · {tokens}`.
 5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
-   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
-   rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
+   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`) ending in that
+   provider's whole-percent share of the period, with a 4pt share bar under them; models are
+   standard rows with the model name leading and `{tokens} · {cost} · {share}` trailing. The model `other` is
    **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
    **Show fewer** collapses them again. Both are standard 44-point List buttons with expanded /
    collapsed accessibility state.

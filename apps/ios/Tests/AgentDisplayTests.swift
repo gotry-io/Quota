@@ -110,6 +110,7 @@ private func emptyPeriod() -> UsagePeriod {
       assumptions: [],
       unpriced: []
     ),
+    cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
     partial: false,
     agents: []
   )

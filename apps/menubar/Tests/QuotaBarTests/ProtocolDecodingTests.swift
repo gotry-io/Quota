@@ -44,6 +44,11 @@ private func usagePeriodJSON(cost: String) -> String {
       "messages": 1
     },
     "cost": \(cost),
+    "cache_saved": {
+      "amount_microusd": "190",
+      "status": "complete",
+      "unpriced_rows": 0
+    },
     "partial": false,
     "agents": []
   }
@@ -640,7 +645,12 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   let summary = LocalUsagePeriodSummary(
     totals: summaryTotals,
     cost: cost,
-    agents: [client]
+    cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
+    agents: [client],
+    days: [LocalUsageDay(date: "2026-08-10", totals: summaryTotals, cost: cost)],
+    hoursOfDay: (0..<24).map {
+      LocalUsageHourOfDay(hour: $0, totalTokens: $0 == 12 ? 1 : 0, costMicrousd: nil)
+    }
   )
   let data = try QuotaWireCodec.makeEncoder().encode(summary)
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: data)
@@ -649,6 +659,18 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.agents.first?.providers.first?.provider == .openai)
   #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
   #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
+  #expect(decoded.cacheSaved.status == .complete)
+  #expect(decoded.days?.map(\.date) == ["2026-08-10"])
+  #expect(decoded.hoursOfDay?.count == 24)
+  #expect(decoded.hoursOfDay?[12].totalTokens == 1)
+
+  // A bounded period carries both local folds; a period that carries one of them is not one.
+  var oneFoldObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  oneFoldObject.removeValue(forKey: "hours_of_day")
+  let oneFold = try JSONSerialization.data(withJSONObject: oneFoldObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: oneFold)
+  }
 
   var modelObject = try #require(
     JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))

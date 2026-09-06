@@ -373,6 +373,7 @@ struct UsageDayDetailSheet: View {
     case .loaded(let agents):
       UsageAgentListSections(
         sections: UsageBreakdown.sections(agents: agents),
+        periodTokens: sheet.headline.totals.totalTokens,
         expandedProviderIDs: $expandedProviderIDs,
         modelIdentifier: "usage.day.model"
       )

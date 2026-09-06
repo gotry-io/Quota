@@ -1,0 +1,407 @@
+{
+  "version": 1,
+  "$comment": "The derived Usage metrics of ADR 0036, answered the same way by every runtime.",
+  "catalogs": {
+    "metrics": {
+      "protocol_version": 2,
+      "revision": "metrics-v1",
+      "published_at": "2026-08-02T00:00:00Z",
+      "entries": [
+        {
+          "entry_id": "openai_gpt_5",
+          "billing_channel": "openai_direct",
+          "model": "gpt-5",
+          "aliases": [],
+          "effective_from": "2026-01-01",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "2",
+            "cache_read_per_million": "0.5",
+            "cache_write_5m_per_million": "1.25",
+            "cache_write_1h_per_million": "2",
+            "cache_write_inferred_per_million": "3",
+            "output_per_million": "10",
+            "web_search_per_request": "0.01",
+            "web_fetch_per_request": "0.0025"
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        },
+        {
+          "entry_id": "openai_gpt_5_mini_no_cache_rate",
+          "billing_channel": "openai_direct",
+          "model": "gpt-5-mini",
+          "aliases": [],
+          "effective_from": "2026-01-01",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "1",
+            "cache_read_per_million": null,
+            "cache_write_5m_per_million": null,
+            "cache_write_1h_per_million": null,
+            "cache_write_inferred_per_million": null,
+            "output_per_million": "4",
+            "web_search_per_request": null,
+            "web_fetch_per_request": null
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        },
+        {
+          "entry_id": "openai_gpt_5_nano_cache_costs_more",
+          "billing_channel": "openai_direct",
+          "model": "gpt-5-nano",
+          "aliases": [],
+          "effective_from": "2026-01-01",
+          "effective_to": null,
+          "service_tier": "default",
+          "speed": "standard",
+          "inference_geo": "global",
+          "context_bucket": "le_128k",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "0.5",
+            "cache_read_per_million": "0.75",
+            "cache_write_5m_per_million": "1",
+            "cache_write_1h_per_million": "1",
+            "cache_write_inferred_per_million": "1",
+            "output_per_million": "2",
+            "web_search_per_request": null,
+            "web_fetch_per_request": null
+          },
+          "source_url": "https://example.com/pricing",
+          "verified_at": "2026-08-02T00:00:00Z"
+        }
+      ]
+    }
+  },
+  "rows": {
+    "priced_cache_read": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "gpt-5",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 1500000,
+      "cache_read_tokens": 1000000,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 100,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "priced_cache_read_odd": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "gpt-5",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 3,
+      "cache_read_tokens": 3,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "no_cache_read": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "gpt-5",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 1000000,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 10,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "missing_cache_rate": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "gpt-5-mini",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 200000,
+      "cache_read_tokens": 200000,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "cache_costs_more": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "gpt-5-nano",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 400000,
+      "cache_read_tokens": 400000,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "unknown_model": {
+      "date": "2026-08-02",
+      "agent": "codex",
+      "billing_channel": "openai_direct",
+      "channel_source": "explicit",
+      "model": "mystery-9",
+      "context_bucket": "le_128k",
+      "service_tier": "default",
+      "speed": "standard",
+      "inference_geo": "global",
+      "input_tokens": 100000,
+      "cache_read_tokens": 100000,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    }
+  },
+  "hit_rate": [
+    {
+      "name": "no input has no rate",
+      "totals": {
+        "total_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": null
+    },
+    {
+      "name": "every input token came from the cache",
+      "totals": {
+        "total_tokens": 1000,
+        "input_tokens": 1000,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 1000,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 10000
+    },
+    {
+      "name": "nothing came from the cache",
+      "totals": {
+        "total_tokens": 1000,
+        "input_tokens": 1000,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 0
+    },
+    {
+      "name": "two thirds cached rounds half up",
+      "totals": {
+        "total_tokens": 3,
+        "input_tokens": 3,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 2,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 6667
+    },
+    {
+      "name": "one third cached rounds half up",
+      "totals": {
+        "total_tokens": 3,
+        "input_tokens": 3,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 1,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 3333
+    },
+    {
+      "name": "an exact half basis point rounds up",
+      "totals": {
+        "total_tokens": 20000,
+        "input_tokens": 20000,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 12345,
+        "cache_write_input_tokens": 0,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 6173
+    },
+    {
+      "name": "a cache write is input the cache did not answer",
+      "totals": {
+        "total_tokens": 1000,
+        "input_tokens": 1000,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 900,
+        "cache_write_input_tokens": 100,
+        "reasoning_tokens": 0,
+        "messages": 0
+      },
+      "expected_basis_points": 9000
+    }
+  ],
+  "saved": [
+    {
+      "name": "no rows saved nothing, completely",
+      "catalog": "metrics",
+      "rows": [],
+      "expected": {
+        "amount_microusd": "0",
+        "status": "complete",
+        "unpriced_rows": 0
+      }
+    },
+    {
+      "name": "a row with no cache read is not a row this metric prices",
+      "catalog": "metrics",
+      "rows": ["no_cache_read"],
+      "expected": {
+        "amount_microusd": "0",
+        "status": "complete",
+        "unpriced_rows": 0
+      }
+    },
+    {
+      "name": "one million cache reads at two dollars against fifty cents",
+      "catalog": "metrics",
+      "rows": ["priced_cache_read"],
+      "expected": {
+        "amount_microusd": "1500000",
+        "status": "complete",
+        "unpriced_rows": 0
+      }
+    },
+    {
+      "name": "each side rounds half up before the difference is taken",
+      "catalog": "metrics",
+      "rows": ["priced_cache_read_odd"],
+      "expected": {
+        "amount_microusd": "4",
+        "status": "complete",
+        "unpriced_rows": 0
+      }
+    },
+    {
+      "name": "an entry with no cache-read rate cannot price the comparison",
+      "catalog": "metrics",
+      "rows": ["missing_cache_rate"],
+      "expected": {
+        "amount_microusd": null,
+        "status": "unavailable",
+        "unpriced_rows": 1
+      }
+    },
+    {
+      "name": "a model outside the catalog cannot price the comparison",
+      "catalog": "metrics",
+      "rows": ["unknown_model"],
+      "expected": {
+        "amount_microusd": null,
+        "status": "unavailable",
+        "unpriced_rows": 1
+      }
+    },
+    {
+      "name": "a cache read priced above uncached input saved nothing",
+      "catalog": "metrics",
+      "rows": ["cache_costs_more"],
+      "expected": {
+        "amount_microusd": "0",
+        "status": "complete",
+        "unpriced_rows": 0
+      }
+    },
+    {
+      "name": "one priced row beside one that is not is a partial saving",
+      "catalog": "metrics",
+      "rows": ["priced_cache_read", "missing_cache_rate", "no_cache_read"],
+      "expected": {
+        "amount_microusd": "1500000",
+        "status": "partial",
+        "unpriced_rows": 1
+      }
+    },
+    {
+      "name": "no catalog prices nothing",
+      "catalog": null,
+      "rows": ["priced_cache_read"],
+      "expected": {
+        "amount_microusd": null,
+        "status": "unavailable",
+        "unpriced_rows": 1
+      }
+    }
+  ]
+}

@@ -63,6 +63,22 @@
         "cost": {
           "$ref": "#/$defs/__schema18"
         },
+        "cache_saved": {
+          "type": "object",
+          "properties": {
+            "amount_microusd": {
+              "$ref": "#/$defs/__schema29"
+            },
+            "status": {
+              "$ref": "#/$defs/__schema21"
+            },
+            "unpriced_rows": {
+              "$ref": "#/$defs/__schema2"
+            }
+          },
+          "required": ["amount_microusd", "status", "unpriced_rows"],
+          "additionalProperties": false
+        },
         "partial": {
           "type": "boolean"
         },
@@ -70,11 +86,11 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema29"
+            "$ref": "#/$defs/__schema30"
           }
         }
       },
-      "required": ["totals", "cost", "partial", "agents"],
+      "required": ["totals", "cost", "cache_saved", "partial", "agents"],
       "additionalProperties": false
     },
     {
@@ -97,7 +113,7 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema29"
+            "$ref": "#/$defs/__schema30"
           }
         }
       },
@@ -479,6 +495,18 @@
       "const": true
     },
     "__schema29": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(?:0|[1-9]\\d*)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema30": {
       "type": "object",
       "properties": {
         "agent": {
@@ -488,14 +516,14 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema30"
+            "$ref": "#/$defs/__schema31"
           }
         }
       },
       "required": ["agent", "providers"],
       "additionalProperties": false
     },
-    "__schema30": {
+    "__schema31": {
       "type": "object",
       "properties": {
         "provider": {
@@ -515,14 +543,14 @@
           "maxItems": 200,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema31"
+            "$ref": "#/$defs/__schema32"
           }
         }
       },
       "required": ["provider", "models"],
       "additionalProperties": false
     },
-    "__schema31": {
+    "__schema32": {
       "type": "object",
       "properties": {
         "model": {

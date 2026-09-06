@@ -9,6 +9,7 @@ struct UsageBreakdownTests {
     let period = UsagePeriod(
       totals: totals(input: 70, output: 14, messages: 7),
       cost: completeCost(microusd: "7000", rows: 7),
+      cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
       partial: true,
       agents: [
         UsageAgentUsage(
@@ -65,6 +66,7 @@ struct UsageBreakdownTests {
         assumptions: [],
         unpriced: []
       ),
+      cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
       partial: false,
       agents: []
     )

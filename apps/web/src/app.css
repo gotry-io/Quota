@@ -1350,6 +1350,208 @@ footer {
   letter-spacing: -0.03em;
 }
 
+/* Daily: one bar per UTC day, and the table behind it. */
+.usage-daily-panel {
+  margin-bottom: var(--space-section);
+}
+
+.usage-daily {
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-daily-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.usage-daily-modes {
+  display: inline-flex;
+  gap: 16px;
+}
+
+.usage-daily-modes button[aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.usage-daily-plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 132px;
+  overflow-x: auto;
+}
+
+.usage-daily-column {
+  display: flex;
+  min-width: 12px;
+  height: 100%;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.usage-daily-bar {
+  display: flex;
+  min-height: 1px;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 3px;
+  background: var(--activity-0);
+}
+
+.usage-daily-segment {
+  display: block;
+  min-height: 0;
+}
+
+.usage-daily-segment:first-child {
+  border-radius: 3px 3px 0 0;
+}
+
+.usage-daily-segment:last-child {
+  border-radius: 0 0 3px 3px;
+}
+
+.segment-cached {
+  background: var(--activity-1);
+}
+
+.segment-fresh {
+  background: var(--activity-2);
+}
+
+.segment-output {
+  background: var(--activity-4);
+}
+
+.usage-daily-axis {
+  overflow: hidden;
+  color: var(--body);
+  font-size: 10px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-daily-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  color: var(--body);
+  font-size: var(--fs-caption);
+}
+
+.usage-daily-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-daily-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.usage-daily-toggle {
+  margin-top: 12px;
+}
+
+.usage-daily-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-daily-table th,
+.usage-daily-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--fs-caption);
+  text-align: right;
+}
+
+.usage-daily-table thead th,
+.usage-daily-table tbody th {
+  color: var(--body);
+  font-weight: 400;
+  text-align: left;
+}
+
+/* Models: the three largest, and each provider's share of the period. */
+.usage-top-models {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  counter-reset: usage-top;
+}
+
+.usage-top-models li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+  counter-increment: usage-top;
+}
+
+.usage-top-model-name::before {
+  content: counter(usage-top) ". ";
+  color: var(--body);
+}
+
+.usage-top-model-value {
+  color: var(--body);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-provider-shares {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-provider-shares li {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr) auto;
+  font-size: var(--fs-caption);
+}
+
+.usage-provider-share-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--activity-0);
+}
+
+.usage-provider-share-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--usage-healthy);
+}
+
+.usage-provider-share-value {
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+
 .usage-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

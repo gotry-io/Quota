@@ -96,6 +96,38 @@ function activityListCalls(calls: string[]): string[] {
   return calls.filter((url) => url.includes("usage/activity") && !url.includes("detail="));
 }
 
+it("shows the cache hit rate, what it saved, and reasoning beside the totals", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  const payload = acceptedSummary();
+  const period = payload.usage.last_30_days as Record<string, unknown>;
+  period.totals = {
+    total_tokens: 1_200,
+    input_tokens: 1_000,
+    output_tokens: 200,
+    cache_read_input_tokens: 940,
+    cache_write_input_tokens: 0,
+    reasoning_tokens: 150,
+    messages: 4,
+  };
+  period.cache_saved = { amount_microusd: "1500000", status: "complete", unpriced_rows: 0 };
+  mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+    return jsonResponse(activityBody(to));
+  });
+
+  const store = createAccountStore();
+  await store.ensureSummary();
+  const view = render(UsagePageHarness, { store });
+
+  await waitFor(() => {
+    expect(view.container.querySelector("#cache-hit")?.textContent?.trim()).toBe("94%");
+  });
+  expect(view.container.querySelector("#cache-saved")?.textContent?.trim()).toBe("saved $1.50");
+  expect(view.container.querySelector("#reasoning-total")?.textContent?.trim()).toBe("150");
+});
+
 it("rolls the Usage activity range once when the shell clock crosses UTC midnight", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-12T23:59:00Z"));
