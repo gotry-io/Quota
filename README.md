@@ -10,7 +10,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub sign-in, and account dashboard.
+- **Quota Web** — public site, GitHub sign-in, account dashboard, and the opt-in public Usage page
+  at `quota.gotry.io/u/<handle>`.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
 Cursor, Gemini CLI, and GitHub Copilot; local Usage analytics supports Codex, Claude Code, Grok,
@@ -157,6 +158,12 @@ session in one table, scoped by what that client is for
 Five providers can fall back to a browser session as their last rung, behind a consent sheet and
 an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.
+
+An Account can publish one read-only page of its Usage totals at `quota.gotry.io/u/<handle>`, with
+a saved share card drawn in the browser. It carries tokens, messages, optional API-equivalent cost,
+provider and model shares, and a year of activity bands — never remaining quota, devices,
+providers, or the account behind it, and there is no leaderboard
+([ADR 0037](docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
 
 Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
 the last parse stopped, local hourly facts a scan recomputes only where records moved,

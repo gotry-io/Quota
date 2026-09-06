@@ -34,7 +34,7 @@ export function formatCount(value: number): string {
   }).format(value);
 }
 
-export function formatCost(cost: CostView): string {
+export function formatCost(cost: Pick<CostView, "amount_microusd" | "status">): string {
   if (cost.amount_microusd === null) return "—";
   const cents = (BigInt(cost.amount_microusd) + 5_000n) / 10_000n;
   const amount = `${new Intl.NumberFormat(WEB_LOCALE).format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;

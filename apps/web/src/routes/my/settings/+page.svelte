@@ -9,6 +9,7 @@ import {
 import { entitlementStatusLine, subscribeActionLabel, viewerInitial } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import PublicProfileSettings from "$lib/components/PublicProfileSettings.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import ThemeToggle from "$lib/components/ThemeToggle.svelte";
 import type { WebDocumentViewer } from "$lib/server/document-port";
@@ -146,6 +147,8 @@ async function onDeleteAccount(event: Event): Promise<void> {
     >
   </div>
 </section>
+
+<PublicProfileSettings />
 
 <section class="settings-group" aria-labelledby="legal-title">
   <h2 id="legal-title">Legal</h2>

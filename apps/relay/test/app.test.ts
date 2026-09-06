@@ -785,6 +785,7 @@ describe("managed Relay on real Workers and D1", () => {
       "entitlement_events",
       "entitlements",
       "login_grants",
+      "public_profiles",
       "quota_snapshots",
       "rate_limit_counters",
       "sessions",

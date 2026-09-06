@@ -37,6 +37,7 @@ Read the relevant source before changing that area:
 | An Account owns its identities, and every sign-in confirms which Account it is | `docs/decisions/0032-an-account-owns-its-identities.md` |
 | Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
 | Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
+| What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |

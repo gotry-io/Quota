@@ -374,6 +374,37 @@ export interface AccountUsageVersionStamp {
   device_generation: number;
 }
 
+/**
+ * One Account's public page, as Relay stores it.
+ *
+ * The row exists as soon as a handle is chosen, whether or not the page is on: turning a page
+ * off must not release the handle, or a reader following an old link would land on someone
+ * else's Usage.
+ */
+export interface PublicProfileRecord {
+  account_id: string;
+  handle: string;
+  enabled: boolean;
+  show_models: boolean;
+  show_cost: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicProfileWriteInput {
+  account_id: string;
+  handle: string;
+  enabled: boolean;
+  show_models: boolean;
+  show_cost: boolean;
+  written_at: string;
+}
+
+/** A handle another Account already holds is the one refusal this write has to state. */
+export type PublicProfileWriteResult =
+  | { outcome: "written"; profile: PublicProfileRecord }
+  | { outcome: "handle_taken" };
+
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
@@ -514,6 +545,17 @@ export interface AccountState {
     platform: string,
     updatedAt: string,
   ): Promise<boolean>;
+  /** This Account's public page, or null when it has never chosen a handle. */
+  getPublicProfile(accountId: string): Promise<PublicProfileRecord | null>;
+  /** Claim or restate this Account's handle and switches, refusing a handle already claimed. */
+  writePublicProfile(input: PublicProfileWriteInput): Promise<PublicProfileWriteResult>;
+  /**
+   * The Account behind a published handle, matched without regard to case.
+   *
+   * A disabled page answers null here rather than being filtered by the caller: the anonymous
+   * read must not be able to tell a handle that was turned off from one that never existed.
+   */
+  findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
   getEntitlement(accountId: string): Promise<StoredEntitlement | null>;

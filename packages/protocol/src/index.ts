@@ -1391,6 +1391,221 @@ export const AccountUsageActivityResponseSchema = z
   .strict();
 
 /**
+ * The handle a public profile is published under, which is the whole address of that page.
+ *
+ * Lowercase because the page is reached by URL and a URL that differs only in case is the same
+ * page to a reader and a different one to a database; the pattern is the one rule both the
+ * Settings form and Relay answer, so a handle the browser accepted is never refused on write.
+ */
+export const PUBLIC_PROFILE_HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]{2,29}$/;
+
+/**
+ * Handles the site itself needs, or would be read as Quota speaking rather than a person.
+ *
+ * A public profile shares one namespace with nothing — the pages live under `/u/` — but a
+ * handle is also printed as a name beside Quota's own, so the ones that would impersonate the
+ * product or one of its routes are refused before they are stored.
+ */
+export const RESERVED_PUBLIC_PROFILE_HANDLES = [
+  "about",
+  "account",
+  "admin",
+  "api",
+  "app",
+  "auth",
+  "blog",
+  "docs",
+  "download",
+  "healthz",
+  "help",
+  "login",
+  "logout",
+  "my",
+  "oauth",
+  "privacy",
+  "providers",
+  "quota",
+  "quotabar",
+  "quotarelay",
+  "readyz",
+  "root",
+  "schema",
+  "security",
+  "settings",
+  "signin",
+  "signup",
+  "status",
+  "support",
+  "terms",
+  "u",
+  "usage",
+  "www",
+] as const;
+
+const reservedPublicProfileHandles: ReadonlySet<string> = new Set(RESERVED_PUBLIC_PROFILE_HANDLES);
+
+export function isReservedPublicProfileHandle(handle: string): boolean {
+  return reservedPublicProfileHandles.has(handle);
+}
+
+export const PublicProfileHandleSchema = z
+  .string()
+  .regex(PUBLIC_PROFILE_HANDLE_PATTERN)
+  .refine((handle) => !isReservedPublicProfileHandle(handle), "This handle is reserved.");
+
+/**
+ * What the owner of an Account may say about their public page.
+ *
+ * The two switches are subtractive: a page always carries token and message totals and the
+ * provider split, and each switch adds one thing to it. `handle` is null until one is chosen,
+ * and a page cannot be enabled without one, because the handle is the only address it has.
+ */
+const PublicProfileSchema = z
+  .object({
+    handle: PublicProfileHandleSchema.nullable(),
+    enabled: z.boolean(),
+    show_models: z.boolean(),
+    show_cost: z.boolean(),
+  })
+  .strict()
+  .superRefine((profile, context) => {
+    if (profile.enabled && profile.handle === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["handle"],
+        message: "An enabled public profile must name a handle.",
+      });
+    }
+  });
+export type PublicProfile = z.infer<typeof PublicProfileSchema>;
+
+/**
+ * What a write states, which is a page with an address.
+ *
+ * `handle` is not nullable here: taking a page down is `enabled: false`, and there is no way to
+ * say "publish nothing under no name". Releasing a handle would strand every link already
+ * shared, so the write cannot ask for it.
+ */
+const PublicProfileUpdateSchema = z
+  .object({
+    handle: PublicProfileHandleSchema,
+    enabled: z.boolean(),
+    show_models: z.boolean(),
+    show_cost: z.boolean(),
+  })
+  .strict();
+export type PublicProfileUpdate = z.infer<typeof PublicProfileUpdateSchema>;
+
+export const PublicProfileUpdateRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    profile: PublicProfileUpdateSchema,
+  })
+  .strict();
+export type PublicProfileUpdateRequest = z.infer<typeof PublicProfileUpdateRequestSchema>;
+
+export const PublicProfileResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    profile: PublicProfileSchema,
+  })
+  .strict();
+export type PublicProfileResponse = z.infer<typeof PublicProfileResponseSchema>;
+
+/** A public page names at most this many models in a period, largest first. */
+export const MAXIMUM_PUBLIC_USAGE_MODELS = 12;
+/** The public heatmap covers a year. */
+export const PUBLIC_ACTIVITY_DAYS = 365;
+/** The intensity levels a public heatmap cell can carry: none, then four bands. */
+export const PUBLIC_ACTIVITY_MAXIMUM_LEVEL = 4;
+
+/**
+ * What a public page says about a period, and nothing else.
+ *
+ * This is a separate statement from {@link UsagePeriodSchema} rather than a narrowing of it,
+ * because a narrowing is a field list someone can widen by accident. Everything an anonymous
+ * reader may see is written here once: totals, an optional cost, and shares. There is no agent,
+ * no device, no account label, and no quota in this shape at all
+ * ([ADR 0037](../../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+ */
+const PublicUsageTotalsSchema = z
+  .object({
+    total_tokens: SafeNonnegativeIntegerSchema,
+    input_tokens: SafeNonnegativeIntegerSchema,
+    output_tokens: SafeNonnegativeIntegerSchema,
+    messages: SafeNonnegativeIntegerSchema,
+  })
+  .strict();
+export type PublicUsageTotals = z.infer<typeof PublicUsageTotalsSchema>;
+
+/** The priced part of a period, present only while the owner has `show_cost` on. */
+const PublicUsageCostSchema = z
+  .object({
+    amount_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+    status: UsageCostStatusSchema,
+  })
+  .strict();
+export type PublicUsageCost = z.infer<typeof PublicUsageCostSchema>;
+
+/** One inference provider's share of a period, in tokens and in thousandths of the period. */
+const PublicUsageProviderShareSchema = z
+  .object({
+    provider: InferenceProviderSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    share_permille: z.number().int().min(0).max(1_000),
+  })
+  .strict();
+export type PublicUsageProviderShare = z.infer<typeof PublicUsageProviderShareSchema>;
+
+/** One model's share, present only while the owner has `show_models` on. */
+const PublicUsageModelShareSchema = z
+  .object({
+    provider: InferenceProviderSchema,
+    model: ModelSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    share_permille: z.number().int().min(0).max(1_000),
+  })
+  .strict();
+export type PublicUsageModelShare = z.infer<typeof PublicUsageModelShareSchema>;
+
+const PublicUsagePeriodSchema = z
+  .object({
+    totals: PublicUsageTotalsSchema,
+    cost: PublicUsageCostSchema.optional(),
+    providers: z.array(PublicUsageProviderShareSchema).max(InferenceProviderSchema.options.length),
+    models: z.array(PublicUsageModelShareSchema).max(MAXIMUM_PUBLIC_USAGE_MODELS).optional(),
+  })
+  .strict();
+export type PublicUsagePeriod = z.infer<typeof PublicUsagePeriodSchema>;
+
+/**
+ * One day of the public heatmap: how busy it was, never how much it was.
+ *
+ * A public cell carries a band rather than a token count, so the page shows a rhythm without
+ * publishing a day-by-day series anyone could difference back into the numbers behind it.
+ */
+const PublicActivityDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    level: z.number().int().min(0).max(PUBLIC_ACTIVITY_MAXIMUM_LEVEL),
+  })
+  .strict();
+export type PublicActivityDay = z.infer<typeof PublicActivityDaySchema>;
+
+export const PublicUsageResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    handle: PublicProfileHandleSchema,
+    published_at: Rfc3339InstantSchema,
+    generated_at: Rfc3339InstantSchema,
+    last_30_days: PublicUsagePeriodSchema,
+    all: PublicUsagePeriodSchema,
+    activity: z.array(PublicActivityDaySchema).max(PUBLIC_ACTIVITY_DAYS),
+  })
+  .strict();
+export type PublicUsageResponse = z.infer<typeof PublicUsageResponseSchema>;
+
+/**
  * What a client takes from a managed read.
  *
  * Every schema above states the contract exactly, which is how Relay — the producer — fails its
@@ -1497,6 +1712,9 @@ const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
 }).loose();
 export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
+
+export const PublicProfileResponseReadSchema = PublicProfileResponseSchema.loose();
+export type PublicProfileResponseRead = z.infer<typeof PublicProfileResponseReadSchema>;
 
 export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
   days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),

@@ -31,6 +31,9 @@ import type {
   LinkIdentityOutcome,
   LoginGrantConsumeResult,
   LoginGrantRecord,
+  PublicProfileRecord,
+  PublicProfileWriteInput,
+  PublicProfileWriteResult,
   QuotaSnapshotSubmission,
   RateLimitInput,
   RateLimitResult,
@@ -1004,6 +1007,63 @@ export class D1AccountState implements AccountState {
    * later sign-in rewrites when the channel it came through states a new label, without
    * touching a device or an observation.
    */
+  async getPublicProfile(accountId: string): Promise<PublicProfileRecord | null> {
+    const row = await this.database
+      .prepare(`${publicProfileSelect} WHERE account_id = ?1`)
+      .bind(accountId)
+      .first<PublicProfileRow>();
+    return row ? publicProfile(row) : null;
+  }
+
+  /**
+   * Claim or restate one Account's handle.
+   *
+   * The unique index over `handle COLLATE NOCASE` is what decides a contest between two
+   * Accounts, so the write attempts it and reads the outcome rather than checking first: a
+   * check followed by an insert is two requests that can both see the handle free.
+   * `created_at` survives a restatement, because the page's age is when it was first
+   * published, not when its switches were last touched.
+   */
+  async writePublicProfile(input: PublicProfileWriteInput): Promise<PublicProfileWriteResult> {
+    try {
+      const row = await this.database
+        .prepare(
+          `INSERT INTO public_profiles (
+             account_id, handle, enabled, show_models, show_cost, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+           ON CONFLICT(account_id) DO UPDATE SET
+             handle = excluded.handle,
+             enabled = excluded.enabled,
+             show_models = excluded.show_models,
+             show_cost = excluded.show_cost,
+             updated_at = excluded.updated_at
+           RETURNING account_id, handle, enabled, show_models, show_cost, created_at, updated_at`,
+        )
+        .bind(
+          input.account_id,
+          input.handle,
+          input.enabled ? 1 : 0,
+          input.show_models ? 1 : 0,
+          input.show_cost ? 1 : 0,
+          input.written_at,
+        )
+        .first<PublicProfileRow>();
+      if (!row) throw new Error("Public profile write returned no row");
+      return { outcome: "written", profile: publicProfile(row) };
+    } catch (error) {
+      if (isUniqueHandleViolation(error)) return { outcome: "handle_taken" };
+      throw error;
+    }
+  }
+
+  async findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null> {
+    const row = await this.database
+      .prepare(`${publicProfileSelect} WHERE handle = ?1 COLLATE NOCASE AND enabled = 1`)
+      .bind(handle)
+      .first<PublicProfileRow>();
+    return row ? publicProfile(row) : null;
+  }
+
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
     const [devices, snapshots, account, entitlement] = await this.database.batch<
       Record<string, unknown>
@@ -1255,6 +1315,7 @@ export class D1AccountState implements AccountState {
       this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM entitlements WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM entitlement_events WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
     ]);
@@ -1479,6 +1540,46 @@ const accountLabelFollowsFirstIdentity = `UPDATE accounts
       WHERE account_id = accounts.id
       ORDER BY created_at ASC, provider ASC LIMIT 1
     )`;
+interface PublicProfileRow {
+  account_id: string;
+  handle: string;
+  enabled: number;
+  show_models: number;
+  show_cost: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const publicProfileSelect = `SELECT account_id, handle, enabled, show_models, show_cost,
+  created_at, updated_at FROM public_profiles`;
+
+function publicProfile(row: PublicProfileRow): PublicProfileRecord {
+  return {
+    account_id: row.account_id,
+    handle: row.handle,
+    enabled: row.enabled === 1,
+    show_models: row.show_models === 1,
+    show_cost: row.show_cost === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Whether this failure is another Account already holding the handle.
+ *
+ * D1 reports a constraint failure as a message rather than a code. The only uniqueness this
+ * statement can violate is the handle — the primary key is what the upsert resolves — and
+ * SQLite names either the index or the column depending on the collation it applied, so the
+ * test is the table plus the constraint rather than one of those two spellings.
+ */
+function isUniqueHandleViolation(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("UNIQUE constraint failed") &&
+    error.message.includes("public_profiles")
+  );
+}
 
 const loginGrantSelect = `SELECT id, client_id, account_id, pkce_challenge, redirect_uri,
   client_state, expires_at, completed_at, consumed_at FROM login_grants`;

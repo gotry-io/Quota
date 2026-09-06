@@ -35,6 +35,8 @@ import {
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
+  PublicProfileResponseSchema,
+  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -48,6 +50,7 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
+  PublicProfileRecord,
   AccountUsageVersionStamp,
   AccountVersionStamp,
   DeviceRecord,
@@ -91,6 +94,7 @@ import {
   type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
+import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
@@ -180,6 +184,8 @@ const rateLimits = {
   emailStartHour: { limit: 5, windowSeconds: 60 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
+  profileMutation: { limit: 30, windowSeconds: 10 * 60 },
+  publicRead: { limit: 120, windowSeconds: 60 },
 } as const;
 
 interface StrictSchema<Output> {
@@ -289,10 +295,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
-  app.use(
-    "/api/v2/device/profile",
-    bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
-  );
+  for (const path of ["/api/v2/device/profile", "/api/v2/account/profile"]) {
+    app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
+  }
   app.use(
     "/api/billing/revenuecat/webhook",
     bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
@@ -1245,6 +1250,113 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     );
   });
 
+  /**
+   * The owner's own view of their public page, whether or not it is on.
+   *
+   * An Account that has never chosen a handle has no row, and that is not a failure: it is a
+   * page that has not been published, which is what the empty profile below says.
+   */
+  app.get("/api/v2/account/profile", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const profile = await options.state.getPublicProfile(principal.account_id);
+    return context.json(
+      PublicProfileResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: publicProfileView(profile),
+      }),
+    );
+  });
+
+  /**
+   * Publish, change, or take down this Account's public page.
+   *
+   * Only a browser may write it: this is the one control that makes account data readable with
+   * no session at all, so it takes the same same-origin check every other web mutation does.
+   * A handle another Account already holds is a conflict rather than a bad request, because
+   * nothing about the request was wrong. Taking a page down is `enabled: false`, which keeps
+   * the handle: releasing it would hand every link already shared to whoever claimed it next.
+   */
+  app.put("/api/v2/account/profile", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) return principal;
+    const unsafe = requireWebOrigin(context, principal);
+    if (unsafe) return unsafe;
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "public-profile-update",
+      principal.account_id,
+      rateLimits.profileMutation,
+      now(),
+    );
+    if (limited) return limited;
+    const update = await parseJSON(context, PublicProfileUpdateRequestSchema);
+    if (update instanceof Response) return update;
+    const written = await options.state.writePublicProfile({
+      account_id: principal.account_id,
+      handle: update.profile.handle,
+      enabled: update.profile.enabled,
+      show_models: update.profile.show_models,
+      show_cost: update.profile.show_cost,
+      written_at: now().toISOString(),
+    });
+    if (written.outcome === "handle_taken") {
+      return relayError(context, 409, "conflict", "That handle is already taken.");
+    }
+    return context.json(
+      PublicProfileResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: publicProfileView(written.profile),
+      }),
+    );
+  });
+
+  /**
+   * One public page's Usage, to whoever asks.
+   *
+   * This is the only route that answers account data with no principal, so it is also the only
+   * one whose answer a shared cache may hold: what it says is the same for every reader, which
+   * is what makes `public` correct here and wrong for the signed-in reads
+   * ([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+   * A handle that is malformed, unclaimed, or switched off is one 404: telling those apart
+   * would turn this route into a way to enumerate who has an Account.
+   */
+  app.get("/api/v6/public/:handle/usage", async (context) => {
+    const checkedAt = now();
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "public-profile-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    try {
+      const read = await readPublicProfile({
+        state: options.state,
+        usageState: options.usageState,
+        catalog,
+        modelCatalog,
+        handle: context.req.param("handle"),
+        checkedAt,
+      });
+      if (!read) return notFound(context);
+      context.header("ETag", read.etag);
+      context.header("Cache-Control", `public, max-age=${PUBLIC_PROFILE_MAX_AGE_SECONDS}`);
+      if (context.req.header("If-None-Match") === read.etag) return context.body(null, 304);
+      return context.json(await read.payload());
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+      throw error;
+    }
+  });
+
   app.get("/api/v2/pricing/catalog", (context) => {
     if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
     context.header("ETag", catalogETag);
@@ -1698,6 +1810,21 @@ async function enforceRateLimit(
   }
   context.header("Retry-After", String(result.retryAfterSeconds));
   return relayError(context, 429, "rate_limited", "Too many requests. Retry later.");
+}
+
+/**
+ * A public profile as its owner reads it back, including the one an Account never created.
+ *
+ * The defaults are what a page would carry if it were published now: models named, cost not.
+ * Cost is the one figure a person may not want beside their name, so it is off until asked for.
+ */
+function publicProfileView(profile: PublicProfileRecord | null) {
+  return {
+    handle: profile?.handle ?? null,
+    enabled: profile?.enabled ?? false,
+    show_models: profile?.show_models ?? true,
+    show_cost: profile?.show_cost ?? false,
+  };
 }
 
 function publicAccount(account: { id: string; display_label: string | null; created_at: string }) {

@@ -41,7 +41,7 @@ export function cacheHitLabel(totals: TotalsView): string | null {
  */
 export function cacheSavedLabel(saved: SavedView): string | null {
   if (saved.amount_microusd === null) return null;
-  return `saved ${formatCost({ ...saved, basis: "calculated" })}`;
+  return `saved ${formatCost(saved)}`;
 }
 
 /** One part of a whole, as whole percent. A whole of zero has no share to state. */

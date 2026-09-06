@@ -196,13 +196,40 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   and it appears in no log or response body but its own `Set-Cookie`.
 - A document navigation carrying no cookie of that shape is answered without reaching D1, SvelteKit
   never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
-  private, no-store`.
+  private, no-store`. The one document that reaches D1 with no cookie is `/u/<handle>`, whose whole
+  address is the handle; it still carries `private, no-store` like every other document, and only
+  the API answer behind it is cacheable ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
   `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
   that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
   advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
   needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
   out the Device the session spoke for.
+
+## The public profile page
+
+- A public page is the only account data Relay answers with no session, and what it may carry is
+  the whole of `PublicUsageResponseSchema`: the handle, when the page was published, when the
+  answer was folded, tokens/messages totals for the last 30 UTC days and for the retained window,
+  an optional API-equivalent cost amount and its status, provider and model shares in tokens and
+  thousandths, and 365 days of heatmap intensity as bands from 0 to 4. Nothing else is publishable
+  through it. An agent name, a device, a device count, an account id or display label, a
+  subscription, a fingerprint, a plan, remaining quota, an email, an unpriced-row detail, and a
+  per-day token count are all absent from that shape, so a public page cannot report one
+  ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+- `show_models` and `show_cost` are owner switches over that shape: with `show_cost` off no cost
+  field is present at all, and with `show_models` off no model list is. Cost is off until asked
+  for.
+- A handle is `^[a-z0-9][a-z0-9-]{2,29}$`, is not one of the reserved names, is unique without
+  regard to case, and is kept when the page is switched off so a shared link cannot be reassigned.
+  A malformed, unclaimed, and disabled handle are one 404 with one body, so the route cannot be
+  used to ask whether a person has an Account. Deleting the Account deletes the row in the same
+  batch as everything else.
+- `GET /api/v6/public/<handle>/usage` is the one route answered `Cache-Control: public, max-age=300`,
+  because its answer is the same for every reader. It is rate limited by Cloudflare's trusted
+  connecting-IP metadata, and its `ETag` is computed before any Usage row is read.
+  `PUT /api/v2/account/profile` writes it, and requires `account:manage`, an exact same-origin
+  `Origin` with same-origin Fetch Metadata when present, and a per-Account rate limit.
 
 ## Upload, Usage, and deletion safety
 
@@ -338,8 +365,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   appear only in the one successful issuance response, never in D1, and browser session tokens only
   in their `Set-Cookie`.
 - Retained business data is limited to Account and Device lifecycle metadata, the paid-sync
-  entitlement cache and webhook event log, normalized quota
-  observations, sparse hourly Usage rows, the daily rollup, and bounded rate limits. Nothing is kept
+  entitlement cache and webhook event log, one optional public profile row per Account,
+  normalized quota observations, sparse hourly Usage rows, the daily rollup, and bounded rate
+  limits. Nothing is kept
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject, and an anonymous
