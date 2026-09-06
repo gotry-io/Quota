@@ -17,6 +17,8 @@ mod io;
 mod json;
 mod renewal;
 mod types;
+#[cfg(test)]
+pub mod web_conformance;
 
 pub use cli_version::{CliTool, ProbeCache, ProbeEnvironment, resolve as resolve_cli_versions};
 pub use config::{ApiKeyCredentials, resolve_api_key};

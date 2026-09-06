@@ -329,6 +329,15 @@ or a report.
   Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or
   Keychain.
+- `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie
+  a sign-in left behind — the last rung of the collection ladder, on the device the reader signed in
+  on. It depends on QuotaWire for `ProviderID`, the catalog's browser-session spec, and the snapshot
+  types, and on nothing else: no UIKit, no WebKit, no Security, no Keychain, and no cookie store. Its
+  transport is injected, so the app decides which `URLSession` is spent and a test answers with a
+  canned exchange. `apps/ios` may depend on it; QuotaBar must not, because on a Mac the local service
+  owns provider collection. Its request sequences, classifications, and account fingerprints are the
+  Rust collectors' in `packages/service/src/providers`, held together by
+  `packages/protocol/fixtures/provider-web-conformance.json`, which both runtimes drive.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
 - `packages/quota-model` and `packages/relay-core` are runtime-neutral TypeScript for Relay and Web;

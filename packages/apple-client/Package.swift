@@ -13,6 +13,7 @@ let package = Package(
     .library(name: "QuotaRelay", targets: ["QuotaRelay"]),
     .library(name: "QuotaAccount", targets: ["QuotaAccount"]),
     .library(name: "QuotaWidgetData", targets: ["QuotaWidgetData"]),
+    .library(name: "QuotaProviderWeb", targets: ["QuotaProviderWeb"]),
   ],
   dependencies: [
     .package(name: "QuotaAppleShared", path: "../apple-shared")
@@ -31,12 +32,20 @@ let package = Package(
       dependencies: ["QuotaWire", "QuotaRelay"]
     ),
     .target(
+      name: "QuotaProviderWeb",
+      dependencies: ["QuotaWire"]
+    ),
+    .target(
       name: "QuotaWidgetData",
       dependencies: [.product(name: "QuotaPresentation", package: "QuotaAppleShared")]
     ),
     .testTarget(
       name: "QuotaAppleClientTests",
       dependencies: ["QuotaWire", "QuotaRelay", "QuotaAccount", "QuotaWidgetData"]
+    ),
+    .testTarget(
+      name: "QuotaProviderWebTests",
+      dependencies: ["QuotaProviderWeb"]
     ),
   ],
   swiftLanguageModes: [.v6]

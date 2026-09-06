@@ -123,6 +123,11 @@ providers whose web app has a session to read. It exists because a reader signed
 chatgpt.com, claude.ai, grok.com, kimi.com, or cursor.com already has an account this Mac can be
 shown, and the alternative is telling them to sign in somewhere they already are.
 
+Quota iOS reads the same rung with `QuotaProviderWeb` in `packages/apple-client`, on the device the
+reader signed in on rather than from a Mac's cookie jars. Both runtimes answer
+`packages/protocol/fixtures/provider-web-conformance.json`, so the request sequence, the
+classifications, and the account fingerprint below are one rule and not two.
+
 It is the **last** rung and only the last rung. A provider's own credential is read first; the
 stored session is reached only when that credential is missing entirely or every rung that read it
 answered `auth_required`. Any other verdict is the refresh's answer — a rejected reading is not a

@@ -336,6 +336,19 @@ mod tests {
         );
     }
 
+    /// Both runtimes answer the same cases, so a rule this collector starts reading differently
+    /// fails here rather than resolving one account into two subscriptions.
+    #[test]
+    fn the_shared_conformance_fixture_is_answered() {
+        use crate::providers::common::web_conformance;
+
+        let cases = web_conformance::cases("claude");
+        assert!(cases.len() >= 3);
+        for case in &cases {
+            web_conformance::assert_case(case, validate_at, collect_at);
+        }
+    }
+
     /// The org list alone proves nothing: a session that can list organizations and cannot read
     /// usage is a session this build would store and never be able to spend.
     #[test]

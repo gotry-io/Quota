@@ -1,0 +1,464 @@
+{
+  "$comment": "One statement of what a stored browser session answers, for the three providers whose web session both Quota clients read. Each case replays `exchanges` as the queue of responses a provider gives, once for `validate` and once for `collect`: a request answers the exchange at its own position, and an operation that stops early leaves the rest of the queue unused. `expect.validated` is the proven session or the error category the validation fails with; `expect.snapshot` is the reading or `null`, and a `null` reading names its category in `snapshot_error`. Every failure names the provider's own `sources` entry, which is the rung both runtimes report.",
+  "sources": {
+    "codex": "chatgpt_web_usage_api",
+    "claude": "claude_web_usage_api",
+    "grok": "grok_web_billing_api"
+  },
+  "cases": [
+    {
+      "provider": "codex",
+      "name": "a signed-in ChatGPT session names the account and reports both windows",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "__Secure-next-auth.session-token=abc; _account=acct_1",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/auth/session",
+          "status": 200,
+          "body": {
+            "user": {
+              "email": "ada@example.com"
+            },
+            "account": {
+              "id": "acct_1",
+              "planType": "plus"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/wham/usage",
+          "status": 200,
+          "body": {
+            "plan_type": "plus",
+            "email": "ada@example.com",
+            "account_id": "acct_1",
+            "rate_limit": {
+              "primary_window": {
+                "used_percent": 12,
+                "limit_window_seconds": 18000,
+                "reset_at": "2026-08-10T05:00:00Z"
+              },
+              "secondary_window": {
+                "used_percent": 40,
+                "limit_window_seconds": 604800,
+                "reset_at": "2026-08-15T00:00:00Z"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "plus"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T05:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            },
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 40.0,
+              "resets_at": "2026-08-15T00:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "codex",
+      "name": "a header carrying no ChatGPT sign-in is refused without a request",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "_account=acct_1",
+      "exchanges": [],
+      "expect": {
+        "validated": "error",
+        "snapshot": null,
+        "snapshot_error": "error"
+      }
+    },
+    {
+      "provider": "codex",
+      "name": "a signed-out jar answers with documents that name nobody",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "__Secure-next-auth.session-token=abc",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/auth/session",
+          "status": 200,
+          "body": {}
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/me",
+          "status": 200,
+          "body": {}
+        }
+      ],
+      "expect": {
+        "validated": "auth_required",
+        "snapshot": null,
+        "snapshot_error": "auth_required"
+      }
+    },
+    {
+      "provider": "codex",
+      "name": "an expired session is refused by ChatGPT itself",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "__Secure-next-auth.session-token=expired",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/auth/session",
+          "status": 401,
+          "body": {}
+        }
+      ],
+      "expect": {
+        "validated": "auth_required",
+        "snapshot": null,
+        "snapshot_error": "auth_required"
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "a session that can read usage is kept, and reports the weekly group's shared reset",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 200,
+          "body": [
+            {
+              "uuid": "org-1",
+              "capabilities": ["chat"]
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
+          "status": 200,
+          "body": {
+            "email_address": "ada@example.com",
+            "subscription_type": "max"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/organizations/org-1/usage",
+          "status": 200,
+          "body": {
+            "five_hour": {
+              "utilization": 12,
+              "resets_at": "2026-08-10T03:00:00Z"
+            },
+            "seven_day": {
+              "utilization": 40,
+              "resets_at": "2026-08-14T00:00:00Z"
+            },
+            "seven_day_opus": {
+              "utilization": 5
+            }
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "claude",
+          "account": {
+            "fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "max"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T03:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            },
+            {
+              "id": "seven_day",
+              "title": "Weekly",
+              "used_percent": 40.0,
+              "resets_at": "2026-08-14T00:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            },
+            {
+              "id": "seven_day_opus",
+              "title": "Opus Weekly",
+              "used_percent": 5.0,
+              "resets_at": "2026-08-14T00:00:00Z",
+              "duration_seconds": 604800
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "an account that answers for a known window, even to say it has none, has been read",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 200,
+          "body": [
+            {
+              "uuid": "org-1",
+              "capabilities": ["chat"]
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
+          "status": 200,
+          "body": {
+            "email_address": "ada@example.com",
+            "subscription_type": "max"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/organizations/org-1/usage",
+          "status": 200,
+          "body": {
+            "five_hour": null
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "claude",
+          "account": {
+            "fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "max"
+          },
+          "windows": [],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "a session that lists organizations and answers for no known window is refused",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 200,
+          "body": [
+            {
+              "uuid": "org-1",
+              "capabilities": ["chat"]
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
+          "status": 200,
+          "body": {
+            "email_address": "ada@example.com",
+            "subscription_type": "max"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/organizations/org-1/usage",
+          "status": 200,
+          "body": {}
+        }
+      ],
+      "expect": {
+        "validated": "error",
+        "snapshot": null,
+        "snapshot_error": "unavailable"
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "a header that names no Anthropic session is refused without a request",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "lastActiveOrg=org-1",
+      "exchanges": [],
+      "expect": {
+        "validated": "error",
+        "snapshot": null,
+        "snapshot_error": "error"
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "an expired session is refused by claude.ai itself",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-expired",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 401,
+          "body": {}
+        }
+      ],
+      "expect": {
+        "validated": "auth_required",
+        "snapshot": null,
+        "snapshot_error": "auth_required"
+      }
+    },
+    {
+      "provider": "grok",
+      "name": "a session grok.com answers for is kept, and the sign-in cookie names the account",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sso=header.eyJzdWIiOiJ1c2VyLTEifQ.signature",
+      "exchanges": [
+        {
+          "method": "POST",
+          "path": "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+          "status": 200,
+          "body_base64": "AAAAAAUNAADIQQ=="
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "c19c7b96f599407b22bcbadb242eebcfd61fba745a0c7582ce4c32abd77bfad9",
+          "account_label": "Grok"
+        },
+        "snapshot": {
+          "provider": "grok",
+          "account": {
+            "fingerprint": "c19c7b96f599407b22bcbadb242eebcfd61fba745a0c7582ce4c32abd77bfad9",
+            "fingerprint_scope": "global",
+            "label": "Grok"
+          },
+          "windows": [
+            {
+              "id": "billing_cycle",
+              "title": "Billing Cycle",
+              "used_percent": 25.0
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "grok",
+      "name": "a reset inside the monthly band names the headline meter",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sso-rw=header.eyJzdWIiOiJ1c2VyLTEifQ.signature",
+      "exchanges": [
+        {
+          "method": "POST",
+          "path": "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+          "status": 200,
+          "body_base64": "AAAAAA8KDQ0AAABBKgYIgMOC1QY="
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "c19c7b96f599407b22bcbadb242eebcfd61fba745a0c7582ce4c32abd77bfad9",
+          "account_label": "Grok"
+        },
+        "snapshot": {
+          "provider": "grok",
+          "account": {
+            "fingerprint": "c19c7b96f599407b22bcbadb242eebcfd61fba745a0c7582ce4c32abd77bfad9",
+            "fingerprint_scope": "global",
+            "label": "Grok"
+          },
+          "windows": [
+            {
+              "id": "billing_cycle",
+              "title": "Monthly",
+              "used_percent": 8.0,
+              "resets_at": "2026-09-09T00:00:00Z",
+              "primary_cadence": "monthly"
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "grok",
+      "name": "a header carrying no grok.com sign-in is refused without a request",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [],
+      "expect": {
+        "validated": "error",
+        "snapshot": null,
+        "snapshot_error": "error"
+      }
+    },
+    {
+      "provider": "grok",
+      "name": "a session grok.com no longer recognises is refused by the RPC's own status",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sso=header.eyJzdWIiOiJ1c2VyLTEifQ.signature",
+      "exchanges": [
+        {
+          "method": "POST",
+          "path": "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+          "status": 200,
+          "body_base64": "gAAAAC9ncnBjLXN0YXR1czogMTYNCmdycGMtbWVzc2FnZTogbm8tY3JlZGVudGlhbHMNCg=="
+        }
+      ],
+      "expect": {
+        "validated": "auth_required",
+        "snapshot": null,
+        "snapshot_error": "auth_required"
+      }
+    }
+  ]
+}

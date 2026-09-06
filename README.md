@@ -54,7 +54,7 @@ apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI
-packages/apple-client/    Shared Apple wire, Relay, session, last-good cache, and widget-snapshot modules
+packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, and provider web-session modules
 packages/apple-shared/    Foundation-only Apple presentation semantics for QuotaBar, Quota iOS, and widgets
 packages/provider/        Language-neutral provider catalog and JSON Schema
 packages/protocol/        Runtime schemas and exported network JSON Schemas
