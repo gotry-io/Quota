@@ -12,7 +12,15 @@ enum QuotaTheme {
   static let meterTrack = Color(uiColor: .tertiarySystemFill)
 
   /// The one warning color: a window whose pace runs it out before its reset.
-  static let warning = Color(uiColor: .systemOrange)
+  /// System orange is 2.9:1 on a light card; this darkens it to 4.6:1 there and keeps the
+  /// system colour on dark grounds, where it already passes.
+  static let warning = Color(
+    uiColor: UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? .systemOrange
+        : UIColor(red: 0.72, green: 0.36, blue: 0.0, alpha: 1)
+    }
+  )
 
   static let minimumTouchTarget: CGFloat = 44
   /// Official status-page incident mark beside a provider name.
