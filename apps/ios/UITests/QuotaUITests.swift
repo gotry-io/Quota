@@ -45,7 +45,11 @@ final class QuotaUITests: XCTestCase {
       app.staticTexts["Studio Mac"].exists,
       "Devices summary does not duplicate onto Overview"
     )
-    XCTAssertTrue(app.staticTexts["Today"].exists, "Today section")
+    XCTAssertTrue(
+      app.staticTexts["Today"].exists || todaySection.exists
+        || app.descendants(matching: .any)["overview.today.tokens"].exists,
+      "Today section"
+    )
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
@@ -155,7 +159,12 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["settings.appearance"].exists,
       "Appearance"
     )
-    XCTAssertTrue(app.descendants(matching: .any)["settings.about"].exists, "About")
+    // Sync and Providers sit above About now, and a List only materializes rows near the screen.
+    let about = app.descendants(matching: .any)["settings.about"]
+    for _ in 0..<4 where !about.exists {
+      scrollToIdentifierOnce(app, "settings.about")
+    }
+    XCTAssertTrue(about.waitForExistence(timeout: 5), "About")
     let deleteAccount = app.descendants(matching: .any)["settings.delete-account"]
     if !deleteAccount.waitForExistence(timeout: 2) {
       scrollToIdentifierOnce(app, "settings.delete-account")

@@ -195,6 +195,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         applySignedInContent(
           to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
         Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
+        model.selectedTab = .settings
       case .syncOff:
         applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
       case .syncActive:
