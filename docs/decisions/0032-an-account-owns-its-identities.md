@@ -21,8 +21,7 @@ states a new one.
 return_to, now)` and `complete(request, now)`, which answers a subject and a label or a category of
 refusal. `WebSessions` owns what that means: a sign-in resolves `(provider, subject)` to the Account
 already bound to it, or opens one; a link binds the channel to the Account the browser is signed in
-as. GitHub is the first implementation and the only one this ADR ships; Apple and Email register
-against the same port.
+as. GitHub and Apple are the implementations this ADR ships; Email registers against the same port.
 
 **The intent travels in the sealed handoff, not in a query.** `__Host-quota_oauth` still carries the
 `state`, the PKCE verifier, and where to return to, and now also the provider and whether this round
@@ -35,6 +34,35 @@ nothing and shows the browser one sentence naming the provider. A link the Accou
 the state it asked for and succeeds. Unbinding is `DELETE /api/v2/account/identities/:provider`
 under `account:manage` and the ten-minute freshness rule, and it refuses to remove the last identity
 (`409 conflict`), because an Account no channel reaches is an Account nobody can sign in to.
+
+**Apple's Web round trip answers with a cross-site form POST, so its handoff is `SameSite=None`.**
+`AppleIdentityProvider` is the second implementation of the same port. Asking Apple for `name email`
+requires `response_mode=form_post`, which means Apple answers `POST /api/auth/apple/callback` from
+`appleid.apple.com` — and a browser attaches no `SameSite=Lax` cookie to that. Only Apple's handoff
+is sealed `None`; it is still `__Host-`, still signed, still ten minutes long, and it is still the
+only thing the callback is checked against. The `client_secret` Apple asks for is not a stored
+string but an ES256 JWT signed per exchange from `APPLE_SIGNIN_PRIVATE_KEY`, so nothing long-lived
+is held in a variable. The identity token is checked against Apple's published keys — RS256, `iss`,
+`aud`, `exp`, and the `nonce` this round trip sent — before its `sub` names anyone.
+
+**A stand-in label never overwrites a name a channel stated.** The label a provider states replaces
+the one stored for that identity, so a renamed GitHub login or a changed Apple address is not left
+frozen at whatever the first sign-in saw. Apple, though, hands over an address only while the person
+is sharing one: a later sign-in can arrive with nothing, and naming the channel "Apple ID" then
+would rename an Account that already had a real name. So a provider states whether its label is its
+own stand-in, and a stand-in fills an empty label and replaces nothing. GitHub's "GitHub account"
+fallback says the same thing about itself.
+
+**The iOS app does not go out to a browser to sign in with Apple.** `ASAuthorizationAppleIDProvider`
+has already proved the identity on the device, so `POST /oauth/v2/apple` takes that identity token
+and the nonce behind it and answers with the viewer's one session — the same row, scopes, and
+credential domains `/oauth/v2/token` issues, by the same function. Sending the app out to
+`/sign-in` and back through `/oauth/v2/complete` would ask Apple the same question a second time and
+carry the answer through a redirect for no gain. The app hands Apple the nonce's SHA-256 and Relay
+the value, so a token minted for an earlier request proves nothing about this one. `intent: link`
+binds Apple to the Account a held iOS session already names. The `sub` Apple states is stable across
+the Web and native flows of one Team, so an Account reached in the app and one reached on the
+website are one Account.
 
 **Every sign-in passes through `/sign-in`.** `GET /oauth/v2/authorize` no longer leaves for a
 provider: it redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…`, and that page asks
@@ -60,6 +88,13 @@ soon as a person can have two. Confirming the Account is one page and it is the 
 and Quota for iPhone open.
 
 ## What was given up
+
+`SameSite=None` on Apple's handoff is a cookie any cross-site request can carry, which `Lax` exists
+to prevent. It is accepted for that one provider because the alternative — dropping `name email` so
+Apple redirects instead — gives up the address that names the channel on the Account, and because
+what the cookie carries is signed, `__Host-`-scoped, ten minutes old at most, and useless without
+the `state` and `nonce` Apple states back. `/sign-in` was the alternative for the iOS app too, and
+was given up for the reason above: it would prove nothing the device had not already proved.
 
 A link conflict could have merged the two Accounts instead of refusing. Merging Devices, quota
 observations, Usage rollups, and stored folds is a destructive operation with no undo, decided from

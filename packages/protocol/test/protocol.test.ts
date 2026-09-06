@@ -9,6 +9,7 @@ import {
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
   AccountUsageActivityResponseSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
@@ -359,6 +360,41 @@ describe("quota protocol", () => {
       "Apple",
       "Email",
     ]);
+  });
+
+  it("states what Sign in with Apple posts from inside the app", () => {
+    const request = {
+      protocol_version: 2,
+      client_id: IOS_OAUTH_CLIENT_ID,
+      identity_token: `${"a".repeat(20)}.${"b".repeat(200)}.${"c".repeat(342)}`,
+      nonce: "n".repeat(43),
+    };
+    expect(AppleNativeSignInRequestSchema.safeParse(request).success).toBe(true);
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, intent: "link" }).success).toBe(
+      true,
+    );
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, intent: "unlink" }).success).toBe(
+      false,
+    );
+    // QuotaBar signs in through a browser; this is the iOS app's route and no one else's.
+    expect(
+      AppleNativeSignInRequestSchema.safeParse({ ...request, client_id: "quotabar" }).success,
+    ).toBe(false);
+    // A token is a compact JWS or it is not a token.
+    expect(
+      AppleNativeSignInRequestSchema.safeParse({ ...request, identity_token: "a.b" }).success,
+    ).toBe(false);
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, nonce: "short" }).success).toBe(
+      false,
+    );
+    expect(protocol.IOS_BUNDLE_ID).toBe("io.gotry.quota");
+    expect(
+      protocol.IdentityLinkResponseSchema.safeParse({
+        protocol_version: 2,
+        provider: "apple",
+        status: "already_linked",
+      }).success,
+    ).toBe(true);
   });
 
   it("adds a strictly additive quota-ios account-only token contract", () => {

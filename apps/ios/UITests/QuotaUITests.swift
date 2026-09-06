@@ -364,6 +364,8 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
     XCTAssertTrue(
+      app.descendants(matching: .any)["connect.apple"].exists, "Continue with Apple")
+    XCTAssertTrue(
       app.staticTexts["This iPhone only reads data reported by QuotaBar."].exists,
       "footnote"
     )
@@ -385,6 +387,10 @@ final class QuotaUITests: XCTestCase {
     XCTAssertFalse(button.isEnabled, "Connecting disables the button")
     XCTAssertEqual(
       button.value as? String, "Connecting", "Connecting is the busy accessibility value")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["connect.apple"].exists,
+      "Apple has no busy presentation and is not drawn while connecting"
+    )
     attachScreenshot(app, name: "connect-connecting")
     try audit(app)
   }
@@ -434,6 +440,8 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.buttons["Use a different account"].exists, "Use a different account")
     XCTAssertFalse(app.buttons["Continue"].exists, "Continue is not offered")
     XCTAssertFalse(app.buttons["Connect with GitHub"].exists, "Connect is replaced by Retry")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["connect.apple"].exists, "Apple is replaced by Retry too")
     XCTAssertTrue(app.staticTexts["Couldn't reach quota.gotry.io."].exists, "network copy")
     attachScreenshot(app, name: "connect-refresh-failed")
     try audit(app)

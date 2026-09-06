@@ -29,8 +29,12 @@ it("offers the channels this build signs in through when nobody is signed in", (
   expect(screen.getByRole("heading", { name: "Sign in to Quota" })).toBeDefined();
   const github = screen.getByRole("link", { name: "Continue with GitHub" });
   expect(github.getAttribute("href")).toBe("/api/auth/github/start?return_to=%2Fmy");
-  // Apple and Email are channels an Account can hold, but this build starts neither.
-  expect(screen.queryByRole("link", { name: /Continue with (Apple|Email)/ })).toBeNull();
+  const apple = screen.getByRole("link", { name: "Continue with Apple" });
+  expect(apple.getAttribute("href")).toBe("/api/auth/apple/start?return_to=%2Fmy");
+  // Apple's mark is drawn on its button and named nowhere: the link already says Apple.
+  expect(apple.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  // Email is a channel an Account can hold, but this build does not start one.
+  expect(screen.queryByRole("link", { name: /Continue with Email/ })).toBeNull();
   expect(screen.queryByRole("button", { name: "Use a different account" })).toBeNull();
 });
 
@@ -44,4 +48,5 @@ it("asks a signed-in browser to confirm the Account before it continues", () => 
   );
   expect(screen.getByRole("button", { name: "Use a different account" })).toBeDefined();
   expect(screen.queryByRole("link", { name: "Continue with GitHub" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Continue with Apple" })).toBeNull();
 });

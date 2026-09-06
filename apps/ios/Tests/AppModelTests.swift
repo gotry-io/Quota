@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import QuotaAccount
 import QuotaRelay
@@ -31,6 +32,56 @@ struct AppModelTests {
         lastObservedAt: now.addingTimeInterval(-120)
       ).activity(now: now).status == .active)
     #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
+  }
+
+  /// Apple is handed the nonce's digest and this device keeps the value, so a token minted for
+  /// some earlier request proves nothing about this one.
+  @Test
+  func appleRequestAsksForTheAddressAndCarriesADigestedNonce() {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    let request = ASAuthorizationAppleIDProvider().createRequest()
+
+    model.prepareAppleRequest(request)
+    #expect(request.requestedScopes == [.fullName, .email])
+    let nonce = request.nonce ?? ""
+    #expect(nonce.count == 64)
+    #expect(nonce.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+
+    let second = ASAuthorizationAppleIDProvider().createRequest()
+    model.prepareAppleRequest(second)
+    #expect(second.nonce != request.nonce)
+  }
+
+  /// Cancelling at Apple is where the person started, not a failure with a sentence under it.
+  @Test
+  func cancellingAtAppleIsSignedOutWithNothingSaid() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.canceled)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner == nil)
+    #expect(model.expiredMessage == nil)
+  }
+
+  @Test
+  func aFailedAppleSheetSaysTheOneConnectFailureSentence() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.failed)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
+  }
+
+  /// A result arriving with no request behind it is not this device's round trip.
+  @Test
+  func anAppleResultWithoutARequestProvesNothing() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.canceled)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
   }
 
   @Test
@@ -401,7 +452,7 @@ struct AppModelTests {
     #expect(authenticator.lastPresentPrefersEphemeral == false)
     #expect(
       authenticator.lastPresentURL?.absoluteString
-        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
   }
 

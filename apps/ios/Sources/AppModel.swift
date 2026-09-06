@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import Observation
 import QuotaAccount
@@ -68,6 +69,8 @@ final class AppModel {
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
   private var sessionActivation: AccountSessionActivation?
+  /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
+  private var appleNonce: AppleSignInNonce?
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -206,27 +209,80 @@ final class AppModel {
     } catch AccountClientError.sessionExpired {
       applyExpired()
     } catch let error as AccountClientError {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: error.userFacingMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(error.userFacingMessage)
     } catch let error as AuthorizationError {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: error.userFacingMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(error.userFacingMessage)
     } catch {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: AuthorizationError.genericConnectFailureMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
     }
+  }
+
+  /// Bind the Sign in with Apple request the button is about to make.
+  ///
+  /// Apple is handed the nonce's digest and states it back inside the token it signs; this device
+  /// keeps the value, so a token minted for some earlier request proves nothing about this one.
+  /// An address is asked for because it is what names the channel on the Account, and Apple hands
+  /// it over only while the person is sharing one.
+  func prepareAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+    request.requestedScopes = [.fullName, .email]
+    let nonce = try? AppleSignIn.generateNonce()
+    appleNonce = nonce
+    request.nonce = nonce?.digest
+  }
+
+  /// Sign in with what Apple proved on this device.
+  ///
+  /// There is no browser round trip: `ASAuthorizationAppleIDProvider` has already asked the
+  /// question, so the token it signed goes straight to Relay, and what comes back is the same
+  /// pending session a browser sign-in opens — the confirm screen still asks which Account this
+  /// reached.
+  func connectWithApple(_ result: Result<ASAuthorization, any Error>) async {
+    guard phase != .connecting else { return }
+    guard let nonce = appleNonce else {
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      return
+    }
+    appleNonce = nil
+    switch result {
+    case .failure(let error):
+      // Cancel is not a failure: the person closed the sheet and is where they started.
+      if (error as? ASAuthorizationError)?.code == .canceled {
+        applySignedOut()
+      } else {
+        presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      }
+    case .success(let authorization):
+      guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+        let data = credential.identityToken,
+        let identityToken = String(data: data, encoding: .utf8)
+      else {
+        presentConnectFailure(AuthorizationError.unexpectedBrowserResponseMessage)
+        return
+      }
+      await exchangeApple(identityToken: identityToken, nonce: nonce.value)
+    }
+  }
+
+  private func exchangeApple(identityToken: String, nonce: String) async {
+    phase = .connecting
+    banner = nil
+    expiredMessage = nil
+    do {
+      let session = try await account.exchangeApple(identityToken: identityToken, nonce: nonce)
+      sessionActivation = session.activation
+      await refresh()
+    } catch AccountClientError.sessionExpired {
+      applyExpired()
+    } catch let error as AccountClientError {
+      presentConnectFailure(error.userFacingMessage)
+    } catch {
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+    }
+  }
+
+  private func presentConnectFailure(_ message: String) {
+    applySignedOut()
+    banner = Banner(kind: .refreshFailed, text: message, symbolName: "exclamationmark.triangle")
   }
 
   /// Keep the session this device just opened. Continue is the only promotion to `active`.

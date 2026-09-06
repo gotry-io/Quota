@@ -12,6 +12,7 @@ import {
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
@@ -19,6 +20,7 @@ import {
   DeviceSyncResponseSchema,
   IanaTimezoneSchema,
   IosLoginExchangeRequestSchema,
+  IdentityLinkResponseSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
@@ -69,6 +71,7 @@ import {
   type BrowserSignInFailureReason,
   htmlOrJsonSignInError,
 } from "./account/browser-error-page.ts";
+import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import { clearedHandoffCookie, type SignInIntent } from "./account/identity.ts";
 import {
   clearedSessionCookie,
@@ -164,6 +167,13 @@ export interface RelayAppOptions {
   usageState: UsageState;
   accountService: AccountService;
   webSessions: WebSessionPort;
+  /**
+   * Sign in with Apple as the iOS app performs it, when this deployment is configured for it.
+   *
+   * Absent, `POST /oauth/v2/apple` answers the same 404 an unregistered provider's round trip
+   * does: Relay does not sign in through a channel it holds no keys for.
+   */
+  appleNativeSignIn?: AppleNativeSignIn;
   hasher: SecretHasher;
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
@@ -301,78 +311,41 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.redirect(started.location, 302);
   });
 
+  // A provider that redirects answers in a query; one that answers with a cross-site form POST
+  // answers in a body. Both are the same callback, so both reach the same completion.
   app.get("/api/auth/:provider/callback", async (context) => {
     const provider = registeredProvider(context, options);
-    if (!provider) return unknownProvider(context);
-    if (!hasOnlyQueryKeys(context, provider.callbackQueryKeys)) {
+    if (!provider || provider.callbackDelivery !== "redirect") return unknownProvider(context);
+    if (!hasOnlyQueryKeys(context, provider.callbackParameterKeys)) {
       return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
-    const limited = await enforceRateLimit(
+    return completeBrowserSignIn(
       context,
-      options.state,
-      options.hasher,
-      "web-signin",
-      anonymousClientSubject(context),
-      rateLimits.webSignIn,
-      now(),
+      options,
+      provider,
+      new URL(context.req.url).searchParams,
+      now,
     );
-    if (limited) return browserSignInFailure(context, limited, "rate_limited");
-    let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
-    try {
-      completed = await options.webSessions.completeSignIn(
-        provider.id,
-        {
-          headers: context.req.raw.headers,
-          query: new URL(context.req.url).searchParams,
-        },
-        now(),
-      );
-    } catch (error) {
-      // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
-      // a credential; without them a production sign-in that dies mid-verification is invisible.
-      console.error("web_signin_failed", {
-        provider: provider.id,
-        name: error instanceof Error ? error.name : typeof error,
-        message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
-      });
-      return browserSignInFailure(
-        context,
-        relayError(context, 502, "internal_error", "Identity verification is unavailable."),
-        "invalid_request",
-      );
+  });
+
+  app.post("/api/auth/:provider/callback", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider || provider.callbackDelivery !== "form_post") return unknownProvider(context);
+    if (
+      !hasOnlyQueryKeys(context, []) ||
+      !(context.req.header("Content-Type") ?? "").startsWith("application/x-www-form-urlencoded")
+    ) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
-    if (completed.outcome === "rejected") {
-      // The reason is a category, never a value: enough to tell a lost cookie from a refused
-      // code when a sign-in fails in production, and nothing a log reader could replay.
-      console.warn("web_signin_rejected", { provider: provider.id, reason: completed.reason });
-      context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
-      return browserSignInFailure(
-        context,
-        completed.reason === "identity_taken"
-          ? relayError(
-              context,
-              409,
-              "conflict",
-              "That identity already belongs to another Quota account.",
-            )
-          : relayError(
-              context,
-              400,
-              "invalid_request",
-              "The sign-in request could not be completed.",
-            ),
-        signInFailureReason(completed.reason),
-        identityProviderDisplayName(provider.id),
-      );
+    // Read as bytes: a form body is not text, and asking for it as text is what a runtime warns
+    // about even when the bytes are exactly the ASCII a form encodes to.
+    const parameters = new URLSearchParams(
+      new TextDecoder().decode(await context.req.arrayBuffer()),
+    );
+    if (!hasOnlyKeys(parameters, provider.callbackParameterKeys)) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
-    if (completed.outcome === "signed_in") {
-      context.header("Set-Cookie", completed.session, { append: true });
-    }
-    context.header("Set-Cookie", completed.handoff, { append: true });
-    // Checked here as well as where it was accepted. This value has been out of Relay's hands
-    // and back — through a signed cookie, but a cookie all the same — and it is about to become
-    // a `Location` on an authenticated response, which is the exact shape of an open redirect.
-    return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
+    return completeBrowserSignIn(context, options, provider, parameters, now);
   });
 
   app.post("/api/auth/logout", async (context) => {
@@ -494,6 +467,65 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         accountFlowReason(error),
       );
     }
+  });
+
+  /**
+   * Sign in with Apple, as the iOS app performs it.
+   *
+   * The app has already proved this identity to Apple on the device, so there is no browser round
+   * trip to make it prove it again: it posts the identity token, Relay checks it against Apple's
+   * own keys, and answers with the viewer's one session — the same session, in the same
+   * credential domains, that `/oauth/v2/token` issues
+   * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
+  app.post("/oauth/v2/apple", async (context) => {
+    const apple = options.appleNativeSignIn;
+    if (!apple) return unknownProvider(context);
+    const request = await parseJSON(context, AppleNativeSignInRequestSchema);
+    if (request instanceof Response) return request;
+    // A native sign-in is the same guessable-at-a-distance surface `/oauth/v2/authorize` is, and
+    // is limited in the same bucket.
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "native-authorize",
+      anonymousClientSubject(context),
+      rateLimits.nativeAuthorize,
+      now(),
+    );
+    if (limited) return limited;
+    if (request.intent === "link") {
+      // Binding a channel writes to an Account, so it takes the session that names one.
+      const principal = await authorizeAccount(context, options, "account:read", now());
+      if (principal instanceof Response) return principal;
+      if (principal.client_kind !== "ios") return forbidden(context);
+      const outcome = await apple.link(
+        principal.account_id,
+        request.identity_token,
+        request.nonce,
+        now(),
+      );
+      if (isNativeIdentityRefusal(outcome)) return appleTokenRefused(context);
+      if (outcome === "identity_taken") {
+        return relayError(
+          context,
+          409,
+          "conflict",
+          "That identity already belongs to another Quota account.",
+        );
+      }
+      return context.json(
+        IdentityLinkResponseSchema.parse({
+          protocol_version: PROTOCOL_VERSION,
+          provider: "apple",
+          status: outcome,
+        }),
+      );
+    }
+    const issued = await apple.signIn(request.identity_token, request.nonce, now());
+    if (isNativeIdentityRefusal(issued)) return appleTokenRefused(context);
+    return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
   });
 
   app.post("/oauth/v2/token", async (context) => {
@@ -1146,6 +1178,96 @@ async function answerIfNoneMatch(
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
+/**
+ * One provider round trip, finished.
+ *
+ * Whether the answer arrived as a redirect's query or as a cross-site form POST's body, what it
+ * carries is the same and what it decides is the same: the session this browser now holds, the
+ * channel just bound to the Account it already held, or a category naming why neither happened.
+ */
+async function completeBrowserSignIn(
+  context: Context,
+  options: RelayAppOptions,
+  provider: RegisteredIdentityProvider,
+  parameters: URLSearchParams,
+  now: () => Date,
+): Promise<Response> {
+  const limited = await enforceRateLimit(
+    context,
+    options.state,
+    options.hasher,
+    "web-signin",
+    anonymousClientSubject(context),
+    rateLimits.webSignIn,
+    now(),
+  );
+  if (limited) return browserSignInFailure(context, limited, "rate_limited");
+  let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
+  try {
+    completed = await options.webSessions.completeSignIn(
+      provider.id,
+      { headers: context.req.raw.headers, parameters },
+      now(),
+    );
+  } catch (error) {
+    // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
+    // a credential; without them a production sign-in that dies mid-verification is invisible.
+    console.error("web_signin_failed", {
+      provider: provider.id,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+    });
+    return browserSignInFailure(
+      context,
+      relayError(context, 502, "internal_error", "Identity verification is unavailable."),
+      "invalid_request",
+    );
+  }
+  if (completed.outcome === "rejected") {
+    // The reason is a category, never a value: enough to tell a lost cookie from a refused
+    // code when a sign-in fails in production, and nothing a log reader could replay.
+    console.warn("web_signin_rejected", { provider: provider.id, reason: completed.reason });
+    context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+    return browserSignInFailure(
+      context,
+      completed.reason === "identity_taken"
+        ? relayError(
+            context,
+            409,
+            "conflict",
+            "That identity already belongs to another Quota account.",
+          )
+        : relayError(
+            context,
+            400,
+            "invalid_request",
+            "The sign-in request could not be completed.",
+          ),
+      signInFailureReason(completed.reason),
+      identityProviderDisplayName(provider.id),
+    );
+  }
+  if (completed.outcome === "signed_in") {
+    context.header("Set-Cookie", completed.session, { append: true });
+  }
+  context.header("Set-Cookie", completed.handoff, { append: true });
+  // Checked here as well as where it was accepted. This value has been out of Relay's hands
+  // and back — through a signed cookie, but a cookie all the same — and it is about to become
+  // a `Location` on an authenticated response, which is the exact shape of an open redirect.
+  return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
+}
+
+/**
+ * What Apple's identity token proved, when it proved nothing.
+ *
+ * A bad signature, another app's audience, a stale nonce, and an expiry are one answer on
+ * purpose: the app can do nothing with the difference, and stating it would tell a caller
+ * probing the route which part of its forgery to fix.
+ */
+function appleTokenRefused(context: Context): Response {
+  return relayError(context, 400, "invalid_grant", "Apple did not prove that identity.");
+}
+
 function unknownProvider(context: Context): Response {
   return relayError(context, 404, "not_found", "Quota does not sign in through that provider.");
 }
@@ -1426,7 +1548,12 @@ async function parseRawJSON(context: Context): Promise<unknown | Response> {
 }
 
 function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean {
-  const keys = [...new URL(context.req.url).searchParams.keys()];
+  return hasOnlyKeys(new URL(context.req.url).searchParams, allowed);
+}
+
+/** Each key at most once, and every key one this route names. */
+function hasOnlyKeys(parameters: URLSearchParams, allowed: readonly string[]): boolean {
+  const keys = [...parameters.keys()];
   return new Set(keys).size === keys.length && keys.every((key) => allowed.includes(key));
 }
 

@@ -8,11 +8,13 @@ import {
   AccountResponseSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IdentityLinkResponseSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
@@ -38,6 +40,8 @@ const directory = join(dirname(fileURLToPath(import.meta.url)), "../schema");
 
 const AccountHttpPayloadSchema = z.union([
   AccountResponseSchema,
+  AppleNativeSignInRequestSchema,
+  IdentityLinkResponseSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,

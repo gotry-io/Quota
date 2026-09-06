@@ -237,6 +237,34 @@ export class AccountService {
   }
 
   /**
+   * Open the iOS viewer's session for an Account a native sign-in has already proved.
+   *
+   * The credentials are minted by the same function `/oauth/v2/token`'s iOS branch mints them
+   * with, in the same domains and with the same lifetimes, so what Sign in with Apple hands the
+   * app is the viewer's one session and not a second kind of token
+   * ([ADR 0027](../../../../docs/decisions/0027-one-token-per-client.md)).
+   */
+  async openIosSession(
+    accountId: string,
+    displayLabel: string | null,
+    now: Date,
+  ): Promise<AccountTokenResponse> {
+    const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[iosClientId], now);
+    await this.state.createIosSession({
+      account_id: accountId,
+      family_id: `family_${crypto.randomUUID()}`,
+      session: hashes(credentials),
+      authenticated_at: now.toISOString(),
+    });
+    return {
+      token_type: "Bearer",
+      account_id: accountId,
+      display_label: displayLabel,
+      session: issued(credentials),
+    };
+  }
+
+  /**
    * Rotate one client's one token.
    *
    * The refresh token must carry the shape its own client issues, so a token cannot be rotated

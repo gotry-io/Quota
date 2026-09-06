@@ -58,19 +58,25 @@ export function encodeBase64UrlJSON(value: unknown): string {
 }
 
 export function decodeBase64UrlJSON(value: string): unknown {
+  return JSON.parse(new TextDecoder().decode(decodeBase64Url(value)));
+}
+
+export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
   const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
   const binary = atob(`${normalized}${padding}`);
-  return JSON.parse(
-    new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0))),
-  );
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
+export function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);

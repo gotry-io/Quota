@@ -1,7 +1,11 @@
 import type { SessionPrincipal } from "@gotry-io/relay-core";
 import type { WebSessionPort } from "../src/account/web-session.ts";
 
-const github = { id: "github", callbackQueryKeys: ["code", "state", "iss"] } as const;
+const github = {
+  id: "github",
+  callbackParameterKeys: ["code", "state", "iss"],
+  callbackDelivery: "redirect",
+} as const;
 
 /** A browser already signed in as one Account, for the routes that only need a Web principal. */
 export class SignedInWebSessionStub implements WebSessionPort {

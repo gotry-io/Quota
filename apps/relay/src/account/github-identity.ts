@@ -1,4 +1,5 @@
 import { constantTimeEqual, randomOpaqueSecret, sha256Base64Url } from "../security.ts";
+import { readBoundedJSON } from "./bounded-json.ts";
 import type {
   IdentityBegin,
   IdentityCallback,
@@ -38,7 +39,8 @@ export interface GitHubIdentityEnvironment {
  */
 export class GitHubIdentityProvider implements IdentityProvider {
   readonly id = "github" as const;
-  readonly callbackQueryKeys = ["code", "state", "iss"] as const;
+  readonly callbackParameterKeys = ["code", "state", "iss"] as const;
+  readonly callbackDelivery = "redirect" as const;
   readonly #fetch: typeof fetch;
 
   constructor(private readonly environment: GitHubIdentityEnvironment) {
@@ -78,13 +80,13 @@ export class GitHubIdentityProvider implements IdentityProvider {
   async complete(request: IdentityCallback): Promise<IdentityProof | IdentityRefusal> {
     // GitHub names itself in the redirect (`iss`, RFC 9207). A callback that names any other
     // issuer is not GitHub's; one that names none is an older GitHub and still is.
-    const issuer = request.query.get("iss");
+    const issuer = request.parameters.get("iss");
     if (issuer !== null && issuer !== GITHUB_ISSUER) return { rejected: "state" };
-    const state = request.query.get("state");
+    const state = request.parameters.get("state");
     if (!state || !constantTimeEqual(state, request.challenge.state)) {
       return { rejected: "state" };
     }
-    const code = request.query.get("code");
+    const code = request.parameters.get("code");
     if (
       !code ||
       code.length > maximumAuthorizationCodeLength ||
@@ -96,7 +98,11 @@ export class GitHubIdentityProvider implements IdentityProvider {
     if (!accessToken) return { rejected: "exchange" };
     const profile = await this.#readProfile(accessToken);
     if (!profile) return { rejected: "profile" };
-    return { subject_raw: String(profile.id), label: profile.label };
+    return {
+      subject_raw: String(profile.id),
+      label: profile.label,
+      label_is_placeholder: profile.label_is_placeholder,
+    };
   }
 
   /**
@@ -124,11 +130,13 @@ export class GitHubIdentityProvider implements IdentityProvider {
       await response.body?.cancel();
       return null;
     }
-    const body = await readBoundedJSON(response);
+    const body = await readBoundedJSON(response, maximumProfileBytes);
     return typeof body.access_token === "string" && body.access_token ? body.access_token : null;
   }
 
-  async #readProfile(accessToken: string): Promise<{ id: number; label: string } | null> {
+  async #readProfile(
+    accessToken: string,
+  ): Promise<{ id: number; label: string; label_is_placeholder: boolean } | null> {
     const response = await this.#fetch(userUrl, {
       headers: {
         Accept: "application/vnd.github+json",
@@ -142,41 +150,13 @@ export class GitHubIdentityProvider implements IdentityProvider {
       await response.body?.cancel();
       return null;
     }
-    const profile = await readBoundedJSON(response);
+    const profile = await readBoundedJSON(response, maximumProfileBytes);
     if (typeof profile.id !== "number" || !Number.isSafeInteger(profile.id)) return null;
     const login = typeof profile.login === "string" ? profile.login.trim().slice(0, 64) : "";
-    return { id: profile.id, label: login || "GitHub account" };
+    return {
+      id: profile.id,
+      label: login || "GitHub account",
+      label_is_placeholder: login === "",
+    };
   }
-}
-
-async function readBoundedJSON(response: Response): Promise<Record<string, unknown>> {
-  const reader = response.body?.getReader();
-  if (!reader) return {};
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    length += value.byteLength;
-    if (length > maximumProfileBytes) {
-      await reader.cancel();
-      return {};
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return {};
-  }
-  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
 }

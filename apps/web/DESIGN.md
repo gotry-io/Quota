@@ -40,7 +40,10 @@ The site has these routes:
 2. `/sign-in` is where every sign-in starts, including the one QuotaBar and Quota for iPhone
    open in a browser. Signed out, it is `Sign in to Quota`, one sentence that an Account is
    reached the same way however you sign in, and one button per channel this build offers
-   (**Continue with GitHub** today), each linking `/api/auth/<provider>/start?return_to=…`.
+   (**Continue with GitHub** and **Continue with Apple** today), each linking
+   `/api/auth/<provider>/start?return_to=…`. Apple's button is its own: black with a white mark
+   and label in a light appearance, white with a black one in dark, drawn from Apple's mark
+   rather than any emoji or substitute glyph, and it does not take the site's ink tokens.
    Signed in, it asks which Account this is: **Continue as \<display label\>** and **Use a
    different account**, which signs this browser out and comes back here. `return_to` defaults
    to `/my`, and anything but a same-origin path is a 400. The page is `noindex, nofollow`.
@@ -121,8 +124,9 @@ The document `<head>` is per-route. `/` publishes the public title, description,
 `https://quota.gotry.io/`, and Open Graph tags. `/my` is `noindex, nofollow` and has no canonical
 URL.
 
-GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
-provider-secret form, server administration, or self-hosted setup in the Web UI.
+Signing in is the only account action the marketing pages take. There is no Relay selection,
+pairing group, owner capability, provider-secret form, server administration, or self-hosted setup
+in the Web UI.
 
 ## Tokens
 

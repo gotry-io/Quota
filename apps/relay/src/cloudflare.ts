@@ -1,3 +1,7 @@
+import { IOS_BUNDLE_ID } from "@gotry-io/quota-protocol";
+import { AppleIdentityTokens } from "./account/apple-identity-token.ts";
+import { AppleIdentityProvider } from "./account/apple-identity.ts";
+import { AppleNativeSignIn } from "./account/apple-native.ts";
 import { GitHubIdentityProvider } from "./account/github-identity.ts";
 import { SignInHandoff } from "./account/identity.ts";
 import { AccountService } from "./account/service.ts";
@@ -16,6 +20,10 @@ export interface CloudflareBindings {
   ASSETS: Fetcher;
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
+  APPLE_SIGNIN_TEAM_ID: string;
+  APPLE_SIGNIN_SERVICES_ID: string;
+  APPLE_SIGNIN_KEY_ID: string;
+  APPLE_SIGNIN_PRIVATE_KEY: string;
   IDENTITY_SUBJECT_KEY: string;
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
@@ -27,6 +35,9 @@ export default {
     const state = new D1AccountState(environment.DB);
     const hasher = new SecretHasher(environment.QUOTA_SESSION_HASH_KEY);
     const handoff = new SignInHandoff(hasher);
+    // One verifier for both Apple flows: the Web round trip and the token the iOS app posts are
+    // signed by the same keys, so they read them from the same cache.
+    const appleTokens = new AppleIdentityTokens();
     const webSessions = memoizeWebSessionAuthorization(
       new WebSessions({
         state,
@@ -40,15 +51,33 @@ export default {
             clientSecret: environment.GITHUB_CLIENT_SECRET,
             callbackUrl: `${CANONICAL_ORIGIN}/api/auth/github/callback`,
           }),
+          new AppleIdentityProvider({
+            handoff,
+            tokens: appleTokens,
+            teamId: environment.APPLE_SIGNIN_TEAM_ID,
+            servicesId: environment.APPLE_SIGNIN_SERVICES_ID,
+            keyId: environment.APPLE_SIGNIN_KEY_ID,
+            privateKeyPem: environment.APPLE_SIGNIN_PRIVATE_KEY,
+            // The one Return URL Apple accepts for this Services ID.
+            callbackUrl: `${CANONICAL_ORIGIN}/api/auth/apple/callback`,
+          }),
         ],
       }),
     );
     const usageState = new D1UsageState(environment.DB);
+    const accountService = new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY);
     const relay = createRelayApp({
       state,
       usageState,
-      accountService: new AccountService(state, hasher, environment.QUOTA_INSTALLATION_KEY),
+      accountService,
       webSessions,
+      appleNativeSignIn: new AppleNativeSignIn({
+        tokens: appleTokens,
+        state,
+        accountService,
+        identitySubjectKey: environment.IDENTITY_SUBJECT_KEY,
+        audience: IOS_BUNDLE_ID,
+      }),
       hasher,
     });
 

@@ -15,6 +15,7 @@ import type {
   CompleteIdentityLoginResult,
   ConsumeAccountLoginGrantInput,
   ConsumeLoginGrantInput,
+  CreateIosSessionInput,
   CreateLoginGrantInput,
   CreateWebSessionInput,
   DeleteDeviceResult,
@@ -523,6 +524,35 @@ export class D1AccountState implements AccountState {
    * The session is its own family. Nothing rotates into or out of a browser session — the cookie is
    * the whole credential — so revoking the family revokes exactly this cookie and no other client.
    */
+  /**
+   * The iOS viewer's one session, written straight from a proved native identity.
+   *
+   * The row is the one `consumeAccountLoginGrant` writes; only what proved the Account differs,
+   * so a session opened through Apple is revoked, refreshed, and swept exactly like the others.
+   */
+  async createIosSession(input: CreateIosSessionInput): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO sessions (
+           id, family_id, account_id, device_id, device_generation, client_kind,
+           access_token_hash, refresh_token_hash, scopes_json,
+           authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+         ) VALUES (?1, ?2, ?3, NULL, NULL, 'ios', ?4, ?5, ?6, ?7, ?8, ?9, ?7, ?7)`,
+      )
+      .bind(
+        input.session.session_id,
+        input.family_id,
+        input.account_id,
+        input.session.access_token_hash,
+        input.session.refresh_token_hash,
+        encodeScopes(IOS_SESSION_SCOPES),
+        input.authenticated_at,
+        input.session.access_expires_at,
+        input.session.refresh_expires_at,
+      )
+      .run();
+  }
+
   async createWebSession(input: CreateWebSessionInput): Promise<void> {
     await this.database
       .prepare(
@@ -547,8 +577,9 @@ export class D1AccountState implements AccountState {
    * The Account this identity reaches, opened when nothing has reached it before.
    *
    * The insert is conditional on the identity being unknown, so a sign-in that is already known
-   * writes no Account at all; the identity's label is then refreshed and the Account's own label
-   * follows whichever identity was bound first. `(provider, subject)` is the primary key, so two
+   * writes no Account at all; the identity's label is then refreshed — unless what arrived is the
+   * provider's stand-in, which never replaces a name the channel once stated — and the Account's
+   * own label follows whichever identity was bound first. `(provider, subject)` is the primary key, so two
    * simultaneous first sign-ins cannot both open an Account.
    */
   async resolveSignInIdentity(input: ResolveSignInIdentityInput): Promise<AccountRecord> {
@@ -564,11 +595,22 @@ export class D1AccountState implements AccountState {
         .bind(input.new_account_id, input.label, input.now, input.provider, input.subject),
       this.database
         .prepare(
+          // A stand-in label fills an empty one and never replaces a stored name: `COALESCE`
+          // keeps whatever is there, which for an already stand-in label is the same value.
           `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
            VALUES (?1, ?2, ?3, ?4, ?5)
-           ON CONFLICT(provider, subject) DO UPDATE SET label = excluded.label`,
+           ON CONFLICT(provider, subject) DO UPDATE SET label =
+             CASE WHEN ?6 = 1 THEN COALESCE(account_identities.label, excluded.label)
+                  ELSE excluded.label END`,
         )
-        .bind(input.new_account_id, input.provider, input.subject, input.label, input.now),
+        .bind(
+          input.new_account_id,
+          input.provider,
+          input.subject,
+          input.label,
+          input.now,
+          input.label_is_placeholder ? 1 : 0,
+        ),
       this.database.prepare(accountLabelFollowsFirstIdentity).bind(
         // The Account this identity belongs to, which is the new one only on a first sign-in.
         input.provider,

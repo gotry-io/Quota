@@ -114,6 +114,25 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `account_identities.subject`; the Account id is opaque and derived from none of them, and no
   subject is ever answered on the wire. Binding a channel another Account already holds is refused
   rather than merged, and the last channel into an Account cannot be unbound.
+- Sign in with Apple is checked against Apple's own keys before its `sub` names anyone
+  ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). Relay verifies the identity token
+  is RS256 over a key Apple publishes at `https://appleid.apple.com/auth/keys` (cached for a day,
+  refetched when a `kid` is unknown), that `iss` is Apple, that `aud` is this flow's own audience —
+  the Services ID on the Web, the app's bundle identifier natively — that it has not expired, and
+  that its `nonce` is the one this round trip sent. An unverifiable token is one refusal with no
+  detail, so nothing tells a caller which part of a forgery to fix. `APPLE_SIGNIN_PRIVATE_KEY` is
+  read only to sign a five-minute ES256 `client_secret` per exchange; it is never sent anywhere and
+  no long-lived secret is minted from it. Apple's Web callback is a cross-site form POST, so its
+  handoff cookie alone is `SameSite=None` — still `__Host-`, signed, and ten minutes long, and the
+  `state` and `nonce` inside it are still what the callback is checked against. Apple states an
+  address only while the person shares one and it may be a private relay address; it is used as the
+  channel's label and, like every other subject, the `sub` itself is stored only as an HMAC.
+- The iOS app signs in with Apple on the device rather than through a browser: `POST /oauth/v2/apple`
+  takes the identity token `ASAuthorizationAppleIDProvider` produced plus the nonce behind it, in
+  the `native-authorize` rate-limit bucket, and answers with the same `quota-ios` session
+  `/oauth/v2/token` issues. The app hands Apple the nonce's SHA-256 and Relay the value, so a token
+  minted for an earlier request cannot be replayed into a new session. `intent: link` writes to the
+  Account the presented iOS session names and to no other.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
@@ -294,7 +313,7 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   new retained fields as security-sensitive. Protocol routing is a trust boundary: v6 writes pass
   the closed v6 provider and agent schemas, and one managed contract is served, so a read excludes
   nothing a retired one could not carry.
-- Persist GitHub subjects, installation identities, token and grant secrets, session-store keys, and
+- Persist identity subjects, installation identities, token and grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
   appear only in the one successful issuance response, never in D1, and browser session tokens only
   in their `Set-Cookie`.
@@ -309,7 +328,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
   eligible at once; expired or revoked sessions remain seven days so logout retries stay
   diagnosable.
-- Production keys (`GITHUB_CLIENT_SECRET` and the subject, installation, and session HMAC keys) are
+- Production keys (`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_PRIVATE_KEY`, and the subject,
+  installation, and session HMAC keys) are
   Cloudflare secrets, are never tracked, and are never reused across purposes.
   `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser session token
   and `__Host-quota_oauth` signature included — each under its own domain label.

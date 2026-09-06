@@ -65,6 +65,7 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
+      - sdk: AuthenticationServices.framework
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
       - sdk: WebKit.framework
