@@ -1139,8 +1139,9 @@ final class QuotaUITests: XCTestCase {
         let control = issue.element,
         app.tabBars.firstMatch.exists
       {
-        // The glass blooms a little above the capsule itself.
-        let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -56)
+        // The glass blooms above the capsule itself: rows fade for roughly a row and a half
+        // before the capsule's own edge.
+        let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -96)
         if control.frame.intersects(overlay) {
           return true
         }
