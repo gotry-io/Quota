@@ -1048,6 +1048,10 @@ final class QuotaUITests: XCTestCase {
     if !control.isHittable {
       scrollToIdentifierOnce(app, link)
     }
+    // A List rebuilds its rows while it settles after a scroll, and a query that resolved a
+    // moment ago can resolve to nothing at the instant of the tap. Wait for the row to be back.
+    settle(app)
+    XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
     control.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)[root].waitForExistence(timeout: 5),
@@ -1097,6 +1101,15 @@ final class QuotaUITests: XCTestCase {
     for _ in 0..<30 where tabBar.buttons.count < 4 {
       app.swipeDown()
       RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    // A list that is already at its top has nothing left to scroll, and the bar can stay
+    // minimized. Tapping the minimized bar expands it without switching tabs.
+    if tabBar.buttons.count < 4, tabBar.buttons.count > 0 {
+      tabBar.buttons.firstMatch.tap()
+      let deadline = Date().addingTimeInterval(3)
+      while tabBar.buttons.count < 4, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+      }
     }
     XCTAssertEqual(tabBar.buttons.count, 4, "tab bar re-expands after scrolling back up")
   }
