@@ -115,6 +115,7 @@ export const accountSummary = structuredClone(accepted.payload) as AccountSummar
 export function accountReadFromSummary(summary: unknown = accountSummary): {
   protocol_version: 2;
   account: unknown;
+  identities: { provider: string; label: string | null; linked_at: string }[];
   entitlement: unknown;
   purchase: { web_url: string };
 } {
@@ -122,6 +123,7 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
   return {
     protocol_version: 2,
     account: body.account,
+    identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
     entitlement: body.entitlement,
     purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
   };
