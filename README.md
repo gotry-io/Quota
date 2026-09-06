@@ -169,6 +169,10 @@ Production sign-in and D1 deployment require the Worker secrets `GITHUB_CLIENT_I
 `APPLE_SIGNIN_PRIVATE_KEY`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
 `QUOTA_SESSION_HASH_KEY`, the HMAC keys each at least 32 random characters and all documented by
 [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
+Production GitHub OAuth, email sign-in, and D1 deployment require the Worker secrets
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`,
+`QUOTA_SESSION_HASH_KEY`, and `RESEND_API_KEY`, each at least 32 random characters and documented
+by [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
 
 ## License
 

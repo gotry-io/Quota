@@ -7,6 +7,7 @@ import {
   type IdentityBegin,
   type IdentityCallbackDelivery,
   identitySubjectHash,
+  type IdentityProof,
   type IdentityProvider,
   type IdentityRefusalReason,
   isIdentityRefusal,
@@ -71,6 +72,20 @@ export interface WebSessionPort {
   completeSignIn(
     provider: IdentityProviderId,
     request: WebCallbackRequest,
+    now: Date,
+  ): Promise<WebSignInResult>;
+  /**
+   * Apply a proved identity the way a provider callback does, without a handoff cookie.
+   *
+   * Email verify uses this: the mailed token is the credential, so the browser that opens it
+   * may not be the one that asked, and there is no cookie to open.
+   */
+  completeProvedIdentity(
+    provider: IdentityProviderId,
+    proof: IdentityProof,
+    intent: SignInIntent,
+    returnTo: string,
+    headers: Headers,
     now: Date,
   ): Promise<WebSignInResult>;
   authorize(headers: Headers, checkedAt: Date): Promise<SessionPrincipal | null>;
@@ -148,23 +163,41 @@ export class WebSessions implements WebSessionPort {
     if (isIdentityRefusal(proved)) {
       return { outcome: "rejected", reason: proved.rejected };
     }
+    return this.completeProvedIdentity(
+      provider,
+      proved,
+      handoff.intent,
+      handoff.return_to,
+      request.headers,
+      now,
+    );
+  }
+
+  async completeProvedIdentity(
+    provider: IdentityProviderId,
+    proof: IdentityProof,
+    intent: SignInIntent,
+    returnTo: string,
+    headers: Headers,
+    now: Date,
+  ): Promise<WebSignInResult> {
     const subject = await identitySubjectHash(
       this.environment.identitySubjectKey,
       provider,
-      proved.subject_raw,
+      proof.subject_raw,
     );
-    if (handoff.intent.kind === "link") {
+    if (intent.kind === "link") {
       // The intent is sealed, but the session behind it may have ended while the browser was
       // away, and a link writes to the Account that session names.
-      const principal = await this.authorize(request.headers, now);
-      if (!principal || principal.account_id !== handoff.intent.account_id) {
+      const principal = await this.authorize(headers, now);
+      if (!principal || principal.account_id !== intent.account_id) {
         return { outcome: "rejected", reason: "link_session" };
       }
       const outcome = await this.environment.state.linkIdentity({
         account_id: principal.account_id,
         provider,
         subject,
-        label: proved.label,
+        label: proof.label,
         now: now.toISOString(),
       });
       if (outcome === "identity_taken") {
@@ -173,14 +206,14 @@ export class WebSessions implements WebSessionPort {
       return {
         outcome: "linked",
         handoff: clearedHandoffCookie(),
-        return_to: handoff.return_to,
+        return_to: returnTo,
       };
     }
     const account = await this.environment.state.resolveSignInIdentity({
       provider,
       subject,
-      label: proved.label,
-      label_is_placeholder: proved.label_is_placeholder,
+      label: proof.label,
+      label_is_placeholder: proof.label_is_placeholder,
       new_account_id: `account_${crypto.randomUUID()}`,
       now: now.toISOString(),
     });
@@ -196,7 +229,7 @@ export class WebSessions implements WebSessionPort {
       outcome: "signed_in",
       session: sessionCookie(token),
       handoff: clearedHandoffCookie(),
-      return_to: handoff.return_to,
+      return_to: returnTo,
     };
   }
 
@@ -242,6 +275,8 @@ export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessio
     beginSignIn: (provider, intent, returnTo, now) =>
       inner.beginSignIn(provider, intent, returnTo, now),
     completeSignIn: (provider, request, now) => inner.completeSignIn(provider, request, now),
+    completeProvedIdentity: (provider, proof, intent, returnTo, headers, now) =>
+      inner.completeProvedIdentity(provider, proof, intent, returnTo, headers, now),
     authorize(headers, checkedAt) {
       principal ??= inner.authorize(headers, checkedAt);
       return principal;

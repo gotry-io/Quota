@@ -44,6 +44,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM account_identities"),
     env.DB.prepare("DELETE FROM accounts"),
     env.DB.prepare("DELETE FROM rate_limit_counters"),
+    env.DB.prepare("DELETE FROM email_challenges"),
   ]);
 });
 

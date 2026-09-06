@@ -50,6 +50,35 @@ export async function signOut(destination = "/"): Promise<void> {
   window.location.assign(destination);
 }
 
+/**
+ * Ask Relay to mail a one-time sign-in link. The answer does not say whether the address is an
+ * identity; 202 is the only success, including when a per-address limit skipped the send.
+ */
+export async function requestEmailSignInLink(input: {
+  email: string;
+  returnTo: string;
+  intent?: "sign_in" | "link";
+}): Promise<"accepted" | "invalid" | "rate_limited" | "failed"> {
+  try {
+    const response = await fetch("/api/auth/email/start", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: input.email,
+        return_to: input.returnTo,
+        ...(input.intent === undefined ? {} : { intent: input.intent }),
+      }),
+    });
+    if (response.status === 202) return "accepted";
+    if (response.status === 400) return "invalid";
+    if (response.status === 429) return "rate_limited";
+    return "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 export async function fetchAccountActivity(
   range: {
     from: string;
