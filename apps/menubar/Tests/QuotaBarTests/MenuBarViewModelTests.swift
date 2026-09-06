@@ -51,6 +51,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     ipcVersion: 1,
     revision: 7,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: component(value: report, updatedAt: now),
@@ -199,6 +200,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
     ipcVersion: 1,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -250,6 +252,7 @@ func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
     ipcVersion: base.ipcVersion,
     revision: base.revision,
     usageUploadEnabled: base.usageUploadEnabled,
+    groupUsageByProject: base.groupUsageByProject,
     quotaRefreshIntervalSeconds: base.quotaRefreshIntervalSeconds,
     usagePeriods: base.usagePeriods,
     quota: base.quota,
@@ -420,6 +423,7 @@ func justSignedInState(
     ipcVersion: 1,
     revision: 2,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -505,7 +509,8 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
       ipcVersion: 1,
       revision: 3,
       usageUploadEnabled: true,
-    quotaRefreshIntervalSeconds: 300,
+      groupUsageByProject: true,
+      quotaRefreshIntervalSeconds: 300,
       usagePeriods: emptyUsagePeriods(),
       quota: component(
         value: QuotaCollectionReport(
@@ -599,6 +604,7 @@ func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async thr
     ipcVersion: 1,
     revision: 2,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: LocalServiceUsagePeriodCache(
       local: todayOnly(tokens: 1_234_567),
@@ -934,6 +940,7 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
     ipcVersion: 1,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -971,6 +978,7 @@ func loggingInState() -> LocalServiceState {
     ipcVersion: 1,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -1051,6 +1059,7 @@ func overviewOnlyState(
     ipcVersion: 1,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -1245,6 +1254,10 @@ struct StubLocalService: LocalServiceServing {
   }
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
     LocalServiceUsageUploadSetting(enabled: enabled)
+  }
+
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting {
+    LocalServiceGroupUsageByProjectSetting(enabled: enabled)
   }
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
     LocalServiceQuotaRefreshIntervalSetting(intervalSeconds: seconds)

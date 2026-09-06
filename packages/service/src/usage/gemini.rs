@@ -7,7 +7,8 @@ use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
     NormalizedUsageEvent, NormalizedUsageRecord, ParsedLine, UsageAgent, UsageError,
     UsageFileDiscoveryResult, UsageScanResult, UsageSourceScan, bounded_model, canonical_instant,
-    context_bucket, object, optional_count, safe_sum,
+    context_bucket, cwd_from_value, object, optional_count, project_key_from_cwd,
+    project_key_from_source_path, safe_sum,
 };
 use serde_json::{Map, Value};
 use std::cell::RefCell;
@@ -37,7 +38,7 @@ pub fn scan_gemini_usage(
         }
     }
     if json.files.is_empty() {
-        return scan_jsonl_files(UsageAgent::Gemini, options, jsonl, GeminiParser::default);
+        return scan_jsonl_files(UsageAgent::Gemini, options, jsonl, |_| GeminiParser);
     }
     let json_ids: HashSet<String> = json
         .files
@@ -48,12 +49,8 @@ pub fn scan_gemini_usage(
     jsonl_options
         .file_index
         .retain(|id, _| !json_ids.contains(id));
-    let jsonl_result = scan_jsonl_files(
-        UsageAgent::Gemini,
-        &jsonl_options,
-        jsonl,
-        GeminiParser::default,
-    )?;
+    let jsonl_result =
+        scan_jsonl_files(UsageAgent::Gemini, &jsonl_options, jsonl, |_| GeminiParser)?;
     let json_result = scan_json_conversations(options, json)?;
     Ok(merge_scans(options, jsonl_result, json_result))
 }
@@ -110,8 +107,11 @@ fn scan_json_conversations(
             Ok(value) => {
                 let parsed_messages = conversation_messages(&value);
                 if parsed_messages.is_empty() && value.is_object() {
-                    let parsed =
-                        parser.parse(value.as_object().expect("object"), &current.source_file_id);
+                    let parsed = parser.parse(
+                        value.as_object().expect("object"),
+                        &current.source_file_id,
+                        &current.path,
+                    );
                     ignored_empty_records = ignored_empty_records.saturating_add(
                         super::scan::collect_parsed_with_prefix(
                             parsed,
@@ -123,7 +123,7 @@ fn scan_json_conversations(
                     );
                 } else {
                     for (index, message) in parsed_messages.into_iter().enumerate() {
-                        let parsed = parser.parse(&message, &current.source_file_id);
+                        let parsed = parser.parse(&message, &current.source_file_id, &current.path);
                         ignored_empty_records = ignored_empty_records.saturating_add(
                             super::scan::collect_parsed_with_prefix(
                                 parsed,
@@ -315,13 +315,18 @@ struct GeminiParser;
 impl UsageParser for GeminiParser {
     const CONTEXT_FREE: bool = true;
 
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        source_path: &Path,
+    ) -> ParsedLine {
         if value.get("messages").is_some() {
             let mut records = Vec::new();
             let mut reason = None;
             let mut ignored_empty_records = 0;
             for message in conversation_messages(&Value::Object(value.clone())) {
-                let parsed = self.parse(&message, source_file_id);
+                let parsed = self.parse(&message, source_file_id, source_path);
                 records.extend(parsed.records);
                 ignored_empty_records += parsed.ignored_empty_records;
                 if reason.is_none() {
@@ -341,11 +346,15 @@ impl UsageParser for GeminiParser {
         if message_type.is_none() && value.get("tokens").is_none() {
             return ParsedLine::empty();
         }
-        gemini_message(value, source_file_id)
+        gemini_message(value, source_file_id, source_path)
     }
 }
 
-fn gemini_message(value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+fn gemini_message(
+    value: &Map<String, Value>,
+    source_file_id: &str,
+    source_path: &Path,
+) -> ParsedLine {
     let Some(tokens) = object(value.get("tokens")) else {
         return if value.get("type").and_then(Value::as_str) == Some("gemini") {
             ParsedLine::ignored_empty()
@@ -412,6 +421,9 @@ fn gemini_message(value: &Map<String, Value>, source_file_id: &str) -> ParsedLin
                 billable_tools: BillableTools::default(),
                 source_cost_microusd: None,
                 source_cost_covered_requests: 0,
+                project_key: cwd_from_value(value)
+                    .and_then(project_key_from_cwd)
+                    .or_else(|| project_key_from_source_path(source_path)),
             },
             source_file_id: source_file_id.to_owned(),
             record_key: String::new(),

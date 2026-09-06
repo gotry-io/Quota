@@ -237,6 +237,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       "ipc_version": 1,
       "revision": 0,
       "usage_upload_enabled": true,
+      "group_usage_by_project": true,
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -327,6 +328,7 @@ func decodesProviderStatusReadings() throws {
       "ipc_version": 1,
       "revision": 0,
       "usage_upload_enabled": true,
+      "group_usage_by_project": true,
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -395,6 +397,7 @@ func rejectsUnknownProviderStatusIndicators() {
       "ipc_version": 1,
       "revision": 0,
       "usage_upload_enabled": true,
+      "group_usage_by_project": true,
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -784,11 +787,26 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
     cost: cost,
     providers: [provider]
   )
+  let namedProject = LocalUsageProjectSummary(
+    projectKey: "Quota",
+    totalTokens: 130,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
+  let otherProject = LocalUsageProjectSummary(
+    projectKey: "other",
+    totalTokens: 10,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
   let summary = LocalUsagePeriodSummary(
     totals: summaryTotals,
     cost: cost,
     cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
     agents: [client],
+    projects: [namedProject, otherProject],
     days: [LocalUsageDay(date: "2026-08-10", totals: summaryTotals, cost: cost)],
     hoursOfDay: (0..<24).map {
       LocalUsageHourOfDay(hour: $0, totalTokens: $0 == 12 ? 1 : 0, costMicrousd: nil)
@@ -802,6 +820,8 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
   #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
   #expect(decoded.cacheSaved.status == .complete)
+  #expect(decoded.projects.map(\.projectKey) == ["Quota", "other"])
+  #expect(decoded.projects.map(\.displayName) == ["Quota", "Other"])
   #expect(decoded.days?.map(\.date) == ["2026-08-10"])
   #expect(decoded.hoursOfDay?.count == 24)
   #expect(decoded.hoursOfDay?[12].totalTokens == 1)

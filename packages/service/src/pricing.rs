@@ -1424,6 +1424,7 @@ mod tests {
     fn unnamed_channel_row(model: &str) -> DatedUsageRow {
         DatedUsageRow {
             date: "2026-08-10".into(),
+            project_key: String::new(),
             row: UsageRow {
                 agent: UsageAgent::Grok,
                 billing_channel: BillingChannel::Unknown,

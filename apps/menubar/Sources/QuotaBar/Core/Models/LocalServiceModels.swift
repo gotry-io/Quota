@@ -575,6 +575,7 @@ struct LocalServiceState: Decodable, Sendable {
   let ipcVersion: Int
   let revision: Int
   let usageUploadEnabled: Bool
+  let groupUsageByProject: Bool
   let quotaRefreshIntervalSeconds: Int
   let usagePeriods: LocalServiceUsagePeriodCache
   let quota: LocalServiceComponent<QuotaCollectionReport>
@@ -592,6 +593,7 @@ struct LocalServiceState: Decodable, Sendable {
     case ipcVersion
     case revision
     case usageUploadEnabled
+    case groupUsageByProject
     case quotaRefreshIntervalSeconds
     case usagePeriods
     case quota
@@ -661,7 +663,8 @@ struct LocalServiceState: Decodable, Sendable {
 extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "ipcVersion", "revision", "usageUploadEnabled", "quotaRefreshIntervalSeconds",
+      "ipcVersion", "revision", "usageUploadEnabled", "groupUsageByProject",
+      "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
       "account", "pricing", "providers", "providerStatus", "providerBrowserSessions",
       "browserScanEnabled",
@@ -671,6 +674,7 @@ extension LocalServiceState {
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
     revision = try container.decode(Int.self, forKey: .revision)
     usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
+    groupUsageByProject = try container.decode(Bool.self, forKey: .groupUsageByProject)
     quotaRefreshIntervalSeconds = try container.decode(Int.self, forKey: .quotaRefreshIntervalSeconds)
     usagePeriods = try container.decode(LocalServiceUsagePeriodCache.self, forKey: .usagePeriods)
     quota = try container.decode(LocalServiceComponent<QuotaCollectionReport>.self, forKey: .quota)
@@ -757,6 +761,22 @@ struct LocalServiceUsageUploadSetting: Decodable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case enabled
+  }
+}
+
+struct LocalServiceGroupUsageByProjectSetting: Decodable, Sendable {
+  let enabled: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+  }
+}
+
+extension LocalServiceGroupUsageByProjectSetting {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["enabled"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
   }
 }
 

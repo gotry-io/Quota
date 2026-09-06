@@ -564,6 +564,10 @@ The default page contains:
   clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as a whole-percent
   share. Omit the section when every hour is empty. The Account source has no Rhythm — Relay stores
   hours on UTC keys and does not fold a local clock.
+- Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
+  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
+  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
+  Account Usage has no such section.
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
@@ -596,7 +600,11 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ### Agents
 
-Agents has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
+Agents opens with a **Usage** group that holds one native mini switch, **Group Usage by project**,
+default on. It only changes This Mac: the Usage page Projects section and the local hour dimension
+behind it. Upload rows never carry a project key.
+
+Agents then has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
 reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
 name. When this Mac has a last-good official status-page reading, that line is
 **All systems operational**, or **Degraded ·** the status-page description for `minor` and above.

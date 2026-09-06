@@ -647,6 +647,9 @@ impl LocalService {
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
             Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
+            Operation::SetGroupUsageByProject => {
+                self.set_group_usage_by_project(&request).map(as_json)
+            }
             Operation::SetQuotaRefreshInterval => {
                 self.set_quota_refresh_interval(&request).map(as_json)
             }
@@ -1000,6 +1003,22 @@ impl LocalService {
         self.emit(vec![ComponentName::Usage]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(UsageUploadSetting {
+            enabled: payload.enabled,
+        })
+    }
+
+    fn set_group_usage_by_project(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<crate::protocol::GroupUsageByProjectSetting, IpcError> {
+        let payload: crate::protocol::SetGroupUsageByProjectPayload = request.decode_payload()?;
+        self.inner
+            .state
+            .set_group_usage_by_project(payload.enabled)
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Usage]);
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
+        Ok(crate::protocol::GroupUsageByProjectSetting {
             enabled: payload.enabled,
         })
     }
@@ -3465,6 +3484,57 @@ mod tests {
                 .snapshot()
                 .expect("updated state")
                 .usage_upload_enabled
+        );
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Usage])
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn grouping_usage_by_project_is_durable_and_emits_usage_state() {
+        let root = std::env::temp_dir().join(format!("quota-group-project-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
+        assert!(
+            state
+                .snapshot()
+                .expect("initial state")
+                .group_usage_by_project
+        );
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "group-project",
+            "operation": "set_group_usage_by_project",
+            "payload": {"enabled": false}
+        }))
+        .expect("request");
+
+        let response = service.handle(request);
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !state
+                .snapshot()
+                .expect("updated state")
+                .group_usage_by_project
         );
         assert!(
             sink.0

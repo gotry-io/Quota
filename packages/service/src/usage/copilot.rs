@@ -2,10 +2,11 @@ use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_fi
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
     ParsedLine, UsageAgent, UsageError, bounded_model, bounded_model_text, canonical_instant,
-    context_bucket, object, optional_count, safe_count,
+    context_bucket, cwd_from_value, object, optional_count, project_key_from_cwd, safe_count,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 pub fn scan_copilot_usage(
     options: &super::UsageScanOptions,
@@ -14,12 +15,9 @@ pub fn scan_copilot_usage(
         UsageAgent::Copilot,
         &roots_for(UsageAgent::Copilot, options),
     )?;
-    scan_jsonl_files(
-        UsageAgent::Copilot,
-        options,
-        discovery,
-        CopilotParser::default,
-    )
+    scan_jsonl_files(UsageAgent::Copilot, options, discovery, |_| {
+        CopilotParser::default()
+    })
 }
 
 #[derive(Default)]
@@ -39,7 +37,12 @@ struct TokenUsage {
 }
 
 impl UsageParser for CopilotParser {
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        _source_path: &Path,
+    ) -> ParsedLine {
         match value.get("type").and_then(Value::as_str) {
             Some("assistant.usage") => {
                 self.saw_per_call = true;
@@ -206,6 +209,9 @@ fn event_from_counts(
                 billable_tools: BillableTools::default(),
                 source_cost_microusd: None,
                 source_cost_covered_requests: 0,
+                project_key: cwd_from_value(envelope)
+                    .or_else(|| object(envelope.get("data")).and_then(cwd_from_value))
+                    .and_then(project_key_from_cwd),
             },
             source_file_id: source_file_id.to_owned(),
             record_key: String::new(),

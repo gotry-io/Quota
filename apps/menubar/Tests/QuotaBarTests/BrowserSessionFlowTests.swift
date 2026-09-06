@@ -788,6 +788,7 @@ private actor FlowService: LocalServiceServing {
       ipcVersion: stateValue.ipcVersion,
       revision: stateValue.revision,
       usageUploadEnabled: stateValue.usageUploadEnabled,
+      groupUsageByProject: stateValue.groupUsageByProject,
       quotaRefreshIntervalSeconds: stateValue.quotaRefreshIntervalSeconds,
       usagePeriods: stateValue.usagePeriods,
       quota: stateValue.quota,
@@ -808,6 +809,7 @@ private actor FlowService: LocalServiceServing {
   func cancelLogin() async throws {}
   func logout() async throws -> LocalServiceLogoutResult { throw LocalServiceClientError.serviceMissing }
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting { throw LocalServiceClientError.serviceMissing }
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting { throw LocalServiceClientError.serviceMissing }
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting { throw LocalServiceClientError.serviceMissing }
   func setOverviewSourcePin(
     provider: ProviderID,
@@ -953,6 +955,7 @@ private func flowState(
     ipcVersion: 1,
     revision: revision,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: LocalServiceUsagePeriodCache(local: emptyPeriods, account: emptyPeriods),
     quota: quota,

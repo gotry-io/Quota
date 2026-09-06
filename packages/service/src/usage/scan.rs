@@ -22,9 +22,8 @@ use std::sync::{
 /// Bump it when a parser starts emitting different facts for input it already indexed; a rescan
 /// then re-derives every source and marks only the hours whose facts actually differ.
 ///
-/// v6 resolves the Moonshot and DeepSeek billing channels from registered provider ids, which
-/// previously produced the unknown channel.
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v6";
+/// v7 attributes each fact to a local project basename derived from cwd or the source path.
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v7";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {
@@ -97,6 +96,7 @@ pub(crate) trait UsageParser {
         &mut self,
         value: &serde_json::Map<String, serde_json::Value>,
         source_file_id: &str,
+        source_path: &Path,
     ) -> ParsedLine;
     fn finish(&mut self) -> ParsedLine {
         ParsedLine::empty()
@@ -320,7 +320,7 @@ pub(crate) fn scan_jsonl_files<P, F>(
 ) -> Result<UsageScanResult, UsageError>
 where
     P: UsageParser,
-    F: Fn() -> P,
+    F: Fn(&LocalUsageFile) -> P,
 {
     let range = parse_range(&options.start_at, &options.end_at)?;
     let discovery_files = discovery.files;
@@ -419,7 +419,7 @@ where
             Some((offset, hasher)) => (offset, Some(hasher)),
             None => (0, None),
         };
-        let mut parser = parser_factory();
+        let mut parser = parser_factory(&file);
         let mut source_records = Vec::new();
         let source_reasons = RefCell::new(Vec::new());
         let mut parsed_offset = resume_at;
@@ -481,7 +481,7 @@ where
                                 return true;
                             }
                         };
-                        let parsed = parser.parse(&object, &current.source_file_id);
+                        let parsed = parser.parse(&object, &current.source_file_id, &file.path);
                         let mut reasons = source_reasons.borrow_mut();
                         ignored_empty_records =
                             ignored_empty_records.saturating_add(collect_parsed(

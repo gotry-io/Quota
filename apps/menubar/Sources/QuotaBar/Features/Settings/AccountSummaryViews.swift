@@ -193,6 +193,12 @@ struct AccountUsageView: View {
             }
           }
 
+          if !usage.projects.isEmpty {
+            SettingsSection(title: "Projects") {
+              projectUsage(usage.projects)
+            }
+          }
+
           if let hours = usage.hoursOfDay, hours.contains(where: { $0.totalTokens > 0 }) {
             SettingsSection(title: "Rhythm") {
               rhythm(hours)
@@ -283,7 +289,8 @@ struct AccountUsageView: View {
       cacheHitBasisPoints: usage.cacheHitBasisPoints,
       days: usage.days,
       hoursOfDay: usage.hoursOfDay,
-      models: localModels
+      models: localModels,
+      projects: source == .local && model.groupUsageByProject ? usage.projects : []
     )
   }
 
@@ -516,6 +523,62 @@ struct AccountUsageView: View {
     .accessibilityLabel("Provider \(title)")
   }
 
+  private func projectUsage(_ projects: [LocalUsageProjectSummary]) -> some View {
+    let ordered = projects.sorted {
+      UsageValueFormatter.precedes(
+        cost: $0.cost, tokens: $0.totalTokens, name: $0.projectKey,
+        before: $1.cost, tokens: $1.totalTokens, name: $1.projectKey
+      )
+    }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+      HStack(spacing: QuotaDesign.Spacing.xxs) {
+        Text("Project")
+          .quotaMetaStyle()
+        Spacer(minLength: 0)
+        Text("Tokens")
+          .quotaMetaStyle()
+          .frame(minWidth: 52, alignment: .trailing)
+        Text("Cost")
+          .quotaMetaStyle()
+          .frame(minWidth: 52, alignment: .trailing)
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.top, QuotaDesign.Spacing.sm)
+      .accessibilityHidden(true)
+
+      ForEach(ordered, id: \.projectKey) { project in
+        let tokens = UsageValueFormatter.count(project.totalTokens)
+        let cost = UsageValueFormatter.compactCost(project.cost)
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.xxs) {
+            Text(project.displayName)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.body)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+            Text(tokens)
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+              .frame(minWidth: 52, alignment: .trailing)
+            Text(cost)
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+              .minimumScaleFactor(0.75)
+              .frame(minWidth: 52, alignment: .trailing)
+          }
+          Text(project.topModel)
+            .quotaMetaStyle()
+            .lineLimit(1)
+        }
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(project.displayName)
+        .accessibilityValue("\(tokens) tokens, \(cost), top model \(project.topModel)")
+      }
+    }
+    .padding(.bottom, QuotaDesign.Spacing.sm)
+  }
+
   private func modelUsageRow(
     _ model: PresentedUsageModel,
     title: String,
@@ -645,6 +708,7 @@ private struct PresentedUsage: Equatable {
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
   let models: [PresentedUsageModel]
+  let projects: [LocalUsageProjectSummary]
 }
 
 private struct PresentedUsageProvider: Identifiable {

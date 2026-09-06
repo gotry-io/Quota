@@ -325,6 +325,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let cost: UsageCostOutcome
   let cacheSaved: UsageCacheSaved
   let agents: [LocalUsageAgentSummary]
+  let projects: [LocalUsageProjectSummary]
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
   let modelsTruncated: Bool?
@@ -334,6 +335,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     case cost
     case cacheSaved
     case agents
+    case projects
     case days
     case hoursOfDay
     case modelsTruncated
@@ -343,6 +345,8 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     totals.isValid && cost.isValid && cacheSaved.isValid
       && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
+      && projects.count <= 50
+      && projects.allSatisfy(\.isValid)
       && (days?.count ?? 0) <= 31
       && (days?.allSatisfy(\.isValid) ?? true)
       && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
@@ -364,6 +368,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     cost: UsageCostOutcome,
     cacheSaved: UsageCacheSaved,
     agents: [LocalUsageAgentSummary],
+    projects: [LocalUsageProjectSummary] = [],
     days: [LocalUsageDay]? = nil,
     hoursOfDay: [LocalUsageHourOfDay]? = nil,
     modelsTruncated: Bool? = nil
@@ -372,6 +377,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     self.cost = cost
     self.cacheSaved = cacheSaved
     self.agents = agents
+    self.projects = projects
     self.days = days
     self.hoursOfDay = hoursOfDay
     self.modelsTruncated = modelsTruncated
@@ -379,19 +385,76 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "totals", "cost", "cacheSaved", "agents", "days", "hoursOfDay", "modelsTruncated",
+      "totals", "cost", "cacheSaved", "agents", "projects", "days", "hoursOfDay",
+      "modelsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
     agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
+    projects = try container.decode([LocalUsageProjectSummary].self, forKey: .projects)
     days = try container.decodeIfPresent([LocalUsageDay].self, forKey: .days)
     hoursOfDay = try container.decodeIfPresent([LocalUsageHourOfDay].self, forKey: .hoursOfDay)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .agents, in: container, debugDescription: "Invalid local Usage period summary.")
+    }
+  }
+}
+
+struct LocalUsageProjectSummary: Codable, Equatable, Sendable {
+  let projectKey: String
+  let totalTokens: Int
+  let cost: UsageCostOutcome
+  let messages: Int
+  let topModel: String
+
+  private enum CodingKeys: String, CodingKey {
+    case projectKey
+    case totalTokens
+    case cost
+    case messages
+    case topModel
+  }
+
+  var isValid: Bool {
+    !projectKey.isEmpty && projectKey.count <= 128 && totalTokens >= 0 && messages >= 0
+      && !topModel.isEmpty && cost.isValid
+  }
+
+  var displayName: String {
+    projectKey == "other" ? "Other" : projectKey
+  }
+
+  init(
+    projectKey: String,
+    totalTokens: Int,
+    cost: UsageCostOutcome,
+    messages: Int,
+    topModel: String
+  ) {
+    self.projectKey = projectKey
+    self.totalTokens = totalTokens
+    self.cost = cost
+    self.messages = messages
+    self.topModel = topModel
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "projectKey", "totalTokens", "cost", "messages", "topModel",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    projectKey = try container.decode(String.self, forKey: .projectKey)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    messages = try container.decode(Int.self, forKey: .messages)
+    topModel = try container.decode(String.self, forKey: .topModel)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .projectKey, in: container, debugDescription: "Invalid local Usage project summary.")
     }
   }
 }

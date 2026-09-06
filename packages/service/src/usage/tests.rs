@@ -1,11 +1,11 @@
 use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
     DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, LocalHourUsage,
-    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS_PER_HOUR, NormalizedUsageEvent,
-    UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions, aggregate_hour_rows,
-    build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other, fold_usage_rows,
-    scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage,
-    scan_opencode_usage, scan_pi_usage,
+    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_PROJECTS, MAX_USAGE_ROWS_PER_HOUR,
+    NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions,
+    aggregate_hour_rows, build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other,
+    fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage,
+    scan_local_usage, scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -219,6 +219,109 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
 }
 
 #[test]
+fn parsers_fill_project_key_from_cwd_and_encoded_directories() {
+    let path = root("project-key-codex");
+    fs::write(
+        path.join("rollout-quota.jsonl"),
+        r#"{"timestamp":"2026-08-02T10:00:00.000Z","type":"session_meta","payload":{"cwd":"/Users/someone/Code/Quota"}}
+{"timestamp":"2026-08-02T10:01:00.000Z","type":"turn_context","payload":{"model":"gpt-5.2-codex"}}
+{"timestamp":"2026-08-02T10:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2},"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}
+"#,
+    )
+    .expect("codex log");
+    let result = scan_codex_usage(&options(&path)).expect("codex");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-claude");
+    let project_dir = path.join("projects").join("-Users-someone-Code-Quota");
+    fs::create_dir_all(&project_dir).expect("claude project dir");
+    fs::write(
+        project_dir.join("session.jsonl"),
+        r#"{"timestamp":"2026-08-02T12:00:00.000Z","cwd":"/Users/someone/Code/Quota","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input_tokens":10,"output_tokens":4}}}
+"#,
+    )
+    .expect("claude log");
+    let result = scan_claude_usage(&options(&path)).expect("claude");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-cursor");
+    let project_dir = path.join("projects").join("Users-someone-Code-Quota");
+    fs::create_dir_all(&project_dir).expect("cursor project dir");
+    fs::write(
+        project_dir.join("chat.jsonl"),
+        r#"{"role":"assistant","createdAt":"2026-08-02T10:00:00Z","model":"gpt-5","tokenCount":{"inputTokens":10,"outputTokens":2}}
+"#,
+    )
+    .expect("cursor log");
+    let result = scan_cursor_usage(&options(&path)).expect("cursor");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-grok");
+    fs::write(path.join("updates.jsonl"), fixture("grok")).expect("grok log");
+    let result = scan_grok_usage(&options(&path)).expect("grok");
+    assert_eq!(result.records[0].event.project_key, None);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn local_projects_fold_past_the_bound_into_other() {
+    let mut rows = Vec::new();
+    for index in 0..MAX_USAGE_PROJECTS + 2 {
+        let mut row = test_fact("2026-08-02T12:00:00Z", "gpt-5");
+        row.project_key = format!("project-{index:02}");
+        row.input_tokens = (MAX_USAGE_PROJECTS + 2 - index) as u64 * 10;
+        rows.push(row);
+    }
+    let summary = super::build_local_usage_summary_with_projects(&rows, Some(&rows), None, None)
+        .expect("projects");
+    assert_eq!(summary.projects.len(), MAX_USAGE_PROJECTS);
+    assert!(
+        summary
+            .projects
+            .iter()
+            .any(|project| project.project_key == "other")
+    );
+    let named: u64 = summary
+        .projects
+        .iter()
+        .filter(|project| project.project_key != "other")
+        .map(|project| project.total_tokens)
+        .sum();
+    let other = summary
+        .projects
+        .iter()
+        .find(|project| project.project_key == "other")
+        .expect("other")
+        .total_tokens;
+    assert_eq!(named + other, summary.totals.total_tokens);
+}
+
+#[test]
+fn aggregate_hour_rows_for_upload_collapse_the_project_dimension() {
+    let mut alpha = test_event("2026-08-02T12:00:00.000Z", "gpt-5", 10);
+    alpha.project_key = Some("Quota".into());
+    let mut beta = test_event("2026-08-02T12:10:00.000Z", "gpt-5", 7);
+    beta.project_key = Some("OtherApp".into());
+    let rows = aggregate_hour_rows(&[alpha, beta]).expect("hour");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].input_tokens, 17);
+    let encoded = serde_json::to_value(&rows[0]).expect("row json");
+    assert!(encoded.get("project_key").is_none());
+}
+
+#[test]
 fn codex_preserves_opaque_provider_model_names() {
     let path = root("codex-opaque-models");
     let log = r#"{"type":"turn_context","payload":{"model":"GPT-5.5[1m]"}}
@@ -237,6 +340,7 @@ fn codex_preserves_opaque_provider_model_names() {
             .collect::<Vec<_>>(),
         ["GPT-5.5[1m]", "openrouter-3o[1m]"]
     );
+    let _ = fs::remove_dir_all(path);
 }
 
 #[test]
@@ -2094,6 +2198,7 @@ fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUs
         billable_tools: super::BillableTools::default(),
         source_cost_microusd: None,
         source_cost_covered_requests: 0,
+        project_key: None,
     }
 }
 
@@ -2101,6 +2206,7 @@ fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUs
 fn test_fact(bucket_start_utc: &str, model: &str) -> DatedUsageRow {
     DatedUsageRow {
         date: bucket_start_utc[..10].into(),
+        project_key: String::new(),
         row: test_row(model),
     }
 }
@@ -2110,6 +2216,7 @@ fn dated(rows: &[UsageRow], date: &str) -> Vec<DatedUsageRow> {
     rows.iter()
         .map(|row| DatedUsageRow {
             date: date.to_owned(),
+            project_key: String::new(),
             row: row.clone(),
         })
         .collect()

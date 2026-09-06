@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Settings → Agents: catalog providers with drill-in to visibility and configuration.
 struct AgentsSettingsView: View {
+  @Bindable var model: MenuBarViewModel
   /// One line under each provider: signed in, reported elsewhere, or what it still needs.
   let statusLine: (ProviderID) -> String
   let onOpenProvider: (ProviderID) -> Void
@@ -20,6 +21,26 @@ struct AgentsSettingsView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
+        SettingsSection(title: "Usage") {
+          SettingsListRow(title: "Group Usage by project", systemImage: "folder") {
+            Toggle(
+              "Group Usage by project",
+              isOn: Binding(
+                get: { model.groupUsageByProject },
+                set: { desired in Task { await model.setGroupUsageByProject(desired) } }
+              )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .tint(QuotaPalette.accent)
+          }
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel("Group Usage by project")
+          .accessibilityHint("Show This Mac Usage broken down by repository")
+          .disabled(model.isUpdatingGroupUsageByProject)
+        }
+
         if !enabledProviders.isEmpty {
           SettingsSection(title: "Shown in Overview") {
             VStack(alignment: .leading, spacing: 0) {
