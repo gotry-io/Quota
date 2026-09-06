@@ -1,3 +1,4 @@
+import AuthenticationServices
 import QuotaProviderSessions
 import QuotaWire
 import SwiftUI
@@ -10,6 +11,7 @@ struct SettingsView: View {
   @State private var consentProvider: ProviderID?
   @State private var loginProvider: ProviderID?
   @State private var removing: StoredProviderSession?
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     Form {
@@ -54,8 +56,10 @@ struct SettingsView: View {
         Text(SettingsCopy.privacyAndSupport)
           .accessibilityIdentifier("section.header.privacy-and-support")
       }
+      signInMethodsSection
       accountSection
     }
+    .task { await model.loadIdentities() }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")
@@ -137,7 +141,7 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.logout")
       } else {
         Button(SettingsCopy.signIn) {
-          Task { await model.connectAccount() }
+          model.showSignIn()
         }
         .accessibilityIdentifier("settings.signin")
       }
@@ -152,6 +156,93 @@ struct SettingsView: View {
       )
       .accessibilityIdentifier("section.footer.account")
     }
+  }
+
+  /// How this Account is signed in to. An Account owns its identities rather than being one
+  /// ([ADR 0032](../../../docs/decisions/0032-an-account-owns-its-identities.md)), so this is a
+  /// group of channels rather than one account name.
+  ///
+  /// Apple is bound on the device, the way it is signed in with. The browser channels and every
+  /// unbind are the website's: binding writes to an Account, and unbinding is a destructive
+  /// change the website asks for a recent sign-in before allowing.
+  @ViewBuilder
+  private var signInMethodsSection: some View {
+    if model.hasAccountSession {
+      Section {
+        // Only a read that answered says which channels are bound. Until one has, the group is
+        // the way to the website and nothing else: rows would otherwise say Not linked about
+        // channels this app has not asked about yet.
+        if case .loaded = model.identities {
+          ForEach(IdentityProvider.offered, id: \.self) { provider in
+            signInMethodRow(provider)
+          }
+        }
+        Button(SettingsCopy.manageSignInMethods) {
+          Task { await model.presentSignInMethodsOnWeb() }
+        }
+        .accessibilityIdentifier("settings.sign-in-methods.manage")
+      } header: {
+        Text(SettingsCopy.signInMethods)
+          .accessibilityIdentifier("section.header.sign-in-methods")
+      } footer: {
+        Text(signInMethodsFooter)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("section.footer.sign-in-methods")
+      }
+    }
+  }
+
+  private var signInMethodsFooter: String {
+    if let failure = model.linkFailure { return failure }
+    if model.identities == .failed { return SettingsCopy.signInMethodsUnreadable }
+    return SettingsCopy.signInMethodsFooter
+  }
+
+  @ViewBuilder
+  private func signInMethodRow(_ provider: IdentityProvider) -> some View {
+    let bound = model.identities.identities.first { $0.provider == provider }
+    HStack {
+      // The state line is the opaque label colour rather than the hierarchical `.primary` a
+      // Providers row uses: as the second Text of a grouped-Form row, `.primary` resolves
+      // against the level the row's content configuration already set, and the contrast auditor
+      // reads what that resolves to rather than the label colour.
+      VStack(alignment: .leading, spacing: 3) {
+        Text(provider.displayName)
+          .font(.subheadline.weight(.medium))
+        Text(signInMethodState(provider, bound: bound))
+          .font(.footnote)
+          .foregroundStyle(Color(uiColor: .label))
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .accessibilityIdentifier("settings.sign-in-methods.\(provider.rawValue)")
+      Spacer(minLength: 12)
+      if bound == nil, model.linkingProvider != provider {
+        if provider == .apple {
+          // Apple's own control asks on the device; there is no browser trip to bind it.
+          SignInWithAppleButton(.continue) { request in
+            model.prepareAppleRequest(request)
+          } onCompletion: { result in
+            Task { await model.linkApple(result) }
+          }
+          .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+          .frame(width: 132, height: 36)
+          .clipShape(Capsule())
+          .accessibilityIdentifier("settings.sign-in-methods.link.apple")
+        } else {
+          Button(SettingsCopy.linkOnWeb) {
+            Task { await model.presentSignInMethodsOnWeb() }
+          }
+          .buttonStyle(.borderless)
+          .accessibilityIdentifier("settings.sign-in-methods.link.\(provider.rawValue)")
+        }
+      }
+    }
+  }
+
+  private func signInMethodState(_ provider: IdentityProvider, bound: AccountIdentity?) -> String {
+    if let bound { return SettingsCopy.linkedLabel(bound.label) }
+    if model.linkingProvider == provider { return SettingsCopy.linking }
+    return SettingsCopy.notLinked
   }
 
   /// One row per connected account, then the row that adds another. A provider this phone holds

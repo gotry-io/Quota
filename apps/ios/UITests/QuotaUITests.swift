@@ -191,7 +191,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.buttons["Log Out"].exists, "Log Out")
     // Back to the top: the hub is longer than one screen, and a row scrolled under the
     // navigation bar's glass is a system overlay the contrast pass would sample instead of the row.
-    scrollContent(app, up: false)
+    scrollToTop(app)
     attachScreenshot(app, name: "settings-main")
     try audit(app)
 
@@ -494,18 +494,72 @@ final class QuotaUITests: XCTestCase {
     try audit(app)
   }
 
-  func testConnectingFixtureDisablesTheConnectButton() throws {
+  /// The one page that offers every way in, over the tabs it was asked from.
+  func testSignInFixtureOffersEveryWayIn() throws {
+    let app = launch(fixture: "sign-in")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
+      "connect.root"
+    )
+    XCTAssertTrue(app.descendants(matching: .any)["connect.apple"].exists, "Continue with Apple")
+    XCTAssertTrue(app.buttons["Continue with GitHub"].exists, "Continue with GitHub")
+    XCTAssertTrue(app.buttons["Continue with Email"].exists, "Continue with Email")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["connect.connecting"].exists,
+      "nothing is in flight until a way in is chosen"
+    )
+    attachScreenshot(app, name: "sign-in")
+    try audit(app)
+  }
+
+  func testConnectingFixtureShowsOneBusyControl() throws {
     let app = launch(fixture: "connecting")
-    let button = app.buttons["Connect with GitHub"]
-    XCTAssertTrue(button.waitForExistence(timeout: 10), "Connect with GitHub")
-    XCTAssertFalse(button.isEnabled, "Connecting disables the button")
-    XCTAssertEqual(
-      button.value as? String, "Connecting", "Connecting is the busy accessibility value")
+    let button = app.descendants(matching: .any)["connect.connecting"]
+    XCTAssertTrue(button.waitForExistence(timeout: 10), "connect.connecting")
+    XCTAssertFalse(button.isEnabled, "Connecting is not actionable")
     XCTAssertFalse(
       app.descendants(matching: .any)["connect.apple"].exists,
       "Apple has no busy presentation and is not drawn while connecting"
     )
+    XCTAssertFalse(
+      app.buttons["Continue with Email"].exists,
+      "no second way in while a sign-in is in flight"
+    )
     attachScreenshot(app, name: "connect-connecting")
+    try audit(app)
+  }
+
+  /// Sign-in methods: one row per channel, the bound ones named, the open one offering a way to
+  /// bind it, and the website for everything this app does not do itself.
+  func testSignInMethodsFixtureShowsEveryChannel() throws {
+    let app = launch(fixture: "sign-in-methods")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
+    )
+    let apple = app.descendants(matching: .any)["settings.sign-in-methods.apple"]
+    for _ in 0..<6 where !apple.exists {
+      scrollToIdentifierOnce(app, "settings.sign-in-methods.apple")
+    }
+    XCTAssertTrue(apple.waitForExistence(timeout: 5), "Apple row")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sign-in-methods.github"].exists, "GitHub row")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sign-in-methods.email"].exists, "Email row")
+    XCTAssertTrue(app.staticTexts["octocat"].exists, "the GitHub channel's label")
+    XCTAssertTrue(app.staticTexts["Linked"].exists, "a channel bound with no label")
+    XCTAssertTrue(app.staticTexts["Not linked"].exists, "the channel still open")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sign-in-methods.link.email"].exists,
+      "Link on Web for the channel this app does not bind itself"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["settings.sign-in-methods.link.github"].exists,
+      "a bound channel offers no Link"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sign-in-methods.manage"].exists, "Manage on Web")
+    attachScreenshot(app, name: "settings-sign-in-methods")
     try audit(app)
   }
 
@@ -947,6 +1001,11 @@ final class QuotaUITests: XCTestCase {
   ) {
     let control = app.descendants(matching: .any)[link]
     if !control.waitForExistence(timeout: 2) {
+      // A popped destination restores the hub where it was left, which can be either side of the
+      // row being asked for, so the top is where the search starts.
+      scrollToTop(app)
+    }
+    if !control.exists {
       scrollToIdentifierOnce(app, link)
     }
     XCTAssertTrue(control.waitForExistence(timeout: 5), link)
@@ -979,6 +1038,14 @@ final class QuotaUITests: XCTestCase {
   private func settle(_ app: XCUIApplication) {
     _ = app.wait(for: .runningForeground, timeout: 1)
     usleep(900_000)
+  }
+
+  /// Back to the top of a list, whatever it was scrolled to. One swipe is not the top of a hub
+  /// longer than a couple of screens.
+  private func scrollToTop(_ app: XCUIApplication) {
+    for _ in 0..<5 {
+      scrollContent(app, up: false)
+    }
   }
 
   private func scrollToIdentifierOnce(_ app: XCUIApplication, _ identifier: String) {
@@ -1174,10 +1241,12 @@ final class QuotaUITests: XCTestCase {
         let control = issue.element,
         app.navigationBars.firstMatch.exists
       {
-        // Everything from the top of the screen to just under the bar: a row scrolled that far
-        // is under the status bar's and the bar's glass alike.
+        // Everything from the top of the screen to where the bar's glass stops blooming: a row
+        // scrolled that far is under the status bar's and the bar's glass alike. The bloom
+        // reaches about a row and a half past the bar's own edge, the same distance the floating
+        // tab bar's does at the other end.
         let bar = app.navigationBars.firstMatch.frame
-        let overlay = CGRect(x: 0, y: 0, width: app.frame.width, height: bar.maxY + 24)
+        let overlay = CGRect(x: 0, y: 0, width: app.frame.width, height: bar.maxY + 96)
         if control.frame.intersects(overlay) {
           return true
         }
@@ -1264,6 +1333,7 @@ final class QuotaUITests: XCTestCase {
             "devices.manage",
             "settings.delete-account",
             "settings.logout",
+            "settings.sign-in-methods.",
             "GitHub",
             "Website",
             "Privacy",
@@ -1292,6 +1362,7 @@ final class QuotaUITests: XCTestCase {
 
 /// The rows this app collapses into one accessibility element with `children: .ignore`.
 private let mergedRows = [
+  "settings.sign-in-methods.",
   "usage.day",
   "usage.provider.",
   "devices.row",

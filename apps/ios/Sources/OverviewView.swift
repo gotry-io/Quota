@@ -145,7 +145,7 @@ struct OverviewEmptyState: View {
           .frame(minHeight: QuotaTheme.minimumTouchTarget)
           .accessibilityIdentifier("overview.connect-provider")
         if !model.hasAccountSession {
-          Button(Self.signIn) { Task { await model.connectAccount() } }
+          Button(Self.signIn) { model.showSignIn() }
             .frame(minHeight: QuotaTheme.minimumTouchTarget)
             .accessibilityIdentifier("overview.signin")
         }

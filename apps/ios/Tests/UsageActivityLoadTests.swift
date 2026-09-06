@@ -259,4 +259,6 @@ private final class CancelledAuthenticator: BrowserSessionAuthenticating {
     callbackScheme: String?,
     prefersEphemeralWebBrowserSession: Bool
   ) async throws {}
+
+  func cancelPresentation() {}
 }

@@ -367,6 +367,176 @@ struct AppModelTests {
   }
 
   @Test
+  func signingInIsAskedBeforeAnythingIsOpened() async throws {
+    let authenticator = ScriptedAuthenticator(results: [])
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(),
+        summaryStore: MemoryAccountSummaryStore()
+      ),
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    model.phase = .signedOut
+
+    model.showSignIn()
+    #expect(model.presentsSignIn)
+    // The page offering every way in opens no browser by itself.
+    #expect(authenticator.lastURL == nil)
+
+    await model.connectAccount()
+    #expect(model.presentsSignIn == false)
+  }
+
+  /// An emailed sign-in link is opened by the mail app, so Relay's redirect back to the app
+  /// arrives as a URL open rather than through the session sheet that is still waiting.
+  @Test
+  func anEmailedSignInFinishesThroughTheAppCallbackAndEndsTheWaitingSheet() async throws {
+    let authenticator = WaitingAuthenticator()
+    let sessions = MemoryAccountSessionStore()
+    let account = AccountClient(
+      relay: RelayClient(
+        transport: ScriptedHTTPTransport([
+          .init(status: 200, body: try tokenResponse()),
+          .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+        ])),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    let connecting = Task { await model.connectAccount() }
+    while model.phase != .connecting {
+      await Task.yield()
+    }
+
+    model.openDeepLink(
+      URL(
+        string:
+          "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+      )!
+    )
+    while model.phase == .connecting {
+      await Task.yield()
+    }
+    await connecting.value
+
+    #expect(authenticator.cancelCount == 1)
+    #expect(model.phase == .confirmingAccount(label: "octocat"))
+    #expect(try sessions.load()?.activation == .pending)
+    // The cancel that ends the sheet is not a sign-out: the callback already answered.
+    #expect(model.summary?.account.displayLabel == "octocat")
+  }
+
+  @Test
+  func anAuthorizationCallbackWithNothingWaitingForItSaysSo() async throws {
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(transport: ScriptedHTTPTransport([])),
+        sessionStore: MemoryAccountSessionStore(),
+        summaryStore: MemoryAccountSummaryStore()
+      ),
+      authenticator: ScriptedAuthenticator(results: []),
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    model.phase = .signedOut
+
+    model.openDeepLink(
+      URL(
+        string:
+          "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+      )!
+    )
+    while model.banner == nil {
+      await Task.yield()
+    }
+    #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
+    #expect(model.phase == .signedOut)
+  }
+
+  @Test
+  func signInMethodsAreReadUnderTheSessionAndClearedWithIt() async throws {
+    let sessions = MemoryAccountSessionStore()
+    try sessions.save(Fixtures.session())
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([
+            .init(status: 200, body: try Fixtures.accountIdentitiesJSON())
+          ])),
+        sessionStore: sessions,
+        summaryStore: MemoryAccountSummaryStore()
+      ),
+      authenticator: ScriptedAuthenticator(results: []),
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    model.sessionActivation = .active
+
+    await model.loadIdentities()
+    #expect(model.identities.identities.map(\.provider) == [.github, .apple])
+
+    await model.logout()
+    #expect(model.identities == .idle)
+  }
+
+  @Test
+  func aFailedIdentitiesReadIsItsOwnStateRatherThanAnEmptyList() async throws {
+    let sessions = MemoryAccountSessionStore()
+    try sessions.save(Fixtures.session())
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([.init(status: 500, body: Data())])),
+        sessionStore: sessions,
+        summaryStore: MemoryAccountSummaryStore()
+      ),
+      authenticator: ScriptedAuthenticator(results: []),
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    model.sessionActivation = .active
+
+    await model.loadIdentities()
+    #expect(model.identities == .failed)
+    #expect(model.identities.identities.isEmpty)
+  }
+
+  @Test
+  func managingSignInMethodsOpensTheWebsiteSignInWithSettingsAsTheReturn() async throws {
+    let sessions = MemoryAccountSessionStore()
+    try sessions.save(Fixtures.session())
+    let authenticator = ScriptedAuthenticator(results: [])
+    let model = AppModel(
+      account: AccountClient(
+        relay: RelayClient(
+          transport: ScriptedHTTPTransport([
+            .init(status: 200, body: try Fixtures.accountIdentitiesJSON())
+          ])),
+        sessionStore: sessions,
+        summaryStore: MemoryAccountSummaryStore()
+      ),
+      authenticator: authenticator,
+      makeAuthorizationAttempt: { connectAttempt() }
+    )
+    model.sessionActivation = .active
+
+    await model.presentSignInMethodsOnWeb()
+    #expect(
+      authenticator.lastPresentURL
+        == URL(string: "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings")
+    )
+    // Shared Safari cookies: the browser must be able to be signed in as this Account.
+    #expect(authenticator.lastPresentCallbackScheme == nil)
+    #expect(authenticator.lastPresentPrefersEphemeral == false)
+    // What came back is read rather than assumed.
+    #expect(model.identities.identities.map(\.provider) == [.github, .apple])
+  }
+
+  @Test
   func connectAccountFetchesFreshSummaryThenLogout() async throws {
     let attempt = AuthorizationAttempt(
       authorizationURL: URL(
@@ -878,6 +1048,50 @@ final class ScriptedAuthenticator: BrowserSessionAuthenticating {
     lastPresentCallbackScheme = callbackScheme
     lastPresentPrefersEphemeral = prefersEphemeralWebBrowserSession
   }
+
+  var cancelCount = 0
+
+  func cancelPresentation() {
+    cancelCount += 1
+    cancel?()
+  }
+
+  /// What ending the sheet does, when a test needs the waiting `authenticate` to answer.
+  var cancel: (@MainActor () -> Void)?
+}
+
+/// A sheet that stays up until it is cancelled, which is what an emailed sign-in leaves behind:
+/// the verifying navigation happens in the system browser, so nothing ever comes back to it.
+@MainActor
+final class WaitingAuthenticator: BrowserSessionAuthenticating {
+  private var waiter: CheckedContinuation<URL, Error>?
+  var cancelCount = 0
+  var lastPresentURL: URL?
+
+  func authenticate(
+    url: URL,
+    callbackScheme: String,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws -> URL {
+    try await withCheckedThrowingContinuation { continuation in
+      waiter = continuation
+    }
+  }
+
+  func present(
+    url: URL,
+    callbackScheme: String?,
+    prefersEphemeralWebBrowserSession: Bool
+  ) async throws {
+    lastPresentURL = url
+  }
+
+  func cancelPresentation() {
+    cancelCount += 1
+    let waiter = waiter
+    self.waiter = nil
+    waiter?.resume(throwing: AuthorizationError.cancelled)
+  }
 }
 
 final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
@@ -1070,6 +1284,23 @@ enum Fixtures {
       "store": "app_store",
       "stale": false,
     ]
+  }
+
+  static func accountIdentitiesJSON() throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "protocol_version": 2,
+      "account": [
+        "account_id": "account_01",
+        "display_label": "octocat",
+        "created_at": "2026-01-04T12:00:00Z",
+      ],
+      "identities": [
+        ["provider": "github", "label": "octocat", "linked_at": "2026-01-04T12:00:00Z"],
+        ["provider": "apple", "label": NSNull(), "linked_at": "2026-02-04T12:00:00Z"],
+      ],
+      "entitlement": entitlement(status: "none", expiresAt: nil, willRenew: false),
+      "purchase": ["web_url": "https://pay.rev.cat/testtoken/account_01"],
+    ])
   }
 
   static func accountSummaryJSON(

@@ -10,6 +10,17 @@ struct DeepLinkTests {
   }
 
   @Test
+  func oauthCallback() {
+    // The end of a browser sign-in that finished outside the session sheet, query and all.
+    #expect(
+      parse("io.gotry.quota:/oauth/callback?code=abc&state=xyz") == .oauthCallback
+    )
+    #expect(parse("io.gotry.quota:/oauth/callback") == .oauthCallback)
+    #expect(parse("io.gotry.quota:/oauth") == nil)
+    #expect(parse("io.gotry.quota:/oauth/callback/extra") == nil)
+  }
+
+  @Test
   func validSubscriptionId() {
     #expect(
       parse("io.gotry.quota:/subscriptions/0123456789ab") == .subscription(id: "0123456789ab")
@@ -54,7 +65,6 @@ struct DeepLinkTests {
 
   @Test
   func rejectsUnknownPathsAndSchemes() {
-    #expect(parse("io.gotry.quota:/oauth/callback") == nil)
     #expect(parse("io.gotry.quota:/devices") == nil)
     #expect(parse("io.gotry.quota:/overview/extra") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789ab/extra") == nil)
@@ -141,7 +151,7 @@ struct DeepLinkTests {
       model.selectedTab = .settings
       model.pendingSubscriptionSelection = "0123456789ab"
       model.overviewPath = ["codex|visual_codex|global|"]
-      model.openDeepLink(URL(string: "io.gotry.quota:/oauth/callback")!)
+      model.openDeepLink(URL(string: "io.gotry.quota:/devices")!)
       #expect(model.selectedTab == .overview)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)

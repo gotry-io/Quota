@@ -4,7 +4,7 @@ Quota is the native iOS 26+ quota app. It reads two things and shows one list.
 
 It signs in to a provider's own web session on the phone and reads that provider on this device,
 which is all it needs to be useful — no Quota account required. With one, it also signs in with the
-registered `quota-ios` public client and reads the GitHub Account's remaining quota and Today Usage
+registered `quota-ios` public client and reads the Account's remaining quota and Today Usage
 from the fixed Relay origin; Relay resolves an account's readings into one subscription per key, so
 the app renders those rows rather than one card per reporting Mac. Overview is the two merged by
 the rule in [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md), so
@@ -13,6 +13,24 @@ non-secret App Group snapshot for Home Screen and Lock Screen widgets. Home Scre
 remaining quota (small: one subscription, two windows; medium: up to three providers; large: three
 providers × two windows plus Today). Lock Screen families show Weekly used percent and
 **Resets in …**; rectangular adds the second window. Widgets are configurable.
+
+## Signing in
+
+There are three ways in, and they reach one Account
+([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). **Continue with Apple**
+asks on the device and posts the identity token Apple signed to `POST /oauth/v2/apple`. **Continue
+with GitHub** and **Continue with Email** open the same Relay authorize URL in
+`ASWebAuthenticationSession`, because Relay's `/sign-in` page is what asks which Account this is
+and offers every channel that reaches one. GitHub finishes inside that sheet; the emailed link is
+opened by the mail app, so it finishes in the system browser and Relay's redirect to
+`io.gotry.quota:/oauth/callback` reaches the app as a URL open, which the app exchanges against the
+attempt it is still holding before ending the sheet.
+
+**Settings › Sign-in methods** lists `GET /api/v2/account`'s `identities[]` and binds Apple on the
+device with `intent: link`. Every other bind, and every unbind, opens
+`https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings` in the browser: binding writes to an
+Account, and unbinding is a destructive change the website asks for a recent sign-in before
+allowing. UI behaviour is canonical in [`DESIGN.md`](DESIGN.md).
 
 ## Runtime boundary
 

@@ -389,4 +389,78 @@ struct DecodingTests {
       )
     }
   }
+
+  /// The Account read that names the channels reaching an Account, read tolerantly: this app
+  /// takes `identities[]` and ignores the account, entitlement, and purchase beside it, which it
+  /// already holds from the summary
+  /// ([ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
+  @Test func accountIdentitiesAreReadTolerantly() throws {
+    let both = try WireCodec.decode(
+      AccountIdentitiesResponse.self,
+      from: try Fixtures.accountIdentitiesJSON()
+    )
+    #expect(both.identities.map(\.provider) == [.github, .apple])
+    #expect(both.identities[1].label == nil)
+
+    // A channel a newer Relay offers is a member this build cannot name, not a broken payload.
+    let newer = try WireCodec.decode(
+      AccountIdentitiesResponse.self,
+      from: try Fixtures.accountIdentitiesJSON(identities: [
+        ["provider": "carrier-pigeon", "label": NSNull(), "linked_at": "2026-01-04T12:00:00Z"]
+      ])
+    )
+    #expect(newer.identities.map(\.provider) == [.unknown])
+
+    // A field beside the ones this read names is ignored, including one Relay does not send.
+    let extra = try WireCodec.decode(
+      AccountIdentitiesResponse.self,
+      from: try Fixtures.accountIdentitiesJSON(
+        identities: [
+          [
+            "provider": "github", "label": "octocat", "linked_at": "2026-01-04T12:00:00Z",
+            "subject": "5b2c9f0a",
+          ]
+        ],
+        extraRoot: ["generated_at": "2026-08-24T09:05:00Z"]
+      )
+    )
+    #expect(extra.identities.map(\.provider) == [.github])
+
+    // An Account always keeps at least one way to sign in to it, so no channels at all is not
+    // an Account this build can show a Sign-in methods group for.
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountIdentitiesResponse.self,
+        from: try Fixtures.accountIdentitiesJSON(identities: [])
+      )
+    }
+
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountIdentitiesResponse.self,
+        from: try Fixtures.accountIdentitiesJSON(extraRoot: ["protocol_version": 1])
+      )
+    }
+  }
+
+  @Test func identityLinkStatusIsTolerant() throws {
+    let linked = try WireCodec.decode(
+      IdentityLinkResponse.self,
+      from: try Fixtures.identityLinkJSON()
+    )
+    #expect(linked.provider == .apple)
+    #expect(linked.status == .linked)
+
+    let repeated = try WireCodec.decode(
+      IdentityLinkResponse.self,
+      from: try Fixtures.identityLinkJSON(status: "already_linked")
+    )
+    #expect(repeated.status == .alreadyLinked)
+
+    let newer = try WireCodec.decode(
+      IdentityLinkResponse.self,
+      from: try Fixtures.identityLinkJSON(status: "rebound")
+    )
+    #expect(newer.status == .unknown)
+  }
 }

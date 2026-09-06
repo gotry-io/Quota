@@ -50,7 +50,7 @@ struct UsageView: View {
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
     } actions: {
-      Button(UsageCopy.signIn) { Task { await model.connectAccount() } }
+      Button(UsageCopy.signIn) { model.showSignIn() }
         .frame(minHeight: QuotaTheme.minimumTouchTarget)
         .accessibilityIdentifier("usage.signin")
     }
