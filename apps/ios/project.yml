@@ -67,6 +67,7 @@ targets:
         product: QuotaProviderWeb
       - package: QuotaAppleClient
         product: QuotaProviderSessions
+      - package: QuotaAppleClient
         product: QuotaProviderStatus
       - package: QuotaAppleShared
         product: QuotaPresentation
@@ -146,6 +147,7 @@ targets:
         product: QuotaProviderWeb
       - package: QuotaAppleClient
         product: QuotaProviderSessions
+      - package: QuotaAppleClient
         product: QuotaProviderStatus
       - package: QuotaAppleShared
         product: QuotaPresentation
