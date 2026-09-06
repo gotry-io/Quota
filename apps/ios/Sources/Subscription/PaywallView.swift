@@ -115,7 +115,8 @@ struct PaywallView: View {
       LabeledContent {
         Text(SyncCopy.offerDetail(offer))
           .font(.subheadline.monospacedDigit())
-          .foregroundStyle(.secondary)
+          // The same rule as the headline: the secondary label only nearly passes at this size.
+          .foregroundStyle(Color(uiColor: .label))
           .multilineTextAlignment(.trailing)
       } label: {
         Text(offer.term.title)
