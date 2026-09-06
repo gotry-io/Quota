@@ -75,34 +75,49 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(period.buttons["Last 7 days"].exists, "Last 7 days segment")
     XCTAssertTrue(period.buttons["Last 30 days"].exists, "Last 30 days segment")
     period.buttons["Last 30 days"].tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.daily.chart"].waitForExistence(timeout: 5),
-      "Daily chart"
-    )
-    XCTAssertTrue(app.staticTexts["Cache hit"].exists, "Cache hit row")
+    XCTAssertTrue(app.staticTexts["Cache hit"].waitForExistence(timeout: 5), "Cache hit row")
+    // The period stepper and the budget section sit above the totals, so Daily starts below the
+    // viewport, and a List builds only the rows near it. Scroll to the chart rather than wait.
+    let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
+    for _ in 0..<8 where !dailyChart.exists {
+      scrollContent(app, up: true)
+    }
+    XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
     attachScreenshot(app, name: "usage-content")
     // Daily sits above Activity, so the heatmap and its selected day are a scroll away rather
     // than on the first screen. Once the heatmap is on screen a middle-of-the-list drag lands on
     // it and scrolls it sideways, so the drag is anchored on the section header beside it.
     // Daily, Models, and Rhythm sit above Activity now, so the heatmap can be several screens down.
-    for _ in 0..<20 where !app.buttons["View day"].exists {
+    // The header is what says the section was reached; by the time the day action is on screen
+    // the header itself may have scrolled off the top, so it is recorded on the way past.
+    var reachedActivity = app.staticTexts["Activity"].exists
+    // Once the header has gone past, a middle-of-the-list drag would land on the heatmap and
+    // scroll it sideways, so the fallback is a swipe, which the day action below uses too.
+    for _ in 0..<24 where !app.buttons["View day"].exists {
       let header = app.staticTexts["Activity"]
       if header.exists {
+        reachedActivity = true
         header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
           .press(
             forDuration: 0.05,
             thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
           )
+      } else if reachedActivity {
+        app.swipeUp()
       } else {
         scrollContent(app, up: true)
       }
     }
     XCTAssertTrue(
-      app.staticTexts["Activity"].waitForExistence(timeout: 5), "Activity section title")
+      reachedActivity || app.staticTexts["Activity"].exists, "Activity section title")
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
     settle(app)
-    attachScreenshot(app, name: "usage-content")
     attachScreenshot(app, name: "usage-activity")
+    // Audited from the top of the page: the audit sweeps the list itself, so starting it from
+    // wherever a swipe happened to stop would sample a different screen each run — and a row
+    // left under the navigation bar's scroll-edge material reads as low contrast.
+    try restoreTabBar(app)
+    settle(app)
     try audit(app)
 
     // The period, budget, totals, and model rows sit above Activity, and a List builds only the
@@ -132,7 +147,9 @@ final class QuotaUITests: XCTestCase {
     let showMore = app.descendants(matching: .any)["usage.show-more"]
     let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
     let codex = app.staticTexts["Codex"]
-    for _ in 0..<12 {
+    // The agent sections are below the heatmap, which is most of a screen on its own, so this
+    // starts at the top of a page that is several screens long.
+    for _ in 0..<24 {
       if showMore.exists || showMoreLabel.exists || codex.exists { break }
       app.swipeUp()
     }
@@ -1003,11 +1020,11 @@ final class QuotaUITests: XCTestCase {
   /// re-expands it. Four visible tabs is the expanded state.
   private func restoreTabBar(_ app: XCUIApplication) throws {
     let tabBar = app.tabBars.firstMatch
-    // The Usage page is long enough that reaching the day action leaves the list well down it,
-    // so getting back to the top takes more than a few swipes.
-    for _ in 0..<12 where tabBar.buttons.count < 4 {
-      scrollContent(app, up: false)
-      RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    // The Usage page is several screens long now, and a drag through the middle of it lands on
+    // the heatmap and scrolls that sideways instead, so this swipes rather than drags.
+    for _ in 0..<30 where tabBar.buttons.count < 4 {
+      app.swipeDown()
+      RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     }
     XCTAssertEqual(tabBar.buttons.count, 4, "tab bar re-expands after scrolling back up")
   }
@@ -1278,6 +1295,8 @@ final class QuotaUITests: XCTestCase {
             "\"License\" StaticText",
             "\"Tokens\" StaticText",
             "\"API-equivalent cost\" StaticText",
+            "\"Cache hit\" StaticText",
+            "\"Reasoning\" StaticText",
             "\"Version\" StaticText",
             "usage.activity.selected-day",
             "usage.provider.",
@@ -1289,6 +1308,8 @@ final class QuotaUITests: XCTestCase {
             "\"Couldn't load this day's usage.\" StaticText",
             "usage.show-more",
             "usage.show-fewer",
+            "usage.daily.table",
+            "\"Daily breakdown\" StaticText",
             "usage.headline",
             "usage.day.headline",
             "overview.today.tokens",

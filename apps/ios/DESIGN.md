@@ -722,13 +722,15 @@ provider and support, and no custom card chrome beyond the system widget contain
     full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today rows the
     bullet above names by frame. Named identifiers:
     `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
-    `usage.show-fewer`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
+    `usage.show-fewer`, `usage.daily.table`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
     `overview.today.cost`, `overview.today.input`, `overview.today.output`,
     `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
     `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
     `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
-    `usage.provider.<provider id>`, the About **License** and **Version** labels, the Notifications
-    **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
+    `usage.provider.<provider id>`, the totals-row labels **Tokens**, **API-equivalent cost**,
+    **Cache hit**, and **Reasoning**, the Daily **Daily breakdown** disclosure label, the
+    About **License** and **Version** labels, the
+    Notifications **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
     **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
     Mac**, **Download QuotaBar**.
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry

@@ -356,6 +356,7 @@ struct UsageTopModelsSection: View {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(row.displayName)
               .font(.subheadline)
+              .foregroundStyle(Color.primary)
             Spacer(minLength: 8)
             Text(
               "\(QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—") · \(QuotaFormat.compactCount(row.totals.totalTokens))"
