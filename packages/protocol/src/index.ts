@@ -312,16 +312,18 @@ export type QuotaCollectionReport = z.infer<typeof QuotaCollectionReportSchema>;
 /**
  * What a Device runs.
  *
- * QuotaBar is the only client that registers a Device, so macOS is the only platform one can
- * report. The registered `quota-ios` client is a viewer and owns no Device
- * ([ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md)).
+ * Both Apple clients register one: QuotaBar always, and Quota iOS when the phone presents an
+ * installation of its own ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+ * What a Device may write is decided by the Account's entitlement at the write, not by which
+ * platform it names.
  */
-export const PlatformSchema = z.enum(["macos"]);
+export const PlatformSchema = z.enum(["macos", "ios"]);
 export type Platform = z.infer<typeof PlatformSchema>;
 
 /** A platform this build has never heard of is named as what it is, not as a raw enum member. */
 export function platformDisplayName(platform: string): string {
-  return platform === "macos" ? "macOS" : "Unknown";
+  if (platform === "macos") return "macOS";
+  return platform === "ios" ? "iOS" : "Unknown";
 }
 
 /**
@@ -471,16 +473,40 @@ export const BrowserLoginExchangeRequestSchema = z
   })
   .strict();
 
-export const IosLoginExchangeRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    grant_type: z.literal("authorization_code"),
-    client_id: IosClientSchema,
-    code: SecretSchema,
-    code_verifier: z.string().regex(PKCE_VERIFIER_PATTERN),
-    redirect_uri: IosRedirectUriSchema,
-  })
+/**
+ * The installation a phone presents when it is asking to be a Device.
+ *
+ * The three fields travel together: an installation with no name to show, or a name with no
+ * installation behind it, is not a Device this Account could ever list. A phone that presents
+ * none is the reader [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md)
+ * described, and its session names no Device
+ * ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+ */
+const IosDeviceRegistrationShape = {
+  installation_id: InstallationIdSchema,
+  device_display_name: DisplayNameSchema,
+  platform: z.literal("ios"),
+} as const;
+
+const IosLoginExchangeShape = {
+  protocol_version: z.literal(PROTOCOL_VERSION),
+  grant_type: z.literal("authorization_code"),
+  client_id: IosClientSchema,
+  code: SecretSchema,
+  code_verifier: z.string().regex(PKCE_VERIFIER_PATTERN),
+  redirect_uri: IosRedirectUriSchema,
+} as const;
+
+export const IosAccountLoginExchangeRequestSchema = z.object(IosLoginExchangeShape).strict();
+
+export const IosDeviceLoginExchangeRequestSchema = z
+  .object({ ...IosLoginExchangeShape, ...IosDeviceRegistrationShape })
   .strict();
+
+export const IosLoginExchangeRequestSchema = z.union([
+  IosDeviceLoginExchangeRequestSchema,
+  IosAccountLoginExchangeRequestSchema,
+]);
 export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSchema>;
 
 /**
@@ -492,15 +518,18 @@ export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSche
  * app is asking for — signing in, or binding Apple to the Account this session already names —
  * and defaults to signing in.
  */
-export const AppleNativeSignInRequestSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    client_id: IosClientSchema,
-    identity_token: z.string().min(16).max(8_192).regex(COMPACT_JWS_PATTERN),
-    nonce: z.string().regex(PKCE_VERIFIER_PATTERN),
-    intent: z.enum(["sign_in", "link"]).optional(),
-  })
-  .strict();
+const AppleNativeSignInShape = {
+  protocol_version: z.literal(PROTOCOL_VERSION),
+  client_id: IosClientSchema,
+  identity_token: z.string().min(16).max(8_192).regex(COMPACT_JWS_PATTERN),
+  nonce: z.string().regex(PKCE_VERIFIER_PATTERN),
+  intent: z.enum(["sign_in", "link"]).optional(),
+} as const;
+
+export const AppleNativeSignInRequestSchema = z.union([
+  z.object({ ...AppleNativeSignInShape, ...IosDeviceRegistrationShape }).strict(),
+  z.object(AppleNativeSignInShape).strict(),
+]);
 export type AppleNativeSignInRequest = z.infer<typeof AppleNativeSignInRequestSchema>;
 
 /**
@@ -555,16 +584,33 @@ export const OAuthTokenResponseSchema = z
   .strict();
 export type OAuthTokenResponse = z.infer<typeof OAuthTokenResponseSchema>;
 
-/** The read-only viewer's session. It names no Device, because it registers none. */
-export const IosOAuthTokenResponseSchema = z
+const IosOAuthTokenShape = {
+  protocol_version: z.literal(PROTOCOL_VERSION),
+  token_type: z.literal("Bearer"),
+  account_id: OpaqueIdSchema,
+  display_label: AccountDisplayLabelSchema,
+  session: SessionTokenSchema,
+} as const;
+
+/** The reader's session. It names no Device, because it presented no installation. */
+export const IosAccountOAuthTokenResponseSchema = z.object(IosOAuthTokenShape).strict();
+
+/**
+ * The phone's session when it presented an installation: one session, naming the Device it
+ * speaks for, exactly as QuotaBar's does.
+ */
+export const IosDeviceOAuthTokenResponseSchema = z
   .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    token_type: z.literal("Bearer"),
-    account_id: OpaqueIdSchema,
-    display_label: AccountDisplayLabelSchema,
-    session: SessionTokenSchema,
+    ...IosOAuthTokenShape,
+    device_id: OpaqueIdSchema,
+    device_generation: SafePositiveIntegerSchema,
   })
   .strict();
+
+export const IosOAuthTokenResponseSchema = z.union([
+  IosDeviceOAuthTokenResponseSchema,
+  IosAccountOAuthTokenResponseSchema,
+]);
 export type IosOAuthTokenResponse = z.infer<typeof IosOAuthTokenResponseSchema>;
 
 export const SessionRefreshRequestSchema = z

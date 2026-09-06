@@ -43,12 +43,21 @@ RevenueCat `purchases-ios` SDK (SPM, pinned to an exact version in `project.yml`
 `entitlement` on the Account summary is, because that is the same row the Relay write routes
 refuse a Device with. See [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
 
-Quota iOS is not a collection Device. It uploads no snapshot or Usage, collects no local logs, and
-adds no `ios` member to `PlatformSchema` — what it reads for itself stays on the phone. The Devices
-tab is the Account's, so it asks for a sign-in when there is no account; with one it lists the
-collection Devices, then **This iPhone** for what this device read itself, with their
-platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
-credentials for them. See [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
+Quota iOS is a Device. Signing in presents this phone's installation — one Keychain item,
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and not synchronized, so a restored backup is
+not a second phone claiming the same Device — with the name the system gives this device and
+`platform: ios`, and the session it gets names that Device. Each refresh that read something then
+asks `GET /api/v2/device/sync` for the generation an envelope must name and sends the readings to
+`PUT /api/v6/device/snapshots`; a 402 stops that refresh and shows the sync-off banner, and the
+next refresh asks again. Only readings go: the provider cookies stay in this device's Keychain,
+and no Usage is uploaded because this phone runs no agent. See
+[ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md).
+
+The Devices tab is the Account's, so it asks for a sign-in when there is no account; with one it
+lists the Devices with their platform and how recently each one spoke — Active, Idle, or Not
+reporting — without requesting credentials for them. This phone is one of those rows once the
+Account lists it; a session that named no Device still draws **This iPhone** for what it read
+itself.
 
 It does sign in to a provider for itself. **Settings › Providers** connects Codex, Claude Code,
 and Grok by opening that provider's own sign-in page in a `WKWebView` whose data store is

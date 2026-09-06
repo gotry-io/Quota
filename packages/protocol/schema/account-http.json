@@ -33,32 +33,69 @@
       "additionalProperties": false
     },
     {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema8"
+            },
+            "client_id": {
+              "$ref": "#/$defs/__schema9"
+            },
+            "identity_token": {
+              "$ref": "#/$defs/__schema10"
+            },
+            "nonce": {
+              "$ref": "#/$defs/__schema11"
+            },
+            "intent": {
+              "$ref": "#/$defs/__schema12"
+            },
+            "installation_id": {
+              "$ref": "#/$defs/__schema13"
+            },
+            "device_display_name": {
+              "$ref": "#/$defs/__schema14"
+            },
+            "platform": {
+              "$ref": "#/$defs/__schema15"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "client_id",
+            "identity_token",
+            "nonce",
+            "installation_id",
+            "device_display_name",
+            "platform"
+          ],
+          "additionalProperties": false
         },
-        "client_id": {
-          "$ref": "#/$defs/__schema8"
-        },
-        "identity_token": {
-          "type": "string",
-          "minLength": 16,
-          "maxLength": 8192,
-          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
-        },
-        "nonce": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
-        },
-        "intent": {
-          "type": "string",
-          "enum": ["sign_in", "link"]
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema8"
+            },
+            "client_id": {
+              "$ref": "#/$defs/__schema9"
+            },
+            "identity_token": {
+              "$ref": "#/$defs/__schema10"
+            },
+            "nonce": {
+              "$ref": "#/$defs/__schema11"
+            },
+            "intent": {
+              "$ref": "#/$defs/__schema12"
+            }
+          },
+          "required": ["protocol_version", "client_id", "identity_token", "nonce"],
+          "additionalProperties": false
         }
-      },
-      "required": ["protocol_version", "client_id", "identity_token", "nonce"],
-      "additionalProperties": false
+      ]
     },
     {
       "type": "object",
@@ -92,30 +129,30 @@
           "maxItems": 256,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema9"
+            "$ref": "#/$defs/__schema16"
           }
         },
         "subscriptions": {
           "maxItems": 1024,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema12"
+            "$ref": "#/$defs/__schema18"
           }
         },
         "usage": {
           "type": "object",
           "properties": {
             "today": {
-              "$ref": "#/$defs/__schema18"
+              "$ref": "#/$defs/__schema24"
             },
             "last_7_days": {
-              "$ref": "#/$defs/__schema18"
+              "$ref": "#/$defs/__schema24"
             },
             "last_30_days": {
-              "$ref": "#/$defs/__schema18"
+              "$ref": "#/$defs/__schema24"
             },
             "all": {
-              "$ref": "#/$defs/__schema18"
+              "$ref": "#/$defs/__schema24"
             }
           },
           "required": ["today", "last_7_days", "last_30_days", "all"],
@@ -158,7 +195,7 @@
           "maxItems": 400,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema38"
+            "$ref": "#/$defs/__schema44"
           }
         }
       },
@@ -177,10 +214,10 @@
           "const": "authorization_code"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema40"
+          "$ref": "#/$defs/__schema46"
         },
         "code": {
-          "$ref": "#/$defs/__schema41"
+          "$ref": "#/$defs/__schema47"
         },
         "code_verifier": {
           "type": "string",
@@ -192,15 +229,13 @@
           "format": "uri"
         },
         "installation_id": {
-          "type": "string",
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          "$ref": "#/$defs/__schema13"
         },
         "device_display_name": {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema14"
         },
         "platform": {
-          "$ref": "#/$defs/__schema11"
+          "$ref": "#/$defs/__schema17"
         }
       },
       "required": [
@@ -217,64 +252,146 @@
       "additionalProperties": false
     },
     {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema48"
+            },
+            "grant_type": {
+              "$ref": "#/$defs/__schema49"
+            },
+            "client_id": {
+              "$ref": "#/$defs/__schema9"
+            },
+            "code": {
+              "$ref": "#/$defs/__schema47"
+            },
+            "code_verifier": {
+              "$ref": "#/$defs/__schema50"
+            },
+            "redirect_uri": {
+              "$ref": "#/$defs/__schema51"
+            },
+            "installation_id": {
+              "$ref": "#/$defs/__schema13"
+            },
+            "device_display_name": {
+              "$ref": "#/$defs/__schema14"
+            },
+            "platform": {
+              "$ref": "#/$defs/__schema15"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "grant_type",
+            "client_id",
+            "code",
+            "code_verifier",
+            "redirect_uri",
+            "installation_id",
+            "device_display_name",
+            "platform"
+          ],
+          "additionalProperties": false
         },
-        "grant_type": {
-          "type": "string",
-          "const": "authorization_code"
-        },
-        "client_id": {
-          "$ref": "#/$defs/__schema8"
-        },
-        "code": {
-          "$ref": "#/$defs/__schema41"
-        },
-        "code_verifier": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
-        },
-        "redirect_uri": {
-          "type": "string",
-          "const": "io.gotry.quota:/oauth/callback"
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema48"
+            },
+            "grant_type": {
+              "$ref": "#/$defs/__schema49"
+            },
+            "client_id": {
+              "$ref": "#/$defs/__schema9"
+            },
+            "code": {
+              "$ref": "#/$defs/__schema47"
+            },
+            "code_verifier": {
+              "$ref": "#/$defs/__schema50"
+            },
+            "redirect_uri": {
+              "$ref": "#/$defs/__schema51"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "grant_type",
+            "client_id",
+            "code",
+            "code_verifier",
+            "redirect_uri"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "protocol_version",
-        "grant_type",
-        "client_id",
-        "code",
-        "code_verifier",
-        "redirect_uri"
-      ],
-      "additionalProperties": false
+      ]
     },
     {
-      "type": "object",
-      "properties": {
-        "protocol_version": {
-          "type": "number",
-          "const": 2
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema52"
+            },
+            "token_type": {
+              "$ref": "#/$defs/__schema53"
+            },
+            "account_id": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "display_label": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "session": {
+              "$ref": "#/$defs/__schema54"
+            },
+            "device_id": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "device_generation": {
+              "$ref": "#/$defs/__schema37"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "token_type",
+            "account_id",
+            "display_label",
+            "session",
+            "device_id",
+            "device_generation"
+          ],
+          "additionalProperties": false
         },
-        "token_type": {
-          "type": "string",
-          "const": "Bearer"
-        },
-        "account_id": {
-          "$ref": "#/$defs/__schema1"
-        },
-        "display_label": {
-          "$ref": "#/$defs/__schema2"
-        },
-        "session": {
-          "$ref": "#/$defs/__schema42"
+        {
+          "type": "object",
+          "properties": {
+            "protocol_version": {
+              "$ref": "#/$defs/__schema52"
+            },
+            "token_type": {
+              "$ref": "#/$defs/__schema53"
+            },
+            "account_id": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "display_label": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "session": {
+              "$ref": "#/$defs/__schema54"
+            }
+          },
+          "required": ["protocol_version", "token_type", "account_id", "display_label", "session"],
+          "additionalProperties": false
         }
-      },
-      "required": ["protocol_version", "token_type", "account_id", "display_label", "session"],
-      "additionalProperties": false
+      ]
     },
     {
       "type": "object",
@@ -288,10 +405,10 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema8"
+          "$ref": "#/$defs/__schema9"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema41"
+          "$ref": "#/$defs/__schema47"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -312,7 +429,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "session": {
-          "$ref": "#/$defs/__schema42"
+          "$ref": "#/$defs/__schema54"
         }
       },
       "required": ["protocol_version", "token_type", "account_id", "session"],
@@ -339,7 +456,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "device_generation": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         },
         "usage_deleted_before": {
           "anyOf": [
@@ -352,10 +469,10 @@
           ]
         },
         "usage_sync_revision": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "session": {
-          "$ref": "#/$defs/__schema42"
+          "$ref": "#/$defs/__schema54"
         }
       },
       "required": [
@@ -383,10 +500,10 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema40"
+          "$ref": "#/$defs/__schema46"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema41"
+          "$ref": "#/$defs/__schema47"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -410,10 +527,10 @@
           "$ref": "#/$defs/__schema1"
         },
         "device_generation": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         },
         "session": {
-          "$ref": "#/$defs/__schema42"
+          "$ref": "#/$defs/__schema54"
         }
       },
       "required": [
@@ -440,7 +557,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "device_generation": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         },
         "usage_deleted_before": {
           "anyOf": [
@@ -453,7 +570,7 @@
           ]
         },
         "usage_sync_revision": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         }
       },
       "required": [
@@ -474,10 +591,10 @@
           "const": 2
         },
         "display_name": {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema14"
         },
         "platform": {
-          "$ref": "#/$defs/__schema11"
+          "$ref": "#/$defs/__schema17"
         }
       },
       "required": ["protocol_version", "display_name", "platform"],
@@ -531,7 +648,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "device_generation": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         },
         "deleted_before": {
           "$ref": "#/$defs/__schema3"
@@ -557,20 +674,20 @@
           "$ref": "#/$defs/__schema1"
         },
         "device_generation": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         },
         "accepted": {
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema13"
+            "$ref": "#/$defs/__schema19"
           }
         },
         "ignored": {
           "maxItems": 32,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema13"
+            "$ref": "#/$defs/__schema19"
           }
         }
       },
@@ -588,7 +705,7 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema43"
+              "$ref": "#/$defs/__schema55"
             },
             "enabled": {
               "type": "boolean"
@@ -618,16 +735,16 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema44"
+              "$ref": "#/$defs/__schema56"
             },
             "enabled": {
-              "$ref": "#/$defs/__schema45"
+              "$ref": "#/$defs/__schema57"
             },
             "show_models": {
-              "$ref": "#/$defs/__schema46"
+              "$ref": "#/$defs/__schema58"
             },
             "show_cost": {
-              "$ref": "#/$defs/__schema47"
+              "$ref": "#/$defs/__schema59"
             }
           },
           "required": ["handle", "enabled", "show_models", "show_cost"],
@@ -645,7 +762,7 @@
           "const": 6
         },
         "handle": {
-          "$ref": "#/$defs/__schema43"
+          "$ref": "#/$defs/__schema55"
         },
         "published_at": {
           "$ref": "#/$defs/__schema3"
@@ -654,16 +771,16 @@
           "$ref": "#/$defs/__schema3"
         },
         "last_30_days": {
-          "$ref": "#/$defs/__schema48"
+          "$ref": "#/$defs/__schema60"
         },
         "all": {
-          "$ref": "#/$defs/__schema48"
+          "$ref": "#/$defs/__schema60"
         },
         "activity": {
           "maxItems": 365,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema51"
+            "$ref": "#/$defs/__schema63"
           }
         }
       },
@@ -862,20 +979,52 @@
       "additionalProperties": false
     },
     "__schema8": {
+      "type": "number",
+      "const": 2
+    },
+    "__schema9": {
       "type": "string",
       "const": "quota-ios"
     },
-    "__schema9": {
+    "__schema10": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 8192,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    },
+    "__schema11": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+    },
+    "__schema12": {
+      "type": "string",
+      "enum": ["sign_in", "link"]
+    },
+    "__schema13": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "__schema14": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "__schema15": {
+      "type": "string",
+      "const": "ios"
+    },
+    "__schema16": {
       "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/__schema1"
         },
         "display_name": {
-          "$ref": "#/$defs/__schema10"
+          "$ref": "#/$defs/__schema14"
         },
         "platform": {
-          "$ref": "#/$defs/__schema11"
+          "$ref": "#/$defs/__schema17"
         },
         "last_seen_at": {
           "anyOf": [
@@ -901,16 +1050,11 @@
       "required": ["id", "display_name", "platform", "last_seen_at", "last_observed_at"],
       "additionalProperties": false
     },
-    "__schema10": {
+    "__schema17": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 128
+      "enum": ["macos", "ios"]
     },
-    "__schema11": {
-      "type": "string",
-      "enum": ["macos"]
-    },
-    "__schema12": {
+    "__schema18": {
       "type": "object",
       "properties": {
         "key": {
@@ -919,23 +1063,23 @@
           "maxLength": 512
         },
         "provider": {
-          "$ref": "#/$defs/__schema13"
+          "$ref": "#/$defs/__schema19"
         },
         "snapshot": {
-          "$ref": "#/$defs/__schema14"
+          "$ref": "#/$defs/__schema20"
         },
         "sources": {
           "maxItems": 256,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema17"
+            "$ref": "#/$defs/__schema23"
           }
         }
       },
       "required": ["key", "provider", "snapshot", "sources"],
       "additionalProperties": false
     },
-    "__schema13": {
+    "__schema19": {
       "type": "string",
       "enum": [
         "codex",
@@ -950,11 +1094,11 @@
         "copilot"
       ]
     },
-    "__schema14": {
+    "__schema20": {
       "type": "object",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/__schema13"
+          "$ref": "#/$defs/__schema19"
         },
         "account": {
           "type": "object",
@@ -987,7 +1131,7 @@
           "maxItems": 16,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema15"
+            "$ref": "#/$defs/__schema21"
           }
         },
         "status": {
@@ -1001,7 +1145,7 @@
       "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
-    "__schema15": {
+    "__schema21": {
       "type": "object",
       "properties": {
         "id": {
@@ -1024,7 +1168,7 @@
           "$ref": "#/$defs/__schema3"
         },
         "duration_seconds": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "primary_cadence": {
           "type": "string",
@@ -1045,12 +1189,12 @@
       "required": ["id", "title", "used_percent"],
       "additionalProperties": false
     },
-    "__schema16": {
+    "__schema22": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema17": {
+    "__schema23": {
       "type": "object",
       "properties": {
         "device_id": {
@@ -1060,32 +1204,32 @@
           "$ref": "#/$defs/__schema3"
         },
         "snapshot": {
-          "$ref": "#/$defs/__schema14"
+          "$ref": "#/$defs/__schema20"
         }
       },
       "required": ["device_id", "observed_at"],
       "additionalProperties": false
     },
-    "__schema18": {
+    "__schema24": {
       "type": "object",
       "properties": {
         "totals": {
-          "$ref": "#/$defs/__schema19"
+          "$ref": "#/$defs/__schema25"
         },
         "cost": {
-          "$ref": "#/$defs/__schema20"
+          "$ref": "#/$defs/__schema26"
         },
         "cache_saved": {
           "type": "object",
           "properties": {
             "amount_microusd": {
-              "$ref": "#/$defs/__schema33"
+              "$ref": "#/$defs/__schema39"
             },
             "status": {
-              "$ref": "#/$defs/__schema23"
+              "$ref": "#/$defs/__schema29"
             },
             "unpriced_rows": {
-              "$ref": "#/$defs/__schema16"
+              "$ref": "#/$defs/__schema22"
             }
           },
           "required": ["amount_microusd", "status", "unpriced_rows"],
@@ -1098,36 +1242,36 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema34"
+            "$ref": "#/$defs/__schema40"
           }
         }
       },
       "required": ["totals", "cost", "cache_saved", "partial", "agents"],
       "additionalProperties": false
     },
-    "__schema19": {
+    "__schema25": {
       "type": "object",
       "properties": {
         "total_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "input_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "output_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "cache_read_input_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "cache_write_input_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "reasoning_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "messages": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         }
       },
       "required": [
@@ -1141,41 +1285,41 @@
       ],
       "additionalProperties": false
     },
-    "__schema20": {
+    "__schema26": {
       "type": "object",
       "properties": {
         "mode": {
-          "$ref": "#/$defs/__schema21"
+          "$ref": "#/$defs/__schema27"
         },
         "basis": {
-          "$ref": "#/$defs/__schema22"
-        },
-        "status": {
-          "$ref": "#/$defs/__schema23"
-        },
-        "amount_microusd": {
-          "$ref": "#/$defs/__schema24"
-        },
-        "catalog_revision": {
-          "$ref": "#/$defs/__schema25"
-        },
-        "calculated_rows": {
-          "$ref": "#/$defs/__schema16"
-        },
-        "reported_rows": {
-          "$ref": "#/$defs/__schema16"
-        },
-        "unpriced_rows": {
-          "$ref": "#/$defs/__schema16"
-        },
-        "assumptions": {
-          "$ref": "#/$defs/__schema26"
-        },
-        "unpriced": {
           "$ref": "#/$defs/__schema28"
         },
-        "unpriced_truncated": {
+        "status": {
+          "$ref": "#/$defs/__schema29"
+        },
+        "amount_microusd": {
+          "$ref": "#/$defs/__schema30"
+        },
+        "catalog_revision": {
+          "$ref": "#/$defs/__schema31"
+        },
+        "calculated_rows": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "reported_rows": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "unpriced_rows": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "assumptions": {
           "$ref": "#/$defs/__schema32"
+        },
+        "unpriced": {
+          "$ref": "#/$defs/__schema34"
+        },
+        "unpriced_truncated": {
+          "$ref": "#/$defs/__schema38"
         }
       },
       "required": [
@@ -1192,19 +1336,19 @@
       ],
       "additionalProperties": false
     },
-    "__schema21": {
+    "__schema27": {
       "type": "string",
       "enum": ["calculate", "auto", "reported"]
     },
-    "__schema22": {
+    "__schema28": {
       "type": "string",
       "enum": ["calculated", "reported", "mixed", "none"]
     },
-    "__schema23": {
+    "__schema29": {
       "type": "string",
       "enum": ["complete", "partial", "unavailable"]
     },
-    "__schema24": {
+    "__schema30": {
       "anyOf": [
         {
           "type": "string",
@@ -1216,7 +1360,7 @@
         }
       ]
     },
-    "__schema25": {
+    "__schema31": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema1"
@@ -1226,14 +1370,14 @@
         }
       ]
     },
-    "__schema26": {
+    "__schema32": {
       "maxItems": 16,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema27"
+        "$ref": "#/$defs/__schema33"
       }
     },
-    "__schema27": {
+    "__schema33": {
       "type": "string",
       "enum": [
         "agent_default_channel",
@@ -1247,14 +1391,14 @@
         "vendor_official_price"
       ]
     },
-    "__schema28": {
+    "__schema34": {
       "maxItems": 100,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema29"
+        "$ref": "#/$defs/__schema35"
       }
     },
-    "__schema29": {
+    "__schema35": {
       "type": "object",
       "properties": {
         "billing_channel": {
@@ -1274,7 +1418,7 @@
           ]
         },
         "model": {
-          "$ref": "#/$defs/__schema30"
+          "$ref": "#/$defs/__schema36"
         },
         "reason": {
           "type": "string",
@@ -1290,26 +1434,26 @@
           ]
         },
         "rows": {
-          "$ref": "#/$defs/__schema31"
+          "$ref": "#/$defs/__schema37"
         }
       },
       "required": ["billing_channel", "model", "reason", "rows"],
       "additionalProperties": false
     },
-    "__schema30": {
+    "__schema36": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?=[\\s\\S]{1,128}$)(?![\\s\\S]*\\p{Cc})[\\s\\S]+$"
     },
-    "__schema31": {
+    "__schema37": {
       "minimum": 1,
-      "$ref": "#/$defs/__schema16"
+      "$ref": "#/$defs/__schema22"
     },
-    "__schema32": {
+    "__schema38": {
       "type": "boolean",
       "const": true
     },
-    "__schema33": {
+    "__schema39": {
       "anyOf": [
         {
           "type": "string",
@@ -1321,7 +1465,7 @@
         }
       ]
     },
-    "__schema34": {
+    "__schema40": {
       "type": "object",
       "properties": {
         "agent": {
@@ -1332,61 +1476,61 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema35"
+            "$ref": "#/$defs/__schema41"
           }
         }
       },
       "required": ["agent", "providers"],
       "additionalProperties": false
     },
-    "__schema35": {
+    "__schema41": {
       "type": "object",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/__schema36"
+          "$ref": "#/$defs/__schema42"
         },
         "models": {
           "maxItems": 200,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema37"
+            "$ref": "#/$defs/__schema43"
           }
         }
       },
       "required": ["provider", "models"],
       "additionalProperties": false
     },
-    "__schema36": {
+    "__schema42": {
       "type": "string",
       "enum": ["openai", "anthropic", "google", "xai", "moonshot", "deepseek", "cursor", "unknown"]
     },
-    "__schema37": {
+    "__schema43": {
       "type": "object",
       "properties": {
         "model": {
-          "$ref": "#/$defs/__schema30"
+          "$ref": "#/$defs/__schema36"
         },
         "totals": {
-          "$ref": "#/$defs/__schema19"
+          "$ref": "#/$defs/__schema25"
         },
         "cost": {
-          "$ref": "#/$defs/__schema20"
+          "$ref": "#/$defs/__schema26"
         }
       },
       "required": ["model", "totals", "cost"],
       "additionalProperties": false
     },
-    "__schema38": {
+    "__schema44": {
       "type": "object",
       "properties": {
         "date": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema45"
         },
         "totals": {
-          "$ref": "#/$defs/__schema19"
+          "$ref": "#/$defs/__schema25"
         },
         "cost": {
-          "$ref": "#/$defs/__schema20"
+          "$ref": "#/$defs/__schema26"
         },
         "partial": {
           "type": "boolean"
@@ -1395,37 +1539,61 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema34"
+            "$ref": "#/$defs/__schema40"
           }
         }
       },
       "required": ["date", "totals", "cost", "partial"],
       "additionalProperties": false
     },
-    "__schema39": {
+    "__schema45": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
-    "__schema40": {
+    "__schema46": {
       "type": "string",
       "const": "quotabar"
     },
-    "__schema41": {
+    "__schema47": {
       "type": "string",
       "minLength": 16,
       "maxLength": 2048
     },
-    "__schema42": {
+    "__schema48": {
+      "type": "number",
+      "const": 2
+    },
+    "__schema49": {
+      "type": "string",
+      "const": "authorization_code"
+    },
+    "__schema50": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+    },
+    "__schema51": {
+      "type": "string",
+      "const": "io.gotry.quota:/oauth/callback"
+    },
+    "__schema52": {
+      "type": "number",
+      "const": 2
+    },
+    "__schema53": {
+      "type": "string",
+      "const": "Bearer"
+    },
+    "__schema54": {
       "type": "object",
       "properties": {
         "access_token": {
-          "$ref": "#/$defs/__schema41"
+          "$ref": "#/$defs/__schema47"
         },
         "access_expires_at": {
           "$ref": "#/$defs/__schema3"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema41"
+          "$ref": "#/$defs/__schema47"
         },
         "refresh_expires_at": {
           "$ref": "#/$defs/__schema3"
@@ -1434,46 +1602,46 @@
       "required": ["access_token", "access_expires_at", "refresh_token", "refresh_expires_at"],
       "additionalProperties": false
     },
-    "__schema43": {
+    "__schema55": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{2,29}$"
     },
-    "__schema44": {
+    "__schema56": {
       "anyOf": [
         {
-          "$ref": "#/$defs/__schema43"
+          "$ref": "#/$defs/__schema55"
         },
         {
           "type": "null"
         }
       ]
     },
-    "__schema45": {
+    "__schema57": {
       "type": "boolean"
     },
-    "__schema46": {
+    "__schema58": {
       "type": "boolean"
     },
-    "__schema47": {
+    "__schema59": {
       "type": "boolean"
     },
-    "__schema48": {
+    "__schema60": {
       "type": "object",
       "properties": {
         "totals": {
           "type": "object",
           "properties": {
             "total_tokens": {
-              "$ref": "#/$defs/__schema16"
+              "$ref": "#/$defs/__schema22"
             },
             "input_tokens": {
-              "$ref": "#/$defs/__schema16"
+              "$ref": "#/$defs/__schema22"
             },
             "output_tokens": {
-              "$ref": "#/$defs/__schema16"
+              "$ref": "#/$defs/__schema22"
             },
             "messages": {
-              "$ref": "#/$defs/__schema16"
+              "$ref": "#/$defs/__schema22"
             }
           },
           "required": ["total_tokens", "input_tokens", "output_tokens", "messages"],
@@ -1495,7 +1663,7 @@
               ]
             },
             "status": {
-              "$ref": "#/$defs/__schema23"
+              "$ref": "#/$defs/__schema29"
             }
           },
           "required": ["amount_microusd", "status"],
@@ -1505,28 +1673,28 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema49"
+            "$ref": "#/$defs/__schema61"
           }
         },
         "models": {
           "maxItems": 12,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema50"
+            "$ref": "#/$defs/__schema62"
           }
         }
       },
       "required": ["totals", "providers"],
       "additionalProperties": false
     },
-    "__schema49": {
+    "__schema61": {
       "type": "object",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/__schema36"
+          "$ref": "#/$defs/__schema42"
         },
         "total_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "share_permille": {
           "type": "integer",
@@ -1537,17 +1705,17 @@
       "required": ["provider", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema50": {
+    "__schema62": {
       "type": "object",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/__schema36"
+          "$ref": "#/$defs/__schema42"
         },
         "model": {
-          "$ref": "#/$defs/__schema30"
+          "$ref": "#/$defs/__schema36"
         },
         "total_tokens": {
-          "$ref": "#/$defs/__schema16"
+          "$ref": "#/$defs/__schema22"
         },
         "share_permille": {
           "type": "integer",
@@ -1558,11 +1726,11 @@
       "required": ["provider", "model", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema51": {
+    "__schema63": {
       "type": "object",
       "properties": {
         "date": {
-          "$ref": "#/$defs/__schema39"
+          "$ref": "#/$defs/__schema45"
         },
         "level": {
           "type": "integer",

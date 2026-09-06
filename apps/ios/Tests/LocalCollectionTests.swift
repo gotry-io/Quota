@@ -166,6 +166,48 @@ struct LocalObservationMergeTests {
     #expect(merged[0].sources.map(\.deviceID).sorted() == [studio, ThisDevice.sourceID].sorted())
   }
 
+  /// This phone uploads what it reads, so the Account answers with this phone among the sources.
+  /// It is already the local reading, and one device is one row.
+  @Test
+  func thisPhonesOwnUploadComesBackAsTheLocalReadingAndNotASecondSource() throws {
+    let phone = "device_phone"
+    let reading = snapshot(fingerprint: "fp", usedPercent: 41)
+    let older = snapshot(
+      fingerprint: "fp", usedPercent: 40, observedAt: now.addingTimeInterval(-600))
+    let uploaded = QuotaSubscription(
+      key: "codex|fp|global|",
+      provider: .codex,
+      snapshot: reading,
+      sources: [
+        QuotaSubscriptionSource(
+          deviceID: phone, observedAt: reading.observedAt, snapshot: reading),
+        QuotaSubscriptionSource(
+          deviceID: studio, observedAt: older.observedAt, snapshot: older),
+      ]
+    )
+
+    let merged = LocalObservationMerge.subscriptions(
+      local: [reading],
+      resolved: [uploaded],
+      selfDeviceID: phone,
+      now: now
+    )
+    #expect(merged.count == 1)
+    #expect(merged[0].snapshot == reading)
+    // The Mac still reports; this phone appears once, as the local reading.
+    #expect(merged[0].sources.map(\.deviceID).sorted() == [studio, ThisDevice.sourceID].sorted())
+
+    // A phone that registered no Device has nothing to exclude, and the Account's row stands.
+    let reader = LocalObservationMerge.subscriptions(
+      local: [reading],
+      resolved: [uploaded],
+      now: now
+    )
+    #expect(
+      reader[0].sources.map(\.deviceID).sorted()
+        == [phone, studio, ThisDevice.sourceID].sorted())
+  }
+
   /// Relay's key is the one every client addresses a subscription by, including a deep link, so
   /// merging must not rename the row.
   @Test

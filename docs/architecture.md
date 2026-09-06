@@ -14,8 +14,11 @@ links to it rather than restating it.
   all: Overview then shows what the phone read for itself. With an account it also signs in with the
   registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
   two are merged into one row per subscription by the rule below. Either way it publishes the
-  non-secret App Group snapshot its widgets render. It is still not a collection Device: it
-  registers no Device and writes nothing to Relay, so a reading taken here reaches no other client. It is also where paid sync is bought:
+  non-secret App Group snapshot its widgets render. Signing in presents this phone's installation,
+  so its session names a Device on platform `ios` and its own readings are uploaded on each
+  refresh while sync is paid for; the provider sessions behind them stay in this device's
+  Keychain, and it uploads no Usage because it runs no agent
+  ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). It is also where paid sync is bought:
   the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
   to an Account is read from the Relay `entitlement` rather than from the store on the device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
@@ -307,18 +310,22 @@ once onto Sparkle. Both that appcast and the website `.dmg` button resolve throu
 hold it.
 
 The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKCE route with the
-exact redirect `io.gotry.quota:/oauth/callback`. Its exchange rejects installation identity and
-Device fields and returns only an account session: it is not a collection Device, is absent from
-`PlatformSchema`, and never receives write authority. Quota iOS consumes that session through
-`packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect with GitHub presents
+exact redirect `io.gotry.quota:/oauth/callback`. Its exchange takes an optional `installation_id`,
+`device_display_name`, and `platform: ios` — present together or not at all — and issues a session
+naming a Device with `[account:read, device:write]` when they are, and a read-only one when they
+are not; the Device half is the path QuotaBar's exchange already takes
+([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Quota iOS consumes that session
+through `packages/apple-client`, fetches `GET /api/v6/account/summary`, and — when its session
+names a Device — sends what it read on the phone through `GET /api/v2/device/sync` and
+`PUT /api/v6/device/snapshots`, which answer 402 until paid sync is on. Connect with GitHub presents
 `ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. `/sign-in` now asks which Account this is before the
 round trip finishes, and the app still confirms **Use this GitHub account?** against the Account
 `display_label` before opening signed-in tabs. Continue with Apple takes no browser at all:
 `ASAuthorizationAppleIDProvider` proves the identity on the device and the app posts that identity
-token and its nonce to `POST /oauth/v2/apple`, which answers with the same `quota-ios` session and
-the same confirmation flow. The Keychain session is stored with `activation: pending` at exchange and
+token and its nonce to `POST /oauth/v2/apple`, which takes the same optional installation and
+answers with the same `quota-ios` session and the same confirmation flow. The Keychain session is stored with `activation: pending` at exchange and
 becomes `active` only when Continue confirms it; **Use a different account** revokes the session
 just opened and repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no

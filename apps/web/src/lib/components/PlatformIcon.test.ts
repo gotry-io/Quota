@@ -4,10 +4,14 @@ import PlatformIcon from "./PlatformIcon.svelte";
 
 afterEach(cleanup);
 
-it("names macOS for macos and Unknown for anything else", () => {
+it("names each platform a Device can report, and Unknown for anything else", () => {
   const mac = render(PlatformIcon, { platform: "macos" });
   expect(screen.getByRole("img", { name: "macOS" })).toBeTruthy();
   mac.unmount();
+
+  const phone = render(PlatformIcon, { platform: "ios" });
+  expect(screen.getByRole("img", { name: "iOS" })).toBeTruthy();
+  phone.unmount();
 
   render(PlatformIcon, { platform: "linux" });
   expect(screen.getByRole("img", { name: "Unknown" })).toBeTruthy();

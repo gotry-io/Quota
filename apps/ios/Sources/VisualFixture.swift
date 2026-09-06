@@ -68,6 +68,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
     func apply(to model: AppModel, now: Date) {
       model.skipsRestore = true
       model.sessionActivation = accountActivation
+      // A fixture with an account is a phone that registered a Device, so Devices shows the
+      // Account's row for it rather than the local one.
+      model.sessionDeviceID =
+        accountActivation == nil ? nil : VisualFixtureContent.phoneDeviceID
       switch self {
       case .signedOut:
         model.phase = .signedOut
@@ -280,6 +284,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
   enum VisualFixtureContent {
     static let studioDeviceID = "device_visual_fixture_01"
     static let kitchenDeviceID = "device_visual_fixture_02"
+    /// This phone, as the Account lists it. A signed-in phone registers a Device
+    /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)), so the
+    /// fixture states the row rather than the one Devices used to draw for itself.
+    static let phoneDeviceID = "device_visual_fixture_03"
     /// A fixture keeps its budget in its own suite, so a screenshot never reads or writes the
     /// preference a real install has.
     static let budgetSuiteName = "io.gotry.quota.visual-fixture"
@@ -308,6 +316,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
           platform: .macos,
           lastSeenAt: date.addingTimeInterval(-300),
           lastObservedAt: date.addingTimeInterval(-360)
+        ),
+        AccountDevice(
+          id: phoneDeviceID,
+          displayName: "Kyle iPhone",
+          platform: .ios,
+          lastSeenAt: date.addingTimeInterval(-20),
+          lastObservedAt: date.addingTimeInterval(-30)
         ),
       ]
     }

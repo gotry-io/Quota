@@ -33,6 +33,17 @@ declare module "vitest" {
 }
 
 const now = new Date("2026-08-10T00:00:00.000Z");
+/** What the phone presents when it is asking to be a Device. */
+interface IosDeviceRegistration {
+  installation_id: string;
+  device_display_name: string;
+  platform: string;
+}
+const iPhone: IosDeviceRegistration = {
+  installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+  device_display_name: "Kyle's iPhone",
+  platform: "ios",
+};
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 let harnessSequence = 0;
 
@@ -40,7 +51,7 @@ beforeEach(async () => {
   await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
 });
 
-describe("quota-ios read-only account client", () => {
+describe("quota-ios account and device client", () => {
   it("rejects exact client and redirect mismatches before GitHub", async () => {
     const harness = await createHarness();
     const { challenge } = await pkcePair();
@@ -130,7 +141,7 @@ describe("quota-ios read-only account client", () => {
     ).toBe(400);
   });
 
-  it("exchanges an account session without creating a Device", async () => {
+  it("exchanges a reader's session without creating a Device", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
     const started = await authorize(harness, {
@@ -192,7 +203,153 @@ describe("quota-ios read-only account client", () => {
     expect(body.devices).toEqual([]);
   });
 
-  it("rejects device fields, a wrong verifier, and replay", async () => {
+  it("registers a Device when the phone presents an installation", async () => {
+    const harness = await createHarness();
+    const tokens = await loginIos(harness, iPhone);
+    expect("device_id" in tokens && "device_generation" in tokens).toBe(true);
+    if (!("device_id" in tokens)) throw new Error("expected a Device session");
+    expect(tokens.device_generation).toBe(1);
+    expect(tokens.session.access_token).toMatch(/^qia_/);
+
+    const device = await env.DB.prepare(
+      "SELECT id, display_name, platform FROM devices WHERE account_id = ?1",
+    )
+      .bind(harness.accountId)
+      .first<{ id: string; display_name: string; platform: string }>();
+    // The name is sanitized the same way a Mac's is: an apostrophe is not a character a
+    // display name keeps.
+    expect(device).toMatchObject({
+      id: tokens.device_id,
+      display_name: "Kyles iPhone",
+      platform: "ios",
+    });
+    const session = await env.DB.prepare(
+      "SELECT client_kind, device_id, scopes_json FROM sessions WHERE account_id = ?1",
+    )
+      .bind(harness.accountId)
+      .first<{ client_kind: string; device_id: string; scopes_json: string }>();
+    expect(session).toMatchObject({ client_kind: "ios", device_id: tokens.device_id });
+    expect(JSON.parse(session?.scopes_json ?? "[]")).toEqual(["account:read", "device:write"]);
+
+    // The phone is a Device every client reads, and it says which platform it runs.
+    const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
+      headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+    });
+    const body = (await summary.json()) as { devices: { id: string; platform: string }[] };
+    expect(body.devices).toEqual([
+      expect.objectContaining({ id: tokens.device_id, platform: "ios" }),
+    ]);
+
+    // Signing in again on the same phone is one Device holding one live session.
+    const second = await loginIos(harness, iPhone);
+    if (!("device_id" in second)) throw new Error("expected a Device session");
+    expect(second.device_id).toBe(tokens.device_id);
+    expect(await deviceCount(harness.accountId)).toBe(1);
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND revoked_at IS NULL",
+      )
+        .bind(harness.accountId)
+        .first("count"),
+    ).toBe(1);
+  });
+
+  it("writes snapshots from the phone only while sync is paid", async () => {
+    const harness = await createHarness();
+    const tokens = await loginIos(harness, iPhone);
+    if (!("device_id" in tokens)) throw new Error("expected a Device session");
+    const headers = {
+      Authorization: `Bearer ${tokens.session.access_token}`,
+      "Content-Type": "application/json",
+    };
+    const envelope = JSON.stringify({
+      protocol_version: 6,
+      generation: tokens.device_generation,
+      snapshots: [
+        {
+          provider: "claude",
+          account: { fingerprint: "fingerprint_ios", fingerprint_scope: "global" },
+          windows: [],
+          status: "available",
+          observed_at: now.toISOString(),
+        },
+      ],
+    });
+
+    // Nothing is bought, so the write boundary is where the phone is told so.
+    const unpaidSync = await harness.app.request("https://quota.gotry.io/api/v2/device/sync", {
+      headers,
+    });
+    expect(unpaidSync.status).toBe(402);
+    expect(await unpaidSync.json()).toMatchObject({ error: { code: "subscription_required" } });
+    const unpaidUpload = await harness.app.request(
+      "https://quota.gotry.io/api/v6/device/snapshots",
+      { method: "PUT", headers, body: envelope },
+    );
+    expect(unpaidUpload.status).toBe(402);
+
+    await paySync(harness.accountId);
+    const sync = await harness.app.request("https://quota.gotry.io/api/v2/device/sync", {
+      headers,
+    });
+    expect(sync.status).toBe(200);
+    expect(await sync.json()).toMatchObject({
+      device_id: tokens.device_id,
+      device_generation: tokens.device_generation,
+    });
+    const uploaded = await harness.app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers,
+      body: envelope,
+    });
+    expect(uploaded.status).toBe(200);
+    expect(await uploaded.json()).toMatchObject({ accepted: ["claude"], ignored: [] });
+    // Usage is a Mac's, not a phone's, but nothing about the route says so: what the phone does
+    // not upload is what it never sends.
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM quota_snapshots WHERE device_id = ?1")
+        .bind(tokens.device_id)
+        .first("count"),
+    ).toBe(1);
+  });
+
+  it("refuses an installation without the name and platform beside it", async () => {
+    const harness = await createHarness();
+    const { verifier, challenge } = await pkcePair();
+    const started = await authorize(harness, {
+      client_id: IOS_OAUTH_CLIENT_ID,
+      redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      state: "client-state-123456789",
+      code_challenge: challenge,
+    });
+    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
+    const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
+
+    for (const partial of [
+      { installation_id: iPhone.installation_id },
+      { installation_id: iPhone.installation_id, device_display_name: iPhone.device_display_name },
+      { ...iPhone, platform: "macos" },
+    ]) {
+      const refused = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: 2,
+          grant_type: "authorization_code",
+          client_id: IOS_OAUTH_CLIENT_ID,
+          code,
+          code_verifier: verifier,
+          redirect_uri: IOS_OAUTH_REDIRECT_URI,
+          ...partial,
+        }),
+      });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "invalid_request" } });
+    }
+    expect(await deviceCount(harness.accountId)).toBe(0);
+  });
+
+  it("rejects a wrong verifier and replay", async () => {
     const harness = await createHarness();
     const { verifier, challenge } = await pkcePair();
     const started = await authorize(harness, {
@@ -205,24 +362,6 @@ describe("quota-ios read-only account client", () => {
     const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     expect(code).toBeTruthy();
-
-    const withDeviceFields = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "authorization_code",
-        client_id: IOS_OAUTH_CLIENT_ID,
-        code,
-        code_verifier: verifier,
-        redirect_uri: IOS_OAUTH_REDIRECT_URI,
-        installation_id: "4a7f950d-89ea-4f64-a7c1-b4aeb46a67f8",
-        device_display_name: "iPhone",
-        platform: "ios",
-      }),
-    });
-    expect(withDeviceFields.status).toBe(400);
-    expect(await withDeviceFields.json()).toMatchObject({ error: { code: "invalid_request" } });
 
     const wrongVerifier = await exchangeIos(harness, {
       code: code ?? "",
@@ -598,7 +737,10 @@ async function loginQuotabar(harness: TestHarness): Promise<OAuthTokenResponse> 
   return OAuthTokenResponseSchema.parse(await exchanged.json());
 }
 
-async function loginIos(harness: TestHarness): Promise<IosOAuthTokenResponse> {
+async function loginIos(
+  harness: TestHarness,
+  registration?: IosDeviceRegistration,
+): Promise<IosOAuthTokenResponse> {
   const { verifier, challenge } = await pkcePair();
   const started = await authorize(harness, {
     client_id: IOS_OAUTH_CLIENT_ID,
@@ -610,7 +752,11 @@ async function loginIos(harness: TestHarness): Promise<IosOAuthTokenResponse> {
   const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
   expect(complete.status).toBe(302);
   const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
-  const exchanged = await exchangeIos(harness, { code: code ?? "", code_verifier: verifier });
+  const exchanged = await exchangeIos(harness, {
+    code: code ?? "",
+    code_verifier: verifier,
+    registration,
+  });
   expect(exchanged.status).toBe(200);
   return IosOAuthTokenResponseSchema.parse(await exchanged.json());
 }
@@ -637,7 +783,14 @@ async function authorize(
   return harness.app.request(url);
 }
 
-async function exchangeIos(harness: TestHarness, input: { code: string; code_verifier: string }) {
+async function exchangeIos(
+  harness: TestHarness,
+  input: {
+    code: string;
+    code_verifier: string;
+    registration?: IosDeviceRegistration | undefined;
+  },
+) {
   return harness.app.request("https://quota.gotry.io/oauth/v2/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -648,8 +801,24 @@ async function exchangeIos(harness: TestHarness, input: { code: string; code_ver
       code: input.code,
       code_verifier: input.code_verifier,
       redirect_uri: IOS_OAUTH_REDIRECT_URI,
+      ...(input.registration ?? {}),
     }),
   });
+}
+
+/** Paid sync, stored the way the RevenueCat fold stores it. */
+async function paySync(accountId: string) {
+  await env.DB.prepare(
+    `INSERT INTO entitlements (
+       account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
+     ) VALUES (?1, 'active', 'quota_sync_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
+  )
+    .bind(
+      accountId,
+      new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      now.toISOString(),
+    )
+    .run();
 }
 
 async function deviceCount(accountId: string) {

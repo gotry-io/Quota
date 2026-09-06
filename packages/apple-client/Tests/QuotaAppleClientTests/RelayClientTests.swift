@@ -4,8 +4,12 @@ import QuotaWire
 import Testing
 
 struct RelayClientTests {
+  /// What this client can reach. The device routes are the phone's own Device and nothing more:
+  /// its readings and the control document behind them
+  /// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Usage is
+  /// a Mac's, and the Account's management routes stay the browser's.
   @Test
-  func publicAPIHasNoDeviceOrWriteRoutes() {
+  func publicAPIReachesOnlyThisDeviceAndTheAccountReads() {
     #expect(
       Set(RelayRoute.allCases.map(\.path)) == [
         "/oauth/v2/token",
@@ -13,10 +17,15 @@ struct RelayClientTests {
         "/oauth/v2/revoke",
         "/api/v6/account/summary",
         "/api/v6/account/usage/activity",
+        "/api/v2/device/sync",
+        "/api/v6/device/snapshots",
       ])
-    #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/") })
-    #expect(RelayRoute.allCases.allSatisfy { $0.method == "GET" || $0.method == "POST" })
-    #expect(!RelayRoute.allCases.contains { $0.method == "PUT" || $0.method == "DELETE" })
+    #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/usage") })
+    #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/account/devices") })
+    #expect(!RelayRoute.allCases.contains { $0.method == "DELETE" })
+    #expect(RelayRoute.allCases.filter { $0.method == "PUT" }.map(\.path) == [
+      "/api/v6/device/snapshots"
+    ])
   }
 
   @Test

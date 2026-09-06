@@ -249,6 +249,61 @@ describe("browser sign-in through Apple", () => {
 });
 
 describe("Sign in with Apple inside the iOS app", () => {
+  it("names the Device when the phone presents an installation", async () => {
+    const apple = await fakeApple();
+    const relay = await harness(apple);
+    const nonce = "quota-native-nonce-value-that-is-long-enough-01";
+    const response = await nativeSignIn(relay, apple, nonce, {
+      registration: {
+        installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+        device_display_name: "Kyle iPhone",
+        platform: "ios",
+      },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { device_id: string; device_generation: number };
+    expect(body.device_generation).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT id, platform FROM devices").first<Record<string, unknown>>(),
+    ).toMatchObject({ id: body.device_id, platform: "ios" });
+    expect(
+      await env.DB.prepare("SELECT client_kind, device_id, scopes_json FROM sessions").first<
+        Record<string, unknown>
+      >(),
+    ).toMatchObject({
+      client_kind: "ios",
+      device_id: body.device_id,
+      scopes_json: '["account:read","device:write"]',
+    });
+
+    // Signing in again on the same phone is the same Device, and one live session.
+    const again = await nativeSignIn(relay, apple, nonce, {
+      registration: {
+        installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+        device_display_name: "Kyle iPhone",
+        platform: "ios",
+      },
+    });
+    expect(((await again.json()) as { device_id: string }).device_id).toBe(body.device_id);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE revoked_at IS NULL").first(
+        "count",
+      ),
+    ).toBe(1);
+  });
+
+  it("refuses an installation the name and platform do not travel with", async () => {
+    const apple = await fakeApple();
+    const relay = await harness(apple);
+    const nonce = "quota-native-nonce-value-that-is-long-enough-01";
+    const refused = await nativeSignIn(relay, apple, nonce, {
+      registration: { installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998" },
+    });
+    expect(refused.status).toBe(400);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(0);
+  });
+
   it("issues the viewer's one session without a browser round trip", async () => {
     const apple = await fakeApple();
     const relay = await harness(apple);
@@ -593,7 +648,12 @@ async function nativeSignIn(
   relay: Awaited<ReturnType<typeof harness>>,
   apple: AppleStub,
   nonce: string,
-  options: { intent?: "link"; bearer?: string; keepClaims?: boolean } = {},
+  options: {
+    intent?: "link";
+    bearer?: string;
+    keepClaims?: boolean;
+    registration?: Record<string, string>;
+  } = {},
 ): Promise<Response> {
   if (!options.keepClaims) {
     apple.identityClaims = { nonce: await sha256Hex(nonce), audience: IOS_BUNDLE_ID };
@@ -610,6 +670,7 @@ async function nativeSignIn(
       identity_token: await apple.identityToken(),
       nonce,
       ...(options.intent ? { intent: options.intent } : {}),
+      ...(options.registration ?? {}),
     }),
   });
 }
@@ -630,7 +691,7 @@ async function openIosSessionFor(
   )
     .bind(accountId, now.toISOString())
     .run();
-  const issued = await relay.accountService.openIosSession(accountId, "Other", now);
+  const issued = await relay.accountService.openIosSession(accountId, "Other", null, now);
   return issued.session.access_token;
 }
 

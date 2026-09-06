@@ -145,9 +145,13 @@ do not ask for HTML still receive the original 409 JSON. See
 Every client's session is a row in that same table, and one login issues one access/refresh family
 ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)). The `quotabar` client exchanges an
 authorization code over a loopback redirect for a session scoped `[account:read, device:write]`,
-which is the only way a Device is registered; Authorization Code with PKCE is the only grant Relay
-offers. The registered `quota-ios` public client is a read-only Account login over the exact
-redirect `io.gotry.quota:/oauth/callback`, scoped `[account:read]`, and it registers no Device. Both
+and Authorization Code with PKCE is the only grant Relay offers. The registered `quota-ios` public
+client signs in over the exact redirect `io.gotry.quota:/oauth/callback`, and its exchange takes an
+optional `installation_id`, `device_display_name`, and `platform: ios` — the three present together
+or not at all. Presenting them registers a Device on the same path `quotabar` takes and issues
+`[account:read, device:write]`; presenting none issues `[account:read]` and registers no Device
+([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+`POST /oauth/v2/apple` takes the same optional installation. Both
 exchanges answer with the Account's `display_label` beside the session, read in the same batch that
 issued it, so a client can name the account before its first Account read. The checked-in Worker
 enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.

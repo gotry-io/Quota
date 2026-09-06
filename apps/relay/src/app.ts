@@ -10,6 +10,7 @@ import {
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
+  type AppleNativeSignInRequest,
   AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
@@ -20,6 +21,7 @@ import {
   IdentityLinkResponseSchema,
   type IdentityProvider,
   IdentityProviderSchema,
+  type IosLoginExchangeRequest,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
@@ -82,6 +84,7 @@ import {
   AccountFlowError,
   type AccountService,
   accessTokenDomain,
+  type IosDeviceRegistration,
   isIosRedirect,
   isLoopbackRedirect,
   refreshTokenDomain,
@@ -743,7 +746,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         }),
       );
     }
-    const issued = await apple.signIn(request.identity_token, request.nonce, now());
+    const issued = await apple.signIn(
+      request.identity_token,
+      request.nonce,
+      iosDeviceRegistration(request),
+      now(),
+    );
     if (isNativeIdentityRefusal(issued)) return appleTokenRefused(context);
     return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
   });
@@ -819,7 +827,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       }
       if (iosTokenRequest.success) {
         const issued = await options.accountService.exchangeIosAuthorizationCode(
-          iosTokenRequest.data,
+          { ...iosTokenRequest.data, device: iosDeviceRegistration(iosTokenRequest.data) },
           now(),
         );
         return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
@@ -1854,14 +1862,35 @@ function publicDevice(device: DeviceRecord, lastObserved: ReadonlyMap<string, st
   };
 }
 
+/**
+ * What the phone presented, or null when it presented nothing.
+ *
+ * The three fields are one answer on the wire, so they are one answer here: a request carrying
+ * an installation carries the name and platform beside it, and the schema has already refused
+ * one that does not.
+ */
+function iosDeviceRegistration(
+  request: AppleNativeSignInRequest | IosLoginExchangeRequest,
+): IosDeviceRegistration | null {
+  return "installation_id" in request
+    ? {
+        installation_id: request.installation_id,
+        device_display_name: request.device_display_name,
+        platform: request.platform,
+      }
+    : null;
+}
+
 function iosOAuthTokenResponse(
   issued: Awaited<ReturnType<AccountService["exchangeIosAuthorizationCode"]>>,
 ) {
+  const device = issued.device;
   return {
     protocol_version: PROTOCOL_VERSION,
     token_type: issued.token_type,
     account_id: issued.account_id,
     display_label: issued.display_label,
+    ...(device ? { device_id: device.id, device_generation: device.generation } : {}),
     session: sessionToken(issued.session),
   };
 }
