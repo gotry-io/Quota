@@ -3,11 +3,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { isBalanceOnly, quotaPace, showsPercentMeter } from "@gotry-io/quota-model";
+import {
+  formatRemaining,
+  isAmountOfLimit,
+  isBalanceOnly,
+  quotaPace,
+  showsPercentMeter,
+} from "@gotry-io/quota-model";
 import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
   NOT_CHECKED_COPY,
+  formatQuotaRemaining,
   formatUtcDateRange,
   lastReadingCopy,
   observationFreshnessCopy,
@@ -42,12 +49,48 @@ const fixture = JSON.parse(
     expected: boolean;
   }[];
   device: { name: string; age_seconds: number | null; expected: string }[];
-  reset: {
+};
+
+const resetFixture = JSON.parse(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../packages/protocol/fixtures/reset-copy-conformance.json",
+    ),
+    "utf8",
+  ),
+) as {
+  cases: {
     name: string;
-    seconds_until: number;
-    now?: string;
-    resets_at?: string;
-    expected: string | null;
+    now: string;
+    resets_at: string;
+    relative: string | null;
+    absolute: string | null;
+  }[];
+};
+
+const remainingFixture = JSON.parse(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../packages/protocol/fixtures/remaining-copy-conformance.json",
+    ),
+    "utf8",
+  ),
+) as {
+  cases: {
+    name: string;
+    window: {
+      id?: string;
+      used_percent: number;
+      remaining_value?: number;
+      limit_value?: number;
+      value_unit?: string;
+    };
+    expected: string;
+    shows_percent_meter: boolean;
+    is_balance_only: boolean;
+    is_amount_of_limit: boolean;
   }[];
 };
 
@@ -105,18 +148,47 @@ test("device lines match the shared fixture", () => {
 });
 
 test("reset copy matches the shared fixture", () => {
-  assert.ok(fixture.reset.length > 1);
-  for (const testCase of fixture.reset) {
-    if (testCase.now !== undefined && testCase.resets_at !== undefined) {
-      assert.equal(
-        resetCopy(testCase.resets_at, new Date(testCase.now), timeZoneFromRfc3339(testCase.now)),
-        testCase.expected,
-        testCase.name,
-      );
-      continue;
-    }
-    const resetsAt = new Date(now.getTime() + testCase.seconds_until * 1000);
-    assert.equal(resetCopy(resetsAt, now, "UTC"), testCase.expected, testCase.name);
+  assert.ok(resetFixture.cases.length > 1);
+  for (const testCase of resetFixture.cases) {
+    const zone = timeZoneFromRfc3339(testCase.now);
+    const nowAt = new Date(testCase.now);
+    assert.equal(
+      resetCopy(testCase.resets_at, nowAt, zone, "relative"),
+      testCase.relative,
+      `${testCase.name} relative`,
+    );
+    assert.equal(
+      resetCopy(testCase.resets_at, nowAt, zone, "absolute"),
+      testCase.absolute,
+      `${testCase.name} absolute`,
+    );
+  }
+});
+
+test("remaining copy matches the shared fixture", () => {
+  assert.ok(remainingFixture.cases.length > 1);
+  for (const testCase of remainingFixture.cases) {
+    assert.equal(formatRemaining(testCase.window), testCase.expected, `${testCase.name} copy`);
+    assert.equal(
+      formatQuotaRemaining(testCase.window),
+      testCase.expected,
+      `${testCase.name} web copy`,
+    );
+    assert.equal(
+      showsPercentMeter(testCase.window),
+      testCase.shows_percent_meter,
+      `${testCase.name} meter`,
+    );
+    assert.equal(
+      isBalanceOnly(testCase.window),
+      testCase.is_balance_only,
+      `${testCase.name} balance`,
+    );
+    assert.equal(
+      isAmountOfLimit(testCase.window),
+      testCase.is_amount_of_limit,
+      `${testCase.name} amount`,
+    );
   }
 });
 
@@ -151,6 +223,15 @@ test("classifies wallet windows as balance-only and metered windows as percent m
 
   assert.equal(showsNoResetTime(wallet), false);
   assert.equal(showsNoResetTime(metered), true);
+
+  const extra = {
+    used_percent: 12.5,
+    remaining_value: 87.5,
+    limit_value: 100,
+    value_unit: "usd",
+  };
+  assert.equal(showsPercentMeter(extra), false);
+  assert.equal(showsNoResetTime(extra), false);
 });
 
 /**

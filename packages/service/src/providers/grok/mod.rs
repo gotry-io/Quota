@@ -331,6 +331,11 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
     // A named period takes the shared title, so the word a person reads and the member a client
     // trusts cannot drift apart. An unnamed one is generic on both counts.
     let title = primary_cadence.map_or("Billing Cycle", Cadence::title);
+    let (remaining_value, limit_value, value_unit) = money(obj_get(config, "monthlyLimit"))
+        .zip(money(obj_get(config, "used")))
+        .filter(|(limit, used)| *limit > 0.0 && limit.is_finite() && used.is_finite())
+        .map(|(limit, used)| (Some((limit - used).max(0.0)), Some(limit), Some("credits")))
+        .unwrap_or((None, None, None));
     Ok(QuotaWindow {
         id: "billing_cycle".to_owned(),
         title: title.to_owned(),
@@ -338,9 +343,9 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
         resets_at: end.map(super::common::unix_seconds_to_iso),
         duration_seconds: duration_seconds(start, end),
         primary_cadence,
-        remaining_value: None,
-        limit_value: None,
-        value_unit: None,
+        remaining_value,
+        limit_value,
+        value_unit,
     })
 }
 
@@ -466,6 +471,27 @@ mod tests {
         assert_eq!(window.duration_seconds, Some(604800));
         assert_eq!(window.resets_at.as_deref(), Some("2026-08-06T07:33:06Z"));
         assert_eq!(window.primary_cadence, Some(Cadence::Weekly));
+        assert_eq!(window.remaining_value, None);
+    }
+
+    #[test]
+    fn maps_credit_amounts_when_the_legacy_money_fields_are_present() {
+        let value = serde_json::json!({
+            "config": {
+                "used": {"val": 20},
+                "monthlyLimit": {"val": 100},
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-07-30T07:33:06Z",
+                    "end": "2026-08-06T07:33:06Z"
+                }
+            }
+        });
+        let window = map_billing(&value).unwrap();
+        assert_eq!(window.used_percent, 20.0);
+        assert_eq!(window.remaining_value, Some(80.0));
+        assert_eq!(window.limit_value, Some(100.0));
+        assert_eq!(window.value_unit, Some("credits"));
     }
 
     /// The billing period is the only recurring allowance Grok reports, so a typed one is that

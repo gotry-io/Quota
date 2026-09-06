@@ -266,16 +266,31 @@ extension QuotaWindow: RemainingQuotaWindow {
     RemainingQuotaFormat.remainingPercent(usedPercent: usedPercent)
   }
 
+  public var remainingUnit: RemainingQuotaUnit? { valueUnit.flatMap(\.remainingUnit) }
+
   /// Wallet-style window: absolute remaining only, no budget/limit ratio.
   public var isBalanceOnly: Bool {
     RemainingQuotaFormat.isBalanceOnly(remainingValue: remainingValue, hasLimit: limitValue != nil)
   }
 
-  /// Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+  public var isAmountOfLimit: Bool {
+    RemainingQuotaFormat.isAmountOfLimit(
+      remainingPercent: remainingPercent,
+      remainingValue: remainingValue,
+      limitValue: limitValue,
+      unit: remainingUnit
+    )
+  }
+
+  /// Rate-limit / budget meters need a percent bar. Balance-only wallets and amount-of-limit
+  /// usd/credits windows do not.
   public var showsPercentMeter: Bool {
     RemainingQuotaFormat.showsPercentMeter(
+      remainingPercent: remainingPercent,
       remainingValue: remainingValue,
-      hasLimit: limitValue != nil
+      limitValue: limitValue,
+      hasLimit: limitValue != nil,
+      unit: remainingUnit
     )
   }
 

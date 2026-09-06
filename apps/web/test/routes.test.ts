@@ -86,6 +86,6 @@ test("keeps Cursor included-usage money out of compact quota cards", () => {
     limit_value: 400,
     value_unit: "usd",
   };
-  assert.equal(formatQuotaRemaining(window, "cursor"), "37%");
-  assert.equal(formatQuotaRemaining(window, "openrouter"), "37% · $14.55");
+  assert.equal(formatQuotaRemaining(window, "cursor"), "36.9%");
+  assert.equal(formatQuotaRemaining(window, "openrouter"), "36.9% · $14.55");
 });

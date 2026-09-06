@@ -34,9 +34,11 @@ Core rules:
 
 Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
+and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, reset copy is
+`packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
+`packages/protocol/fixtures/remaining-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
-`FreshnessCopy` and never assemble their own. A window's pace prints under its support line in
+`FreshnessCopy` and `RemainingQuotaFormat` and never assemble their own. A window's pace prints under its support line in
 `QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise;
 there is no Rust on iOS, so the app derives it with `QuotaPace` from the reading it already holds,
 answering `packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space

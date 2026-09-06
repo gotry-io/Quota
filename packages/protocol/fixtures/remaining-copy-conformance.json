@@ -1,0 +1,177 @@
+{
+  "$comment": "How remaining quota is printed. Percent is remaining of a budget. A wallet with no limit prints the amount and drops the meter. A usd or credits window whose remaining and limit describe that same percent prints remaining of limit (`$x of $y`) and drops the meter; when remaining/limit is a different quantity from used_percent the percent stays the meter. `packages/quota-model`, `packages/apple-shared` RemainingQuotaFormat, and `apps/web/src/lib/format.ts` all answer this file.",
+  "amount_of_limit_percent_tolerance": 1,
+  "cases": [
+    {
+      "name": "a percent-only window prints remaining percent",
+      "window": {
+        "id": "weekly",
+        "title": "Weekly",
+        "used_percent": 25
+      },
+      "expected": "75%",
+      "shows_percent_meter": true,
+      "is_balance_only": false,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "a fractional remaining percent keeps one decimal",
+      "window": {
+        "id": "other_models",
+        "title": "Other Models",
+        "used_percent": 29.204
+      },
+      "expected": "70.8%",
+      "shows_percent_meter": true,
+      "is_balance_only": false,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "a usd wallet with no limit is the amount",
+      "window": {
+        "id": "credits",
+        "title": "Balance (USD)",
+        "used_percent": 0,
+        "remaining_value": 60,
+        "value_unit": "usd"
+      },
+      "expected": "$60.00",
+      "shows_percent_meter": false,
+      "is_balance_only": true,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "a credits wallet with no limit names the unit",
+      "window": {
+        "id": "credits",
+        "title": "Credits",
+        "used_percent": 0,
+        "remaining_value": 1.5,
+        "value_unit": "credits"
+      },
+      "expected": "1.50 credits",
+      "shows_percent_meter": false,
+      "is_balance_only": true,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "extra usage remaining of a usd cap is remaining of limit",
+      "window": {
+        "id": "extra_usage",
+        "title": "Extra Usage",
+        "used_percent": 12.5,
+        "remaining_value": 87.5,
+        "limit_value": 100,
+        "value_unit": "usd"
+      },
+      "expected": "$87.50 of $100.00",
+      "shows_percent_meter": false,
+      "is_balance_only": false,
+      "is_amount_of_limit": true
+    },
+    {
+      "name": "a usd budget whose remaining matches the percent is remaining of limit",
+      "window": {
+        "id": "key_budget",
+        "title": "API Key Budget",
+        "used_percent": 40,
+        "remaining_value": 30,
+        "limit_value": 50,
+        "value_unit": "usd"
+      },
+      "expected": "$30.00 of $50.00",
+      "shows_percent_meter": false,
+      "is_balance_only": false,
+      "is_amount_of_limit": true
+    },
+    {
+      "name": "a credits pool remaining of its cap names credits once",
+      "window": {
+        "id": "billing_cycle",
+        "title": "Weekly",
+        "used_percent": 20,
+        "remaining_value": 80,
+        "limit_value": 100,
+        "value_unit": "credits"
+      },
+      "expected": "80.00 of 100.00 credits",
+      "shows_percent_meter": false,
+      "is_balance_only": false,
+      "is_amount_of_limit": true
+    },
+    {
+      "name": "included dollars that are not the percent stay a percent meter",
+      "window": {
+        "id": "other_models",
+        "title": "Other Models",
+        "used_percent": 63.102,
+        "remaining_value": 14.55,
+        "limit_value": 400,
+        "value_unit": "usd"
+      },
+      "expected": "36.9% · $14.55",
+      "shows_percent_meter": true,
+      "is_balance_only": false,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "a count budget keeps percent then remaining count",
+      "window": {
+        "id": "weekly",
+        "title": "Weekly",
+        "used_percent": 25,
+        "remaining_value": 75,
+        "limit_value": 100,
+        "value_unit": "count"
+      },
+      "expected": "75% · 75",
+      "shows_percent_meter": true,
+      "is_balance_only": false,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "reset credits are a count wallet",
+      "window": {
+        "id": "reset_credits",
+        "title": "Reset Credits",
+        "used_percent": 0,
+        "remaining_value": 2,
+        "value_unit": "count"
+      },
+      "expected": "2",
+      "shows_percent_meter": false,
+      "is_balance_only": true,
+      "is_amount_of_limit": false
+    },
+    {
+      "name": "a usd remaining/limit within a percent of remaining percent is remaining of limit",
+      "window": {
+        "id": "extra_usage",
+        "title": "Extra Usage",
+        "used_percent": 50.5,
+        "remaining_value": 50,
+        "limit_value": 100,
+        "value_unit": "usd"
+      },
+      "expected": "$50.00 of $100.00",
+      "shows_percent_meter": false,
+      "is_balance_only": false,
+      "is_amount_of_limit": true
+    },
+    {
+      "name": "a usd remaining/limit more than a percent off keeps the percent meter",
+      "window": {
+        "id": "on_demand",
+        "title": "On-Demand",
+        "used_percent": 48.8,
+        "remaining_value": 50,
+        "limit_value": 100,
+        "value_unit": "usd"
+      },
+      "expected": "51.2% · $50.00",
+      "shows_percent_meter": true,
+      "is_balance_only": false,
+      "is_amount_of_limit": false
+    }
+  ]
+}

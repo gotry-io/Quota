@@ -95,6 +95,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public let windowTitle: String
   public let remainingPercent: Double
   public let remainingValue: Double?
+  public let limitValue: Double?
   public let unit: WidgetQuotaUnit?
   public let hasLimit: Bool?
   public let resetsAt: Date?
@@ -111,6 +112,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     windowTitle: String,
     remainingPercent: Double,
     remainingValue: Double? = nil,
+    limitValue: Double? = nil,
     unit: WidgetQuotaUnit? = nil,
     hasLimit: Bool? = nil,
     resetsAt: Date? = nil,
@@ -123,6 +125,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     self.windowTitle = windowTitle
     self.remainingPercent = remainingPercent
     self.remainingValue = remainingValue
+    self.limitValue = limitValue
     self.unit = unit
     self.hasLimit = hasLimit
     self.resetsAt = resetsAt
@@ -133,7 +136,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
       "selectionId", "providerId", "providerDisplayName", "windowTitle", "remainingPercent",
-      "remainingValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
+      "remainingValue", "limitValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     selectionID = try container.decode(String.self, forKey: .selectionID)
@@ -142,6 +145,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     windowTitle = try container.decode(String.self, forKey: .windowTitle)
     remainingPercent = try container.decode(Double.self, forKey: .remainingPercent)
     remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
+    limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     unit = try container.decodeIfPresent(WidgetQuotaUnit.self, forKey: .unit)
     hasLimit = try container.decodeIfPresent(Bool.self, forKey: .hasLimit)
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
@@ -173,6 +177,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     try container.encode(windowTitle, forKey: .windowTitle)
     try container.encode(remainingPercent, forKey: .remainingPercent)
     try container.encodeIfPresent(remainingValue, forKey: .remainingValue)
+    try container.encodeIfPresent(limitValue, forKey: .limitValue)
     try container.encodeIfPresent(unit, forKey: .unit)
     try container.encodeIfPresent(hasLimit, forKey: .hasLimit)
     try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
@@ -189,6 +194,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
       && remainingPercent.isFinite
       && (0...100).contains(remainingPercent)
       && (remainingValue?.isFinite ?? true)
+      && (limitValue.map { $0.isFinite && $0 >= 0 } ?? true)
       && (resetsAt.map(WidgetValidation.isFiniteDate) ?? true)
       && (validUntil.map(WidgetValidation.isFiniteDate) ?? true)
   }
@@ -200,6 +206,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     case windowTitle
     case remainingPercent
     case remainingValue
+    case limitValue
     case unit
     case hasLimit
     case resetsAt

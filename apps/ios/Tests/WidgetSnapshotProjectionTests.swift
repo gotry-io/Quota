@@ -60,7 +60,7 @@ struct WidgetSnapshotProjectionTests {
           provider: "grok",
           fingerprint: "fp_grok",
           windowID: "balance",
-          title: "Wallet",
+          title: "Balance (USD)",
           usedPercent: 0,
           remainingValue: 12.5,
           valueUnit: "usd",

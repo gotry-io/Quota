@@ -9,6 +9,7 @@ struct SettingsHomeView: View {
   let onOpenNotifications: () -> Void
   let onOpenMenuBarStyle: () -> Void
   let onOpenMenuBarProvider: () -> Void
+  let onOpenResetCopy: () -> Void
   let onOpenSupport: () -> Void
   let onOpenRefreshInterval: () -> Void
 
@@ -19,6 +20,8 @@ struct SettingsHomeView: View {
     MenuBarProviderPreference.fallback
   @AppStorage(MenuBarArrangementPreference.storageKey) private var menuBarArrangement =
     MenuBarArrangementPreference.fallback
+  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
+    ResetCopyStylePreference.fallback
 
   var body: some View {
     ScrollView {
@@ -77,6 +80,13 @@ struct SettingsHomeView: View {
               trailing: currentLayout.settingsSummary,
               accessibilityLabel: MenuBarRoute.menuBarProvider.title,
               action: onOpenMenuBarProvider
+            )
+            settingsDestinationRow(
+              title: "Reset time",
+              systemImage: "clock.arrow.circlepath",
+              trailing: resetCopyStyle.label,
+              accessibilityLabel: MenuBarRoute.resetCopy.title,
+              action: onOpenResetCopy
             )
           }
         }

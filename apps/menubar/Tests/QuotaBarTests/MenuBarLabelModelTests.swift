@@ -293,13 +293,15 @@ struct MenuBarLabelModelTests {
     )
     #expect(specs[0].label.icon == .provider(.codex))
     #expect(specs[0].label.cells[0].rows.map(\.percent) == ["68%", "74%"])
-    #expect(
-      MenuBarLayout.resolve(
-        selection: .providers([.codex, .claude]),
-        arrangement: .separate,
-        visibleProviders: [.codex, .claude]
-      ).effectiveStyle(.icon) == .iconAndPercent
+    let multi = MenuBarLayout.resolve(
+      selection: .providers([.codex, .claude]),
+      arrangement: .separate,
+      visibleProviders: [.codex, .claude]
     )
+    #expect(multi.effectiveStyle(.icon) == .iconAndPercent)
+    #expect(multi.effectiveStyle(.percent) == .iconAndPercent)
+    #expect(multi.effectiveStyle(.iconAndTodayCost) == .iconAndTodayCost)
+    #expect(multi.effectiveStyle(.iconAndTodayTokens) == .iconAndTodayTokens)
   }
 
   @Test
@@ -740,9 +742,89 @@ struct MenuBarLabelModelTests {
   @Test
   func theStoredStyleKeepsItsWireSpellingAndItsKey() {
     #expect(MenuBarStylePreference.iconAndPercent.rawValue == "icon_and_percent")
+    #expect(MenuBarStylePreference.iconAndTodayCost.rawValue == "icon_and_today_cost")
+    #expect(MenuBarStylePreference.iconAndTodayTokens.rawValue == "icon_and_today_tokens")
     #expect(MenuBarStylePreference.fallback == .iconAndPercent)
-    #expect(MenuBarStylePreference.allCases.count == 3)
+    #expect(MenuBarStylePreference.allCases.count == 5)
     #expect(MenuBarStylePreference.storageKey == "menubar.style")
+    #expect(ResetCopyStylePreference.storageKey == "quota.resetCopy.style")
+    #expect(ResetCopyStylePreference.fallback == .relative)
+  }
+
+  @Test
+  func iconAndTodayCostShowsTheCompactCostBesideTheQuotaMark() {
+    let today = MenuBarTodaySnapshot(
+      total: MenuBarTodayUsage(
+        cost: MenuBarTodayReading(text: "≥ $1.49", spoken: "≥ $1.49"),
+        tokens: MenuBarTodayReading(text: "1.23M", spoken: "1,234,567 tokens")
+      ),
+      byProvider: [
+        .claude: MenuBarTodayUsage(
+          cost: MenuBarTodayReading(text: "$0.40", spoken: "$0.40"),
+          tokens: MenuBarTodayReading(text: "320k", spoken: "320,000 tokens")
+        )
+      ]
+    )
+    let automatic = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndTodayCost,
+      provider: .automatic,
+      now: now,
+      today: today
+    )
+    #expect(automatic.icon == .quota)
+    #expect(automatic.text == "≥ $1.49")
+    #expect(automatic.accessibilityLabel == "QuotaBar, today ≥ $1.49")
+
+    let named = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndTodayTokens,
+      provider: .provider(.claude),
+      now: now,
+      today: today
+    )
+    #expect(named.icon == .provider(.claude))
+    #expect(named.text == "320k")
+    #expect(named.accessibilityLabel == "QuotaBar, Claude Code today 320,000 tokens")
+
+    let empty = MenuBarLabelModel.make(
+      overview: mixedProviders,
+      style: .iconAndTodayCost,
+      provider: .automatic,
+      now: now,
+      today: .empty
+    )
+    #expect(empty.icon == .quota)
+    #expect(empty.text == nil)
+
+    let packed = MenuBarLabelModel.specs(
+      overview: mixedProviders,
+      style: .iconAndTodayCost,
+      provider: .providers([.codex, .claude]),
+      arrangement: .combined,
+      visibleProviders: [.codex, .claude],
+      now: now,
+      today: MenuBarTodaySnapshot(
+        total: today.total,
+        byProvider: [
+          .codex: MenuBarTodayUsage(
+            cost: MenuBarTodayReading(text: "$0.80", spoken: "$0.80"),
+            tokens: MenuBarTodayReading(text: "410k", spoken: "410,000 tokens")
+          ),
+          .claude: MenuBarTodayUsage(
+            cost: MenuBarTodayReading(text: "$0.40", spoken: "$0.40"),
+            tokens: MenuBarTodayReading(text: "320k", spoken: "320,000 tokens")
+          ),
+        ]
+      )
+    )
+    #expect(packed.count == 1)
+    #expect(packed[0].label.cells[0] == MenuBarLabelCell(icon: .provider(.codex), text: "$0.80"))
+    #expect(packed[0].label.cells[1] == MenuBarLabelCell(icon: .provider(.claude), text: "$0.40"))
+    #expect(
+      packed[0].label.accessibilityLabel
+        == "QuotaBar, Codex today $0.80, Claude Code today $0.40"
+    )
   }
 
   /// Codex at 68% and 74% remaining, Claude Code at 27%, and a Grok reading that aged out.

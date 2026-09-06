@@ -530,6 +530,15 @@ pub(super) fn map_usage(value: &Value) -> MappedUsage {
         value,
         &["code_review_rate_limit", "codeReviewRateLimit"],
     )));
+    if let Some(window) = map_credits(obj_get(value, "credits")) {
+        windows.push(window);
+    }
+    if let Some(window) = map_reset_credits(obj_get_any(
+        value,
+        &["rate_limit_reset_credits", "rateLimitResetCredits"],
+    )) {
+        windows.push(window);
+    }
     let primary_present = rate_limit
         .and_then(|v| obj_get_any(v, &["primary_window", "primaryWindow"]))
         .map(|v| !v.is_null())
@@ -573,6 +582,48 @@ fn classify(duration: Option<u64>, fallback: Cadence) -> Cadence {
         Some(MONTHLY_SECONDS) => Cadence::Monthly,
         _ => fallback,
     }
+}
+
+fn map_credits(value: Option<&Value>) -> Option<QuotaWindow> {
+    let credits = value?;
+    if obj_get(credits, "unlimited").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    if obj_get_any(credits, &["has_credits", "hasCredits"]).and_then(|v| v.as_bool()) == Some(false)
+    {
+        return None;
+    }
+    let balance = number(obj_get(credits, "balance"))?;
+    Some(QuotaWindow {
+        id: "credits".to_owned(),
+        title: "Balance (USD)".to_owned(),
+        used_percent: 0.0,
+        resets_at: None,
+        duration_seconds: None,
+        primary_cadence: None,
+        remaining_value: Some(balance.max(0.0)),
+        limit_value: None,
+        value_unit: Some("usd"),
+    })
+}
+
+/// Earned rate-limit resets the account can redeem. This is a count, not a dollar wallet.
+fn map_reset_credits(value: Option<&Value>) -> Option<QuotaWindow> {
+    let count = number(obj_get_any(value?, &["available_count", "availableCount"]))?;
+    if count < 0.0 {
+        return None;
+    }
+    Some(QuotaWindow {
+        id: "reset_credits".to_owned(),
+        title: "Reset Credits".to_owned(),
+        used_percent: 0.0,
+        resets_at: None,
+        duration_seconds: None,
+        primary_cadence: None,
+        remaining_value: Some(count),
+        limit_value: None,
+        value_unit: Some("count"),
+    })
 }
 
 fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
@@ -967,6 +1018,44 @@ mod tests {
             ["five_hour", "weekly"]
         );
         assert!(!usage.malformed_success);
+    }
+
+    #[test]
+    fn maps_credits_balance_and_reset_credits() {
+        let usage = map_usage(&serde_json::json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 12, "limit_window_seconds": 18000}
+            },
+            "credits": {"has_credits": true, "unlimited": false, "balance": "45.25"},
+            "rate_limit_reset_credits": {"available_count": 2}
+        }));
+        let credits = usage
+            .windows
+            .iter()
+            .find(|window| window.id == "credits")
+            .expect("credits");
+        assert_eq!(credits.remaining_value, Some(45.25));
+        assert_eq!(credits.limit_value, None);
+        assert_eq!(credits.value_unit, Some("usd"));
+        let resets = usage
+            .windows
+            .iter()
+            .find(|window| window.id == "reset_credits")
+            .expect("reset credits");
+        assert_eq!(resets.remaining_value, Some(2.0));
+        assert_eq!(resets.value_unit, Some("count"));
+        assert_eq!(resets.title, "Reset Credits");
+        assert!(
+            map_usage(&serde_json::json!({
+                "rate_limit": {
+                    "primary_window": {"used_percent": 12, "limit_window_seconds": 18000}
+                },
+                "credits": {"has_credits": false, "balance": "10"}
+            }))
+            .windows
+            .iter()
+            .all(|window| window.id != "credits")
+        );
     }
 
     #[test]

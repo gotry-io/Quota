@@ -17,7 +17,7 @@ struct MenuBarStyleSettingsView: View {
     let effective = layout.effectiveStyle(style)
     MenuBarChoiceList {
       ForEach(MenuBarStylePreference.allCases) { option in
-        let locked = layout.usesMultiReadingStyle && option != .iconAndPercent
+        let locked = layout.usesMultiReadingStyle && (option == .icon || option == .percent)
         MenuBarChoiceRow(
           title: option.label,
           isSelected: option == effective,
@@ -37,6 +37,29 @@ struct MenuBarStyleSettingsView: View {
       arrangement: arrangement,
       visibleProviders: ProviderDisplayOrder.enabledProviders()
     )
+  }
+}
+
+/// Settings → Menu Bar → Reset time: countdown or local date on Overview window rows.
+struct ResetCopySettingsView: View {
+  let onSelect: () -> Void
+
+  @AppStorage(ResetCopyStylePreference.storageKey) private var style =
+    ResetCopyStylePreference.fallback
+
+  var body: some View {
+    MenuBarChoiceList {
+      ForEach(ResetCopyStylePreference.allCases) { option in
+        MenuBarChoiceRow(
+          title: option.label,
+          subtitle: option.summary,
+          isSelected: option == style
+        ) {
+          style = option
+          onSelect()
+        }
+      }
+    }
   }
 }
 

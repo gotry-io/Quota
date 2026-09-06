@@ -4,13 +4,15 @@ import QuotaWire
 
 extension QuotaWindow {
   /// Overview remaining copy. No "left" suffix; the value is remaining by product rule.
-  /// Budget windows with an amount show `71% · $3.75`.
+  /// Amount-of-limit usd/credits windows show `$12.50 of $40.00`. Other budget windows with
+  /// an amount show `71% · $3.75`.
   var remainingDisplayLabel: String {
     RemainingQuotaFormat.remaining(
       remainingPercent: remainingPercent,
       remainingValue: remainingValue,
+      limitValue: limitValue,
       hasLimit: limitValue != nil,
-      unit: valueUnit.flatMap(\.remainingUnit)
+      unit: remainingUnit
     )
   }
 

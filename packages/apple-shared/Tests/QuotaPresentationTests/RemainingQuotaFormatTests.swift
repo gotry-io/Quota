@@ -58,6 +58,9 @@ struct RemainingQuotaFormatTests {
     #expect(
       RemainingQuotaFormat.windowTitle("Balance (USD)", isBalanceOnly: true) == "Balance"
     )
+    #expect(
+      RemainingQuotaFormat.windowTitle("Reset Credits", isBalanceOnly: true) == "Reset Credits"
+    )
   }
 
   @Test
@@ -88,6 +91,7 @@ struct RemainingQuotaFormatTests {
       RemainingQuotaFormat.remaining(
         remainingPercent: 70.796,
         remainingValue: 3.75,
+        limitValue: 400,
         hasLimit: true,
         unit: .usd
       ) == "70.8% · $3.75"
@@ -100,6 +104,7 @@ struct RemainingQuotaFormatTests {
       RemainingQuotaFormat.remaining(
         remainingPercent: 75,
         remainingValue: 75,
+        limitValue: 100,
         hasLimit: true,
         unit: .count
       ) == "75% · 75"
@@ -142,6 +147,28 @@ struct RemainingQuotaFormatTests {
     )
     #expect(
       RemainingQuotaFormat.showsPercentMeter(remainingValue: nil, hasLimit: false) == true
+    )
+  }
+
+  @Test
+  func extraUsagePrintsRemainingOfTheUsdCap() {
+    #expect(
+      RemainingQuotaFormat.remaining(
+        remainingPercent: 87.5,
+        remainingValue: 87.5,
+        limitValue: 100,
+        hasLimit: true,
+        unit: .usd
+      ) == "$87.50 of $100.00"
+    )
+    #expect(
+      RemainingQuotaFormat.showsPercentMeter(
+        remainingPercent: 87.5,
+        remainingValue: 87.5,
+        limitValue: 100,
+        hasLimit: true,
+        unit: .usd
+      ) == false
     )
   }
 }

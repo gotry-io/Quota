@@ -186,6 +186,21 @@ struct OverviewWidgetContentTests {
     #expect(OverviewWidgetContent.isBalanceOnly(balanceItem))
     #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "OpenRouter 100%")
 
+    let extraUsage = WidgetQuotaItem(
+      selectionID: "abcdef012345",
+      providerID: "claude",
+      providerDisplayName: "Claude Code",
+      windowTitle: "Extra Usage",
+      remainingPercent: 87.5,
+      remainingValue: 87.5,
+      limitValue: 100,
+      unit: .usd,
+      hasLimit: true
+    )
+    #expect(OverviewWidgetContent.remainingLabel(for: extraUsage) == "$87.50 of $100.00")
+    #expect(!OverviewWidgetContent.showsPercentMeter(extraUsage))
+    #expect(!OverviewWidgetContent.isBalanceOnly(extraUsage))
+
     let cost = WidgetCost(status: .partial, amountMicrousd: "50239770")
     #expect(OverviewWidgetContent.costLabel(for: cost).hasPrefix("≥"))
     #expect(

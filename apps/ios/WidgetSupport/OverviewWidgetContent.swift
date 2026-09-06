@@ -89,6 +89,7 @@ enum OverviewWidgetContent {
     RemainingQuotaFormat.remaining(
       remainingPercent: item.remainingPercent,
       remainingValue: item.remainingValue,
+      limitValue: item.limitValue,
       hasLimit: item.hasLimit == true,
       unit: remainingUnit(item.unit)
     )
@@ -106,6 +107,16 @@ enum OverviewWidgetContent {
     RemainingQuotaFormat.isBalanceOnly(
       remainingValue: item.remainingValue,
       hasLimit: item.hasLimit == true
+    )
+  }
+
+  static func showsPercentMeter(_ item: WidgetQuotaItem) -> Bool {
+    RemainingQuotaFormat.showsPercentMeter(
+      remainingPercent: item.remainingPercent,
+      remainingValue: item.remainingValue,
+      limitValue: item.limitValue,
+      hasLimit: item.hasLimit == true,
+      unit: remainingUnit(item.unit)
     )
   }
 
