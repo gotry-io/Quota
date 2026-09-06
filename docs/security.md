@@ -208,11 +208,13 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   address is the handle; it still carries `private, no-store` like every other document, and only
   the API answer behind it is cacheable ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
-  `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
-  that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
-  advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
-  needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
-  out the Device the session spoke for.
+  `Origin` with same-origin Fetch Metadata when present. Delete Account, Delete Device, and unbinding
+  an identity (`DELETE /api/v2/account/identities/:provider`) require that same check,
+  `account:manage`, and a session authenticated within ten minutes, which nothing advances except
+  signing in again — so only a browser can make any of them. Unbinding the last identity is refused
+  (`409 conflict`): an Account no channel reaches is an Account nobody can sign in to.
+  `POST /oauth/v2/revoke` needs no scope: presenting the refresh token is the proof, and it ends the
+  whole family and signs out the Device the session spoke for.
 
 ## The public profile page
 

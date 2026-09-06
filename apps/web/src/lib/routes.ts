@@ -64,6 +64,18 @@ export function accountPageTitle(pathname: string): string {
  */
 export const SIGN_IN_PATH = "/sign-in";
 
+/**
+ * The order a person is offered the channels on `/sign-in` and in Settings.
+ *
+ * Apple first: it is the required channel on iOS, and the page that starts every sign-in
+ * should ask in the same order on every surface.
+ */
+export const SIGN_IN_METHOD_ORDER = [
+  "apple",
+  "github",
+  "email",
+] as const satisfies readonly IdentityProvider[];
+
 /** Where to send a signed-out visitor so they come back to the page they wanted. */
 export function signInHref(returnTo: string = DASHBOARD_PATH): string {
   return returnTo === DASHBOARD_PATH
@@ -77,6 +89,40 @@ export function signInHref(returnTo: string = DASHBOARD_PATH): string {
  */
 export function identityStartHref(provider: IdentityProvider, returnTo: string): string {
   return `/api/auth/${provider}/start?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+/**
+ * Bind a channel to the signed-in Account. Email is a form, not this navigation.
+ */
+export function identityLinkHref(
+  provider: Exclude<IdentityProvider, "email">,
+  returnTo: string = SETTINGS_PATH,
+): string {
+  return `/api/auth/${provider}/start?intent=link&return_to=${encodeURIComponent(returnTo)}`;
+}
+
+/** The Settings query Relay bounces a taken link to, and that this page then drops. */
+export const LINKED_TAKEN_PARAM = "linked";
+export const LINKED_TAKEN_VALUE = "taken";
+
+export function isLinkedTaken(url: URL): boolean {
+  return url.searchParams.get(LINKED_TAKEN_PARAM) === LINKED_TAKEN_VALUE;
+}
+
+/**
+ * Delete Account's re-auth returns here so `/sign-in` can say why, and so Settings can
+ * focus the delete heading after the session is fresh.
+ */
+export const DELETE_ACCOUNT_RETURN_PATH = `${SETTINGS_PATH}?delete=account`;
+
+export function isDeleteAccountReturn(returnTo: string): boolean {
+  const path = signInReturnPath(returnTo);
+  if (path === null) return false;
+  try {
+    return new URL(path, PUBLIC_PROFILE_ORIGIN).searchParams.get("delete") === "account";
+  } catch {
+    return false;
+  }
 }
 
 /**

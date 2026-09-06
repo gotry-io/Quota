@@ -5,18 +5,22 @@ import { KNOWN_PLANS } from "../src/lib/plan-display.generated.ts";
 import {
   accountPageTitle,
   DASHBOARD_PATH,
+  DELETE_ACCOUNT_RETURN_PATH,
   DEVICES_PATH,
+  identityLinkHref,
+  identityStartHref,
   isAccountShellPath,
+  isDeleteAccountReturn,
   isDevicesPath,
   isSettingsPath,
   isSubscriptionPath,
-  identityStartHref,
   isUsagePath,
   planDisplayName,
-  signInReturnPath,
   SETTINGS_PATH,
+  SIGN_IN_METHOD_ORDER,
   SIGN_IN_PATH,
   signInHref,
+  signInReturnPath,
   subscriptionPath,
   USAGE_PATH,
 } from "../src/lib/routes.ts";
@@ -29,7 +33,15 @@ test("sends a signed-out visitor to the sign-in page, and back to the page they 
 });
 
 test("starts one provider round trip, and only for a page on this origin", () => {
+  assert.deepEqual(SIGN_IN_METHOD_ORDER, ["apple", "github", "email"]);
   assert.equal(identityStartHref("github", "/my"), "/api/auth/github/start?return_to=%2Fmy");
+  assert.equal(
+    identityLinkHref("apple"),
+    "/api/auth/apple/start?intent=link&return_to=%2Fmy%2Fsettings",
+  );
+  assert.equal(DELETE_ACCOUNT_RETURN_PATH, "/my/settings?delete=account");
+  assert.equal(isDeleteAccountReturn("/my/settings?delete=account"), true);
+  assert.equal(isDeleteAccountReturn("/my/settings"), false);
   assert.equal(signInReturnPath("/my?device=device_1"), "/my?device=device_1");
   for (const refused of [
     "https://attacker.invalid/",

@@ -279,17 +279,21 @@ describe("browser sign-in through email", () => {
     expect(await refused.json()).toMatchObject({ error: { code: "conflict" } });
 
     clock = new Date(now.getTime() + 61_000);
-    expect((await startEmail(relay, "taken@example.test", { intent: "link", cookie })).status).toBe(
-      202,
-    );
+    expect(
+      (
+        await startEmail(relay, "taken@example.test", {
+          intent: "link",
+          cookie,
+          returnTo: "/my/settings",
+        })
+      ).status,
+    ).toBe(202);
     const asHtml = await relay.app.request(
       `${origin}/api/auth/email/verify?token=${encodeURIComponent(tokenFrom(mailbox.sent[2]?.text ?? ""))}`,
       { headers: { Cookie: cookie, Accept: "text/html" } },
     );
-    expect(asHtml.status).toBe(200);
-    expect(await asHtml.text()).toContain(
-      "That Email account is already linked to another Quota account.",
-    );
+    expect(asHtml.status).toBe(302);
+    expect(asHtml.headers.get("location")).toBe("/my/settings?linked=taken");
     expect(await identityProviders("account_taken")).toEqual(["email"]);
   });
 
@@ -451,7 +455,7 @@ function fakeGitHubFetch(): typeof fetch {
 async function startEmail(
   relay: ReturnType<typeof harness>,
   email: string,
-  options: { intent?: "sign_in" | "link"; cookie?: string } = {},
+  options: { intent?: "sign_in" | "link"; cookie?: string; returnTo?: string } = {},
 ): Promise<Response> {
   return await relay.app.request(`${origin}/api/auth/email/start`, {
     method: "POST",
@@ -462,6 +466,7 @@ async function startEmail(
     body: JSON.stringify({
       email,
       ...(options.intent === undefined ? {} : { intent: options.intent }),
+      ...(options.returnTo === undefined ? {} : { return_to: options.returnTo }),
     }),
   });
 }

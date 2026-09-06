@@ -32,10 +32,11 @@ provider that answers with a cross-site form POST can be given what it needs wit
 the providers that redirect.
 
 **A link that would take a channel from another Account is refused.** `identity_taken` changes
-nothing and shows the browser one sentence naming the provider. A link the Account already holds is
-the state it asked for and succeeds. Unbinding is `DELETE /api/v2/account/identities/:provider`
-under `account:manage` and the ten-minute freshness rule, and it refuses to remove the last identity
-(`409 conflict`), because an Account no channel reaches is an Account nobody can sign in to.
+nothing. A JSON client sees 409; a browser is sent back to `return_to?linked=taken` so Settings can
+say one sentence. A link the Account already holds is the state it asked for and succeeds. Unbinding
+is `DELETE /api/v2/account/identities/:provider` under `account:manage` and the ten-minute freshness
+rule, and it refuses to remove the last identity (`409 conflict`), because an Account no channel
+reaches is an Account nobody can sign in to.
 
 **Apple's Web round trip answers with a cross-site form POST, so its handoff is `SameSite=None`.**
 `AppleIdentityProvider` is the second implementation of the same port. Asking Apple for `name email`
