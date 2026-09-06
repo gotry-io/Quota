@@ -40,6 +40,27 @@ Quota on iPhone is a **companion** to QuotaBar for Mac.
 - Home Screen and Lock Screen widgets render a non-secret App Group snapshot the app
   publishes. The widget extension has no network, Keychain, or account session.
 
+## Signing in to a provider inside the app
+
+Settings › Providers lets a user sign in to their **own** Codex, Claude Code, or Grok account so
+this app can show that account's remaining quota. This is not a login for Quota — GitHub remains
+the only Quota identity (above).
+
+- Tapping Connect first shows a confirmation naming the exact cookies and hosts involved, that
+  they stay in the iPhone's Keychain, that Quota never uploads them, and that Remove deletes them.
+- Continue opens a full-screen sheet showing **the provider's own sign-in page** in a `WKWebView`
+  whose data store is non-persistent and created for that sheet. Quota injects no JavaScript, reads
+  no page content, and intercepts no form or navigation. It reads only that store's cookies, and
+  only to ask the provider whether they identify a signed-in account.
+- An accepted session is stored in the Keychain
+  (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronized to iCloud) and is sent only
+  to that provider's own API. Remove deletes it.
+- Nothing acquired here is uploaded to Quota's servers, and no provider credential appears in the
+  App Privacy declaration because none is collected off the device.
+
+Reviewers can exercise this with any provider account, or skip it: the demo Account below shows
+Overview without it.
+
 ## Demo Account
 
 The demo GitHub Account is signed into QuotaBar on a Mac that has uploaded synthetic quota

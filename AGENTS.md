@@ -36,6 +36,7 @@ Read the relevant source before changing that area:
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
+| In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |

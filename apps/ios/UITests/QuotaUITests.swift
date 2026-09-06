@@ -142,11 +142,15 @@ final class QuotaUITests: XCTestCase {
       deleteAccount.waitForExistence(timeout: 5) || app.buttons["Delete Account…"].exists,
       "Delete Account…"
     )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["settings.logout"].exists,
-      "Log Out on Settings hub"
-    )
+    let logout = app.descendants(matching: .any)["settings.logout"]
+    if !logout.exists {
+      scrollToIdentifierOnce(app, "settings.logout")
+    }
+    XCTAssertTrue(logout.exists, "Log Out on Settings hub")
     XCTAssertTrue(app.buttons["Log Out"].exists, "Log Out")
+    // Back to the top: the hub is longer than one screen, and a row scrolled under the
+    // navigation bar's glass is a system overlay the contrast pass would sample instead of the row.
+    scrollContent(app, up: false)
     attachScreenshot(app, name: "settings-main")
     try audit(app)
 
@@ -196,6 +200,53 @@ final class QuotaUITests: XCTestCase {
         || app.staticTexts["License"].exists,
       "License MIT"
     )
+    try audit(app)
+  }
+
+  /// The Providers group in its three states: two accounts on one provider, one on another,
+  /// and a third with nothing connected yet.
+  func testProvidersFixtureShowsEveryConnectionState() throws {
+    let app = launch(fixture: "providers")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
+    )
+    let providers = app.descendants(matching: .any)["section.header.providers"]
+    if !providers.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "section.header.providers")
+    }
+    XCTAssertTrue(providers.waitForExistence(timeout: 5), "Providers header")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.session.codex:codex_work"].exists,
+      "first connected Codex account"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.session.codex:codex_personal"].exists,
+      "second connected Codex account"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.session.claude:claude_team"].exists,
+      "connected Claude Code account"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.connect.grok"].exists,
+      "Grok Connect row"
+    )
+    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
+    XCTAssertTrue(
+      grokConnect.label.contains("Connect"),
+      "a provider with nothing connected offers Connect, got \(grokConnect.label)"
+    )
+    let codexConnect = app.descendants(matching: .any)["providers.connect.codex"]
+    XCTAssertTrue(
+      codexConnect.label.contains("Add Account"),
+      "a provider already connected offers another account, got \(codexConnect.label)"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists,
+      "Remove"
+    )
+    attachScreenshot(app, name: "settings-providers")
     try audit(app)
   }
 

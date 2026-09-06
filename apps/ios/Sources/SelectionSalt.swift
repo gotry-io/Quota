@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import QuotaAccount
+import QuotaKeychain
 import Security
 
 /// The 32-byte installation salt mixed into every widget `selection_id`.

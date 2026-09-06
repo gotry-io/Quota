@@ -124,7 +124,10 @@ chatgpt.com, claude.ai, grok.com, kimi.com, or cursor.com already has an account
 shown, and the alternative is telling them to sign in somewhere they already are.
 
 Quota iOS reads the same rung with `QuotaProviderWeb` in `packages/apple-client`, on the device the
-reader signed in on rather than from a Mac's cookie jars. Both runtimes answer
+reader signed in on rather than from a Mac's cookie jars. It has no other rung and no cookie jar to
+import: the session comes from a sign-in the reader completes inside the app, in a web view whose
+store is discarded with the sheet, and is kept in that device's Keychain
+([ADR 0034](decisions/0034-ios-collects-for-itself.md)). Both runtimes answer
 `packages/protocol/fixtures/provider-web-conformance.json`, so the request sequence, the
 classifications, and the account fingerprint below are one rule and not two.
 

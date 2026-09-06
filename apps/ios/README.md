@@ -3,7 +3,8 @@
 Quota is the native iOS 26+ account viewer. It signs in with the registered `quota-ios` public
 client and reads the GitHub Account's remaining quota and Today Usage from the fixed Relay origin.
 One read answers all of it: Relay resolves an account's readings into one subscription per key, so
-the app renders those rows rather than collapsing one card per reporting Mac.
+the app renders those rows rather than collapsing one card per reporting Mac. It can also sign in
+to a provider's own web session on the phone, for the accounts no Mac reports.
 The app also publishes a non-secret App Group snapshot for Home Screen and Lock Screen widgets.
 Widgets are configurable.
 
@@ -12,8 +13,9 @@ Widgets are configurable.
 The app owns SwiftUI, `ASWebAuthenticationSession`, UI preferences, App Group snapshot publish/clear,
 and WidgetKit timeline reloads. [`packages/apple-client`](../../packages/apple-client)
 owns wire decoding, PKCE values, the fixed-origin HTTPS client, session refresh/revoke, Keychain
-session storage, last-good Account summary cache, and the Foundation-only `QuotaWidgetData`
-snapshot types/store. [`packages/apple-shared`](../../packages/apple-shared)
+session storage, last-good Account summary cache, the provider web collectors
+(`QuotaProviderWeb`) and their Keychain store (`QuotaProviderSessions`), and the Foundation-only
+`QuotaWidgetData` snapshot types/store. [`packages/apple-shared`](../../packages/apple-shared)
 owns remaining-quota, plan/account label, compact count, Usage cost, and compact relative-age
 presentation. Views never call `URLSession`, Security, or decode JSON. `QuotaWire` is the one definition of the
 managed wire types and `ProviderID`; QuotaBar reads the same module, so a decoding rule written once
@@ -24,11 +26,21 @@ and `QuotaPresentation`. It reads the App Group protected snapshot and never imp
 Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
-Quota iOS is not a collection Device. It does not configure Providers, collect local logs, upload
-snapshots or Usage, or add `ios` to `PlatformSchema`. The Devices tab lists the collection Devices
-with their platform and how recently each one spoke — Active, Idle, or Not reporting — without
-requesting credentials for them. See
-[ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
+Quota iOS is not a collection Device. It uploads no snapshot or Usage, collects no local logs, and
+adds no `ios` member to `PlatformSchema`. The Devices tab lists the collection Devices with their
+platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
+credentials for them. See [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
+
+It does sign in to a provider for itself. **Settings › Providers** connects Codex, Claude Code,
+and Grok by opening that provider's own sign-in page in a `WKWebView` whose data store is
+non-persistent and made new for each sheet. After each navigation the sheet reads that store's
+cookies, assembles the header `packages/provider/catalog.json` declares, and keeps it only when
+`QuotaProviderWeb` validates it against the provider. Accepted sessions live in this device's
+Keychain — one item per provider and account fingerprint,
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronized to iCloud — and are never
+uploaded. The first Connect for a provider asks for consent naming that provider's cookies and
+hosts. Nothing is injected into the page and no page content is read. See
+[ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
 requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
@@ -57,7 +69,10 @@ it still only reads the snapshot.
 
 The app target ships [`Sources/PrivacyInfo.xcprivacy`](Sources/PrivacyInfo.xcprivacy) and the
 widget extension ships [`Widgets/PrivacyInfo.xcprivacy`](Widgets/PrivacyInfo.xcprivacy). Neither
-tracks. The app declares the Account data Relay retains — a GitHub-subject HMAC account id
+tracks. Provider sign-in cookies are not a declared collection: they stay in this device's Keychain
+and are sent only to the provider they came from, so no App Privacy type covers them. Keychain is
+not a required-reason API, so `NSPrivacyAccessedAPITypes` stays empty. The app declares the Account
+data Relay retains — a GitHub-subject HMAC account id
 (`NSPrivacyCollectedDataTypeUserID`) and quota/usage summaries
 (`NSPrivacyCollectedDataTypeOtherUsageData`) — linked, for App Functionality, matching the
 retention list in [`docs/security.md`](../../docs/security.md). The extension collects nothing: it
@@ -100,7 +115,8 @@ project. Pass `--no-commit` to skip the commit.
 `usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
 sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
 opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
-setup Section for `no-devices`, Devices content and empty states, the cached-error status Label, the
+setup Section for `no-devices`, the Providers group's three connection states for `providers`,
+Devices content and empty states, the cached-error status Label, the
 Connect with GitHub control for `signed-out`, connecting / connect-error / expired / loading
 fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
 hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
@@ -129,7 +145,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | activity-loading | activity-failed | activity-day-empty | activity-day-failed
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

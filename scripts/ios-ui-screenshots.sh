@@ -149,6 +149,7 @@ const wanted = [
   "settings-notifications",
   "settings-appearance",
   "settings-about",
+  "settings-providers",
 ];
 const found = new Map();
 for (const test of manifest) {

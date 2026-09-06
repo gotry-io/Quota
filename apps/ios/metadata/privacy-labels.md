@@ -52,6 +52,7 @@ categories to `PrivacyInfo.xcprivacy`.
 | Store | Contents | Leaves the device? |
 | --- | --- | --- |
 | Keychain session | Access/refresh family for `quota-ios`, `WhenUnlockedThisDeviceOnly` | Presented only to `https://quota.gotry.io` as Bearer. |
+| Keychain provider sessions | One item per provider and account fingerprint the user signed in to in Settings › Providers: the sign-in cookie header, masked account label, and two dates. `AfterFirstUnlockThisDeviceOnly`, not synchronized to iCloud | Presented only to that provider's own API as a `Cookie` header. Never uploaded to Quota, never in the App Group snapshot, deleted by Remove. |
 | Last-good Account cache | Decoded summary, fetch time, ETag | No upload; offered only for the Account the current session owns; cleared on mismatch, orphan, or Log Out. |
 | App Group widget snapshot | Non-secret remaining quota and compact Today fields | Extension reads the file only. No network, Keychain, or account modules. Cleared on Log Out. |
 | UI preferences | Appearance and similar, when present | Not account data. |
@@ -61,3 +62,9 @@ categories to `PrivacyInfo.xcprivacy`.
 WP-3.10b found no Required Reason API use in the app, extension, `apple-client`, or
 `apple-shared` (no UserDefaults, file timestamps, disk space, boot time, or active
 keyboard APIs). `NSPrivacyAccessedAPITypes` is empty. Re-check if those call sites appear.
+
+The in-app provider sign-in ([ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md))
+adds no entry to either list: Keychain and `WKWebView` are not Required Reason APIs, and a cookie
+that never leaves the device for Quota is not collected data. Declare **Not Collected** for
+Browsing History — Quota reads no browsing history; it reads the cookies its own sheet's
+non-persistent store holds for the one host the user signed in to.

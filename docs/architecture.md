@@ -9,7 +9,10 @@ links to it rather than restating it.
 
 - **Quota** is the iOS 26+ presentation product. It signs in with the registered `quota-ios` public
   client, reads Account remaining quota and Today Usage, and publishes the non-secret App Group
-  snapshot its widgets render. It is not a collection Device.
+  snapshot its widgets render. It is not a collection Device: it writes nothing to Relay. It does
+  sign in to a provider's own web session for itself, inside the app and with the reader watching,
+  and reads that provider on the phone; those sessions stay in this device's Keychain and are never
+  uploaded ([ADR 0034](decisions/0034-ios-collects-for-itself.md)).
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
 - **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized
@@ -321,10 +324,18 @@ or a report.
   itself. QuotaWire's `ProviderID` carries only
   providers that sync to an account, because a local-only collector there would force QuotaBar's
   enum to diverge again.
+- `QuotaProviderSessions`, in `packages/apple-client`, keeps the provider web sessions a device
+  signed in for: one Keychain item per provider and account fingerprint, device-only and not
+  synchronized, holding the cookie header, masked label, and the two dates Settings shows. It
+  depends on QuotaWire for `ProviderID` and on `QuotaKeychain`, and on nothing else — not
+  `QuotaProviderWeb`, which must stay free of Security and Keychain, and not QuotaAccount, which
+  owns a different credential. `QuotaKeychain` is the generic-password seam both session stores
+  inject, and owns no policy of its own: the store that writes an item decides its accessibility.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
   client, account session refresh/revoke, the last-good Account summary cache, the activity
   read (not cached), and the Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios`
-  owns SwiftUI, `ASWebAuthenticationSession`, App Group snapshot publish/clear, the app-private
+  owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
+  non-persistent data store, App Group snapshot publish/clear, the app-private
   selection-salt Keychain item, and the WidgetKit extension; its views do not call `URLSession` or
   Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or
@@ -335,8 +346,10 @@ or a report.
   types, and on nothing else: no UIKit, no WebKit, no Security, no Keychain, and no cookie store. Its
   transport is injected, so the app decides which `URLSession` is spent and a test answers with a
   canned exchange. `apps/ios` may depend on it; QuotaBar must not, because on a Mac the local service
-  owns provider collection. Its request sequences, classifications, and account fingerprints are the
-  Rust collectors' in `packages/service/src/providers`, held together by
+  owns provider collection. Which cookies on which hosts are one sign-in is `BrowserSessionSpec`'s,
+  in QuotaWire, so QuotaBar's browser importer and the iOS sign-in sheet assemble the same header
+  from the same catalog entry. Its request sequences, classifications, and account fingerprints are
+  the Rust collectors' in `packages/service/src/providers`, held together by
   `packages/protocol/fixtures/provider-web-conformance.json`, which both runtimes drive.
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
