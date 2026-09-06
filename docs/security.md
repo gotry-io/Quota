@@ -170,7 +170,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Outbox payloads carry allowlisted aggregate fields only; file IDs, byte offsets, record hashes,
   paths, raw events, and parser diagnostics stay local, and payload, row, range, model, and
   dimension bounds plus token invariants are checked by the managed-data schema before upload and by
-  Relay before persistence. Model identifiers are opaque provider text: preserve any non-empty
+  Relay before persistence. A local hour fact may keep `project_key`, the basename of a git work
+  tree or cwd, so This Mac can group Usage by repository; that column is stripped when an hour is
+  folded for upload and is never a path
+  ([ADR 0039](decisions/0039-project-attribution-stays-local.md)). Model identifiers are opaque provider text: preserve any non-empty
   bounded identifier, punctuation and `unknown` included, never rewrite or replace the raw value,
   and never discard a valid fact because pricing is missing. Records with no tokens, billable tools,
   or source cost do not become Usage facts, and an invalid record is isolated and counted in the

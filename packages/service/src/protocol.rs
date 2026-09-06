@@ -29,6 +29,7 @@ pub enum Operation {
     CancelLogin,
     Logout,
     SetUsageUpload,
+    SetGroupUsageByProject,
     SetQuotaRefreshInterval,
     SetOverviewSourcePin,
     SetProviderConfig,
@@ -345,6 +346,12 @@ pub struct SetUsageUploadPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SetGroupUsageByProjectPayload {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetQuotaRefreshIntervalPayload {
     pub interval_seconds: u64,
 }
@@ -410,6 +417,12 @@ pub struct LogoutResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsageUploadSetting {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupUsageByProjectSetting {
     pub enabled: bool,
 }
 
@@ -534,6 +547,7 @@ pub struct StateSnapshot {
     pub ipc_version: u32,
     pub revision: u64,
     pub usage_upload_enabled: bool,
+    pub group_usage_by_project: bool,
     pub quota_refresh_interval_seconds: u64,
     pub usage_periods: UsagePeriodCache,
     pub quota: ComponentState,

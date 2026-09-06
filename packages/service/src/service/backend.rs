@@ -1897,15 +1897,33 @@ impl NativeBackend {
         incomplete: bool,
     ) -> Result<Value, BackendError> {
         let (today, span) = usage_period_window(period, timezone, generated_at)?;
+        let range = span
+            .as_ref()
+            .map(|span| (span.start.as_str(), span.end.as_str()));
         let (rows, partial) = self
             .state
-            .usage_period_rows(
-                span.as_ref()
-                    .map(|span| (span.start.as_str(), span.end.as_str())),
+            .usage_period_rows(range)
+            .map_err(|_| BackendError::unavailable())?;
+        let group_by_project = self
+            .state
+            .group_usage_by_project()
+            .map_err(|_| BackendError::unavailable())?;
+        let project_rows = if group_by_project {
+            Some(
+                self.state
+                    .usage_period_project_rows(range)
+                    .map_err(|_| BackendError::unavailable())?,
             )
-            .map_err(|_| BackendError::unavailable())?;
-        let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
-            .map_err(|_| BackendError::unavailable())?;
+        } else {
+            None
+        };
+        let summary = usage::build_local_usage_summary_with_projects(
+            &rows,
+            project_rows.as_deref(),
+            pricing_catalog,
+            model_catalog,
+        )
+        .map_err(|_| BackendError::unavailable())?;
         let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
         let (from, to) = span
             .map(|span| span.dates)

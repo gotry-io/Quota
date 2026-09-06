@@ -116,6 +116,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var isLoggingOut = false
   private(set) var isUpdatingUsageUpload = false
   private(set) var usageUploadEnabled = true
+  private(set) var isUpdatingGroupUsageByProject = false
+  private(set) var groupUsageByProject = true
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
   private(set) var isUpdatingQuotaRefreshInterval = false
   private(set) var accountDisconnectReason: AccountDisconnectReason?
@@ -378,13 +380,19 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       localUsage = visualTestState.localUsage
       accountSummary = visualTestState.accountSummary
       if let usage = visualTestState.accountSummary?.usage {
-        let values = LocalServiceUsagePeriodValues(
+        let account = LocalServiceUsagePeriodValues(
           today: Self.periodDetail(usage.today),
           last7Days: Self.periodDetail(usage.last7Days),
           last30Days: Self.periodDetail(usage.last30Days),
           all: Self.periodDetail(usage.all)
         )
-        usagePeriods = LocalServiceUsagePeriodCache(local: values, account: values)
+        let local = LocalServiceUsagePeriodValues(
+          today: Self.localPeriodDetail(usage.today),
+          last7Days: Self.localPeriodDetail(usage.last7Days),
+          last30Days: Self.localPeriodDetail(usage.last30Days),
+          all: Self.localPeriodDetail(usage.all)
+        )
+        usagePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
       }
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
@@ -418,11 +426,47 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         usage: LocalUsagePeriodSummary(
           totals: period.totals,
           cost: period.cost,
-          agents: agents
+          agents: agents,
+          projects: []
         ),
         incomplete: period.partial,
         detailsTruncated: period.hasTruncatedDetails
       )
+    }
+
+    private static func localPeriodDetail(_ period: QuotaWire.UsagePeriod)
+      -> LocalServiceUsageDetail
+    {
+      var detail = periodDetail(period)
+      let projects = [
+        LocalUsageProjectSummary(
+          projectKey: "Quota",
+          totalTokens: 1_204_620,
+          cost: period.cost,
+          messages: 110,
+          topModel: "gpt-5"
+        ),
+        LocalUsageProjectSummary(
+          projectKey: "other",
+          totalTokens: 500_000,
+          cost: period.cost,
+          messages: 54,
+          topModel: "claude-sonnet-4"
+        ),
+      ]
+      detail = LocalServiceUsageDetail(
+        range: detail.range,
+        usage: LocalUsagePeriodSummary(
+          totals: detail.usage.totals,
+          cost: detail.usage.cost,
+          agents: detail.usage.agents,
+          projects: projects,
+          modelsTruncated: detail.usage.modelsTruncated
+        ),
+        incomplete: detail.incomplete,
+        detailsTruncated: detail.detailsTruncated
+      )
+      return detail
     }
   #endif
 
@@ -703,6 +747,20 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     defer { isUpdatingUsageUpload = false }
     do {
       usageUploadEnabled = try await client.setUsageUpload(enabled: enabled).enabled
+      await reloadState()
+    } catch is CancellationError {
+      return
+    } catch {
+      errorMessage = Self.message(for: error)
+    }
+  }
+
+  func setGroupUsageByProject(_ enabled: Bool) async {
+    guard !isUpdatingGroupUsageByProject, enabled != groupUsageByProject, let client else { return }
+    isUpdatingGroupUsageByProject = true
+    defer { isUpdatingGroupUsageByProject = false }
+    do {
+      groupUsageByProject = try await client.setGroupUsageByProject(enabled: enabled).enabled
       await reloadState()
     } catch is CancellationError {
       return
@@ -1200,6 +1258,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     revision = state.revision
     cache = state.cache
     usageUploadEnabled = state.usageUploadEnabled
+    groupUsageByProject = state.groupUsageByProject
     quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
     usagePeriods = state.usagePeriods
     report = state.quota.value

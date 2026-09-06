@@ -37,7 +37,8 @@ use crate::protocol::{
     StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
-    DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
+    DatedUsageRow, LocalHourlyFact, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow,
+    UsageScanResult,
 };
 
 mod legacy_import;
@@ -548,6 +549,7 @@ impl StateStore {
         tolerate_invalid_provider_config: bool,
     ) -> Result<StateSnapshot, StateError> {
         let usage_upload_enabled = self.usage_upload_enabled()?;
+        let group_usage_by_project = self.group_usage_by_project()?;
         let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
         let browser_scan_enabled = self.browser_scan_enabled_providers()?;
@@ -582,6 +584,7 @@ impl StateStore {
                 ipc_version: IPC_VERSION,
                 revision,
                 usage_upload_enabled,
+                group_usage_by_project,
                 quota_refresh_interval_seconds,
                 usage_periods,
                 quota: quota
@@ -1259,6 +1262,73 @@ impl StateStore {
             )
         })?;
         self.bump_revision()
+    }
+
+    pub fn group_usage_by_project(&self) -> Result<bool, StateError> {
+        self.with_identity(
+            |conn| match preference(conn, "group_usage_by_project")?.as_deref() {
+                Some("1") => Ok(true),
+                Some("0") => Ok(false),
+                _ => Err(StateError::InvalidState),
+            },
+        )
+    }
+
+    pub fn set_group_usage_by_project(&self, enabled: bool) -> Result<u64, StateError> {
+        if self.group_usage_by_project()? == enabled {
+            return self.current_revision();
+        }
+        self.with_identity_mut(|conn| {
+            write_preference(
+                conn,
+                "group_usage_by_project",
+                if enabled { "1" } else { "0" },
+            )
+        })?;
+        self.recompute_all_hourly_facts()?;
+        self.bump_revision()
+    }
+
+    fn recompute_all_hourly_facts(&self) -> Result<(), StateError> {
+        let group_by_project = self.group_usage_by_project()?;
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            let hours = {
+                let mut statement = tx.prepare(
+                    "SELECT agent, bucket, MAX(scan_version) FROM (
+                        SELECT agent, bucket_start_utc AS bucket, MAX(scan_version) AS scan_version
+                        FROM usage_hourly_facts
+                        GROUP BY agent, bucket_start_utc
+                        UNION ALL
+                        SELECT agent, substr(occurred_at, 1, 13) || ':00:00Z', 0
+                        FROM usage_file_records
+                        GROUP BY agent, substr(occurred_at, 1, 13)
+                     )
+                     GROUP BY agent, bucket",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    let agent: String = row.get(0)?;
+                    let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                        rusqlite::Error::InvalidColumnType(
+                            0,
+                            "agent".to_owned(),
+                            rusqlite::types::Type::Text,
+                        )
+                    })?;
+                    Ok((
+                        agent,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? as u64,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (agent, bucket, scan_version) in hours {
+                let _ = recompute_hour(&tx, agent, &bucket, scan_version, group_by_project)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     pub fn quota_refresh_interval_seconds(&self) -> Result<u64, StateError> {
@@ -2182,9 +2252,59 @@ impl StateStore {
             for entry in mapped {
                 let (date, row, row_partial) = entry?;
                 partial = partial || row_partial;
-                rows.push(DatedUsageRow { date, row });
+                rows.push(DatedUsageRow {
+                    date,
+                    project_key: String::new(),
+                    row,
+                });
             }
             Ok((rows, partial))
+        })
+    }
+
+    /// Period rows grouped with the local project dimension, for the Projects fold.
+    pub fn usage_period_project_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<Vec<DatedUsageRow>, StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT substr(bucket_start_utc, 1, 10) AS date, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests),
+                        project_key
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY date, agent, billing_channel, channel_source, model, context_bucket,
+                          service_tier, speed, inference_geo, project_key
+                 ORDER BY date, project_key, agent, billing_channel, model"
+            ))?;
+            let mapped = statement.query_map(params![from, to], |row| {
+                let date: String = row.get(0)?;
+                let mut dated = DatedUsageRow {
+                    date,
+                    project_key: String::new(),
+                    row: read_grouped_row(row)?,
+                };
+                dated.project_key = row.get(21)?;
+                Ok(dated)
+            })?;
+            let mut rows = Vec::new();
+            for entry in mapped {
+                rows.push(entry?);
+            }
+            Ok(rows)
         })
     }
 
@@ -2318,6 +2438,7 @@ impl StateStore {
         scan: &UsageScanResult,
         scan_version: u64,
     ) -> Result<u64, StateError> {
+        let group_by_project = self.group_usage_by_project()?;
         self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let mut changed = 0usize;
@@ -2427,7 +2548,7 @@ impl StateStore {
             }
             let mut recomputed = 0usize;
             for hour in &dirty_hours {
-                if recompute_hour(&tx, agent, hour, scan_version)? {
+                if recompute_hour(&tx, agent, hour, scan_version, group_by_project)? {
                     recomputed += 1;
                 }
             }
@@ -2548,12 +2669,24 @@ pub struct UsageOutboxEntry {
 }
 
 const FACT_ROW_QUERY: &str = "SELECT agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, SUM(input_tokens), SUM(cache_read_tokens),
+            SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+            SUM(output_tokens), SUM(reasoning_tokens), SUM(requests), SUM(web_search_requests),
+            SUM(web_fetch_requests), SUM(source_cost_microusd), SUM(source_cost_covered_requests)
+     FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
+     GROUP BY agent, billing_channel, channel_source, model, context_bucket, service_tier, speed,
+              inference_geo
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+
+const LOCAL_FACT_QUERY: &str =
+    "SELECT agent, billing_channel, channel_source, model, context_bucket,
             service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
             cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
             output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-            source_cost_microusd, source_cost_covered_requests
+            source_cost_microusd, source_cost_covered_requests, project_key
      FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
-     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo,
+              project_key";
 
 fn read_outbox(
     conn: &Connection,
@@ -2606,6 +2739,13 @@ fn read_outbox(
 
 fn read_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
     read_row_at(row, 0)
+}
+
+fn read_local_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalHourlyFact> {
+    Ok(LocalHourlyFact {
+        row: read_row_at(row, 0)?,
+        project_key: row.get(20)?,
+    })
 }
 
 /// The grouped period projection names the date first, so its row columns start one later.
@@ -2744,6 +2884,7 @@ fn recompute_hour(
     agent: UsageAgent,
     bucket_start_utc: &str,
     scan_version: u64,
+    group_by_project: bool,
 ) -> Result<bool, StateError> {
     let start =
         DateTime::parse_from_rfc3339(bucket_start_utc).map_err(|_| StateError::InvalidState)?;
@@ -2761,9 +2902,15 @@ fn recompute_hour(
     drop(statement);
     let mut events = Vec::with_capacity(stored.len());
     for value in &stored {
-        events.push(serde_json::from_str::<NormalizedUsageEvent>(value)?);
+        let mut event = serde_json::from_str::<NormalizedUsageEvent>(value)?;
+        if !group_by_project {
+            event.project_key = None;
+        }
+        events.push(event);
     }
-    let rows = crate::usage::aggregate_hour_rows(&events)
+    let facts =
+        crate::usage::aggregate_hourly_facts(&events).map_err(|_| StateError::InvalidState)?;
+    let rows = crate::usage::fold_project_dimension(facts.clone())
         .and_then(|rows| {
             crate::usage::fold_rows_into_other(rows, crate::usage::MAX_USAGE_ROWS_PER_HOUR)
         })
@@ -2774,10 +2921,16 @@ fn recompute_hour(
         |row| row.get(0),
     )?;
     let partial = partial > 0;
-    // An hour whose facts came out the same is the same hour. Restamping it would spend a
-    // scan version and send an upload that says nothing.
+    let mut stored = tx.prepare(LOCAL_FACT_QUERY)?;
+    let previous_facts = stored
+        .query_map(
+            params![agent.as_str(), bucket_start_utc],
+            read_local_fact_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stored);
     let mut stored = tx.prepare(FACT_ROW_QUERY)?;
-    let previous = stored
+    let previous_upload = stored
         .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stored);
@@ -2789,56 +2942,61 @@ fn recompute_hour(
         )
         .optional()?
         .flatten();
-    if previous == rows && previous_partial.map(|value| value != 0).unwrap_or(false) == partial {
+    let partial_changed = previous_partial.map(|value| value != 0).unwrap_or(false) != partial;
+    if previous_facts == facts && !partial_changed {
         return Ok(false);
     }
     tx.execute(
         "DELETE FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
         params![agent.as_str(), bucket_start_utc],
     )?;
-    for row in &rows {
-        let source_cost = match &row.source_cost_microusd {
+    for fact in &facts {
+        let source_cost = match &fact.row.source_cost_microusd {
             Some(value) => Some(value.parse::<i64>().map_err(|_| StateError::InvalidState)?),
             None => None,
         };
         tx.execute(
             "INSERT INTO usage_hourly_facts(
                 agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
-                service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+                service_tier, speed, inference_geo, project_key, input_tokens, cache_read_tokens,
                 cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
                 output_tokens, reasoning_tokens, requests, web_search_requests,
                 web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
                 partial, scan_version
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                       ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 agent.as_str(),
                 bucket_start_utc,
-                row.billing_channel.as_str(),
-                serde_json::to_value(row.channel_source)?
+                fact.row.billing_channel.as_str(),
+                serde_json::to_value(fact.row.channel_source)?
                     .as_str()
                     .unwrap_or_default(),
-                row.model,
-                row.context_bucket.as_str(),
-                row.service_tier,
-                row.speed,
-                row.inference_geo,
-                row.input_tokens as i64,
-                row.cache_read_tokens as i64,
-                row.cache_write_5m_tokens as i64,
-                row.cache_write_1h_tokens as i64,
-                row.cache_write_inferred_tokens as i64,
-                row.output_tokens as i64,
-                row.reasoning_tokens as i64,
-                row.requests as i64,
-                row.web_search_requests as i64,
-                row.web_fetch_requests as i64,
+                fact.row.model,
+                fact.row.context_bucket.as_str(),
+                fact.row.service_tier,
+                fact.row.speed,
+                fact.row.inference_geo,
+                fact.project_key,
+                fact.row.input_tokens as i64,
+                fact.row.cache_read_tokens as i64,
+                fact.row.cache_write_5m_tokens as i64,
+                fact.row.cache_write_1h_tokens as i64,
+                fact.row.cache_write_inferred_tokens as i64,
+                fact.row.output_tokens as i64,
+                fact.row.reasoning_tokens as i64,
+                fact.row.requests as i64,
+                fact.row.web_search_requests as i64,
+                fact.row.web_fetch_requests as i64,
                 source_cost,
-                row.source_cost_covered_requests as i64,
+                fact.row.source_cost_covered_requests as i64,
                 i64::from(partial),
                 scan_version as i64,
             ],
         )?;
+    }
+    if previous_upload == rows && !partial_changed {
+        return Ok(false);
     }
     tx.execute(
         "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
@@ -4673,6 +4831,73 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[test]
+    fn local_hour_facts_keep_project_key_and_upload_rows_do_not() {
+        let root = std::env::temp_dir().join(format!("quota-project-upload-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        assert!(store.snapshot().expect("snapshot").group_usage_by_project);
+
+        let mut quota = usage_event("2026-08-10T12:15:00Z", 10);
+        quota.project_key = Some("Quota".into());
+        let mut other = usage_event("2026-08-10T12:20:00Z", 7);
+        other.project_key = Some("OtherApp".into());
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![quota, other], 1), 1)
+            .expect("scan");
+
+        let upload_rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("upload rows");
+        assert_eq!(upload_rows.len(), 1);
+        assert_eq!(upload_rows[0].input_tokens, 17);
+        let encoded = serde_json::to_value(&upload_rows[0]).expect("row json");
+        assert!(
+            encoded.get("project_key").is_none(),
+            "upload rows must not name project_key: {encoded}"
+        );
+
+        let project_rows = store.usage_period_project_rows(None).expect("project rows");
+        let mut keys: Vec<_> = project_rows
+            .iter()
+            .map(|row| row.project_key.as_str())
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["OtherApp", "Quota"]);
+
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        let payload = serde_json::to_string(&dirty[0].rows).expect("upload rows");
+        assert!(
+            !payload.contains("project_key"),
+            "upload payload must not name project_key: {payload}"
+        );
+        assert!(
+            !payload.contains("Quota") && !payload.contains("OtherApp"),
+            "upload payload must not carry project basenames: {payload}"
+        );
+
+        store
+            .set_group_usage_by_project(false)
+            .expect("disable grouping");
+        assert!(!store.snapshot().expect("snapshot").group_usage_by_project);
+        let collapsed = store.usage_period_project_rows(None).expect("collapsed");
+        assert!(collapsed.iter().all(|row| row.project_key.is_empty()));
+
+        store
+            .set_group_usage_by_project(true)
+            .expect("enable grouping");
+        let restored = store.usage_period_project_rows(None).expect("restored");
+        let mut restored_keys: Vec<_> = restored
+            .iter()
+            .map(|row| row.project_key.as_str())
+            .collect();
+        restored_keys.sort();
+        assert_eq!(restored_keys, ["OtherApp", "Quota"]);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     /// Every dirty hour, whatever its bound, as the tests below read them.
     fn dirty_hours(store: &StateStore) -> Vec<UsageOutboxEntry> {
         store
@@ -5720,6 +5945,7 @@ mod tests {
             billable_tools: BillableTools::default(),
             source_cost_microusd: None,
             source_cost_covered_requests: 0,
+            project_key: None,
         }
     }
 

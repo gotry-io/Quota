@@ -2,9 +2,11 @@ use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_fi
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
     ParsedLine, UsageAgent, UsageError, bounded_dimension, bounded_model, canonical_instant,
-    context_bucket, object, optional_count,
+    context_bucket, cwd_from_value, object, optional_count, project_key_from_cwd,
+    project_key_from_source_path,
 };
 use serde_json::{Map, Value};
+use std::path::Path;
 
 pub fn scan_claude_usage(
     options: &super::UsageScanOptions,
@@ -13,7 +15,7 @@ pub fn scan_claude_usage(
         UsageAgent::ClaudeCode,
         &roots_for(UsageAgent::ClaudeCode, options),
     )?;
-    scan_jsonl_files(UsageAgent::ClaudeCode, options, discovery, || ClaudeParser)
+    scan_jsonl_files(UsageAgent::ClaudeCode, options, discovery, |_| ClaudeParser)
 }
 
 #[derive(Default)]
@@ -22,7 +24,12 @@ struct ClaudeParser;
 impl UsageParser for ClaudeParser {
     const CONTEXT_FREE: bool = true;
 
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        source_path: &Path,
+    ) -> ParsedLine {
         let Some(message) = object(value.get("message")) else {
             return if value.get("type").is_none() {
                 ParsedLine::reason(super::CoverageReasonCode::UnknownRecord)
@@ -124,6 +131,9 @@ impl UsageParser for ClaudeParser {
                     } else {
                         0
                     },
+                    project_key: cwd_from_value(value)
+                        .and_then(project_key_from_cwd)
+                        .or_else(|| project_key_from_source_path(source_path)),
                 },
                 source_file_id: source_file_id.to_owned(),
                 record_key: String::new(),

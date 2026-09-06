@@ -22,6 +22,7 @@ struct MenuBarContentView: View {
     model: MenuBarViewModel,
     panelSession: MenuBarPanelSession? = nil,
     initialPath: [MenuBarRoute] = [],
+    initialUsageSource: UsageSource = .account,
     performsInitialRefresh: Bool = true,
     performsDiagnosticsCheckOnEntry: Bool = true,
     diagnosticsModel: DiagnosticsPageModel? = nil,
@@ -33,6 +34,7 @@ struct MenuBarContentView: View {
     self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
+    _usageSource = State(initialValue: initialUsageSource)
     _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
   }
 
@@ -212,6 +214,7 @@ struct MenuBarContentView: View {
       )
     case .agents:
       AgentsSettingsView(
+        model: model,
         statusLine: { provider in model.agentStatusLine(for: provider) },
         onOpenProvider: { provider in navigate(to: .provider(provider)) }
       )

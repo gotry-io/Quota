@@ -499,6 +499,10 @@ The default page contains:
 - Models: grouped by the vendor whose model it is — the service resolves that from the model's name
   — independent of the collecting client and of who billed the request. Every model remains a
   static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
+- Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
+  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
+  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
+  Account Usage has no such section.
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
@@ -531,7 +535,11 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ### Agents
 
-Agents has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
+Agents opens with a **Usage** group that holds one native mini switch, **Group Usage by project**,
+default on. It only changes This Mac: the Usage page Projects section and the local hour dimension
+behind it. Upload rows never carry a project key.
+
+Agents then has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
 reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
 name — `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
 one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not

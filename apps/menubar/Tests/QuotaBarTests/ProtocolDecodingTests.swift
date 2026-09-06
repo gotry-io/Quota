@@ -224,6 +224,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       "ipc_version": 1,
       "revision": 0,
       "usage_upload_enabled": true,
+      "group_usage_by_project": true,
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -637,10 +638,25 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
     cost: cost,
     providers: [provider]
   )
+  let namedProject = LocalUsageProjectSummary(
+    projectKey: "Quota",
+    totalTokens: 130,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
+  let otherProject = LocalUsageProjectSummary(
+    projectKey: "other",
+    totalTokens: 10,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
   let summary = LocalUsagePeriodSummary(
     totals: summaryTotals,
     cost: cost,
-    agents: [client]
+    agents: [client],
+    projects: [namedProject, otherProject]
   )
   let data = try QuotaWireCodec.makeEncoder().encode(summary)
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: data)
@@ -649,6 +665,8 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.agents.first?.providers.first?.provider == .openai)
   #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
   #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
+  #expect(decoded.projects.map(\.projectKey) == ["Quota", "other"])
+  #expect(decoded.projects.map(\.displayName) == ["Quota", "Other"])
 
   var modelObject = try #require(
     JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))

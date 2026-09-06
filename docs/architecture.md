@@ -136,9 +136,11 @@ Operational state has one owner and two files
 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). `identity.sqlite` stores what
 this device cannot regenerate: installation, session, upload identity, the outbox of hours it still
 owes an Account, the monotonic scan revision those hours carry, stored provider browser sessions, and
-preferences including the Usage upload setting. The outbox is in that file because losing it would
+preferences including the Usage upload setting and whether This Mac groups Usage by project. The outbox is in that file because losing it would
 lose hours already recomputed, not because it could not be rebuilt. `cache.sqlite` stores what it can: component
-last-good values, the Usage file index and its normalized records, the hourly facts folded from them,
+last-good values, the Usage file index and its normalized records, the hourly facts folded from them
+(including a local-only `project_key` basename that upload rows never carry,
+[ADR 0039](decisions/0039-project-attribution-stays-local.md)),
 the fixed-period presentation cache, pricing and model catalog state, cached Account reads, the
 last-completed diagnostic snapshot, and the bounded attempt journal. Both start at schema v1 with
 explicit append-only migrations. A released single-file `state.sqlite` hands its identity rows over
@@ -173,13 +175,15 @@ first time sends everything it holds, and Relay can ask for everything again by 
 revision it returns from `/api/v2/device/sync`. A scan that came up short
 marks that hour `partial`, and a read reports a period `partial` when any hour behind it was. An hour
 past 512 distinct rows folds its smallest into `other`, a period's agent tree folds its smallest model
-leaves into `other` past 200, and a bounded read marks truncated unpriced-model detail with
-`unpriced_truncated`. Exact totals stay usable, and clients surface the degradation.
+leaves into `other` past 200, a period's project list folds past 50 into `other`, and a bounded read
+marks truncated unpriced-model detail with `unpriced_truncated`. Exact totals stay usable, and
+clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
 no version of its own and moves with `ipc_version`. State snapshots separately carry the Today,
-7 Days, 30 Days, and All summaries with exact totals, cost, and `agents[].providers[].models[]`
-detail. `total_tokens` is input plus output; cache-read and cache-write tokens are named input
+7 Days, 30 Days, and All summaries with exact totals, cost, `agents[].providers[].models[]`
+detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
+([ADR 0039](decisions/0039-project-attribution-stays-local.md)). `total_tokens` is input plus output; cache-read and cache-write tokens are named input
 subsets; reasoning is an output subset; `messages` sums normalized usage-bearing model output facts
 and is not a session count, because sessions are not collected. The Rust report groups facts by the
 agent that emitted the usage, then each model under the vendor whose model it is, resolved from the

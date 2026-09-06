@@ -67,6 +67,7 @@ protocol LocalServiceServing: Sendable {
   func cancelLogin() async throws
   func logout() async throws -> LocalServiceLogoutResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting
   func setOverviewSourcePin(
     provider: ProviderID,
@@ -213,6 +214,13 @@ actor LocalServiceClient: LocalServiceServing {
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
     try await request(
       operation: "set_usage_upload",
+      payload: SetUsageUploadPayload(enabled: enabled)
+    )
+  }
+
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting {
+    try await request(
+      operation: "set_group_usage_by_project",
       payload: SetUsageUploadPayload(enabled: enabled)
     )
   }

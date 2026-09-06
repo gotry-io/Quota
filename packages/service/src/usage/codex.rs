@@ -1,17 +1,18 @@
 use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_files};
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
-    ParsedLine, UsageAgent, UsageError, bounded_model, canonical_instant, context_bucket, object,
-    safe_count, safe_sum, string_field,
+    ParsedLine, UsageAgent, UsageError, bounded_model, canonical_instant, context_bucket,
+    cwd_from_value, object, project_key_from_cwd, safe_count, safe_sum, string_field,
 };
 use serde_json::{Map, Value};
+use std::path::Path;
 
 pub fn scan_codex_usage(
     options: &super::UsageScanOptions,
 ) -> Result<super::UsageScanResult, UsageError> {
     let discovery =
         discover_usage_files_at(UsageAgent::Codex, &roots_for(UsageAgent::Codex, options))?;
-    scan_jsonl_files(UsageAgent::Codex, options, discovery, || {
+    scan_jsonl_files(UsageAgent::Codex, options, discovery, |_| {
         CodexParser::default()
     })
 }
@@ -35,6 +36,7 @@ struct CodexParser {
     channel_source: ChannelSource,
     previous_totals: Option<TokenUsage>,
     pending_records: Vec<NormalizedUsageRecord>,
+    project_key: Option<String>,
 }
 
 impl Default for CodexParser {
@@ -48,6 +50,7 @@ impl Default for CodexParser {
             channel_source: ChannelSource::AgentDefault,
             previous_totals: None,
             pending_records: Vec::new(),
+            project_key: None,
         }
     }
 }
@@ -135,12 +138,27 @@ impl CodexParser {
 }
 
 impl UsageParser for CodexParser {
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        _source_path: &Path,
+    ) -> ParsedLine {
         match string_field(value, "type") {
+            Some("session_meta") => {
+                let payload = object(value.get("payload")).unwrap_or(value);
+                if let Some(cwd) = cwd_from_value(payload).or_else(|| cwd_from_value(value)) {
+                    self.project_key = project_key_from_cwd(cwd);
+                }
+                ParsedLine::empty()
+            }
             Some("turn_context") => {
                 let payload = object(value.get("payload"));
                 if let Some(payload) = payload {
                     self.update_provider(payload);
+                    if let Some(cwd) = cwd_from_value(payload) {
+                        self.project_key = project_key_from_cwd(cwd);
+                    }
                 }
                 let Some(model) = bounded_model(payload.and_then(|value| value.get("model")))
                 else {
@@ -331,6 +349,7 @@ impl CodexParser {
             billable_tools: BillableTools::default(),
             source_cost_microusd: None,
             source_cost_covered_requests: 0,
+            project_key: self.project_key.clone(),
         };
         let record = NormalizedUsageRecord {
             event,

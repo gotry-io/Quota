@@ -243,18 +243,22 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
   let agents: [LocalUsageAgentSummary]
+  let projects: [LocalUsageProjectSummary]
   let modelsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case totals
     case cost
     case agents
+    case projects
     case modelsTruncated
   }
 
   var isValid: Bool {
     totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
+      && projects.count <= 50
+      && projects.allSatisfy(\.isValid)
       && modelsTruncated != false
   }
 
@@ -262,24 +266,82 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
     agents: [LocalUsageAgentSummary],
+    projects: [LocalUsageProjectSummary] = [],
     modelsTruncated: Bool? = nil
   ) {
     self.totals = totals
     self.cost = cost
     self.agents = agents
+    self.projects = projects
     self.modelsTruncated = modelsTruncated
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["totals", "cost", "agents", "modelsTruncated"])
+    try decoder.rejectUnknownWireKeys(["totals", "cost", "agents", "projects", "modelsTruncated"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
+    projects = try container.decode([LocalUsageProjectSummary].self, forKey: .projects)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .agents, in: container, debugDescription: "Invalid local Usage period summary.")
+    }
+  }
+}
+
+struct LocalUsageProjectSummary: Codable, Equatable, Sendable {
+  let projectKey: String
+  let totalTokens: Int
+  let cost: UsageCostOutcome
+  let messages: Int
+  let topModel: String
+
+  private enum CodingKeys: String, CodingKey {
+    case projectKey
+    case totalTokens
+    case cost
+    case messages
+    case topModel
+  }
+
+  var isValid: Bool {
+    !projectKey.isEmpty && projectKey.count <= 128 && totalTokens >= 0 && messages >= 0
+      && !topModel.isEmpty && cost.isValid
+  }
+
+  var displayName: String {
+    projectKey == "other" ? "Other" : projectKey
+  }
+
+  init(
+    projectKey: String,
+    totalTokens: Int,
+    cost: UsageCostOutcome,
+    messages: Int,
+    topModel: String
+  ) {
+    self.projectKey = projectKey
+    self.totalTokens = totalTokens
+    self.cost = cost
+    self.messages = messages
+    self.topModel = topModel
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "projectKey", "totalTokens", "cost", "messages", "topModel",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    projectKey = try container.decode(String.self, forKey: .projectKey)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    messages = try container.decode(Int.self, forKey: .messages)
+    topModel = try container.decode(String.self, forKey: .topModel)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .projectKey, in: container, debugDescription: "Invalid local Usage project summary.")
     }
   }
 }
