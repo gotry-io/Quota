@@ -19,7 +19,8 @@ final class QuotaUITests: XCTestCase {
     )
     let todaySection = app.descendants(matching: .any)["overview.today"]
     if !todaySection.waitForExistence(timeout: 2) {
-      for _ in 0..<6 {
+      // Pace lines and the sync row make Overview taller than one screen on every device.
+      for _ in 0..<12 {
         if todaySection.exists || app.staticTexts["Today"].exists { break }
         app.swipeUp()
       }

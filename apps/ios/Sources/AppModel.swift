@@ -5,6 +5,7 @@ import QuotaAccount
 import QuotaAlerts
 import QuotaPresentation
 import QuotaProviderSessions
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
@@ -50,6 +51,7 @@ final class AppModel {
   private let activity: any ActivityLoading
   private let localStore: any LocalCollectionStoring
   private let localCollector: LocalCollector
+  private let providerStatusClient: any ProviderStatusServing
   private let now: @Sendable () -> Date
 
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
@@ -84,6 +86,8 @@ final class AppModel {
   var sessionActivation: AccountSessionActivation?
   /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
   private var appleNonce: AppleSignInNonce?
+  /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
+  var providerStatus: [ProviderID: ProviderStatusReading] = [:]
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -108,6 +112,7 @@ final class AppModel {
     localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
     localCollector: LocalCollector? = nil,
     purchases: any PurchasesFacade = UnconfiguredPurchases(),
+    providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.providers = ProvidersModel(store: providerSessions)
@@ -142,6 +147,7 @@ final class AppModel {
     subscription.onStoreChange = { [weak self] in
       await self?.refresh()
     }
+    self.providerStatusClient = providerStatusClient
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -159,7 +165,8 @@ final class AppModel {
       notificationCenter: IOSNotificationCenter(),
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
-        ?? UnconfiguredPurchases()
+        ?? UnconfiguredPurchases(),
+      providerStatusClient: ProviderStatusClient()
     )
   }
 
@@ -437,6 +444,13 @@ final class AppModel {
     guard !isRefreshing else { return false }
     isRefreshing = true
     defer { isRefreshing = false }
+    #if DEBUG
+      if !skipsRestore {
+        await refreshProviderStatus()
+      }
+    #else
+      await refreshProviderStatus()
+    #endif
     let collector = localCollector
     let collects = !providers.sessions.isEmpty
     async let collected: LocalCollection? =
@@ -483,6 +497,11 @@ final class AppModel {
     resolvePendingSubscriptionSelection()
     pruneOverviewPath()
     updateBackgroundRefreshAsk()
+  }
+
+  func refreshProviderStatus() async {
+    let readings = await providerStatusClient.refresh()
+    providerStatus = Dictionary(uniqueKeysWithValues: readings.map { ($0.provider, $0) })
   }
 
   func logout() async {

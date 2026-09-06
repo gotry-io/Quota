@@ -45,6 +45,18 @@ pub struct BrowserSessionConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatusPageKind {
+    StatuspageV2,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatusPageConfig {
+    pub kind: StatusPageKind,
+    pub url: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogEntry {
     pub id: ProviderId,
     pub display_name: &'static str,
@@ -58,6 +70,7 @@ pub struct ProviderCatalogEntry {
     pub browser_session: Option<BrowserSessionConfig>,
     pub default_base_url: Option<&'static str>,
     pub base_url_environment_key: Option<&'static str>,
+    pub status_page: Option<StatusPageConfig>,
 }
 
 pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
@@ -91,6 +104,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.openai.com/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Claude,
@@ -113,6 +130,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.claude.com/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Grok,
@@ -135,6 +156,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.x.ai/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::OpenRouter,
@@ -154,6 +179,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: Some("https://openrouter.ai/api/v1"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.openrouter.ai/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::DeepSeek,
@@ -173,6 +202,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: Some("https://api.deepseek.com"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.deepseek.com/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Kimi,
@@ -200,6 +233,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: Some("https://api.kimi.com"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.moonshot.cn/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::LiteLlm,
@@ -219,6 +256,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: None,
         base_url_environment_key: Some("LITELLM_BASE_URL"),
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: None,
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Cursor,
@@ -250,6 +291,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.cursor.com/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Gemini,
@@ -264,6 +309,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: None,
     },
     ProviderCatalogEntry {
         id: ProviderId::Copilot,
@@ -278,6 +324,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: None,
     },
 ];
 

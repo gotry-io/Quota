@@ -15,6 +15,8 @@ pub const QUOTA_REFRESH_INTERVALS_SECONDS: [u64; 5] = [60, 120, 300, 600, 900];
 pub const DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS: u64 = 300;
 /// How often a signed-in helper asks Relay for an Account summary without collecting quota.
 pub const ACCOUNT_SYNC_INTERVAL_SECONDS: u64 = 60;
+/// How often the helper polls each catalog status page. Failures keep the last reading.
+pub const PROVIDER_STATUS_INTERVAL_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -431,6 +433,20 @@ pub struct ProviderConfigView {
     pub base_url: Option<String>,
 }
 
+/// Last-good official status-page reading for one catalog provider.
+///
+/// This is a field of the `providers` component, not a sixth component: it is public JSON
+/// about the provider, last-good on failure, and emitted on the same `providers` change
+/// event configuration already uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderStatusView {
+    pub provider: String,
+    pub indicator: String,
+    pub description: String,
+    pub checked_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderBrowserSessionView {
@@ -572,6 +588,7 @@ pub struct StateSnapshot {
     pub account: ComponentState,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
+    pub provider_status: Vec<ProviderStatusView>,
     pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
     pub browser_scan_enabled: Vec<String>,
     pub overview: Vec<QuotaOverviewItem>,

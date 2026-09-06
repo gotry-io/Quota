@@ -306,7 +306,9 @@ reachable. Back follows the stack.
 
 Each quota observation shows:
 
-- provider brand and name;
+- provider brand and name, with a 6pt incident dot after the name when the official status page
+  reports `minor` or worse; the tooltip is the status-page `description`. `none` shows no mark.
+  The menu-bar extra never overlays this mark;
 - optional masked account label and normalized plan badge;
 - remaining value as the strongest number, with no "left" or "remaining" suffix;
 - budget windows that also have an absolute remaining amount as `71% · $3.75`;
@@ -572,7 +574,9 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 Agents has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
 reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
-name — `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
+name. When this Mac has a last-good official status-page reading, that line is
+**All systems operational**, or **Degraded ·** the status-page description for `minor` and above.
+Otherwise it is `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
 one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
 configured**, or **Not signed in** — so the list says which agent needs attention before it is
 opened. The Settings home **Agents** row trails **3 shown** and, when any shown agent has no

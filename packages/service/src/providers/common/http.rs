@@ -45,6 +45,23 @@ impl HttpClient {
             headers,
             source,
             ErrorCategory::Unavailable,
+            HTTP_BODY_LIMIT,
+        )
+    }
+
+    pub fn get_json_limited(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        source: &'static str,
+        body_limit: usize,
+    ) -> Result<(u16, Value), ProviderError> {
+        self.send_json(
+            self.client.get(url),
+            headers,
+            source,
+            ErrorCategory::Unavailable,
+            body_limit,
         )
     }
 
@@ -59,6 +76,7 @@ impl HttpClient {
             headers,
             source,
             ErrorCategory::AuthRequired,
+            HTTP_BODY_LIMIT,
         )
     }
 
@@ -77,6 +95,7 @@ impl HttpClient {
             headers,
             source,
             ErrorCategory::Unavailable,
+            HTTP_BODY_LIMIT,
         )
     }
 
@@ -95,6 +114,7 @@ impl HttpClient {
             headers,
             source,
             ErrorCategory::AuthRequired,
+            HTTP_BODY_LIMIT,
         )
     }
 
@@ -110,6 +130,7 @@ impl HttpClient {
             headers,
             source,
             ErrorCategory::AuthRequired,
+            HTTP_BODY_LIMIT,
         )
     }
 
@@ -119,8 +140,10 @@ impl HttpClient {
         headers: &[(&str, &str)],
         source: &'static str,
         redirect_category: ErrorCategory,
+        body_limit: usize,
     ) -> Result<(u16, Value), ProviderError> {
-        let (status, body) = self.send_raw(request, headers, source, redirect_category)?;
+        let (status, body) =
+            self.send_raw(request, headers, source, redirect_category, body_limit)?;
         Ok((status, serde_json::from_slice(&body).unwrap_or(Value::Null)))
     }
 
@@ -130,6 +153,7 @@ impl HttpClient {
         headers: &[(&str, &str)],
         source: &'static str,
         redirect_category: ErrorCategory,
+        body_limit: usize,
     ) -> Result<(u16, Vec<u8>), ProviderError> {
         for (name, value) in headers {
             request = request.header(*name, *value);
@@ -143,7 +167,7 @@ impl HttpClient {
         }
         if response
             .content_length()
-            .is_some_and(|length| length > HTTP_BODY_LIMIT as u64)
+            .is_some_and(|length| length > body_limit as u64)
         {
             return Err(ProviderError::new(ErrorCategory::Error, source));
         }
@@ -151,13 +175,13 @@ impl HttpClient {
             response
                 .content_length()
                 .unwrap_or(0)
-                .min(HTTP_BODY_LIMIT as u64) as usize,
+                .min(body_limit as u64) as usize,
         );
         response
-            .take(HTTP_BODY_LIMIT.saturating_add(1) as u64)
+            .take(body_limit.saturating_add(1) as u64)
             .read_to_end(&mut body)
             .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, source))?;
-        if body.len() > HTTP_BODY_LIMIT {
+        if body.len() > body_limit {
             return Err(ProviderError::new(ErrorCategory::Error, source));
         }
         if !(200..300).contains(&status) {

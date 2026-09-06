@@ -79,6 +79,9 @@
         "base_url_environment_key": {
           "type": ["string", "null"],
           "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+        },
+        "status_page": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/status_page" }]
         }
       }
     },
@@ -147,6 +150,24 @@
         "exclusive": {
           "type": "boolean",
           "description": "When true, Settings omits the official CLI sign-in command because the provider has no CLI or API-key login."
+        }
+      }
+    },
+    "status_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["statuspage_v2", "none"],
+          "description": "statuspage_v2 is Atlassian Statuspage GET /api/v2/status.json. none means this build does not poll: the provider has no machine-readable Statuspage v2 feed."
+        },
+        "url": {
+          "type": ["string", "null"],
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "description": "HTTPS Statuspage v2 status.json when kind is statuspage_v2. A human status page, or null, when kind is none."
         }
       }
     }

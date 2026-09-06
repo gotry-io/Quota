@@ -1,9 +1,10 @@
-//! Quota collection cadence, Account poll, and window-reset catch-up.
+//! Quota collection cadence, Account poll, window-reset catch-up, and status-page poll.
 //!
-//! One scheduler thread waits for the next of three events. Provider collection uses the stored
+//! One scheduler thread waits for the next of four events. Provider collection uses the stored
 //! interval. Account reads run every minute and are skipped when a collection that already
 //! includes an Account read is due. A window `resets_at` that falls before the next collection
-//! wakes a quota-only pass.
+//! wakes a quota-only pass. Official status pages are polled every ten minutes and never win a
+//! tie against quota, reset, or Account work.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -14,7 +15,7 @@ use serde_json::Value;
 use crate::observation::instant;
 use crate::protocol::{
     ACCOUNT_SYNC_INTERVAL_SECONDS, DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS,
-    QUOTA_REFRESH_INTERVALS_SECONDS,
+    PROVIDER_STATUS_INTERVAL_SECONDS, QUOTA_REFRESH_INTERVALS_SECONDS,
 };
 
 /// Extra delay after `resets_at` so the provider has rolled the window before we read it.
@@ -34,13 +35,19 @@ pub fn quota_refresh_interval(seconds: u64) -> Option<Duration> {
         .then_some(Duration::from_secs(seconds))
 }
 
+pub const fn provider_status_interval() -> Duration {
+    Duration::from_secs(PROVIDER_STATUS_INTERVAL_SECONDS)
+}
+
 /// Which scheduler event is due first. Equal instants prefer a collection over an Account-only
-/// read, and a reset catch-up over a periodic collection that would cover it anyway.
+/// read, a reset catch-up over a periodic collection that would cover it anyway, and any of
+/// those over a status-page poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerWake {
     Account,
     Quota,
     ResetBoundary,
+    ProviderStatus,
 }
 
 /// Why the scheduler thread was woken before its sleep elapsed.
@@ -72,6 +79,7 @@ pub fn next_wake(
     next_account: Instant,
     next_quota: Instant,
     next_reset: Option<Instant>,
+    next_status: Instant,
 ) -> (SchedulerWake, Instant) {
     let mut kind = SchedulerWake::Account;
     let mut at = next_account;
@@ -84,6 +92,10 @@ pub fn next_wake(
     {
         kind = SchedulerWake::ResetBoundary;
         at = reset;
+    }
+    if next_status < at {
+        kind = SchedulerWake::ProviderStatus;
+        at = next_status;
     }
     (kind, at)
 }
@@ -175,6 +187,7 @@ mod tests {
             origin + Duration::from_secs(60),
             origin + Duration::from_secs(300),
             Some(origin + Duration::from_secs(12)),
+            origin + Duration::from_secs(600),
         );
         assert_eq!(kind, SchedulerWake::ResetBoundary);
         assert_eq!(at, origin + Duration::from_secs(12));
@@ -184,7 +197,7 @@ mod tests {
     fn a_due_collection_skips_a_same_instant_account_read() {
         let origin = Instant::now();
         let due = origin + Duration::from_secs(60);
-        let (kind, at) = next_wake(due, due, None);
+        let (kind, at) = next_wake(due, due, None, due + Duration::from_secs(1));
         assert_eq!(kind, SchedulerWake::Quota);
         assert_eq!(at, due);
     }
@@ -277,6 +290,28 @@ mod tests {
             )
             .is_some()
         );
+    }
+
+    #[test]
+    fn a_status_poll_loses_a_tie_with_quota_work() {
+        let origin = Instant::now();
+        let due = origin + Duration::from_secs(60);
+        let (kind, at) = next_wake(due, due, None, due);
+        assert_eq!(kind, SchedulerWake::Quota);
+        assert_eq!(at, due);
+    }
+
+    #[test]
+    fn a_sooner_status_poll_runs_when_nothing_else_is_due() {
+        let origin = Instant::now();
+        let (kind, at) = next_wake(
+            origin + Duration::from_secs(60),
+            origin + Duration::from_secs(300),
+            None,
+            origin + Duration::from_secs(12),
+        );
+        assert_eq!(kind, SchedulerWake::ProviderStatus);
+        assert_eq!(at, origin + Duration::from_secs(12));
     }
 
     #[test]

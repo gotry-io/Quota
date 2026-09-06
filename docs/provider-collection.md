@@ -34,6 +34,32 @@ always the last rung, described once under [Browser session](#browser-session).
 Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor,
 Gemini CLI, GitHub Copilot.
 
+## Service status
+
+Catalog `status_page` declares whether this build polls an official status page. `kind` is
+`statuspage_v2` or `none`. `statuspage_v2` is Atlassian Statuspage `GET {url}` of
+`/api/v2/status.json`; this build reads only `status.indicator` (`none` / `minor` / `major` /
+`critical`) and `status.description`. `none` means there is no machine-readable Statuspage v2
+feed: the helper does not scrape HTML and does not invent a second parser.
+
+Verified 2026-09-06 (no redirects; this client's HTTP stack follows none):
+
+| Provider | Kind | URL |
+| --- | --- | --- |
+| Codex | `statuspage_v2` | `https://status.openai.com/api/v2/status.json` (incident.io page; still answers Statuspage v2 `status.indicator` / `status.description`) |
+| Claude Code | `statuspage_v2` | `https://status.claude.com/api/v2/status.json` (`status.anthropic.com` 301s here) |
+| Grok | `none` | `https://status.x.ai/` (custom page, Cloudflare 403 on `/api/v2/status.json`) |
+| OpenRouter | `none` | `https://status.openrouter.ai/` (OnlineOrNot HTML, no Statuspage v2) |
+| DeepSeek | `none` | `https://status.deepseek.com/` (Flashcat HTML; `/api/v2/status.json` is 404) |
+| Kimi Code | `statuspage_v2` | `https://status.moonshot.cn/api/v2/status.json` |
+| LiteLLM | `none` | no official page |
+| Cursor | `statuspage_v2` | `https://status.cursor.com/api/v2/status.json` |
+
+The local helper polls every ten minutes (and once at scheduler start) with
+`User-Agent: Quota/<version>`, a ten-second timeout, and a 64 KiB body cap. A failed poll keeps
+the last reading. Quota iOS uses the same URL list through `QuotaProviderStatus` on the device;
+Relay does not forward status pages. The menu-bar icon does not overlay an incident mark.
+
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.
 

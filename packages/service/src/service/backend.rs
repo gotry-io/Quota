@@ -3053,6 +3053,24 @@ fn worst_operation(left: DiagnosticOperation, right: DiagnosticOperation) -> Dia
 }
 
 impl LocalBackend for NativeBackend {
+    fn client_version(&self) -> &str {
+        &self.client_version
+    }
+
+    fn poll_provider_status(
+        &self,
+        user_agent: &str,
+        checked_at: &str,
+    ) -> std::collections::BTreeMap<String, crate::provider_status::ProviderStatusReading> {
+        let Ok(client) = crate::providers::common::HttpClient::with_timeout(
+            crate::provider_status::STATUS_TIMEOUT,
+        ) else {
+            return std::collections::BTreeMap::new();
+        };
+        let pages = crate::provider_status::catalog_endpoints();
+        crate::provider_status::poll(&client, user_agent, &pages, checked_at)
+    }
+
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
     }

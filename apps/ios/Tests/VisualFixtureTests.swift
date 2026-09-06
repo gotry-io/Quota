@@ -1,4 +1,6 @@
 import Foundation
+import QuotaPresentation
+import QuotaProviderStatus
 import QuotaWire
 import Testing
 
@@ -172,6 +174,9 @@ struct VisualFixtureParserTests {
       let providers = Set(model.providerCards.map(\.provider))
       #expect(providers == [.codex, .claude, .grok])
       #expect(model.providerCards.count == 3)
+      #expect(model.providerStatus[.claude]?.indicator == .minor)
+      #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
+      #expect(model.providerStatus[.codex] == nil)
 
       let codex = try #require(
         model.summary?.subscriptions.first { $0.snapshot.provider == .codex })

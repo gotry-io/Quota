@@ -68,17 +68,21 @@ deadline, and a helper leaving two consecutive pings unanswered is replaced.
 `get_state` performs no collection or network work: it returns the current SQLite-backed snapshot,
 including precomputed Today, 7 Days, 30 Days, and All Usage periods, immediately. Components carry
 independent status, last-good value, update time, error/recovery code, and refreshing flag; there
-are five of them — quota, Usage, account, pricing, and providers, the last of which a refresh never
-touches and a configuration change always does. QuotaBar evaluates local notification rules in Swift
-from the quota readings those events already carry; there is no notification IPC event and no sixth
-component. The service begins a background startup refresh once IPC is available,
+are five of them — quota, Usage, account, pricing, and providers, the last of which a quota refresh
+never touches and a configuration change or status-page poll always does. Official status-page
+readings live as a field of the providers component (`status: { indicator, description, checked_at }`
+per catalog provider), not as a sixth component: they are public JSON about the provider, last-good
+on failure, and announced on the same `providers` change event. QuotaBar evaluates local notification
+rules in Swift from the quota readings those events already carry; there is no notification IPC
+event and no sixth component. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and then waits on one scheduler thread for the next of
-three events: an Account conditional read every minute, a quota collection at the stored interval
-(1, 2, 5, 10, or 15 minutes; default five), and a quota-only catch-up when a window `resets_at`
-falls before the next collection. Usage indexes on the collection tick when the file index is
-dirty, on its own in-flight lane, so a long scan does not postpone the next quota pass. An Account
-poll that lands while Quota is already in flight is kept pending and starts when Quota finishes,
-rather than being dropped for that minute. Manual refresh and Diagnostics Recheck run both lanes as
+four events: an Account conditional read every minute, a quota collection at the stored interval
+(1, 2, 5, 10, or 15 minutes; default five), a quota-only catch-up when a window `resets_at`
+falls before the next collection, and a status-page poll every ten minutes that never wins a tie
+against quota, reset, or Account work. The first status poll runs at scheduler start. Usage indexes
+on the collection tick when the file index is dirty, on its own in-flight lane, so a long scan does
+not postpone the next quota pass. An Account poll that lands while Quota is already in flight is
+kept pending and starts when Quota finishes, rather than being dropped for that minute. Manual refresh and Diagnostics Recheck run both lanes as
 one coordinated refresh. A refresh applies a
 component as soon as it has one rather than only at its end — the account read finishes in well
 under a second, quota is applied and uploaded before Usage joins, and provider collection can
@@ -358,8 +362,8 @@ or a report.
   QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this product.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
   quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
-  [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, the
-  observation-freshness rule each snapshot type conforms to, and the subscription selector every
+  [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
+  status-page copy, the observation-freshness rule each snapshot type conforms to, and the subscription selector every
   Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
   evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
   wire types, network, persist, or reach Relay; `QuotaAlerts` may depend on `QuotaPresentation`.
@@ -381,14 +385,15 @@ or a report.
   inject, and owns no policy of its own: the store that writes an item decides its accessibility.
 - `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
   client, account session refresh/revoke, the last-good Account summary cache, the activity
-  read (not cached), and the Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios`
+  read (not cached), the Foundation-only `QuotaWidgetData` snapshot types and store, and
+  `QuotaProviderStatus`, which polls catalog Statuspage v2 URLs on the device. `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
   non-persistent data store, the local collection pass over its stored provider sessions and the
   app-container file holding its result, App Group snapshot publish/clear, the app-private
   selection-salt Keychain item, and the WidgetKit extension; its views do not call `URLSession` or
   Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
-  and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or
-  Keychain.
+  and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`, or Security,
+  or use `URLSession` or Keychain. Relay does not forward provider status pages.
 - `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie
   a sign-in left behind — the last rung of the collection ladder, on the device the reader signed in
   on. It depends on QuotaWire for `ProviderID`, the catalog's browser-session spec, and the snapshot

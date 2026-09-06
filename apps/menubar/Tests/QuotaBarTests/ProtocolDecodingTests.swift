@@ -279,6 +279,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
         "refreshing": false
       },
       "providers": [],
+      "provider_status": [],
       "provider_browser_sessions": [],
       "browser_scan_enabled": [],
       "overview": [],
@@ -315,6 +316,139 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: nestedExtra)
+  }
+}
+
+@Test
+func decodesProviderStatusReadings() throws {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 1,
+      "revision": 0,
+      "usage_upload_enabled": true,
+      "quota_refresh_interval_seconds": 300,
+      "usage_periods": {"local": {}, "account": {}},
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "signed_out",
+        "value": {
+          "auth_status": "signed_out",
+          "account_id": null,
+          "device_id": null,
+          "device_generation": null,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "pricing": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "provider_status": [
+        {
+          "provider": "claude",
+          "indicator": "minor",
+          "description": "Partial System Outage",
+          "checked_at": "2026-09-06T00:00:00Z"
+        }
+      ],
+      "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
+      "overview": [],
+      "cache": { "rebuilding": false, "reset_at": null }
+    }
+    """#.utf8
+  )
+  let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
+  #expect(state.providerStatus.count == 1)
+  #expect(state.providerStatus[0].provider == .claude)
+  #expect(state.providerStatus[0].indicator == .minor)
+  #expect(state.providerStatus[0].description == "Partial System Outage")
+  #expect(state.providerStatus[0].settingsLine == "Degraded · Partial System Outage")
+}
+
+@Test
+func rejectsUnknownProviderStatusIndicators() {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 1,
+      "revision": 0,
+      "usage_upload_enabled": true,
+      "quota_refresh_interval_seconds": 300,
+      "usage_periods": {"local": {}, "account": {}},
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "signed_out",
+        "value": {
+          "auth_status": "signed_out",
+          "account_id": null,
+          "device_id": null,
+          "device_generation": null,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "pricing": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "provider_status": [
+        {
+          "provider": "claude",
+          "indicator": "maintenance",
+          "description": "Scheduled",
+          "checked_at": "2026-09-06T00:00:00Z"
+        }
+      ],
+      "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
+      "overview": [],
+      "cache": { "rebuilding": false, "reset_at": null }
+    }
+    """#.utf8
+  )
+  #expect(throws: DecodingError.self) {
+    try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
   }
 }
 

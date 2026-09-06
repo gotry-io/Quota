@@ -258,7 +258,15 @@
       localUsage: localUsageReport(at: date, partial: accountSummary.usage.today.partial),
       accountSummary: accountSummary,
       authStatus: .signedIn,
-      overview: overviewItems(summary: accountSummary, report: report, now: date)
+      overview: overviewItems(summary: accountSummary, report: report, now: date),
+      providerStatus: [
+        LocalServiceProviderStatus(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: date
+        )
+      ]
     )
   }
 

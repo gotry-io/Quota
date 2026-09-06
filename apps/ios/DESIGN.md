@@ -169,15 +169,19 @@ Body, in order:
    a sheet with **Done**. The sentence is the one Relay's own 402 `subscription_required` is
    spoken as, so a refused write and this row never disagree.
 3. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
-   name, masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
-   List row background is the only content container. Remaining is the strongest number, with one
-   meter per percent window and reset copy. A reading that is not current names why in place of, or
-   ahead of, that reset time, because the reset it names may already have passed: **Sign-in
-   needed**, **Unavailable**, **Unsupported**, or **Can’t refresh** for a state its device
-   reported, and **Not current** for one that aged past its `valid_until`. Widgets apply the same
-   rule at the instant they draw. Remaining has no "left" or "remaining" suffix. Budget windows
-   with an amount use `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use
-   **Balance** plus the unit amount. Empty windows: **No quota windows yet.** The canonical
+   name with an 8pt incident dot after the name when this device's last-good status-page reading
+   is `minor` or worse (VoiceOver speaks the status-page description; there is no tooltip),
+   masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
+   List row background is the only content container. Status pages are fetched on this device
+   (`QuotaProviderStatus`); Relay does not forward them. Widgets do not show the mark. Remaining
+   is the strongest number, with one meter per percent window and reset copy. A reading that is
+   not current names why in place of, or ahead of, that reset time, because the reset it names
+   may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
+   refresh** for a state its device reported, and **Not current** for one that aged past its
+   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left"
+   or "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows
+   use `71%`, and balance-only windows use **Balance** plus the unit amount. Empty windows: **No
+   quota windows yet.** The canonical
    **Updated** age is the quota Section footer; it wraps and is spoken in full.
 4. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
    `gauge.with.dots.needle.33percent`, and the two ways to change that as buttons. Without an
@@ -772,7 +776,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
 | `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
