@@ -1326,6 +1326,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     persistNotificationRules { $0.resetReminders = enabled }
   }
 
+  func setPaceAlerts(_ enabled: Bool) {
+    persistNotificationRules { $0.paceAlerts = enabled }
+  }
+
   func setNotificationFirstThreshold(_ value: Int, for selector: String) {
     let current = notificationRules.thresholds(for: selector)
     var next = [value]

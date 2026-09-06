@@ -63,6 +63,7 @@ struct AlertCoordinatorTests {
       state: AlertDedupState(
         fired: [
           AlertDedupKey(
+            kind: .threshold,
             selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
         ],
         readings: [

@@ -470,13 +470,17 @@
                   id: "five_hour",
                   title: "5 Hours",
                   usedPercent: 32,
-                  resetsAt: date.addingTimeInterval(2_700)
+                  resetsAt: date.addingTimeInterval(2_700),
+                  durationSeconds: 18_000,
+                  now: date
                 ),
                 window(
                   id: "weekly",
                   title: "Weekly",
-                  usedPercent: 16,
-                  resetsAt: date.addingTimeInterval(4 * 86_400)
+                  usedPercent: 60,
+                  resetsAt: date.addingTimeInterval(4 * 86_400),
+                  durationSeconds: 604_800,
+                  now: date
                 ),
               ],
               observedAt: date.addingTimeInterval(-90)
@@ -496,7 +500,9 @@
                   id: "five_hour",
                   title: "5 Hours",
                   usedPercent: 47,
-                  resetsAt: date.addingTimeInterval(7_200)
+                  resetsAt: date.addingTimeInterval(9_000),
+                  durationSeconds: 18_000,
+                  now: date
                 )
               ],
               observedAt: date.addingTimeInterval(-120)
@@ -516,7 +522,8 @@
                   id: "monthly",
                   title: "Monthly",
                   usedPercent: 73,
-                  resetsAt: date.addingTimeInterval(12 * 86_400)
+                  resetsAt: date.addingTimeInterval(12 * 86_400),
+                  now: date
                 )
               ],
               observedAt: date.addingTimeInterval(-180)
@@ -747,18 +754,31 @@
     )
   }
 
+  /// A fixture window carrying the pace its service would have stated for it, derived by the
+  /// one shared rule rather than a second copy of it.
   private func window(
     id: String,
     title: String,
     usedPercent: Double,
-    resetsAt: Date?
+    resetsAt: Date?,
+    durationSeconds: Int? = nil,
+    now: Date
   ) -> QuotaWindow {
     QuotaWindow(
       id: id,
       title: title,
       usedPercent: usedPercent,
       resetsAt: resetsAt,
-      durationSeconds: nil
+      durationSeconds: durationSeconds,
+      pace: QuotaPace.evaluate(
+        QuotaPaceReading(
+          usedPercent: usedPercent,
+          resetsAt: resetsAt,
+          cadenceSeconds: durationSeconds,
+          isBalanceOnly: false
+        ),
+        now: now
+      )
     )
   }
 #endif

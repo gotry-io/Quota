@@ -49,6 +49,7 @@ final class ResetReminderScheduler: @unchecked Sendable {
           let provider = catalog.providerDisplayName(selector: subscription.selector)
         else { continue }
         let key = AlertDedupKey(
+          kind: .reset,
           selector: subscription.selector,
           windowID: window.id,
           resetsAt: resetsAt,

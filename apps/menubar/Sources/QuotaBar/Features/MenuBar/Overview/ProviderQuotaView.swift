@@ -153,6 +153,19 @@ struct QuotaWindowRow: View {
     isStale ? QuotaPalette.mute : QuotaPalette.ink
   }
 
+  /// The pace this window's reading was published with, and whether it warns.
+  ///
+  /// The service derived it; the panel prints it. A window with no pace takes no line.
+  private var paceLine: (text: String, warns: Bool)? {
+    guard let pace = window.pace,
+      let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt)
+    else {
+      return nil
+    }
+    if case .runsOut = pace { return (text, true) }
+    return (text, false)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.meta) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.inline) {
@@ -179,6 +192,13 @@ struct QuotaWindowRow: View {
       } else if window.resetsAt == nil, FreshnessCopy.showsNoResetTime(window) {
         Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
+      }
+
+      if let paceLine {
+        Text(paceLine.text)
+          .quotaFont(.meta)
+          .foregroundStyle(paceLine.warns ? QuotaPalette.warning : QuotaPalette.mute)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .padding(.top, 2)

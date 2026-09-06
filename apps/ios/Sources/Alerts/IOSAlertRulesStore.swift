@@ -3,10 +3,12 @@ import QuotaAlerts
 
 /// UserDefaults adapter for `AlertRules` under `alerts.*`.
 ///
-/// Defaults match QuotaBar: enabled off, reset reminders on, unedited selectors `[20, 10]`.
+/// Defaults match QuotaBar: enabled off, reset reminders and pace warnings on, unedited
+/// selectors `[20, 10]`.
 struct IOSAlertRulesStore {
   static let enabledKey = "alerts.enabled"
   static let resetRemindersKey = "alerts.resetReminders"
+  static let paceAlertsKey = "alerts.paceAlerts"
   static let thresholdsKey = "alerts.thresholds"
 
   let defaults: UserDefaults
@@ -19,6 +21,8 @@ struct IOSAlertRulesStore {
     let enabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? AlertRules.defaultEnabled
     let resetReminders =
       defaults.object(forKey: Self.resetRemindersKey) as? Bool ?? AlertRules.defaultResetReminders
+    let paceAlerts =
+      defaults.object(forKey: Self.paceAlertsKey) as? Bool ?? AlertRules.defaultPaceAlerts
     var parsed: [String: [Int]] = [:]
     if let raw = defaults.dictionary(forKey: Self.thresholdsKey) {
       for (selector, value) in raw {
@@ -30,6 +34,7 @@ struct IOSAlertRulesStore {
     return AlertRules(
       enabled: enabled,
       resetReminders: resetReminders,
+      paceAlerts: paceAlerts,
       thresholds: parsed
     )
   }
@@ -37,6 +42,7 @@ struct IOSAlertRulesStore {
   func save(_ rules: AlertRules) {
     defaults.set(rules.enabled, forKey: Self.enabledKey)
     defaults.set(rules.resetReminders, forKey: Self.resetRemindersKey)
+    defaults.set(rules.paceAlerts, forKey: Self.paceAlertsKey)
     defaults.set(
       rules.thresholds.mapValues { AlertRules.normalized($0) } as [String: Any],
       forKey: Self.thresholdsKey

@@ -1580,6 +1580,10 @@ footer {
   font-size: 10px;
 }
 
+.quota-window-pace-warn {
+  color: var(--meter-warn);
+}
+
 .quota-window-list .empty-state {
   margin: 0;
 }

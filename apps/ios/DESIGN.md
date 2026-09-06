@@ -29,13 +29,17 @@ Core rules:
 
 ## Shared product vocabulary
 
-Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, period names, and Devices copy follow
+Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
 and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
-`FreshnessCopy` and never assemble their own. Local remaining-quota alerts answer
+`FreshnessCopy` and never assemble their own. A window's pace prints under its support line in
+`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise;
+there is no Rust on iOS, so the app derives it with `QuotaPace` from the reading it already holds,
+answering `packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
+belongs to the number. Local remaining-quota alerts answer
 `packages/protocol/fixtures/alert-transition-conformance.json`; both Apple apps evaluate that file
-through `QuotaAlerts`.
+through `QuotaAlerts`, including the pace warning Settings can turn off.
 
 ## Surfaces
 
@@ -512,13 +516,25 @@ provider and support, and no custom card chrome beyond the system widget contain
     `section.footer.subscription-updated`, `section.footer.usage.headline`,
     `section.footer.usage.day.headline`;
   - the system sheet **Done** confirmation button for Dynamic Type;
-  - contrast on any element whose frame intersects the floating tab bar's frame (inset by 40 pt
-    horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit over the last
-    visible rows and the auditor samples the glass, not the row. This is geometric and
-    system-owned; it never applies to rows away from the tab bar;
+  - contrast and clipping on any element whose frame intersects the floating tab bar's frame
+    (inset by 40 pt horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit
+    over the last visible rows, so the contrast auditor samples the glass, not the row, and the
+    clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never
+    applies to rows away from the tab bar;
+  - contrast, Dynamic Type, and clipping on the Today rows of Overview, scoped by frame containment
+    to the elements this app marked `overview.today` or `overview.today.*`. Those rows are
+    grouped-Form `LabeledContent`, so iOS 26 `UIListContentConfiguration` owns their colours, how
+    much they grow, and how their label and value share the row, and the auditor names their inner label and value texts, which carry no identifier
+    of their own — which is why matching the `overview.today` identifier on the reported element
+    alone never reached them, and why the message on them reads "unsupported" rather than the
+    "partially unsupported" the identifier-named rows below report. Containment in a marked row's
+    frame is what ties a report back to a row: the exception is not by element type, not by how
+    close the ratio came, and it is the only place either type is skipped by frame other than the
+    tab-bar glass above;
   - iOS 26 `UIListContentConfiguration` List/Form Button, Link, and LabeledContent rows for the
     "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
-    full Dynamic Type. Contrast on those rows is not skipped. Named identifiers:
+    full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today rows the
+    bullet above names by frame. Named identifiers:
     `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
     `usage.show-fewer`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
     `overview.today.cost`, `overview.today.input`, `overview.today.output`,

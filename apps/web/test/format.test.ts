@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { isBalanceOnly, showsPercentMeter } from "@gotry-io/quota-model";
+import { isBalanceOnly, quotaPace, showsPercentMeter } from "@gotry-io/quota-model";
 import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
@@ -11,6 +11,7 @@ import {
   formatUtcDateRange,
   lastReadingCopy,
   observationFreshnessCopy,
+  paceCopy,
   relativeAge,
   resetCopy,
   showsNoResetTime,
@@ -150,4 +151,33 @@ test("classifies wallet windows as balance-only and metered windows as percent m
 
   assert.equal(showsNoResetTime(wallet), false);
   assert.equal(showsNoResetTime(metered), true);
+});
+
+/**
+ * The pace line is the same sentence on the website, in QuotaBar, and in the iOS app.
+ * `QuotaPaceCopy` answers this file too, so a phrase one of them changes fails the other.
+ */
+const paceFixture = JSON.parse(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../packages/protocol/fixtures/quota-pace-conformance.json",
+    ),
+    "utf8",
+  ),
+) as {
+  cases: {
+    name: string;
+    now: string;
+    window: { used_percent: number; resets_at?: string; duration_seconds?: number };
+    expected_copy: string | null;
+  }[];
+};
+
+test("pace copy matches the shared fixture", () => {
+  assert.ok(paceFixture.cases.length >= 12);
+  for (const testCase of paceFixture.cases) {
+    const pace = quotaPace(testCase.window, new Date(testCase.now));
+    assert.equal(paceCopy(pace, testCase.window.resets_at), testCase.expected_copy, testCase.name);
+  }
 });

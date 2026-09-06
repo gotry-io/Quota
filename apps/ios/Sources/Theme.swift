@@ -11,6 +11,9 @@ enum QuotaTheme {
 
   static let meterTrack = Color(uiColor: .tertiarySystemFill)
 
+  /// The one warning color: a window whose pace runs it out before its reset.
+  static let warning = Color(uiColor: .systemOrange)
+
   static let minimumTouchTarget: CGFloat = 44
   static let activityCellSize: CGFloat = 14
   static let activityCellGap: CGFloat = 4

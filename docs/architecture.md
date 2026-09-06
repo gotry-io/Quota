@@ -104,6 +104,11 @@ client version expires on the same terms. `packages/quota-model` owns the TypeSc
 `packages/apple-shared` the Swift one each Apple observation type answers by conforming, and
 `packages/service`'s `observation` module the Rust one.
 
+Whether a window's current burn rate lasts to its reset is derived the same way, from the same
+reading and nothing else ([ADR 0035](decisions/0035-quota-pace-is-derived-from-the-reading.md)):
+QuotaBar is handed each window's pace on the IPC state its service publishes, while Quota iOS and
+the website derive their own, and Relay neither stores nor carries one.
+
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
 `{device_id, observed_at}` behind it. That rule is stated once in

@@ -22,6 +22,7 @@ Read the relevant source before changing that area:
 | Browser-session acquisition, its consent gate, and its bounds | `docs/decisions/0010-provider-browser-session-auth.md` |
 | SvelteKit documents served through the Relay Worker | `docs/decisions/0011-sveltekit-document-worker.md` |
 | Freshness derived from the observation, not stamped on it | `docs/decisions/0017-derived-observation-freshness.md` |
+| Quota pace derived from the reading, and the one phrase every surface prints | `docs/decisions/0035-quota-pace-is-derived-from-the-reading.md` |
 | One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |

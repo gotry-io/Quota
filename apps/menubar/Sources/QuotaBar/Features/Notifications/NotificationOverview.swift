@@ -28,6 +28,7 @@ enum NotificationOverview {
             title: window.title,
             remainingPercent: window.remainingPercent,
             resetsAt: window.resetsAt,
+            durationSeconds: window.durationSeconds,
             primaryCadence: window.primaryCadenceKind?.rawValue
           )
         }

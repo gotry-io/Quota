@@ -31,6 +31,16 @@ struct NotificationsSettingsView: View {
               accessibilityLabel: "Reset reminders",
               accessibilityHint: "Notify when a quota window refills"
             )
+            settingsToggleRow(
+              title: "Pace warnings",
+              systemImage: "gauge.with.dots.needle.67percent",
+              isOn: Binding(
+                get: { model.notificationRules.paceAlerts },
+                set: { model.setPaceAlerts($0) }
+              ),
+              accessibilityLabel: "Pace warnings",
+              accessibilityHint: "Notify when a window stops lasting to its reset"
+            )
             if model.notificationAuthorizationDenied {
               permissionDeniedRows
             }

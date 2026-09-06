@@ -84,6 +84,13 @@ final class IOSAlertSink: AlertSink, @unchecked Sendable {
       content.title = AlertCopy.title(
         providerDisplayName: provider, windowTitle: windowTitle)
       content.body = AlertCopy.resetBody(windowTitle: windowTitle)
+    case .paceRunsOut(_, _, let pace, let resetsAt):
+      guard let provider = catalog.providerDisplayName(selector: event.selector),
+        let body = AlertCopy.paceBody(pace: pace, resetsAt: resetsAt)
+      else { return nil }
+      content.title = AlertCopy.title(
+        providerDisplayName: provider, windowTitle: windowTitle)
+      content.body = body
     }
     return UNNotificationRequest(
       identifier: event.dedupKey.requestIdentifier,

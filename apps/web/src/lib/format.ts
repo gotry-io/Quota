@@ -6,6 +6,7 @@ type CostView = { amount_microusd: string | null; status: string; basis: string 
 import { USAGE_OTHER_MODEL } from "@gotry-io/quota-protocol";
 import {
   isBalanceOnly,
+  type QuotaPace,
   remainingPercent,
   showsPercentMeter as windowShowsPercentMeter,
 } from "@gotry-io/quota-model";
@@ -164,6 +165,30 @@ export function resetCopy(
     return `Resets ${parts.weekday} ${parts.hour}:${parts.minute}`;
   }
   return `Resets ${parts.month} ${parts.day}`;
+}
+
+/**
+ * The one line every Quota surface prints for a window's pace, or `null` when there is none.
+ *
+ * `packages/protocol/fixtures/quota-pace-conformance.json` is the shared statement of these
+ * phrases; `QuotaPaceCopy` in `packages/apple-shared` answers the same file. See ADR 0035.
+ */
+export function paceCopy(pace: QuotaPace, resetsAt: string | undefined): string | null {
+  if (pace.kind === "none") return null;
+  let outcome: string;
+  if (pace.kind === "lasts") {
+    outcome = "lasts to reset";
+  } else {
+    if (pace.exhausts_at === undefined || resetsAt === undefined) return null;
+    outcome = `runs out ~${compactAge(pace.exhausts_at, new Date(resetsAt))} before reset`;
+  }
+  const tempo =
+    pace.tempo === "on_track"
+      ? "On track"
+      : pace.tempo === "ahead"
+        ? `Ahead +${pace.delta_percent}%`
+        : `Behind −${Math.abs(pace.delta_percent)}%`;
+  return `${tempo} · ${outcome}`;
 }
 
 function zonedDateParts(
