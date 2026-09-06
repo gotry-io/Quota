@@ -129,9 +129,9 @@ only bounds, and its types are held to the exported schema by test
 
 The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
 Schema; generation produces TypeScript protocol IDs, Rust catalog metadata in
-`packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared crate implements all eight
-quota collectors and all six Usage parsers. `account_sync` declares whether a provider
-synchronizes and the generated managed provider enum is exactly that set; all eight declare it
+`packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared crate implements all ten
+quota collectors and all eight Usage parsers. `account_sync` declares whether a provider
+synchronizes and the generated managed provider enum is exactly that set; all ten declare it
 today, so the managed enum and the local collection schema currently name the same providers.
 Provider credentials stay provider-owned; optional API-key overrides live in the owner-only `providers.json`
 described in [`security.md`](security.md).

@@ -42,7 +42,7 @@ struct ProviderDisplayOrderTests {
 
     #expect(
       ProviderDisplayOrder.enabledProviders(defaults: defaults)
-        == [.grok, .codex, .claude, .openrouter, .deepseek, .kimi, .litellm, .cursor]
+        == [.grok, .codex, .claude, .openrouter, .deepseek, .kimi, .litellm, .cursor, .gemini, .copilot]
     )
   }
 }

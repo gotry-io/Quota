@@ -6,7 +6,9 @@
 
 mod claude;
 mod codex;
+mod copilot;
 mod cursor;
+mod gemini;
 mod grok;
 mod opencode;
 mod pi;
@@ -17,7 +19,9 @@ mod tests;
 
 pub use claude::scan_claude_usage;
 pub use codex::scan_codex_usage;
+pub use copilot::scan_copilot_usage;
 pub use cursor::scan_cursor_usage;
+pub use gemini::scan_gemini_usage;
 pub use grok::scan_grok_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
@@ -67,16 +71,22 @@ pub enum UsageAgent {
     Pi,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "gemini")]
+    Gemini,
+    #[serde(rename = "copilot")]
+    Copilot,
 }
 
 impl UsageAgent {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::Grok,
         Self::OpenCode,
         Self::Pi,
         Self::Cursor,
+        Self::Gemini,
+        Self::Copilot,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -87,6 +97,8 @@ impl UsageAgent {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::Cursor => "cursor",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
         }
     }
 }
@@ -109,11 +121,12 @@ pub enum BillingChannel {
     XaiDirect,
     MoonshotDirect,
     DeepseekDirect,
+    GoogleDirect,
     Unknown,
 }
 
 impl BillingChannel {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::OpenaiDirect,
         Self::AzureOpenai,
         Self::AnthropicDirect,
@@ -123,6 +136,7 @@ impl BillingChannel {
         Self::XaiDirect,
         Self::MoonshotDirect,
         Self::DeepseekDirect,
+        Self::GoogleDirect,
         Self::Unknown,
     ];
 
@@ -137,6 +151,7 @@ impl BillingChannel {
             Self::XaiDirect => "xai_direct",
             Self::MoonshotDirect => "moonshot_direct",
             Self::DeepseekDirect => "deepseek_direct",
+            Self::GoogleDirect => "google_direct",
             Self::Unknown => "unknown",
         }
     }

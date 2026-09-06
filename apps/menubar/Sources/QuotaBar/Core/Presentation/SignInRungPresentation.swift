@@ -89,6 +89,10 @@ enum SignInRungCatalog {
       [(.apiKey, "API Key", ["litellm_budget_api"])]
     case .cursor:
       [(.application, "Cursor App", ["cursor_app_auth"])]
+    case .gemini:
+      [(.cli(command: provider.setupAction), "Gemini CLI", ["gemini_code_assist_quota"])]
+    case .copilot:
+      [(.cli(command: provider.setupAction), "GitHub Copilot", ["github_copilot_user_api"])]
     case .unknown:
       []
     }
@@ -100,7 +104,8 @@ enum SignInRungCatalog {
     case .codex, .claude, .grok: "Fallback when the CLI is signed out"
     case .kimi: "Fallback when no key or CLI works"
     case .cursor: "Fallback when Cursor is signed out"
-    case .openrouter, .deepseek, .litellm, .unknown: "Fallback when nothing else works"
+    case .openrouter, .deepseek, .litellm, .gemini, .copilot, .unknown:
+      "Fallback when nothing else works"
     }
   }
 }

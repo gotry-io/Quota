@@ -26,7 +26,7 @@ name the fact already carried.
 **The pricing layer values an unnamed-channel row at the vendor's official direct price when exact
 model or alias matching lands in exactly one vendor-direct channel.** Vendor-direct means the
 vendor's own billed channel (`openai_direct`, `anthropic_direct`, `xai_direct`, `moonshot_direct`,
-`deepseek_direct`). Gateways — OpenRouter, Bedrock, Vertex, Azure OpenAI, and any other proxy — are
+`deepseek_direct`, `google_direct`). Gateways — OpenRouter, Bedrock, Vertex, Azure OpenAI, and any other proxy — are
 never candidates. A successful match records `vendor_official_price` so the valuation is auditable.
 `agent_default_channel` is not added: the fact's `channel_source` is `unknown`, not `agent_default`.
 

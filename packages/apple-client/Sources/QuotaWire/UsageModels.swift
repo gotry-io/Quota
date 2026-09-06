@@ -8,6 +8,8 @@ public enum BillingAgent: String, CaseIterable, Codable, Sendable, TolerantWireE
   case opencode
   case pi
   case cursor
+  case gemini
+  case copilot
   case unknown
 }
 
@@ -17,6 +19,7 @@ public enum BillingChannel: String, Codable, Sendable, TolerantWireEnum {
   case anthropicDirect = "anthropic_direct"
   case awsBedrock = "aws_bedrock"
   case googleVertex = "google_vertex"
+  case googleDirect = "google_direct"
   case openrouter
   case xaiDirect = "xai_direct"
   case moonshotDirect = "moonshot_direct"

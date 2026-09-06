@@ -67,7 +67,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 6,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema29"
@@ -94,7 +94,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 6,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema29"
@@ -121,7 +121,7 @@
     },
     "__schema3": {
       "type": "string",
-      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
+      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor", "gemini", "copilot"]
     },
     "__schema4": {
       "maxItems": 256,
@@ -258,6 +258,7 @@
         "anthropic_direct",
         "aws_bedrock",
         "google_vertex",
+        "google_direct",
         "openrouter",
         "xai_direct",
         "moonshot_direct",

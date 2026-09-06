@@ -155,6 +155,7 @@ fn billing_channel(provider: Option<&str>) -> BillingChannel {
         Some("azure-openai") => BillingChannel::AzureOpenai,
         Some("amazon-bedrock") | Some("bedrock") => BillingChannel::AwsBedrock,
         Some("google-vertex") => BillingChannel::GoogleVertex,
+        Some("google") | Some("gemini") => BillingChannel::GoogleDirect,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
         Some("moonshotai") | Some("kimi-for-coding") => BillingChannel::MoonshotDirect,

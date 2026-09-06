@@ -782,6 +782,7 @@ fn billing_channel(provider: Option<&str>) -> (BillingChannel, ChannelSource) {
         Some("google-vertex") | Some("google_vertex") => {
             (BillingChannel::GoogleVertex, ChannelSource::Explicit)
         }
+        Some("google") | Some("gemini") => (BillingChannel::GoogleDirect, ChannelSource::Explicit),
         Some("openrouter") => (BillingChannel::Openrouter, ChannelSource::Explicit),
         Some("xai") => (BillingChannel::XaiDirect, ChannelSource::Explicit),
         Some("moonshotai") | Some("kimi-for-coding") => {

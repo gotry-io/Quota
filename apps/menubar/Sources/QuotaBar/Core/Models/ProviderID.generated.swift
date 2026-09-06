@@ -19,6 +19,8 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: false
     case .`cursor`: false
+    case .`gemini`: false
+    case .`copilot`: false
     case .unknown: false
     }
   }
@@ -34,6 +36,8 @@ extension ProviderID {
     case .`kimi`: "Configure in QuotaBar"
     case .`litellm`: "Configure in QuotaBar"
     case .`cursor`: "Sign in with browser"
+    case .`gemini`: "gemini"
+    case .`copilot`: "copilot login"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -48,6 +52,8 @@ extension ProviderID {
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
+    case .`gemini`: "gemini"
+    case .`copilot`: "copilot"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -71,6 +77,8 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .`gemini`: false
+    case .`copilot`: false
     case .unknown: false
     }
   }
@@ -85,6 +93,8 @@ extension ProviderID {
     case .`kimi`: false
     case .`litellm`: true
     case .`cursor`: false
+    case .`gemini`: false
+    case .`copilot`: false
     case .unknown: false
     }
   }

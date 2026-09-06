@@ -20,7 +20,9 @@ mod types;
 #[cfg(test)]
 pub mod web_conformance;
 
-pub use cli_version::{CliTool, ProbeCache, ProbeEnvironment, resolve as resolve_cli_versions};
+pub use cli_version::{
+    CliTool, ProbeCache, ProbeEnvironment, resolve as resolve_cli_versions, resolve_binary,
+};
 pub use config::{ApiKeyCredentials, resolve_api_key};
 #[cfg(test)]
 pub use http::serve_responses;

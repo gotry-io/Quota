@@ -836,7 +836,18 @@
     },
     "__schema13": {
       "type": "string",
-      "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm", "cursor"]
+      "enum": [
+        "codex",
+        "claude",
+        "grok",
+        "openrouter",
+        "deepseek",
+        "kimi",
+        "litellm",
+        "cursor",
+        "gemini",
+        "copilot"
+      ]
     },
     "__schema14": {
       "type": "object",
@@ -967,7 +978,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 6,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema33"
@@ -1137,6 +1148,7 @@
             "anthropic_direct",
             "aws_bedrock",
             "google_vertex",
+            "google_direct",
             "openrouter",
             "xai_direct",
             "moonshot_direct",
@@ -1185,7 +1197,7 @@
       "properties": {
         "agent": {
           "type": "string",
-          "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor"]
+          "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor", "gemini", "copilot"]
         },
         "providers": {
           "maxItems": 8,
@@ -1258,7 +1270,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 6,
+          "maxItems": 8,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema33"
