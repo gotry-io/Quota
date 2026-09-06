@@ -26,6 +26,12 @@ public enum WireValidation {
     isSecret(value) && value.hasPrefix(QuotaIOSOAuth.refreshTokenPrefix)
   }
 
+  /// A compact JWS, which is the shape of the identity token Apple hands a native app.
+  public static func isCompactJWS(_ value: String) -> Bool {
+    guard (16...8_192).contains(value.count) else { return false }
+    return value.range(of: #"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+  }
+
   public static func isPKCEVerifier(_ value: String) -> Bool {
     value.range(of: #"^[A-Za-z0-9._~-]{43,128}$"#, options: .regularExpression) != nil
   }

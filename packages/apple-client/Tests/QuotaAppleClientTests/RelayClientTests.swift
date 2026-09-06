@@ -9,6 +9,7 @@ struct RelayClientTests {
     #expect(
       Set(RelayRoute.allCases.map(\.path)) == [
         "/oauth/v2/token",
+        "/oauth/v2/apple",
         "/oauth/v2/revoke",
         "/api/v6/account/summary",
         "/api/v6/account/usage/activity",

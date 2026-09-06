@@ -243,7 +243,10 @@ Device fields and returns only an account session: it is not a collection Device
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. `/sign-in` now asks which Account this is before the
 round trip finishes, and the app still confirms **Use this GitHub account?** against the Account
-`display_label` before opening signed-in tabs. The Keychain session is stored with `activation: pending` at exchange and
+`display_label` before opening signed-in tabs. Continue with Apple takes no browser at all:
+`ASAuthorizationAppleIDProvider` proves the identity on the device and the app posts that identity
+token and its nonce to `POST /oauth/v2/apple`, which answers with the same `quota-ios` session and
+the same confirmation flow. The Keychain session is stored with `activation: pending` at exchange and
 becomes `active` only when Continue confirms it; **Use a different account** revokes the session
 just opened and repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no

@@ -35,6 +35,7 @@
 		4694AB9ADAE0941DA5E1C6E1 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */; };
 		476F9FC23E13F2FDDE7AC5E5 /* RecordingWidgetSnapshotPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7817116D076AF5E867D37B90 /* RecordingWidgetSnapshotPublisher.swift */; };
 		47B560DDAD359CE7E6437DF9 /* UsageActivityChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = B83FF236D780793577FA7ED1 /* UsageActivityChart.swift */; };
+		4D0D7FD7634C1EA27D640BEB /* AuthenticationServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09E92C52CF815570FAF183DC /* AuthenticationServices.framework */; };
 		4F43C059E55874822A81800F /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D20ECC9117266738C855DB30 /* WidgetKit.framework */; };
 		4F8AF68FAF8C3318E846BE20 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22EA5EC387AF4FF520BED534 /* UsageView.swift */; };
 		4FD2BE656E69ED29AA0D4B0D /* SettingsAppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4399D77F34E72CF73E1C64 /* SettingsAppearanceView.swift */; };
@@ -142,6 +143,7 @@
 		0217A9DC324748A19C8043BC /* apple-client */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-client"; path = "../../packages/apple-client"; sourceTree = SOURCE_ROOT; };
 		03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDeliveryTests.swift; sourceTree = "<group>"; };
 		032F85F69C9DBBC730CD0F7F /* ConnectAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectAccountView.swift; sourceTree = "<group>"; };
+		09E92C52CF815570FAF183DC /* AuthenticationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AuthenticationServices.framework; path = System/Library/Frameworks/AuthenticationServices.framework; sourceTree = SDKROOT; };
 		0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjectionTests.swift; sourceTree = "<group>"; };
 		136F12D15EF930FCFA0D08E5 /* UsageActivityLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageActivityLoadTests.swift; sourceTree = "<group>"; };
 		1DF31866210B6905C77A5CF7 /* QuotaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuotaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -230,6 +232,7 @@
 				93ED7CA9E53DBA0831F68102 /* QuotaWidgetData in Frameworks */,
 				FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */,
 				732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */,
+				4D0D7FD7634C1EA27D640BEB /* AuthenticationServices.framework in Frameworks */,
 				20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */,
 				52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */,
 				4F43C059E55874822A81800F /* WidgetKit.framework in Frameworks */,
@@ -370,6 +373,7 @@
 			isa = PBXGroup;
 			children = (
 				F9141D8E147B24CE24D48194 /* AppIntents.framework */,
+				09E92C52CF815570FAF183DC /* AuthenticationServices.framework */,
 				383D78AB5F09A4248D36752A /* BackgroundTasks.framework */,
 				9F1B27F361B6F8E7353A7BA3 /* SwiftUI.framework */,
 				408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */,
@@ -763,7 +767,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.1;
+				MARKETING_VERSION = 0.0.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -899,7 +903,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.1;
+				MARKETING_VERSION = 0.0.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

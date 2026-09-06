@@ -94,10 +94,12 @@ struct SettingsModelTests {
   }
 
   @Test func deleteAccountStartEncodesReturnToSoTheQueryDoesNotSplit() {
-    let url = QuotaWebLinks.githubStartURL(returnTo: "/my/settings?delete=account")
+    let url = QuotaWebLinks.signInURL(returnTo: "/my/settings?delete=account")
+    // Re-authenticating goes through the page that asks which Account this is, not through one
+    // channel's round trip.
     #expect(
       url.absoluteString
-        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
     #expect(QuotaWebLinks.deleteAccountStart == url)
     #expect(QuotaWebLinks.deleteAccountReturnTo == "/my/settings?delete=account")

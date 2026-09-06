@@ -57,6 +57,14 @@ export interface ResolveSignInIdentityInput {
   provider: IdentityProviderId;
   subject: string;
   label: string;
+  /**
+   * Whether `label` is the provider's stand-in rather than something it stated.
+   *
+   * Apple hands over an address only while the person is sharing one, so a later sign-in can
+   * arrive with nothing but "Apple ID". A stand-in must not overwrite a name a channel once
+   * really stated ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
+  label_is_placeholder: boolean;
   /** The id the Account takes when this identity has never been seen before. */
   new_account_id: string;
   now: string;
@@ -208,6 +216,20 @@ export interface CreateWebSessionInput {
   access_token_hash: string;
   authenticated_at: string;
   expires_at: string;
+}
+
+/**
+ * The iOS viewer's one session, opened for an Account a native sign-in has already proved.
+ *
+ * Sign in with Apple proves who this is inside the app, so there is no browser round trip and no
+ * grant to consume; what is written is the same `sessions` row `/oauth/v2/token` writes, with the
+ * same scopes and the same credential domains ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+ */
+export interface CreateIosSessionInput {
+  account_id: string;
+  family_id: string;
+  session: SessionCredentialHashes;
+  authenticated_at: string;
 }
 
 export interface ConsumeAccountLoginGrantInput {
@@ -369,12 +391,14 @@ export interface AccountState {
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
   createWebSession(input: CreateWebSessionInput): Promise<void>;
+  createIosSession(input: CreateIosSessionInput): Promise<void>;
   /**
    * The Account this identity reaches, opened when nothing has reached it before.
    *
    * The label the provider states now replaces the one stored for that identity, and the Account's
    * own label follows the identity it was opened with, so a renamed GitHub login or a changed
-   * Apple address is not left frozen at whatever it was on the first sign-in.
+   * Apple address is not left frozen at whatever it was on the first sign-in. A stand-in label is
+   * the exception: it fills an empty one and never replaces a name the channel once stated.
    */
   resolveSignInIdentity(input: ResolveSignInIdentityInput): Promise<AccountRecord>;
   linkIdentity(input: LinkIdentityInput): Promise<LinkIdentityOutcome>;

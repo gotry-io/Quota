@@ -105,6 +105,24 @@ public actor AccountClient {
     }
   }
 
+  /// Sign in with what Apple proved on this device, and keep the session it answers with.
+  ///
+  /// The session it writes is `pending`, exactly as a browser sign-in's is: which Account this
+  /// reached is still a question the person answers on the confirm screen.
+  public func exchangeApple(identityToken: String, nonce: String) async throws -> AccountSession {
+    do {
+      let tokens = try await relay.exchangeAppleIdentityToken(
+        identityToken: identityToken,
+        nonce: nonce
+      )
+      let session = AccountSession(tokens)
+      try persist(session)
+      return session
+    } catch let error as RelayClientError {
+      throw AccountClientError.relay(error)
+    }
+  }
+
   public func fetchTodaySummary() async -> AccountRefreshResult {
     let cached = try? loadBoundCachedSummary()
     do {

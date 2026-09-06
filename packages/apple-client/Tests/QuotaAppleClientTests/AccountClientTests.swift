@@ -288,6 +288,55 @@ struct AccountClientTests {
   }
 
   @Test
+  func appleSignInPostsTheSignedTokenAndKeepsAPendingSession() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.tokenResponse())
+    ])
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache
+    )
+    let nonce = try AppleSignIn.generateNonce()
+    let identityToken = "\(String(repeating: "a", count: 20)).\(String(repeating: "b", count: 40)).\(String(repeating: "c", count: 43))"
+
+    let session = try await client.exchangeApple(identityToken: identityToken, nonce: nonce.value)
+    #expect(session.accessToken == Fixtures.accessToken)
+    // Which Account this reached is still the question the confirm screen asks.
+    #expect(session.activation == .pending)
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(try cache.load() == nil)
+    #expect(transport.recordedURLs.map(\.path) == ["/oauth/v2/apple"])
+
+    let body =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[0]) as? [String: Any] ?? [:]
+    #expect(body["client_id"] as? String == "quota-ios")
+    // Apple was handed the digest; Relay is handed the value and digests it again.
+    #expect(body["nonce"] as? String == nonce.value)
+    #expect(body["identity_token"] as? String == identityToken)
+    #expect(body["intent"] == nil)
+  }
+
+  @Test
+  func appleSignInRefusesAnythingThatIsNotASignedToken() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.tokenResponse())
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let nonce = try AppleSignIn.generateNonce()
+    await #expect(throws: AccountClientError.relay(.invalidResponse)) {
+      _ = try await client.exchangeApple(identityToken: "not-a-jws", nonce: nonce.value)
+    }
+    #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
   func completeLoginExchangesOnceAndCachesNothingUntilSummary() async throws {
     let transport = ScriptedTransport([
       .init(status: 200, body: try Fixtures.tokenResponse())

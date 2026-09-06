@@ -84,6 +84,8 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const NONNEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/;
 const PKCE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
+/** A compact JWS: three base64url segments. What Apple hands a native app is one of these. */
+const COMPACT_JWS_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 // A wire enum member, as a reader takes it: lowercase snake_case, bounded, membership unchecked.
 const WIRE_ENUM_PATTERN = /^[a-z][a-z0-9_]*$/;
 
@@ -388,6 +390,11 @@ const InstallationIdSchema = z.string().uuid();
 
 export const IOS_OAUTH_CLIENT_ID = "quota-ios" as const;
 export const IOS_OAUTH_REDIRECT_URI = "io.gotry.quota:/oauth/callback" as const;
+/**
+ * The iOS app's bundle identifier, which is also the audience Apple states in the identity token
+ * `ASAuthorizationAppleIDProvider` hands the app.
+ */
+export const IOS_BUNDLE_ID = "io.gotry.quota" as const;
 const IosClientSchema = z.literal(IOS_OAUTH_CLIENT_ID);
 const IosRedirectUriSchema = z.literal(IOS_OAUTH_REDIRECT_URI);
 
@@ -416,6 +423,41 @@ export const IosLoginExchangeRequestSchema = z
   })
   .strict();
 export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSchema>;
+
+/**
+ * The identity token Apple hands a native app, and the nonce it was asked for.
+ *
+ * Nothing about it is trusted here beyond its shape: the signature, issuer, audience, expiry, and
+ * nonce are all checked by Relay against Apple's own keys before the `sub` inside it names anyone
+ * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). `intent` is what the
+ * app is asking for — signing in, or binding Apple to the Account this session already names —
+ * and defaults to signing in.
+ */
+export const AppleNativeSignInRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    client_id: IosClientSchema,
+    identity_token: z.string().min(16).max(8_192).regex(COMPACT_JWS_PATTERN),
+    nonce: z.string().regex(PKCE_VERIFIER_PATTERN),
+    intent: z.enum(["sign_in", "link"]).optional(),
+  })
+  .strict();
+export type AppleNativeSignInRequest = z.infer<typeof AppleNativeSignInRequestSchema>;
+
+/**
+ * What binding a channel to the Account a session already names answers with.
+ *
+ * `already_linked` is the same channel on the same Account, which is what a repeated bind is and
+ * is not a failure. A refusal is a 409, not a status here.
+ */
+export const IdentityLinkResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    provider: IdentityProviderSchema,
+    status: z.enum(["linked", "already_linked"]),
+  })
+  .strict();
+export type IdentityLinkResponse = z.infer<typeof IdentityLinkResponseSchema>;
 
 const SessionTokenSchema = z
   .object({

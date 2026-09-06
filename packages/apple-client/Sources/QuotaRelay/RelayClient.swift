@@ -21,6 +21,7 @@ public enum ActivityDetail: String, Sendable {
 
 public enum RelayRoute: CaseIterable, Sendable {
   case token
+  case appleSignIn
   case revoke
   case accountSummary
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?)
@@ -28,6 +29,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   public static var allCases: [RelayRoute] {
     [
       .token,
+      .appleSignIn,
       .revoke,
       .accountSummary,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil),
@@ -36,7 +38,7 @@ public enum RelayRoute: CaseIterable, Sendable {
 
   public var method: String {
     switch self {
-    case .token, .revoke: "POST"
+    case .token, .appleSignIn, .revoke: "POST"
     case .accountSummary, .accountUsageActivity: "GET"
     }
   }
@@ -44,6 +46,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   public var path: String {
     switch self {
     case .token: "/oauth/v2/token"
+    case .appleSignIn: "/oauth/v2/apple"
     case .revoke: "/oauth/v2/revoke"
     case .accountSummary: "/api/v6/account/summary"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
@@ -60,7 +63,7 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("detail", detail.rawValue))
       }
       return items
-    case .token, .revoke, .accountSummary:
+    case .token, .appleSignIn, .revoke, .accountSummary:
       return []
     }
   }
@@ -99,6 +102,25 @@ public struct RelayClient: Sendable {
       IosLoginExchangeRequest(code: code, codeVerifier: verifier))
     return try await send(
       route: .token,
+      query: [],
+      body: body,
+      bearer: nil,
+      expectedStatus: 200,
+      decode: IosOAuthTokenResponse.self
+    )
+  }
+
+  /// Trade the identity token Apple signed on this device for the viewer's one session.
+  public func exchangeAppleIdentityToken(identityToken: String, nonce: String) async throws
+    -> IosOAuthTokenResponse
+  {
+    guard WireValidation.isCompactJWS(identityToken), WireValidation.isPKCEVerifier(nonce) else {
+      throw RelayClientError.invalidResponse
+    }
+    let body = try WireCodec.encodeRequest(
+      AppleNativeSignInRequest(identityToken: identityToken, nonce: nonce))
+    return try await send(
+      route: .appleSignIn,
       query: [],
       body: body,
       bearer: nil,

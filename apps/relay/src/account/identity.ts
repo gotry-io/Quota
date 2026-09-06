@@ -4,6 +4,7 @@ import {
   constantTimeEqual,
   decodeBase64UrlJSON,
   encodeBase64UrlJSON,
+  hmacSha256Hex,
   type SecretHasher,
 } from "../security.ts";
 
@@ -20,13 +21,19 @@ const handoffSeconds = 10 * 60;
  */
 export type SignInIntent = { kind: "sign_in" } | { kind: "link"; account_id: string };
 
+/** How a provider answers the round trip it was sent on. */
+export type IdentityCallbackDelivery = "redirect" | "form_post";
+
 export interface HandoffPayload {
   provider: IdentityProviderId;
   intent: SignInIntent;
   return_to: string;
   /** The 256-bit value the callback must come back carrying. */
   state: string;
-  /** The PKCE verifier the code exchange is bound to. */
+  /**
+   * The per-round-trip secret the provider binds its exchange to: GitHub's PKCE verifier, or the
+   * `nonce` Apple states back inside the identity token it signs.
+   */
   verifier: string;
   expires_at: string;
 }
@@ -46,7 +53,8 @@ export interface IdentityBegin {
 
 /** One callback, as the provider that started it reads it. */
 export interface IdentityCallback {
-  query: URLSearchParams;
+  /** What the callback carried: a redirect's query, or a form POST's body. */
+  parameters: URLSearchParams;
   challenge: HandoffChallenge;
 }
 
@@ -55,6 +63,14 @@ export interface IdentityProof {
   /** The provider's own identifier — never stored as it stands, only its HMAC. */
   subject_raw: string;
   label: string;
+  /**
+   * Whether `label` is the provider's stand-in rather than a name it stated.
+   *
+   * A provider that will not always name someone — Apple hands over an address only while it is
+   * being shared — has to say so, because a stand-in must not overwrite what a channel stated
+   * once ([ADR 0032](../../../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
+  label_is_placeholder: boolean;
 }
 
 /** Why a callback was refused — a category for the log line, never a secret or a value. */
@@ -74,10 +90,32 @@ export interface IdentityRefusal {
  */
 export interface IdentityProvider {
   readonly id: IdentityProviderId;
-  /** The query keys this provider's callback may carry; anything else is not its callback. */
-  readonly callbackQueryKeys: readonly string[];
+  /** The keys this provider's callback may carry; anything else is not its callback. */
+  readonly callbackParameterKeys: readonly string[];
+  /**
+   * How the provider delivers its callback.
+   *
+   * A `redirect` comes back as a GET whose query is the answer. A `form_post` comes back as a
+   * cross-site POST whose body is, which is the only reason the handoff cookie has a `sameSite`
+   * to choose.
+   */
+  readonly callbackDelivery: IdentityCallbackDelivery;
   begin(intent: SignInIntent, returnTo: string, now: Date): Promise<IdentityBegin>;
   complete(request: IdentityCallback, now: Date): Promise<IdentityProof | IdentityRefusal>;
+}
+
+/**
+ * How a provider's own subject is stored: never as it stands, only under `IDENTITY_SUBJECT_KEY`.
+ *
+ * The provider is part of what is hashed, so two channels that happened to state the same
+ * identifier are still two identities ([ADR 0032](../../../../docs/decisions/0032-an-account-owns-its-identities.md)).
+ */
+export function identitySubjectHash(
+  key: string,
+  provider: IdentityProviderId,
+  subjectRaw: string,
+): Promise<string> {
+  return hmacSha256Hex(key, `${provider}:${subjectRaw}`);
 }
 
 export function isIdentityRefusal(

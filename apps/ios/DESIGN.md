@@ -15,8 +15,8 @@ the QuotaBar menu panel.
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect with GitHub and Log Out are the only account actions this device performs. Delete Account
-   starts on the website after a fresh GitHub sign-in.
+2. Connect with GitHub, Continue with Apple, and Log Out are the only account actions this device
+   performs. Delete Account starts on the website after a fresh sign-in.
 3. Last-good Account data stays visible across transient failures. A status line states that in
    words, not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
@@ -70,12 +70,25 @@ different account** and Log Out revoke and clear either state.
   Connecting uses neutral system `.glass` with explicit label-color foreground so the spinner and
   **Connecting…** stay readable. The accessibility label stays **Connect with GitHub**; the value
   is **Connecting** and the control is not actionable.
+- Second action **Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control
+  drawn by Apple, 50pt tall, capsule-clipped to match, black in light appearance and white in dark
+  as Apple's guidelines pair them. It is 12pt below Connect with GitHub. Its label, mark, and sheet
+  are Apple's; the app draws no substitute glyph and adds no tint. Connecting draws Connect with
+  GitHub's busy state alone — Apple's control has no busy presentation of its own, so it is not
+  drawn then rather than shown disabled.
 - Footnote: **This iPhone only reads data reported by QuotaBar.**
 - No product title, value-proposition paragraph, card, banner container, or raw URL.
 - The longer product and privacy explanation lives on Settings › About, not on Connect.
 - Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
   - expired: **Session expired. Connect again.**
   - connect failure default: **Couldn't connect. Try again.**
+
+Continue with Apple asks on the device instead: `ASAuthorizationAppleIDProvider` requests the full
+name and email scopes and a nonce, and the identity token it returns is posted straight to Relay,
+which answers with the same `pending` session a browser sign-in opens. There is no browser sheet and
+no `return_to`. Cancelling at Apple returns to the normal signed-out state without an error; any
+other failure shows the connect-failure copy. Confirmation, Retry, and Use a different account are
+the same screens either way.
 
 Connect with GitHub starts `ASWebAuthenticationSession` for the Relay authorize URL with
 `prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
@@ -400,6 +413,7 @@ There is no third-party UI kit, no custom glass shader, and no app-owned glass o
 | Tab bar | System `Tab` chrome; `tabBarMinimizeBehavior(.onScrollDown)` |
 | Navigation / toolbar | System navigation chrome |
 | Connect with GitHub | `.glassProminent` with emerald tint |
+| Continue with Apple | `SignInWithAppleButton`, `.black` in light appearance and `.white` in dark |
 | Confirm Continue | `.glassProminent` with the system accent; no extra `.tint` |
 | Sheets | System sheet chrome |
 | Quota data, status, meters, charts, settings rows, empty states | Content. List/Form/Section grouping. No `glassEffect`. |
@@ -542,7 +556,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect with GitHub (mark, button, and footnote only in the normal state), connecting,
+Inspect Connect with GitHub and Continue with Apple (mark, both buttons, and footnote only in
+the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, loading, signed-in
 Overview (quota first, Today second, system NavigationLink chevron, no device-summary
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
@@ -593,7 +608,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 | Fixture | UI state |
 | --- | --- |
-| `signed-out` | Connect with GitHub: mark, button, and footnote. No session restore |
+| `signed-out` | Connect with GitHub and Continue with Apple: mark, both buttons, and footnote. No session restore |
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
 | `expired` | Connect with GitHub plus **Session expired. Connect again.** |

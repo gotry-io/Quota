@@ -1,10 +1,12 @@
 import type { AccountState, IdentityProviderId, SessionPrincipal } from "@gotry-io/relay-core";
 import { CANONICAL_ORIGIN } from "../config.ts";
-import { hmacSha256Hex, randomOpaqueSecret, type SecretHasher } from "../security.ts";
+import { randomOpaqueSecret, type SecretHasher } from "../security.ts";
 import {
   clearedHandoffCookie,
   HANDOFF_COOKIE,
   type IdentityBegin,
+  type IdentityCallbackDelivery,
+  identitySubjectHash,
   type IdentityProvider,
   type IdentityRefusalReason,
   isIdentityRefusal,
@@ -30,7 +32,8 @@ const sessionTokenPattern = /^qw_[A-Za-z0-9_-]{43}$/;
 
 export interface WebCallbackRequest {
   headers: Headers;
-  query: URLSearchParams;
+  /** What the callback carried: a redirect's query, or a form POST's body. */
+  parameters: URLSearchParams;
 }
 
 export type WebSignInResult =
@@ -52,7 +55,8 @@ export type WebSignInRejection =
 /** What a route needs to know about a provider before it dispatches to one. */
 export interface RegisteredIdentityProvider {
   id: IdentityProviderId;
-  callbackQueryKeys: readonly string[];
+  callbackParameterKeys: readonly string[];
+  callbackDelivery: IdentityCallbackDelivery;
 }
 
 export interface WebSessionPort {
@@ -102,7 +106,13 @@ export class WebSessions implements WebSessionPort {
 
   identityProvider(id: string): RegisteredIdentityProvider | null {
     const provider = this.#providers.get(id);
-    return provider ? { id: provider.id, callbackQueryKeys: provider.callbackQueryKeys } : null;
+    return provider
+      ? {
+          id: provider.id,
+          callbackParameterKeys: provider.callbackParameterKeys,
+          callbackDelivery: provider.callbackDelivery,
+        }
+      : null;
   }
 
   beginSignIn(
@@ -129,15 +139,19 @@ export class WebSessions implements WebSessionPort {
       return { outcome: "rejected", reason: "handoff" };
     }
     const proved = await this.#require(provider).complete(
-      { query: request.query, challenge: { state: handoff.state, verifier: handoff.verifier } },
+      {
+        parameters: request.parameters,
+        challenge: { state: handoff.state, verifier: handoff.verifier },
+      },
       now,
     );
     if (isIdentityRefusal(proved)) {
       return { outcome: "rejected", reason: proved.rejected };
     }
-    const subject = await hmacSha256Hex(
+    const subject = await identitySubjectHash(
       this.environment.identitySubjectKey,
-      `${provider}:${proved.subject_raw}`,
+      provider,
+      proved.subject_raw,
     );
     if (handoff.intent.kind === "link") {
       // The intent is sealed, but the session behind it may have ended while the browser was
@@ -166,6 +180,7 @@ export class WebSessions implements WebSessionPort {
       provider,
       subject,
       label: proved.label,
+      label_is_placeholder: proved.label_is_placeholder,
       new_account_id: `account_${crypto.randomUUID()}`,
       now: now.toISOString(),
     });

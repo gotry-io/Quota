@@ -101,7 +101,8 @@ project. Pass `--no-commit` to skip the commit.
 sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
 opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
 setup Section for `no-devices`, Devices content and empty states, the cached-error status Label, the
-Connect with GitHub control for `signed-out`, connecting / connect-error / expired / loading
+Connect with GitHub and Continue with Apple controls for `signed-out`, connecting /
+connect-error / expired / loading
 fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
 hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
 Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,

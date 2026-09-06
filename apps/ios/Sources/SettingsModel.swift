@@ -46,7 +46,7 @@ enum SettingsCopy {
   static let manageDevices = "Manage Devices on Web"
   static let deleteAccount = "Delete Account…"
   static let deleteAccountExplanation =
-    "Deletion happens on the website after you sign in again with GitHub."
+    "Deletion happens on the website after you sign in again."
   static let deleteAccountFollowUp = "If you deleted the Account, sign out here too."
   static let logOut = "Log Out"
   static let license = "License"
@@ -85,15 +85,20 @@ enum QuotaWebLinks {
   static let deleteAccountReturnTo = "/my/settings?delete=account"
 
   static var deleteAccountStart: URL {
-    githubStartURL(returnTo: deleteAccountReturnTo)
+    signInURL(returnTo: deleteAccountReturnTo)
   }
 
+  /// Where the website asks, or confirms, which Account this browser is signing in as.
+  ///
+  /// An Account owns its identities rather than being one, so re-authenticating goes through the
+  /// page that asks which Account this is instead of straight to one channel's round trip
+  /// ([ADR 0032](../../../docs/decisions/0032-an-account-owns-its-identities.md)).
   /// `return_to` is encoded so `/`, `?`, and `=` cannot split the query.
-  static func githubStartURL(returnTo: String) -> URL {
+  static func signInURL(returnTo: String) -> URL {
     var allowed = CharacterSet.alphanumerics
     allowed.insert(charactersIn: "-._~")
     let encoded = returnTo.addingPercentEncoding(withAllowedCharacters: allowed)!
-    return URL(string: "\(origin)/api/auth/github/start?return_to=\(encoded)")!
+    return URL(string: "\(origin)/sign-in?return_to=\(encoded)")!
   }
 }
 

@@ -66,6 +66,38 @@ public enum PKCE {
   }
 }
 
+/// The nonce one Sign in with Apple request is bound to.
+///
+/// Apple is handed the digest and states it back inside the identity token it signs; the app
+/// keeps the value and sends that to Relay, which digests it again and compares. A token minted
+/// for some earlier request therefore proves nothing about this one.
+public struct AppleSignInNonce: Equatable, Sendable {
+  public let value: String
+  public let digest: String
+
+  public init(value: String, digest: String) {
+    self.value = value
+    self.digest = digest
+  }
+}
+
+public enum AppleSignIn {
+  public static func generateNonce(using entropy: any RandomBytesGenerating = SystemRandomBytes())
+    throws -> AppleSignInNonce
+  {
+    let value = try PKCE.base64URL(entropy.bytes(count: 32))
+    guard WireValidation.isPKCEVerifier(value) else {
+      throw AuthorizationError.invalidState
+    }
+    return AppleSignInNonce(value: value, digest: digest(of: value))
+  }
+
+  /// Lowercase hexadecimal, which is what Apple's own guidance hashes a nonce to.
+  static func digest(of value: String) -> String {
+    SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+}
+
 public struct AuthorizationAttempt: Sendable {
   public let authorizationURL: URL
   public let redirectURI: String

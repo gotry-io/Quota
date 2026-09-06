@@ -55,6 +55,9 @@ pnpm dev
 The Worker requires these secrets:
 
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+- `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`, and
+  `APPLE_SIGNIN_PRIVATE_KEY` (the Sign in with Apple signing key, as the PKCS#8 PEM Apple hands
+  out once)
 - `IDENTITY_SUBJECT_KEY`
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
@@ -64,23 +67,28 @@ not read by anything now and can be deleted from a local `.env` and from the dep
 named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Register the GitHub OAuth App callback as
-`https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself, and
+`https://quota.gotry.io/api/auth/github/callback`, and the Apple Services ID's one Return URL as
+`https://quota.gotry.io/api/auth/apple/callback`. QuotaRelay owns the browser sign-in itself, and
 an Account owns the channels it is reached through
 ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)):
 
 | Route | What it does |
 | --- | --- |
 | `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. |
-| `GET /api/auth/:provider/callback` | Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
+| `GET /api/auth/:provider/callback` | The callback of a provider that redirects. Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
+| `POST /api/auth/:provider/callback` | The same completion for a provider that answers with a cross-site form POST, which today is Apple alone. Each provider accepts one delivery; the other is 404. |
 | `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
 | `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
 | `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
 | `DELETE /api/v2/account` | Removes the Account and everything stored for it in one D1 batch. |
 | `GET /oauth/v2/authorize` | Redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…` rather than to a provider, so a native login confirms which Account it is. |
 | `GET /oauth/v2/complete` | Turns the web session into an authorization code. |
+| `POST /oauth/v2/apple` | Sign in with Apple from inside the iOS app. Takes `{client_id: 'quota-ios', identity_token, nonce, intent?}`, checks the token against Apple's published keys, and answers with the `quota-ios` session — or, with `intent: 'link'` and a Bearer iOS session, binds Apple to that Account. |
 
-GitHub is the only provider registered today; `github`, `apple`, and `email` are the channels an
-Account can hold. A browser whose `Accept` includes `text/html` and that fails on
+`github` and `apple` are the providers registered today; `email` is the remaining channel an Account
+can hold. Apple is asked for `name email`, which requires `response_mode=form_post`, so its handoff
+cookie alone is sealed `SameSite=None` — still `__Host-`, still signed, still ten minutes. Its
+`client_secret` is an ES256 JWT signed per exchange rather than a stored string. A browser whose `Accept` includes `text/html` and that fails on
 `/api/auth/:provider/callback` or `/oauth/v2/complete` (no session, expired grant, rate limited,
 invalid request, or a channel that already reaches another Account) gets a 200 HTML page titled
 **Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try again.** —

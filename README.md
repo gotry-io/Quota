@@ -163,9 +163,10 @@ without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-a
 Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
 and file failures are isolated.
 
-Production GitHub OAuth and D1 deployment require the Worker secrets `GITHUB_CLIENT_ID`,
-`GITHUB_CLIENT_SECRET`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
-`QUOTA_SESSION_HASH_KEY`, each at least 32 random characters and documented by
+Production sign-in and D1 deployment require the Worker secrets `GITHUB_CLIENT_ID`,
+`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`,
+`APPLE_SIGNIN_PRIVATE_KEY`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
+`QUOTA_SESSION_HASH_KEY`, the HMAC keys each at least 32 random characters and all documented by
 [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
 
 ## License
