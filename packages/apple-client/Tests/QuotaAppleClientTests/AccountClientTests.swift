@@ -44,6 +44,60 @@ struct AccountClientTests {
     #expect(try cache.load()?.summary.account.displayLabel == "octocat")
   }
 
+  /// Relay refuses a write the entitlement does not cover with 402 `subscription_required`.
+  /// That reaches callers as its own case rather than as one more rejected status, so the app
+  /// can offer the paywall instead of saying the request was malformed.
+  @Test
+  func aRefusedSubscriptionIsItsOwnErrorAndKeepsTheStoredRead() async throws {
+    let stored = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON()
+    )
+    let cache = MemoryAccountSummaryStore(
+      value: CachedAccountSummary(
+        summary: stored,
+        fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+      )
+    )
+    let client = AccountClient(
+      relay: RelayClient(
+        transport: ScriptedTransport([
+          .init(status: 402, body: try Fixtures.errorBody(code: "subscription_required"))
+        ])
+      ),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: cache,
+      calendar: Calendar(identifier: .gregorian),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    let result = await client.fetchTodaySummary()
+    #expect(result.error == .subscriptionRequired)
+    #expect(result.fromCache)
+    #expect(result.summary?.account.accountID == "account_01")
+    #expect(
+      result.error?.userFacingMessage == AccountClientError.subscriptionRequiredMessage)
+  }
+
+  /// A 402 that is not the entitlement refusal stays a rejected status.
+  @Test
+  func anotherPaymentRequiredStatusStaysARejection() async throws {
+    let client = AccountClient(
+      relay: RelayClient(
+        transport: ScriptedTransport([
+          .init(status: 402, body: try Fixtures.errorBody(code: "invalid_request"))
+        ])
+      ),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    #expect(
+      await client.fetchTodaySummary().error
+        == .relay(.rejected(code: "invalid_request", status: 402)))
+  }
+
   /// One contract: a 304 is an answer. The stored summary stands, the read is not reported as
   /// coming from a failure, and the second request is the one that offered the validator.
   @Test

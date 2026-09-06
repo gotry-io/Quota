@@ -587,7 +587,15 @@
       subscriptions: subscriptions,
       usage: visualAccountUsage(),
       pricingRevision: "pricing_2026_08_01",
-      modelCatalogRevision: "visual-model-catalog"
+      modelCatalogRevision: "visual-model-catalog",
+      entitlement: AccountEntitlement(
+        status: .active,
+        expiresAt: date.addingTimeInterval(14 * 86_400),
+        willRenew: true,
+        productID: "quota_sync_monthly",
+        store: "app_store",
+        stale: false
+      )
     )
   }
 

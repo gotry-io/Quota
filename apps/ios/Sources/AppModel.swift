@@ -45,6 +45,9 @@ final class AppModel {
   private let activity: any ActivityLoading
   private let now: @Sendable () -> Date
 
+  /// The store side of paid sync. It buys; Relay's `entitlement` is what says sync is on.
+  let subscription: SubscriptionModel
+
   var phase: Phase = .launching
   var summary: AccountSummary?
   var fetchedAt: Date?
@@ -83,6 +86,7 @@ final class AppModel {
       try AuthorizationRequest.make()
     },
     activity: (any ActivityLoading)? = nil,
+    purchases: any PurchasesFacade = UnconfiguredPurchases(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.account = account
@@ -108,6 +112,11 @@ final class AppModel {
       )
     }
     self.activity = activity ?? AccountClientActivityLoading(client: account)
+    let subscription = SubscriptionModel(purchases: purchases)
+    self.subscription = subscription
+    subscription.onStoreChange = { [weak self] in
+      await self?.refresh()
+    }
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -122,8 +131,27 @@ final class AppModel {
       selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
       alertStateStore: FileIOSAlertStateStore.applicationSupport(),
-      notificationCenter: IOSNotificationCenter()
+      notificationCenter: IOSNotificationCenter(),
+      purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
+        ?? UnconfiguredPurchases()
     )
+  }
+
+  /// What Relay last said paid sync is worth to this Account. An Account read that has not
+  /// happened yet is `none`: nothing has been bought until a summary says so.
+  var entitlement: AccountEntitlement {
+    summary?.entitlement ?? .unsubscribed
+  }
+
+  var isSyncOn: Bool {
+    entitlement.status.allowsSync
+  }
+
+  /// The Overview banner a signed-in Account without paid sync gets. Its Macs keep collecting;
+  /// none of what they send reaches this Account until sync is on.
+  var syncBanner: String? {
+    guard phase == .signedIn, summary != nil, !isSyncOn else { return nil }
+    return SyncCopy.offBanner
   }
 
   var accountLabel: String {
@@ -478,6 +506,7 @@ final class AppModel {
       } else {
         clearWidget()
       }
+      await identifySubscriber()
     case .sessionExpired:
       applyExpired()
     case .notSignedIn:
@@ -606,6 +635,7 @@ final class AppModel {
     activityChart = .idle
     activityDaySheet = nil
     backgroundRefresh.cancelPendingRefresh()
+    Task { await subscription.signOut() }
     try? selectionSaltStore.clear()
     clearWidget()
     alertCoordinator.clearState()
@@ -630,6 +660,15 @@ final class AppModel {
       catalog: catalog,
       now: instant
     )
+  }
+
+  /// Bind store purchases to this Account, and let the paywall know Relay has caught up.
+  private func identifySubscriber() async {
+    guard let accountID = summary?.account.accountID else { return }
+    if isSyncOn {
+      subscription.entitlementConfirmed()
+    }
+    await subscription.identify(accountID: accountID)
   }
 
   private func publishWidget(summary: AccountSummary, fetchedAt: Date) {

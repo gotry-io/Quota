@@ -190,6 +190,7 @@ func alertSummaryJSON(usedPercent: Double = 88, resetsAt: String = "2026-08-18T0
       ],
       "pricing_revision": "pricing_1",
       "model_catalog_revision": "models_1",
+      "entitlement": Fixtures.entitlement(),
     ] as [String: Any]
   )
 }

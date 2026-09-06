@@ -8,6 +8,7 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
+      syncSection
       Section {
         NavigationLink {
           SettingsNotificationsView(model: model, settings: settings)
@@ -90,6 +91,34 @@ struct SettingsView: View {
     }
     .alert(SettingsCopy.deleteAccountFollowUp, isPresented: $promptSignOutAfterDelete) {
       Button("OK", role: .cancel) {}
+    }
+  }
+
+  /// Sync is one row: the paywall when the Account has not bought it, the state Relay reports
+  /// plus the system's own management when it has.
+  @ViewBuilder
+  private var syncSection: some View {
+    Section {
+      if let status = SyncCopy.status(model.entitlement) {
+        LabeledContent(SyncCopy.section, value: status)
+          .accessibilityIdentifier("settings.sync.status")
+        Link(SyncCopy.manage, destination: QuotaWebLinks.appleSubscriptions)
+          .accessibilityIdentifier("settings.sync.manage")
+      } else {
+        NavigationLink {
+          PaywallView(model: model)
+        } label: {
+          Text(SyncCopy.subscribeRow)
+        }
+        .accessibilityIdentifier("settings.sync.subscribe")
+      }
+    } header: {
+      Text(SyncCopy.section)
+        .accessibilityIdentifier("section.header.sync")
+    } footer: {
+      Text(SyncCopy.sectionFooter)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("section.footer.sync")
     }
   }
 }

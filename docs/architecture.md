@@ -9,7 +9,9 @@ links to it rather than restating it.
 
 - **Quota** is the iOS 26+ presentation product. It signs in with the registered `quota-ios` public
   client, reads Account remaining quota and Today Usage, and publishes the non-secret App Group
-  snapshot its widgets render. It is not a collection Device.
+  snapshot its widgets render. It is not a collection Device. It is also where paid sync is bought:
+  the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
+  to an Account is read from the Relay `entitlement` rather than from the store on the device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
 - **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized

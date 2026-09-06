@@ -569,6 +569,103 @@ final class QuotaUITests: XCTestCase {
     settingsShot(link: "settings.about", root: "settings.about.root", name: "settings-about")
   }
 
+  func testSyncOffFixtureShowsTheOverviewRowAndOpensThePaywall() throws {
+    let app = launch(fixture: "sync-off")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    let row = app.descendants(matching: .any)["overview.sync-off"]
+    XCTAssertTrue(row.waitForExistence(timeout: 5), "overview.sync-off")
+    XCTAssertTrue(
+      app.staticTexts["Sync is off. Subscribe to see your Macs here."].exists,
+      "sync-off copy"
+    )
+    attachScreenshot(app, name: "overview-sync-off")
+    try audit(app)
+
+    row.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["paywall.root"].waitForExistence(timeout: 5),
+      "paywall.root"
+    )
+    XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "Done")
+  }
+
+  func testSyncActiveFixtureShowsStatusAndManage() throws {
+    let app = launch(fixture: "sync-active")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sync.status"].waitForExistence(timeout: 5),
+      "settings.sync.status"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.sync.manage"].exists,
+      "settings.sync.manage"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["settings.sync.subscribe"].exists,
+      "a paid Account is not offered the paywall"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Sync is billed through the App Store and managed in your Apple Account."]
+        .exists,
+      "sync footer"
+    )
+    attachScreenshot(app, name: "settings-sync-active")
+    try audit(app)
+  }
+
+  func testPaywallFixtureShowsBothPlansAndRestore() throws {
+    let app = launch(fixture: "paywall")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
+    )
+    openSettingsDestination(app, link: "settings.sync.subscribe", root: "paywall.root")
+    XCTAssertTrue(
+      app.staticTexts["Every Mac you run QuotaBar on reports into one Account."]
+        .waitForExistence(timeout: 5),
+      "first benefit"
+    )
+    let monthly = app.descendants(matching: .any)["paywall.plan.monthly"]
+    XCTAssertTrue(monthly.waitForExistence(timeout: 5), "paywall.plan.monthly")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["paywall.plan.yearly"].exists,
+      "paywall.plan.yearly"
+    )
+    XCTAssertTrue(app.staticTexts["7 days free, then $2.99"].exists, "monthly trial detail")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["paywall.restore"].exists,
+      "paywall.restore"
+    )
+    XCTAssertTrue(app.descendants(matching: .any)["Terms"].exists, "Terms")
+    attachScreenshot(app, name: "paywall")
+    try audit(app)
+  }
+
+  func testPaywallWithoutAStoreSaysSo() throws {
+    let app = launch(fixture: "paywall-unavailable")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
+    )
+    openSettingsDestination(app, link: "settings.sync.subscribe", root: "paywall.root")
+    XCTAssertTrue(
+      app.staticTexts["Purchases unavailable in this build."].waitForExistence(timeout: 5),
+      "unavailable copy"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["paywall.plan.monthly"].exists,
+      "no plans without a store"
+    )
+    attachScreenshot(app, name: "paywall-unavailable")
+    try audit(app)
+  }
+
   func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
     let app = launch(fixture: "confirm-account")
     XCTAssertTrue(
@@ -647,6 +744,11 @@ final class QuotaUITests: XCTestCase {
       scrollToIdentifierOnce(app, link)
     }
     XCTAssertTrue(control.waitForExistence(timeout: 5), link)
+    // A row can exist and still be under the floating iOS 26 tab bar, where a synthesized tap
+    // lands on the glass instead. Scroll it clear before tapping.
+    if !control.isHittable {
+      scrollToIdentifierOnce(app, link)
+    }
     control.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)[root].waitForExistence(timeout: 5),
@@ -869,6 +971,8 @@ final class QuotaUITests: XCTestCase {
             "Website",
             "Privacy",
             "Support",
+            "\"Terms\" Button",
+            "\"Purchases unavailable in this build.\" StaticText",
             "Manage Devices on Web",
             "Download for Mac",
             "Download QuotaBar",

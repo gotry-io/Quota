@@ -198,7 +198,7 @@ public struct QuotaSubscription: Codable, Equatable, Identifiable, Sendable {
 }
 
 /// What an Account read answers: who the account is, what reported to it, what it is using,
-/// and the catalog revisions the numbers were priced against.
+/// the catalog revisions the numbers were priced against, and what paid sync it is entitled to.
 public struct AccountSummary: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let account: QuotaUserAccount
@@ -207,6 +207,9 @@ public struct AccountSummary: Codable, Equatable, Sendable {
   public let usage: AccountUsage
   public let pricingRevision: String
   public let modelCatalogRevision: String
+  /// Relay's answer, and the only entitlement a client acts on. A store SDK on the device knows
+  /// a purchase sooner, but Relay is what refuses or allows the write, so it is what is shown.
+  public let entitlement: AccountEntitlement
 
   public init(
     account: QuotaUserAccount,
@@ -214,7 +217,8 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     subscriptions: [QuotaSubscription],
     usage: AccountUsage,
     pricingRevision: String,
-    modelCatalogRevision: String
+    modelCatalogRevision: String,
+    entitlement: AccountEntitlement
   ) {
     protocolVersion = WireCodec.managedDataProtocolVersion
     self.account = account
@@ -223,6 +227,7 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     self.usage = usage
     self.pricingRevision = pricingRevision
     self.modelCatalogRevision = modelCatalogRevision
+    self.entitlement = entitlement
   }
 
   public init(from decoder: Decoder) throws {
@@ -234,6 +239,7 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     usage = try container.decode(AccountUsage.self, forKey: .usage)
     pricingRevision = try container.decode(String.self, forKey: .pricingRevision)
     modelCatalogRevision = try container.decode(String.self, forKey: .modelCatalogRevision)
+    entitlement = try container.decode(AccountEntitlement.self, forKey: .entitlement)
     guard protocolVersion == WireCodec.managedDataProtocolVersion,
       account.isValid,
       devices.count <= 256,
@@ -260,6 +266,7 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     case usage
     case pricingRevision
     case modelCatalogRevision
+    case entitlement
   }
 }
 
@@ -304,6 +311,7 @@ public enum RelayErrorCode: String, Codable, Sendable, TolerantWireEnum {
   case staleGeneration = "stale_generation"
   case deviceDeleted = "device_deleted"
   case clientUpgradeRequired = "client_upgrade_required"
+  case subscriptionRequired = "subscription_required"
   case conflict
   case internalError = "internal_error"
   case unknown
