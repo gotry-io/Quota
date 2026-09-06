@@ -12,6 +12,7 @@ import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { signInReturnTo } from "./native-sign-in.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
 
 declare global {
@@ -39,7 +40,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("refuses to rebuild an hour this device's deletion watermark covers", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_watermark', 'subject_watermark', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_watermark', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -186,7 +187,7 @@ describe("managed Relay on real Workers and D1", () => {
       });
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_agents', 'subject_agents', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_agents', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -262,7 +263,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("answers an unchanged Account read from its validator instead of folding Usage again", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_etag', 'subject_etag', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_etag', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -354,7 +355,7 @@ describe("managed Relay on real Workers and D1", () => {
       });
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_channels', 'subject_channels', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_channels', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -425,7 +426,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("answers every retained day and the trailing windows the caller's calendar names", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_history', 'account_history', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_history', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -524,7 +525,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("adds a day's agent tree only for a single UTC day asked with detail=agents", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_activity_detail', 'subject_activity_detail', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_activity_detail', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -675,7 +676,7 @@ describe("managed Relay on real Workers and D1", () => {
     const models = JSON.stringify(Array.from({ length: 1_001 }, (_, index) => index));
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_cardinality', 'subject_cardinality', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_cardinality', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -721,7 +722,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("answers an account whose stored reading this build cannot read", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_unreadable', 'subject_unreadable', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_unreadable', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -776,6 +777,7 @@ describe("managed Relay on real Workers and D1", () => {
        ORDER BY name`,
     ).all<{ name: string }>();
     expect(tables.results.map((row) => row.name)).toEqual([
+      "account_identities",
       "account_usage_folds",
       "accounts",
       "devices",
@@ -811,7 +813,7 @@ describe("managed Relay on real Workers and D1", () => {
       ).bind(provider, observedAt, now.toISOString());
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_retention', 'subject_retention', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_retention', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -837,7 +839,7 @@ describe("managed Relay on real Workers and D1", () => {
     const older = utcDaysBefore(730);
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_window', 'subject_window', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_window', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -878,7 +880,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("sweeps Usage older than retention, a bounded batch at a time", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_sweep', 'subject_sweep', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_sweep', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -948,12 +950,12 @@ describe("managed Relay on real Workers and D1", () => {
     const hasher = new SecretHasher(secret);
     const service = new AccountService(state, hasher, secret);
     await env.DB.prepare(
-      `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-       VALUES ('identity_subject', 'identity_subject', 'Quota Tester', ?1, ?1)`,
+      `INSERT INTO accounts (id, display_label, created_at, updated_at)
+       VALUES ('account_identity', 'Quota Tester', ?1, ?1)`,
     )
       .bind(now.toISOString())
       .run();
-    const webSessions = new SignedInWebSessionStub("identity_subject", now);
+    const webSessions = new SignedInWebSessionStub("account_identity", now);
     const app = createRelayApp({
       state,
       usageState: new D1UsageState(env.DB),
@@ -962,7 +964,6 @@ describe("managed Relay on real Workers and D1", () => {
       hasher,
       now: () => now,
     });
-    const callbackURL = (): string => `https://quota.gotry.io${webSessions.returnTo}`;
 
     const verifier = "a".repeat(43);
     const challengeBuffer = await crypto.subtle.digest(
@@ -982,9 +983,10 @@ describe("managed Relay on real Workers and D1", () => {
       code_challenge: challenge,
       code_challenge_method: "S256",
     }).toString();
-    expect((await app.request(authorize)).status).toBe(302);
+    const started = await app.request(authorize);
+    expect(started.status).toBe(302);
 
-    const complete = await app.request(callbackURL());
+    const complete = await app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
     expect(complete.status).toBe(302);
     const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
     expect(code).toBeTruthy();
@@ -1006,7 +1008,7 @@ describe("managed Relay on real Workers and D1", () => {
     });
     expect(exchanged.status).toBe(200);
     const tokens = (await exchanged.json()) as OAuthTokenResponse;
-    expect(tokens.account_id).toBe("identity_subject");
+    expect(tokens.account_id).toBe("account_identity");
     // Signing in names the Account, so QuotaBar says whose account it reached before it has
     // read one.
     expect(tokens.display_label).toBe("Quota Tester");
@@ -1171,11 +1173,14 @@ describe("managed Relay on real Workers and D1", () => {
     expect(await state.getDeviceSyncControl(tokens.device_id, 1)).toBeNull();
     expect(await state.getDeviceSyncControl(tokens.device_id, 2)).toMatchObject({ generation: 2 });
 
-    expect((await app.request(authorize)).status).toBe(302);
+    const unsafeStart = await app.request(authorize);
+    expect(unsafeStart.status).toBe(302);
     await env.DB.prepare(
       "UPDATE login_grants SET redirect_uri = 'https://attacker.invalid/callback' WHERE completed_at IS NULL",
     ).run();
-    const unsafeRedirect = await app.request(callbackURL());
+    const unsafeRedirect = await app.request(
+      `https://quota.gotry.io${signInReturnTo(unsafeStart)}`,
+    );
     expect(unsafeRedirect.status).toBe(400);
     expect(unsafeRedirect.headers.get("location")).toBeNull();
     expect(
@@ -1184,9 +1189,12 @@ describe("managed Relay on real Workers and D1", () => {
       ).first("count"),
     ).toBe(0);
 
-    expect((await app.request(authorize)).status).toBe(302);
+    const deletedStart = await app.request(authorize);
+    expect(deletedStart.status).toBe(302);
     await env.DB.prepare("DELETE FROM accounts WHERE id = ?1").bind(tokens.account_id).run();
-    expect((await app.request(callbackURL())).status).toBe(401);
+    expect(
+      (await app.request(`https://quota.gotry.io${signInReturnTo(deletedStart)}`)).status,
+    ).toBe(401);
     expect(
       (
         await app.request("https://quota.gotry.io/api/v6/account/summary", {
@@ -1202,8 +1210,8 @@ describe("managed Relay on real Workers and D1", () => {
   });
 
   it("accepts a same-instant restatement that only changes available to a failure", async () => {
-    const { app, webSessions } = await quotabarHarness("account_same_instant", { now });
-    const tokens = await loginQuotabar(app, webSessions);
+    const { app } = await quotabarHarness("account_same_instant", { now });
+    const tokens = await loginQuotabar(app);
     const headers = {
       Authorization: `Bearer ${tokens.session.access_token}`,
       "Content-Type": "application/json",
@@ -1295,8 +1303,8 @@ describe("managed Relay on real Workers and D1", () => {
 
   it("a refresh whose answer was lost can be repeated with the token it replaced", async () => {
     const clock = { now };
-    const { app, webSessions } = await quotabarHarness("account_rotation_grace", clock);
-    const login = await loginQuotabar(app, webSessions);
+    const { app } = await quotabarHarness("account_rotation_grace", clock);
+    const login = await loginQuotabar(app);
     const r0 = login.session.refresh_token;
 
     const first = await refreshQuotabar(app, r0);
@@ -1341,8 +1349,8 @@ describe("managed Relay on real Workers and D1", () => {
   });
 
   it("the replaced token can end the family while its successor is unspent", async () => {
-    const { app, webSessions } = await quotabarHarness("account_rotation_revoke", { now });
-    const login = await loginQuotabar(app, webSessions);
+    const { app } = await quotabarHarness("account_rotation_revoke", { now });
+    const login = await loginQuotabar(app);
     const first = await refreshQuotabar(app, login.session.refresh_token);
     expect(first.status).toBe(200);
     const rotated = (await first.json()) as SessionRefreshResponse;
@@ -1372,7 +1380,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("serves a stored Usage fold when a snapshot upload moves the ETag", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_etag', 'subject_fold_etag', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_fold_etag', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -1450,7 +1458,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("stores a different Usage fold for a different timezone", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_tz', 'subject_fold_tz', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_fold_tz', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -1475,7 +1483,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("refolds a stored Usage fold the current contract cannot read", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_stale', 'subject_fold_stale', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_fold_stale', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO devices (
@@ -1518,7 +1526,7 @@ describe("managed Relay on real Workers and D1", () => {
   it("sweeps a Usage fold older than retention and keeps a newer one", async () => {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES ('account_fold_sweep', 'subject_fold_sweep', ?1, ?1)",
+        "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_fold_sweep', ?1, ?1)",
       ).bind(now.toISOString()),
       env.DB.prepare(
         `INSERT INTO account_usage_folds (account_id, fold_key, usage_json, created_at)
@@ -1541,8 +1549,8 @@ describe("managed Relay on real Workers and D1", () => {
 async function seedDevice(name: string, generation = 1): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO accounts (id, identity_subject, created_at, updated_at)
-       VALUES ('account_${name}', 'subject_${name}', ?1, ?1)`,
+      `INSERT INTO accounts (id, created_at, updated_at)
+       VALUES ('account_${name}', ?1, ?1)`,
     ).bind(now.toISOString()),
     env.DB.prepare(
       `INSERT INTO devices (
@@ -1786,29 +1794,25 @@ function recordingD1(statements: string[]): D1Database {
 
 async function quotabarHarness(accountId: string, clock: { now: Date }) {
   await env.DB.prepare(
-    `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-     VALUES (?1, ?1, 'Quota Tester', ?2, ?2)`,
+    `INSERT INTO accounts (id, display_label, created_at, updated_at)
+     VALUES (?1, 'Quota Tester', ?2, ?2)`,
   )
     .bind(accountId, clock.now.toISOString())
     .run();
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
-  const webSessions = new SignedInWebSessionStub(accountId, clock.now);
   const app = createRelayApp({
     state,
     usageState: new D1UsageState(env.DB),
     accountService: new AccountService(state, hasher, secret),
-    webSessions,
+    webSessions: new SignedInWebSessionStub(accountId, clock.now),
     hasher,
     now: () => clock.now,
   });
-  return { app, state, hasher, webSessions };
+  return { app, state, hasher };
 }
 
-async function loginQuotabar(
-  app: ReturnType<typeof createRelayApp>,
-  webSessions: SignedInWebSessionStub,
-): Promise<OAuthTokenResponse> {
+async function loginQuotabar(app: ReturnType<typeof createRelayApp>): Promise<OAuthTokenResponse> {
   const verifier = "a".repeat(43);
   const challengeBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   const challenge = btoa(String.fromCharCode(...new Uint8Array(challengeBuffer)))
@@ -1824,8 +1828,9 @@ async function loginQuotabar(
     code_challenge: challenge,
     code_challenge_method: "S256",
   }).toString();
-  expect((await app.request(authorize)).status).toBe(302);
-  const complete = await app.request(`https://quota.gotry.io${webSessions.returnTo}`);
+  const started = await app.request(authorize);
+  expect(started.status).toBe(302);
+  const complete = await app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
   expect(complete.status).toBe(302);
   const code = new URL(complete.headers.get("location") ?? "invalid:").searchParams.get("code");
   const exchanged = await app.request("https://quota.gotry.io/oauth/v2/token", {

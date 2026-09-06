@@ -3,7 +3,9 @@ import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
-import { GitHubWebSessions } from "../src/account/web-session.ts";
+import { GitHubIdentityProvider } from "../src/account/github-identity.ts";
+import { SignInHandoff } from "../src/account/identity.ts";
+import { WebSessions } from "../src/account/web-session.ts";
 import { createRelayApp } from "../src/app.ts";
 import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
@@ -39,6 +41,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM login_grants"),
     env.DB.prepare("DELETE FROM devices"),
+    env.DB.prepare("DELETE FROM account_identities"),
     env.DB.prepare("DELETE FROM accounts"),
     env.DB.prepare("DELETE FROM rate_limit_counters"),
   ]);
@@ -111,12 +114,24 @@ describe("browser sign-in through GitHub", () => {
       await new SecretHasher(secret).hash("web-access", session?.value ?? ""),
     );
 
-    const account = await env.DB.prepare(
-      "SELECT id, identity_subject, display_label FROM accounts",
-    ).first<{ id: string; identity_subject: string; display_label: string }>();
+    const account = await env.DB.prepare("SELECT id, display_label FROM accounts").first<{
+      id: string;
+      display_label: string;
+    }>();
     expect(account?.display_label).toBe("octocat");
-    expect(account?.id).toBe(account?.identity_subject);
-    expect(account?.id).toMatch(/^[0-9a-f]{64}$/);
+    // The Account is its own opaque id, and the identity that opened it is a row of its own
+    // holding nothing but the HMAC of what GitHub proved.
+    expect(account?.id).toMatch(/^account_[0-9a-f-]{36}$/);
+    const identity = await env.DB.prepare(
+      "SELECT account_id, provider, subject, label FROM account_identities",
+    ).first<{ account_id: string; provider: string; subject: string; label: string }>();
+    expect(identity).toMatchObject({
+      account_id: account?.id,
+      provider: "github",
+      label: "octocat",
+    });
+    expect(identity?.subject).toMatch(/^[0-9a-f]{64}$/);
+    expect(identity?.subject).not.toContain(String(githubProfileId));
 
     const read = await relay.app.request(`${origin}/api/v2/account`, {
       headers: { Cookie: sessionCookie },
@@ -240,6 +255,8 @@ describe("browser sign-in through GitHub", () => {
     // signed the same way Relay signs its own, so only the deadline itself is under test.
     const hasher = new SecretHasher(secret);
     const forged = encodeBase64UrlJSON({
+      provider: "github",
+      intent: { kind: "sign_in" },
       state,
       verifier: "a".repeat(43),
       return_to: "/my",
@@ -340,6 +357,8 @@ describe("browser sign-in through GitHub", () => {
     // so nothing outside can forge one — and the callback still refuses to send the browser there,
     // because the value has left this Worker and come back before becoming a `Location`.
     const forged = await sealedHandoff({
+      provider: "github",
+      intent: { kind: "sign_in" },
       state,
       verifier: "x".repeat(43),
       return_to: "https://attacker.invalid/",
@@ -517,6 +536,7 @@ describe("browser sign-in through GitHub", () => {
 
     for (const table of [
       "accounts",
+      "account_identities",
       "sessions",
       "devices",
       "quota_snapshots",
@@ -540,6 +560,222 @@ describe("browser sign-in through GitHub", () => {
   });
 });
 
+describe("an Account owns the identities that reach it", () => {
+  it("opens one Account on a first sign-in and reaches the same one on the next", async () => {
+    const relay = harness(fakeGitHub());
+    const first = setCookies(await signIn(relay, "first-visit")).get("__Host-quota_session")?.value;
+
+    const read = await relay.app.request(`${origin}/api/v2/account`, {
+      headers: { Cookie: `__Host-quota_session=${first}` },
+    });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      account: { display_label: "octocat" },
+      identities: [{ provider: "github", label: "octocat", linked_at: now.toISOString() }],
+    });
+
+    // The same GitHub profile is the same identity, so it reaches the Account it opened rather
+    // than opening a second one.
+    const second = setCookies(await signIn(relay, "return-visit")).get(
+      "__Host-quota_session",
+    )?.value;
+    expect(second).not.toBe(first);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
+    ).toBe(1);
+
+    // A renamed GitHub login is the same subject, and the Account is called what that channel
+    // calls it now.
+    const renamed = harness(fakeGitHub({ id: githubProfileId, login: "octocat-renamed" }));
+    expect((await signIn(renamed, "renamed-visit")).status).toBe(302);
+    expect(await env.DB.prepare("SELECT display_label FROM accounts").first("display_label")).toBe(
+      "octocat-renamed",
+    );
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
+  });
+
+  it("binds another channel to the Account that asked, and does it once", async () => {
+    const relay = harness(fakeGitHub());
+    const session = await seedAccountReachedByEmail("account_link", "linked@example.test");
+    const cookie = `__Host-quota_session=${session}`;
+
+    const linked = await linkGitHub(relay, cookie, "link-code");
+    expect(linked.status).toBe(302);
+    expect(linked.headers.get("location")).toBe("/my");
+    // Linking opens no session: the browser keeps the one it arrived with.
+    expect(setCookies(linked).get("__Host-quota_session")).toBeUndefined();
+    expect(await identityProviders("account_link")).toEqual(["email", "github"]);
+    // The Account is still called what the channel that opened it calls it.
+    expect(await displayLabel("account_link")).toBe("linked@example.test");
+
+    // Binding the same channel again is the state it is already in, so it succeeds and writes
+    // nothing new.
+    expect((await linkGitHub(relay, cookie, "link-again")).status).toBe(302);
+    expect(await identityProviders("account_link")).toEqual(["email", "github"]);
+
+    // A browser with no session has no Account to bind a channel to.
+    expect((await relay.app.request(`${origin}/api/auth/github/start?intent=link`)).status).toBe(
+      401,
+    );
+  });
+
+  it("refuses a channel that is already how another Account is reached", async () => {
+    const relay = harness(fakeGitHub());
+    // Somebody already signs in with this GitHub profile.
+    expect((await signIn(relay, "owner-code")).status).toBe(302);
+    const session = await seedAccountReachedByEmail("account_taken", "taken@example.test");
+    const cookie = `__Host-quota_session=${session}`;
+
+    const refused = await linkGitHub(relay, cookie, "taken-code");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "conflict" } });
+    // Nothing moved: the identity still belongs to the Account that had it.
+    expect(await identityProviders("account_taken")).toEqual(["email"]);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
+    ).toBe(2);
+
+    const asHtml = await linkGitHub(relay, cookie, "taken-again", { Accept: "text/html" });
+    expect(asHtml.status).toBe(200);
+    const page = await asHtml.text();
+    expect(page).toContain("identity_taken");
+    expect(page).toContain("That GitHub account is already linked to another Quota account.");
+  });
+
+  it("keeps the last way into an Account", async () => {
+    const relay = harness(fakeGitHub());
+    const session = setCookies(await signIn(relay, "unlink-code")).get(
+      "__Host-quota_session",
+    )?.value;
+    const accountId = String(await env.DB.prepare("SELECT id FROM accounts").first("id"));
+    const unlink = (provider: string) =>
+      relay.app.request(`${origin}/api/v2/account/identities/${provider}`, {
+        method: "DELETE",
+        headers: {
+          Cookie: `__Host-quota_session=${session}`,
+          Origin: origin,
+          "Sec-Fetch-Site": "same-origin",
+        },
+      });
+
+    const refused = await unlink("github");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "conflict" } });
+    expect(await identityProviders(accountId)).toEqual(["github"]);
+
+    // A channel Relay speaks but this Account does not hold is not there to unbind.
+    expect((await unlink("apple")).status).toBe(404);
+    // One it has never heard of is not a channel at all.
+    expect((await unlink("carrier-pigeon")).status).toBe(404);
+
+    await env.DB.prepare(
+      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+       VALUES (?1, 'email', 'email-subject-unlink', 'person@example.test', ?2)`,
+    )
+      .bind(accountId, new Date(now.getTime() + 1_000).toISOString())
+      .run();
+    expect((await unlink("github")).status).toBe(204);
+    expect(await identityProviders(accountId)).toEqual(["email"]);
+    // The Account is now called what the channel it is left with calls it.
+    expect(await displayLabel(accountId)).toBe("person@example.test");
+  });
+
+  it("answers no such provider for a channel Relay does not sign in through", async () => {
+    const relay = harness(fakeGitHub());
+    for (const provider of ["apple", "email", "carrier-pigeon"]) {
+      const started = await relay.app.request(`${origin}/api/auth/${provider}/start`);
+      expect(started.status, provider).toBe(404);
+      expect(await started.json()).toMatchObject({ error: { code: "not_found" } });
+      expect((await relay.app.request(`${origin}/api/auth/${provider}/callback`)).status).toBe(404);
+    }
+  });
+
+  it("sends a native sign-in to the page that confirms which Account this is", async () => {
+    const relay = harness(fakeGitHub());
+    const authorize = new URL(`${origin}/oauth/v2/authorize`);
+    authorize.search = new URLSearchParams({
+      response_type: "code",
+      client_id: "quotabar",
+      redirect_uri: "http://127.0.0.1:43210/callback",
+      state: "client-state-123456789",
+      code_challenge: "a".repeat(43),
+      code_challenge_method: "S256",
+    }).toString();
+
+    const started = await relay.app.request(authorize);
+    expect(started.status).toBe(302);
+    const location = new URL(started.headers.get("location") ?? "", origin);
+    expect(location.pathname).toBe("/sign-in");
+    const returnTo = location.searchParams.get("return_to") ?? "";
+    expect(returnTo).toMatch(/^\/oauth\/v2\/complete\?login_token=/);
+    // Nothing left for a provider, so no sign-in is in flight and no cookie was set.
+    expect(started.headers.getSetCookie()).toEqual([]);
+  });
+});
+
+/** An Account reached today by an address, and a browser signed in as it. Returns the cookie. */
+async function seedAccountReachedByEmail(accountId: string, label: string): Promise<string> {
+  const token = `qw_${accountId.replaceAll("_", "-").padEnd(43, "x").slice(0, 43)}`;
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+    ).bind(accountId, label, now.toISOString()),
+    env.DB.prepare(
+      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+       VALUES (?1, 'email', ?2, ?3, ?4)`,
+    ).bind(accountId, `email-subject-${accountId}`, label, now.toISOString()),
+    env.DB.prepare(
+      `INSERT INTO sessions (
+         id, family_id, account_id, device_id, device_generation, client_kind,
+         access_token_hash, refresh_token_hash, scopes_json,
+         authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+       ) VALUES (?1, ?1, ?2, NULL, NULL, 'web', ?3, NULL,
+         '["account:read","account:manage"]', ?4, ?5, ?5, ?4, ?4)`,
+    ).bind(
+      `session_${accountId}`,
+      accountId,
+      await new SecretHasher(secret).hash("web-access", token),
+      now.toISOString(),
+      new Date(now.getTime() + 60 * 60_000).toISOString(),
+    ),
+  ]);
+  return token;
+}
+
+async function linkGitHub(
+  relay: ReturnType<typeof harness>,
+  cookie: string,
+  code: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  const started = await relay.app.request(`${origin}/api/auth/github/start?intent=link`, {
+    headers: { Cookie: cookie },
+  });
+  expect(started.status).toBe(302);
+  const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? "";
+  const handoff = onlyCookie(started);
+  return relay.app.request(
+    `${origin}/api/auth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+    { headers: { Cookie: `${cookie}; ${handoff.name}=${handoff.value}`, ...headers } },
+  );
+}
+
+async function identityProviders(accountId: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    "SELECT provider FROM account_identities WHERE account_id = ?1 ORDER BY provider",
+  )
+    .bind(accountId)
+    .all<{ provider: string }>();
+  return rows.results.map((row) => row.provider);
+}
+
+function displayLabel(accountId: string): Promise<unknown> {
+  return env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+    .bind(accountId)
+    .first("display_label");
+}
+
 interface GitHubStub {
   fetch: typeof fetch;
   accessToken: string;
@@ -552,7 +788,7 @@ interface GitHubStub {
  * GitHub as this flow sees it: one code may be spent once, and a replay comes back as an error
  * body under a 200, which is what GitHub actually answers.
  */
-function fakeGitHub(): GitHubStub {
+function fakeGitHub(profile = { id: githubProfileId, login: "octocat" }): GitHubStub {
   const spent = new Set<string>();
   const stub: GitHubStub = {
     accessToken: "gho_fake_provider_access_token",
@@ -574,7 +810,7 @@ function fakeGitHub(): GitHubStub {
       }
       if (url === "https://api.github.com/user") {
         stub.profileReads += 1;
-        return Response.json({ id: githubProfileId, login: "octocat", name: "The Octocat" });
+        return Response.json({ id: profile.id, login: profile.login, name: "The Octocat" });
       }
       throw new Error(`unexpected outbound request: ${url}`);
     },
@@ -585,14 +821,21 @@ function fakeGitHub(): GitHubStub {
 function harness(github: GitHubStub, clock: () => Date = () => now) {
   const state = new D1AccountState(env.DB);
   const hasher = new SecretHasher(secret);
-  const webSessions = new GitHubWebSessions({
+  const handoff = new SignInHandoff(hasher);
+  const webSessions = new WebSessions({
     state,
     hasher,
-    githubClientId: "github-client",
-    githubClientSecret: "github-secret",
-    githubSubjectKey: secret,
-    origin,
-    fetch: github.fetch,
+    handoff,
+    identitySubjectKey: secret,
+    providers: [
+      new GitHubIdentityProvider({
+        handoff,
+        clientId: "github-client",
+        clientSecret: "github-secret",
+        callbackUrl: `${origin}/api/auth/github/callback`,
+        fetch: github.fetch,
+      }),
+    ],
   });
   return {
     app: createRelayApp({
@@ -609,6 +852,8 @@ function harness(github: GitHubStub, clock: () => Date = () => now) {
 
 /** A handoff cookie value Relay itself would accept, whatever it carries. */
 async function sealedHandoff(payload: {
+  provider: string;
+  intent: { kind: string; account_id?: string };
   state: string;
   verifier: string;
   return_to: string;

@@ -57,9 +57,7 @@ beforeEach(async () => {
       "accounts",
     ].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
   );
-  await env.DB.prepare(
-    `INSERT INTO accounts (id, identity_subject, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)`,
-  )
+  await env.DB.prepare(`INSERT INTO accounts (id, created_at, updated_at) VALUES (?1, ?2, ?2)`)
     .bind(accountId, now.toISOString())
     .run();
 });

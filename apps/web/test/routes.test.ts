@@ -10,8 +10,10 @@ import {
   isDevicesPath,
   isSettingsPath,
   isSubscriptionPath,
+  identityStartHref,
   isUsagePath,
   planDisplayName,
+  signInReturnPath,
   SETTINGS_PATH,
   SIGN_IN_PATH,
   signInHref,
@@ -19,14 +21,26 @@ import {
   USAGE_PATH,
 } from "../src/lib/routes.ts";
 
-test("sends a signed-out visitor to Relay, and back to the page they wanted", () => {
-  assert.equal(SIGN_IN_PATH, "/api/auth/github/start");
+test("sends a signed-out visitor to the sign-in page, and back to the page they wanted", () => {
+  assert.equal(SIGN_IN_PATH, "/sign-in");
   assert.equal(signInHref(), SIGN_IN_PATH);
   assert.equal(signInHref(DASHBOARD_PATH), SIGN_IN_PATH);
-  assert.equal(
-    signInHref("/my?device=device_1"),
-    "/api/auth/github/start?return_to=%2Fmy%3Fdevice%3Ddevice_1",
-  );
+  assert.equal(signInHref("/my?device=device_1"), "/sign-in?return_to=%2Fmy%3Fdevice%3Ddevice_1");
+});
+
+test("starts one provider round trip, and only for a page on this origin", () => {
+  assert.equal(identityStartHref("github", "/my"), "/api/auth/github/start?return_to=%2Fmy");
+  assert.equal(signInReturnPath("/my?device=device_1"), "/my?device=device_1");
+  for (const refused of [
+    "https://attacker.invalid/",
+    "//attacker.invalid/",
+    "/my\\@attacker.invalid",
+    "/my with space",
+    "my",
+    `/${"m".repeat(512)}`,
+  ]) {
+    assert.equal(signInReturnPath(refused), null, refused);
+  }
 });
 
 test("names the account sub-routes and hashes a selector into the subscription path", () => {

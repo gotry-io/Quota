@@ -1,6 +1,8 @@
+import { GitHubIdentityProvider } from "./account/github-identity.ts";
+import { SignInHandoff } from "./account/identity.ts";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
-import { GitHubWebSessions, memoizeWebSessionAuthorization } from "./account/web-session.ts";
+import { memoizeWebSessionAuthorization, WebSessions } from "./account/web-session.ts";
 import { accountMaintenanceInput, createRelayApp } from "./app.ts";
 import { CANONICAL_ORIGIN } from "./config.ts";
 import { isRelayApiPath } from "./relay-paths.ts";
@@ -14,7 +16,7 @@ export interface CloudflareBindings {
   ASSETS: Fetcher;
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
-  GITHUB_SUBJECT_KEY: string;
+  IDENTITY_SUBJECT_KEY: string;
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
 }
@@ -24,14 +26,21 @@ export default {
     const pathname = new URL(request.url).pathname;
     const state = new D1AccountState(environment.DB);
     const hasher = new SecretHasher(environment.QUOTA_SESSION_HASH_KEY);
+    const handoff = new SignInHandoff(hasher);
     const webSessions = memoizeWebSessionAuthorization(
-      new GitHubWebSessions({
+      new WebSessions({
         state,
         hasher,
-        githubClientId: environment.GITHUB_CLIENT_ID,
-        githubClientSecret: environment.GITHUB_CLIENT_SECRET,
-        githubSubjectKey: environment.GITHUB_SUBJECT_KEY,
-        origin: CANONICAL_ORIGIN,
+        handoff,
+        identitySubjectKey: environment.IDENTITY_SUBJECT_KEY,
+        providers: [
+          new GitHubIdentityProvider({
+            handoff,
+            clientId: environment.GITHUB_CLIENT_ID,
+            clientSecret: environment.GITHUB_CLIENT_SECRET,
+            callbackUrl: `${CANONICAL_ORIGIN}/api/auth/github/callback`,
+          }),
+        ],
       }),
     );
     const usageState = new D1UsageState(environment.DB);

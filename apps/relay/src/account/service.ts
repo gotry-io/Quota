@@ -169,7 +169,6 @@ export class AccountService {
   async completeBrowserLogin(
     loginToken: string,
     accountId: string,
-    displayLabel: string,
     now: Date,
   ): Promise<BrowserLoginCompletion> {
     const tokenHash = await this.hasher.hash("login-token", loginToken);
@@ -187,7 +186,6 @@ export class AccountService {
       grant_id: grant.id,
       login_token_hash: tokenHash,
       completion_nonce_hash: await this.hasher.hash("completion", randomOpaqueSecret()),
-      display_label: sanitizeLabel(displayLabel, 64),
       account_id: accountId,
       completed_at: now.toISOString(),
       authorization_code_hash: await this.hasher.hash("authorization-code", authorizationCode),

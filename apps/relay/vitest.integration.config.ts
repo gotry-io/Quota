@@ -13,7 +13,7 @@ export default defineConfig({
         bindings: {
           GITHUB_CLIENT_ID: "test-github-client-id",
           GITHUB_CLIENT_SECRET: testSecret,
-          GITHUB_SUBJECT_KEY: testSecret,
+          IDENTITY_SUBJECT_KEY: testSecret,
           QUOTA_INSTALLATION_KEY: testSecret,
           QUOTA_SESSION_HASH_KEY: testSecret,
         },

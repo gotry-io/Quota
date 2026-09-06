@@ -36,7 +36,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   );
   assert.match(landing, /Free &amp; open source · MIT · macOS 14\+/);
   assert.match(landing, /Download for macOS/);
-  assert.match(landing, /Sign in with GitHub/);
+  assert.match(landing, />Sign in</);
   assert.match(landing, /signInHref/);
   assert.match(landing, /InstallOptions/);
   assert.match(
@@ -47,7 +47,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(install, /aria-live="polite"/);
   assert.match(install, /copied \? "Copied" : "Copy"/);
   assert.match(landing, /id="platforms"/);
-  assert.match(header, /Sign in with GitHub/);
+  assert.match(header, /Sign in\n/);
   assert.match(header, /id="header-account"/);
   assert.match(header, /Settings/);
   assert.match(header, /Sign out/);
