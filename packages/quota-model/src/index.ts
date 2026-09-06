@@ -18,10 +18,13 @@ import {
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
+  type UsageCacheSaved,
+  UsageCacheSavedSchema,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
   type UsageRow,
   UsageRowSchema,
+  type UsageSummaryTotals,
   type UsageUnpricedItem,
   type UsageUnpricedReason,
 } from "@gotry-io/quota-protocol";
@@ -764,6 +767,112 @@ export function foldPreparedUsageCosts(
     assumptions: [...assumptions].sort(),
     unpriced,
   });
+}
+
+/**
+ * How much of a period's input tokens came back from a cache, in basis points.
+ *
+ * `input_tokens` is every input token the request was billed for, and the cache counts are the
+ * parts of it that were read from or written to a cache, so the hit rate is one share of one
+ * whole rather than a ratio between two different measurements. A period with no input has no
+ * rate — not a rate of zero. Basis points keep the answer an integer, so the three runtimes
+ * that state this rule agree exactly rather than to within a rounding.
+ *
+ * See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export function usageCacheHitBasisPoints(totals: UsageSummaryTotals): number | null {
+  if (totals.input_tokens === 0) return null;
+  const input = BigInt(totals.input_tokens);
+  return Number((BigInt(totals.cache_read_input_tokens) * 20_000n + input) / (input * 2n));
+}
+
+/**
+ * What the cache reads in these rows saved against paying the uncached input price for them.
+ *
+ * Only the uncached-input and cache-read rates take part: a cache write is what buying the
+ * cache cost, and it is already in the cost above this. A row is priced by the same entry its
+ * cost resolved through, so a saving and a cost never disagree about which model was used. A
+ * row whose entry states no rate for either side is counted as unpriced and the saving says so,
+ * because a saving nobody can price is not a saving of zero.
+ *
+ * A catalog that priced a cache read above uncached input saved nothing on that row, which is
+ * what "saved" means; it is not evidence of a loss the cost outcome did not already carry.
+ *
+ * See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export function calculateUsageCacheSaved(
+  inputRows: readonly DatedUsageRow[],
+  catalogInput: unknown,
+): UsageCacheSaved {
+  return foldPreparedUsageCacheSaved(prepareUsageCacheSaved(inputRows, catalogInput));
+}
+
+/**
+ * One row's part in the saving: what it saved, or that nothing could price it.
+ *
+ * A row that read nothing from a cache takes no part at all, which is why it is neither.
+ */
+export type PreparedUsageCacheSavedRow =
+  | { status: "saved"; amount_microusd: bigint }
+  | { status: "unpriced" }
+  | { status: "no_cache_read" };
+
+export interface PreparedUsageCacheSaved {
+  rows: readonly PreparedUsageCacheSavedRow[];
+}
+
+/** Resolve every row once so overlapping periods fold the same answer without re-resolving it. */
+export function prepareUsageCacheSaved(
+  inputRows: readonly DatedUsageRow[],
+  catalogInput: unknown,
+): PreparedUsageCacheSaved {
+  const rows = inputRows.map((row) => DatedUsageRowSchema.parse(row));
+  const validation = validatePricingCatalogOnce(catalogInput);
+  const catalog = validation.valid ? validation.catalog : null;
+  return {
+    rows: rows.map((row): PreparedUsageCacheSavedRow => {
+      if (row.cache_read_tokens === 0) return { status: "no_cache_read" };
+      const saved = catalog === null ? null : rowCacheSaved(catalog, row);
+      return saved === null ? { status: "unpriced" } : { status: "saved", amount_microusd: saved };
+    }),
+  };
+}
+
+/** Fold all prepared rows, or a caller-selected set of row indexes. */
+export function foldPreparedUsageCacheSaved(
+  prepared: PreparedUsageCacheSaved,
+  indexes?: readonly number[],
+): UsageCacheSaved {
+  let amount = 0n;
+  let priced = 0;
+  let unpriced = 0;
+  for (const index of indexes ?? prepared.rows.keys()) {
+    const row = prepared.rows[index];
+    if (!row) throw new RangeError(`Missing prepared Usage cache saving at index ${index}.`);
+    if (row.status === "unpriced") unpriced += 1;
+    else if (row.status === "saved") {
+      amount += row.amount_microusd;
+      priced += 1;
+    }
+  }
+  return UsageCacheSavedSchema.parse({
+    amount_microusd: unpriced > 0 && priced === 0 ? null : amount.toString(),
+    status: unpriced === 0 ? "complete" : priced > 0 ? "partial" : "unavailable",
+    unpriced_rows: unpriced,
+  });
+}
+
+/** One row's saving, or `null` when the catalog cannot price both sides of the comparison. */
+function rowCacheSaved(catalog: PricingCatalog, row: DatedUsageRow): bigint | null {
+  const resolution = resolvePricingEntry(catalog, row);
+  if (resolution.status === "unpriced") return null;
+  const uncached = resolution.entry.rates.uncached_input_per_million;
+  const cached = resolution.entry.rates.cache_read_per_million;
+  if (uncached === null || cached === null) return null;
+  const count = BigInt(row.cache_read_tokens);
+  const full = roundDecimalComponents([{ count, rate: uncached }]);
+  const actual = roundDecimalComponents([{ count, rate: cached }]);
+  return full > actual ? full - actual : 0n;
 }
 
 export type CalculatedUsageRowCost =

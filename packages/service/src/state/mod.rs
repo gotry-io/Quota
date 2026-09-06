@@ -2188,6 +2188,52 @@ impl StateStore {
         })
     }
 
+    /// The same period, kept apart by the UTC hour each fact was collected in.
+    ///
+    /// A local day and a local hour are properties of an instant, not of a UTC date, so the
+    /// caller that knows the zone places each hour on the local clock. The `date` a row carries
+    /// stays the UTC date behind it, because that is what prices the row and resolves its model
+    /// alias — the same rule [`Self::usage_period_rows`] follows.
+    pub fn usage_period_hour_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<Vec<(String, DatedUsageRow)>, StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT bucket_start_utc, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests)
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY bucket_start_utc, agent, billing_channel, channel_source, model,
+                          context_bucket, service_tier, speed, inference_geo
+                 ORDER BY bucket_start_utc, agent, billing_channel, model"
+            ))?;
+            let mut rows = Vec::new();
+            let mapped = statement.query_map(params![from, to], |row| {
+                let bucket_start_utc: String = row.get(0)?;
+                Ok((bucket_start_utc, read_grouped_row(row)?))
+            })?;
+            for entry in mapped {
+                let (bucket_start_utc, row) = entry?;
+                let date = bucket_start_utc.get(..10).unwrap_or_default().to_owned();
+                rows.push((bucket_start_utc, DatedUsageRow { date, row }));
+            }
+            Ok(rows)
+        })
+    }
+
     /// Switches the upload identity atomically.
     ///
     /// A new account or device generation owes that Account every hour this device still holds
@@ -5240,6 +5286,30 @@ mod tests {
         let (all, partial) = store.usage_period_rows(None).expect("all");
         assert!(!partial);
         assert_eq!(all.iter().map(|row| row.input_tokens).sum::<u64>(), 7);
+
+        // The same span, kept apart by hour: the totals are the period's, and every fact still
+        // carries the UTC date that prices it.
+        let span = crate::service::backend::usage_period_window(
+            crate::protocol::UsagePeriod::Today,
+            "Asia/Singapore",
+            now,
+        )
+        .expect("window")
+        .1
+        .expect("span");
+        let hours = store
+            .usage_period_hour_rows(Some((&span.start, &span.end)))
+            .expect("hours");
+        assert_eq!(
+            hours.iter().map(|(_, row)| row.input_tokens).sum::<u64>(),
+            6
+        );
+        assert!(hours.len() >= local.len());
+        assert!(
+            hours
+                .iter()
+                .all(|(bucket, row)| bucket.starts_with(&row.date))
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -493,12 +493,26 @@ still useful. Cached account refresh failures and partial Usage warnings are inl
 not replace available content.
 The default page contains:
 
-- Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
-  and message metrics in a two-column grid. Headline values use the primary text tone; grid labels
-  stay muted while their values use the secondary tone.
+- Summary: a titled group with separate Tokens, Cost, and Cache hit headline metrics followed by
+  the six token and message metrics in a two-column grid. Cache hit is whole percent, with
+  `saved $X.XX` under it when the period's cache reads could be priced and nothing under it when
+  they could not ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values
+  use the primary text tone; grid labels stay muted while their values use the secondary tone.
+- Daily, for This Mac and for any period but 2 Years: one bar per local day at 44pt tall, then the
+  last seven of those days as `date` / `tokens · cost` rows. The bars are a plain neutral fill at
+  55% ink, and a day with nothing in it is drawn at 12% rather than left out, so the shape of a
+  week is the shape of the week. Omit the section when the period reported nothing. The 2 Years
+  period has no Daily section: its per-day shape is the Account's activity chart.
 - Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. Every model remains a
-  static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
+  — independent of the collecting client and of who billed the request. A **Top models** list of
+  the three largest leads the section when there is more than one, each as `share · tokens`. Each
+  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
+  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
+  share` when unpriced.
+- Rhythm, for This Mac and for any period but 2 Years: 24 bars at 36pt, one per hour of the local
+  clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as a whole-percent
+  share. Omit the section when every hour is empty. The Account source has no Rhythm — Relay stores
+  hours on UTC keys and does not fold a local clock.
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset

@@ -167,6 +167,12 @@ struct AccountUsageView: View {
             usageSummary(usage)
           }
 
+          if let days = usage.days, days.contains(where: { $0.totals.totalTokens > 0 }) {
+            SettingsSection(title: "Daily") {
+              dailyUsage(days)
+            }
+          }
+
           SettingsSection(title: "Models") {
             let providers = presentedProviders(usage.models)
             if providers.isEmpty {
@@ -178,11 +184,18 @@ struct AccountUsageView: View {
                 alignment: .leading,
                 spacing: QuotaDesign.Spacing.sm
               ) {
+                topModels(usage)
                 ForEach(providers) { provider in
-                  providerUsage(provider)
+                  providerUsage(provider, of: usage.totals.totalTokens)
                 }
               }
               .padding(.vertical, QuotaDesign.Spacing.sm)
+            }
+          }
+
+          if let hours = usage.hoursOfDay, hours.contains(where: { $0.totalTokens > 0 }) {
+            SettingsSection(title: "Rhythm") {
+              rhythm(hours)
             }
           }
 
@@ -266,6 +279,10 @@ struct AccountUsageView: View {
     return PresentedUsage(
       totals: PresentedUsageTotals(usage.totals),
       cost: usage.cost,
+      cacheSaved: usage.cacheSaved,
+      cacheHitBasisPoints: usage.cacheHitBasisPoints,
+      days: usage.days,
+      hoursOfDay: usage.hoursOfDay,
       models: localModels
     )
   }
@@ -273,17 +290,22 @@ struct AccountUsageView: View {
   private func usageSummary(_ usage: PresentedUsage) -> some View {
     let tokens = UsageValueFormatter.count(usage.totals.totalTokens)
     let cost = UsageValueFormatter.compactCost(usage.cost)
+    let hit = UsageMetrics.cacheHitPercentLabel(basisPoints: usage.cacheHitBasisPoints) ?? "—"
+    let saved = UsageValueFormatter.cacheSaved(usage.cacheSaved)
     return VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.md) {
         summaryMetric("Tokens", tokens)
         summaryMetric("Cost", cost)
+        summaryMetric("Cache hit", hit, detail: saved)
       }
       .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
       .padding(.top, QuotaDesign.Layout.groupContentInset)
       .padding(.bottom, QuotaDesign.Spacing.sm)
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Usage summary")
-      .accessibilityValue("\(tokens) tokens, \(cost)")
+      .accessibilityValue(
+        "\(tokens) tokens, \(cost), cache hit \(hit)" + (saved.map { ", \($0)" } ?? "")
+      )
 
       Divider()
         .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
@@ -294,7 +316,7 @@ struct AccountUsageView: View {
     }
   }
 
-  private func summaryMetric(_ label: String, _ value: String) -> some View {
+  private func summaryMetric(_ label: String, _ value: String, detail: String? = nil) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(label)
         .quotaMetaStyle()
@@ -303,19 +325,27 @@ struct AccountUsageView: View {
         .monospacedDigit()
         .foregroundStyle(QuotaPalette.ink)
         .lineLimit(1)
+      if let detail {
+        Text(detail)
+          .quotaMetaStyle()
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func providerUsage(_ provider: PresentedUsageProvider) -> some View {
+  private func providerUsage(_ provider: PresentedUsageProvider, of total: Int) -> some View {
     let models = Array(sortedModels(provider.models).prefix(5))
     let duplicateNames = Set(
       Dictionary(grouping: provider.models, by: \.model)
         .filter { $0.value.count > 1 }
         .keys
     )
+    let providerTokens = provider.models.reduce(0) { $0 + $1.totals.totalTokens }
     return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
       providerHeading(provider.provider)
+      shareBar(providerTokens, of: total)
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         ForEach(models, id: \.id) { model in
           let title =
@@ -324,10 +354,148 @@ struct AccountUsageView: View {
           } else {
             model.model
           }
-          modelUsageRow(model, title: title)
+          modelUsageRow(model, title: title, of: total)
         }
       }
     }
+  }
+
+  /// A provider's share of the period, drawn once under its name.
+  private func shareBar(_ tokens: Int, of total: Int) -> some View {
+    let share = total > 0 ? min(1, Double(tokens) / Double(total)) : 0
+    return HStack(spacing: QuotaDesign.Spacing.sm) {
+      GeometryReader { proxy in
+        ZStack(alignment: .leading) {
+          Capsule().fill(QuotaPalette.progressTrack)
+          Capsule()
+            .fill(QuotaPalette.ink.opacity(0.55))
+            .frame(width: proxy.size.width * share)
+        }
+      }
+      .frame(height: 4)
+      Text(UsageValueFormatter.share(tokens, of: total) ?? "—")
+        .quotaMetaStyle()
+        .monospacedDigit()
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    .padding(
+      .leading,
+      QuotaDesign.Layout.settingsIconColumnWidth + QuotaDesign.Spacing.sm
+    )
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Share of period")
+    .accessibilityValue(UsageValueFormatter.share(tokens, of: total) ?? "none")
+  }
+
+  /// The three models this period was mostly spent on, above the tree that holds all of them.
+  @ViewBuilder
+  private func topModels(_ usage: PresentedUsage) -> some View {
+    let ranked = Array(sortedByTokens(usage.models).prefix(3))
+    if ranked.count > 1 {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        Text("Top models")
+          .quotaMetaStyle()
+        ForEach(ranked, id: \.id) { model in
+          HStack(spacing: QuotaDesign.Spacing.xxs) {
+            Text(model.model)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.ink)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+            Text(
+              "\(UsageValueFormatter.share(model.totals.totalTokens, of: usage.totals.totalTokens) ?? "—") · \(UsageValueFormatter.count(model.totals.totalTokens))"
+            )
+            .quotaMonoListValueStyle()
+            .lineLimit(1)
+          }
+          .accessibilityElement(children: .combine)
+        }
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.bottom, QuotaDesign.Spacing.sm)
+    }
+  }
+
+  /// One bar per local day, and the numbers behind them.
+  private func dailyUsage(_ days: [LocalUsageDay]) -> some View {
+    let maximum = days.map(\.totals.totalTokens).max() ?? 0
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(days, id: \.date) { day in
+          let share = maximum > 0 ? Double(day.totals.totalTokens) / Double(maximum) : 0
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(QuotaPalette.ink.opacity(day.totals.totalTokens > 0 ? 0.55 : 0.12))
+            .frame(maxWidth: .infinity)
+            .frame(height: max(2, 44 * share))
+            .help("\(day.date) · \(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))")
+        }
+      }
+      .frame(height: 44, alignment: .bottom)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Usage by day")
+      .accessibilityValue(
+        "\(days.count) days, most in a day \(UsageValueFormatter.accessibleCount(maximum)) tokens"
+      )
+
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        ForEach(days.reversed().prefix(7), id: \.date) { day in
+          HStack(spacing: QuotaDesign.Spacing.xxs) {
+            Text(day.date)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.body)
+            Spacer(minLength: 0)
+            Text(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+          }
+          .accessibilityElement(children: .combine)
+        }
+      }
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+    .padding(.vertical, QuotaDesign.Layout.groupContentInset)
+  }
+
+  /// The hours of the local clock this Mac works in, and the four stretches they fall into.
+  private func rhythm(_ hours: [LocalUsageHourOfDay]) -> some View {
+    let maximum = hours.map(\.totalTokens).max() ?? 0
+    let total = hours.reduce(0) { $0 + $1.totalTokens }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(hours, id: \.hour) { hour in
+          let share = maximum > 0 ? Double(hour.totalTokens) / Double(maximum) : 0
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(QuotaPalette.ink.opacity(hour.totalTokens > 0 ? 0.55 : 0.12))
+            .frame(maxWidth: .infinity)
+            .frame(height: max(2, 36 * share))
+            .help("\(hour.hour):00 · \(UsageValueFormatter.count(hour.totalTokens)) tokens")
+        }
+      }
+      .frame(height: 36, alignment: .bottom)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Usage by hour of the day")
+
+      LazyVGrid(
+        columns: [GridItem(.flexible()), GridItem(.flexible())],
+        alignment: .leading,
+        spacing: QuotaDesign.Spacing.meta
+      ) {
+        ForEach(UsageDayPart.allCases, id: \.self) { part in
+          let tokens = hours.filter { part.hours.contains($0.hour) }.reduce(0) { $0 + $1.totalTokens }
+          HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.meta) {
+            Text(part.title).quotaMetaStyle()
+            Spacer(minLength: 2)
+            Text(UsageValueFormatter.share(tokens, of: total) ?? "—")
+              .quotaMonoListValueStyle()
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(part.title)
+          .accessibilityValue(UsageValueFormatter.share(tokens, of: total) ?? "none")
+        }
+      }
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+    .padding(.vertical, QuotaDesign.Layout.groupContentInset)
   }
 
   private func providerHeading(_ provider: InferenceProvider?) -> some View {
@@ -350,9 +518,13 @@ struct AccountUsageView: View {
 
   private func modelUsageRow(
     _ model: PresentedUsageModel,
-    title: String
+    title: String,
+    of total: Int
   ) -> some View {
-    let summary = UsageValueFormatter.tokensAndCost(model.totals.totalTokens, model.cost)
+    let share = UsageValueFormatter.share(model.totals.totalTokens, of: total)
+    let summary =
+      UsageValueFormatter.tokensAndCost(model.totals.totalTokens, model.cost)
+      + (share.map { " · \($0)" } ?? "")
     return HStack(spacing: QuotaDesign.Spacing.xxs) {
       Text(title)
         .quotaFont(.listSecondary)
@@ -420,6 +592,14 @@ struct AccountUsageView: View {
       }
   }
 
+  private func sortedByTokens(_ models: [PresentedUsageModel]) -> [PresentedUsageModel] {
+    models.sorted {
+      $0.totals.totalTokens != $1.totals.totalTokens
+        ? $0.totals.totalTokens > $1.totals.totalTokens
+        : $0.model < $1.model
+    }
+  }
+
   private func sortedModels(_ models: [PresentedUsageModel]) -> [PresentedUsageModel] {
     models.sorted {
       UsageValueFormatter.precedes(
@@ -459,6 +639,11 @@ private struct AccountUsagePageState: Equatable {
 private struct PresentedUsage: Equatable {
   let totals: PresentedUsageTotals
   let cost: UsageCostOutcome
+  let cacheSaved: UsageCacheSaved
+  let cacheHitBasisPoints: Int?
+  /// Present for a period bounded by two local midnights, and absent for every retained day.
+  let days: [LocalUsageDay]?
+  let hoursOfDay: [LocalUsageHourOfDay]?
   let models: [PresentedUsageModel]
 }
 

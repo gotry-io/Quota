@@ -239,43 +239,155 @@ enum LocalUsageReportStatus: String, Codable, Sendable {
   case unavailable
 }
 
+/// One local calendar day of a bounded period, on the same midnights the period itself keeps.
+struct LocalUsageDay: Codable, Equatable, Sendable {
+  let date: String
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case totals
+    case cost
+  }
+
+  var isValid: Bool { WireValidation.isCalendarDate(date) && totals.isValid && cost.isValid }
+
+  init(date: String, totals: UsageSummaryTotals, cost: UsageCostOutcome) {
+    self.date = date
+    self.totals = totals
+    self.cost = cost
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["date", "totals", "cost"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(String.self, forKey: .date)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .date, in: container, debugDescription: "Invalid local Usage day.")
+    }
+  }
+}
+
+/// One hour of the local clock, summed over every day of the period that reached it.
+///
+/// An hour nothing reached is still named, at no tokens and no amount: there is no priced row
+/// behind it to state one.
+struct LocalUsageHourOfDay: Codable, Equatable, Sendable {
+  let hour: Int
+  let totalTokens: Int
+  let costMicrousd: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case hour
+    case totalTokens
+    case costMicrousd
+  }
+
+  var isValid: Bool { (0..<24).contains(hour) && totalTokens >= 0 }
+
+  init(hour: Int, totalTokens: Int, costMicrousd: String?) {
+    self.hour = hour
+    self.totalTokens = totalTokens
+    self.costMicrousd = costMicrousd
+  }
+
+  /// An hour with no amount still names the key, which is how the service writes it.
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(hour, forKey: .hour)
+    try container.encode(totalTokens, forKey: .totalTokens)
+    try container.encode(costMicrousd, forKey: .costMicrousd)
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["hour", "totalTokens", "costMicrousd"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    hour = try container.decode(Int.self, forKey: .hour)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    costMicrousd = try container.decode(String?.self, forKey: .costMicrousd)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .hour, in: container, debugDescription: "Invalid local Usage hour of the day.")
+    }
+  }
+}
+
+/// One period of this Mac's own Usage.
+///
+/// `days` and `hoursOfDay` describe a period bounded by two local midnights, so the three
+/// trailing periods carry them and `all` — every retained day — does not.
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
+  let cacheSaved: UsageCacheSaved
   let agents: [LocalUsageAgentSummary]
+  let days: [LocalUsageDay]?
+  let hoursOfDay: [LocalUsageHourOfDay]?
   let modelsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case totals
     case cost
+    case cacheSaved
     case agents
+    case days
+    case hoursOfDay
     case modelsTruncated
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
+    totals.isValid && cost.isValid && cacheSaved.isValid
+      && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
+      && (days?.count ?? 0) <= 31
+      && (days?.allSatisfy(\.isValid) ?? true)
+      && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
+      && (hoursOfDay.map { $0.count == 24 && $0.enumerated().allSatisfy { $1.hour == $0 } } ?? true)
+      && (days == nil) == (hoursOfDay == nil)
       && modelsTruncated != false
+  }
+
+  /// How much of this period's input came back from a cache, in basis points.
+  var cacheHitBasisPoints: Int? {
+    UsageMetrics.cacheHitBasisPoints(
+      cacheReadInputTokens: totals.cacheReadInputTokens,
+      inputTokens: totals.inputTokens
+    )
   }
 
   init(
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
+    cacheSaved: UsageCacheSaved,
     agents: [LocalUsageAgentSummary],
+    days: [LocalUsageDay]? = nil,
+    hoursOfDay: [LocalUsageHourOfDay]? = nil,
     modelsTruncated: Bool? = nil
   ) {
     self.totals = totals
     self.cost = cost
+    self.cacheSaved = cacheSaved
     self.agents = agents
+    self.days = days
+    self.hoursOfDay = hoursOfDay
     self.modelsTruncated = modelsTruncated
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["totals", "cost", "agents", "modelsTruncated"])
+    try decoder.rejectUnknownWireKeys([
+      "totals", "cost", "cacheSaved", "agents", "days", "hoursOfDay", "modelsTruncated",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
     agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
+    days = try container.decodeIfPresent([LocalUsageDay].self, forKey: .days)
+    hoursOfDay = try container.decodeIfPresent([LocalUsageHourOfDay].self, forKey: .hoursOfDay)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(

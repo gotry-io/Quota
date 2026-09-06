@@ -32,9 +32,16 @@ type UsageCost = {
   unpriced: unknown[];
 };
 
+type UsageCacheSaved = {
+  amount_microusd: string;
+  status: string;
+  unpriced_rows: number;
+};
+
 type UsagePeriod = {
   totals: UsageTotals;
   cost: UsageCost;
+  cache_saved: UsageCacheSaved;
   partial: boolean;
   agents: Array<{
     agent: string;
@@ -243,6 +250,12 @@ function periodFromModels(
   return {
     totals: merged,
     cost: cost(microusd, messages),
+    // A dollar fifty per million cache reads is the gap this fixture's catalog would price.
+    cache_saved: {
+      amount_microusd: String(Math.round(merged.cache_read_input_tokens * 1.5)),
+      status: "complete",
+      unpriced_rows: 0,
+    },
     partial: false,
     agents: [
       {

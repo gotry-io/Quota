@@ -1,10 +1,11 @@
 use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
-    DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, MAX_JSONL_LINE_BYTES,
-    MAX_USAGE_MODELS, MAX_USAGE_ROWS_PER_HOUR, NormalizedUsageEvent, UsageAgent, UsageFileIndex,
-    UsageRow, UsageScanOptions, aggregate_hour_rows, build_local_usage_summary,
-    fold_rows_into_other, fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage,
-    scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, LocalHourUsage,
+    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_ROWS_PER_HOUR, NormalizedUsageEvent,
+    UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions, aggregate_hour_rows,
+    build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other, fold_usage_rows,
+    scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_local_usage,
+    scan_opencode_usage, scan_pi_usage,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -1402,6 +1403,66 @@ fn pricing_caps_unpriced_detail_without_losing_rows_or_status() {
     assert_eq!(outcome.unpriced.len(), 100);
     assert!(outcome.unpriced_truncated);
     assert_eq!(outcome.status, UsageCostStatus::Unavailable);
+}
+
+#[test]
+fn a_rhythm_names_every_hour_and_groups_days_by_the_local_clock() {
+    let catalog = pricing_catalog(vec![pricing_entry("openai_gpt_5")]);
+    let entries = [
+        ("2026-08-02", 23u8, 10u64),
+        ("2026-08-03", 0, 30),
+        ("2026-08-03", 23, 5),
+    ]
+    .into_iter()
+    .map(|(date, hour, input)| LocalHourUsage {
+        date: date.to_owned(),
+        hour,
+        row: test_fact_with_input("2026-08-02T00:00:00Z", "gpt-5", input),
+    })
+    .collect::<Vec<_>>();
+
+    let (days, hours) = build_local_usage_rhythm(&entries, Some(&catalog)).expect("rhythm");
+
+    assert_eq!(
+        days.iter().map(|day| day.date.as_str()).collect::<Vec<_>>(),
+        ["2026-08-02", "2026-08-03"]
+    );
+    assert_eq!(days[0].totals.input_tokens, 10);
+    assert_eq!(days[1].totals.input_tokens, 35);
+    assert_eq!(hours.len(), 24);
+    assert!(
+        hours
+            .iter()
+            .enumerate()
+            .all(|(index, hour)| hour.hour as usize == index)
+    );
+    assert_eq!(hours[0].total_tokens, 30);
+    assert_eq!(hours[23].total_tokens, 15);
+    // An hour nothing reached is still named, at no tokens and no amount: there is no priced
+    // row behind it to state one.
+    assert_eq!(hours[12].total_tokens, 0);
+    assert_eq!(hours[12].cost_microusd, None);
+}
+
+#[test]
+fn a_period_that_read_a_cache_says_what_that_saved() {
+    let catalog = pricing_catalog(vec![pricing_entry("openai_gpt_5")]);
+    let mut fact = test_fact_with_input("2026-08-02T12:00:00Z", "gpt-5", 2_000_000);
+    fact.row.cache_read_tokens = 1_000_000;
+
+    let summary = build_local_usage_summary(&[fact], Some(&catalog), None).expect("summary");
+
+    // A million cache reads at $1 per million against $0.10 per million saved $0.90.
+    assert_eq!(
+        summary.cache_saved.amount_microusd.as_deref(),
+        Some("900000")
+    );
+    assert_eq!(summary.cache_saved.status, UsageCostStatus::Complete);
+    assert_eq!(summary.cache_saved.unpriced_rows, 0);
+    assert_eq!(
+        crate::pricing::usage_cache_hit_basis_points(&summary.totals),
+        Some(5_000)
+    );
 }
 
 #[test]

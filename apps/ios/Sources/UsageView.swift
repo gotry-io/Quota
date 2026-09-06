@@ -1,3 +1,4 @@
+import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
@@ -19,9 +20,14 @@ struct UsageView: View {
           emptyPeriod
         }
         if model.selectedTab == .usage {
+          if UsageDailyFold.hasUsage(dailyRows) {
+            UsageDailySection(rows: dailyRows)
+          }
           UsageActivitySection(model: model)
+          UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
           UsageAgentListSections(
             sections: sections,
+            periodTokens: period.totals.totalTokens,
             expandedProviderIDs: $expandedProviderIDs
           )
         }
@@ -41,6 +47,16 @@ struct UsageView: View {
     .accessibilityIdentifier("usage.root")
     .navigationTitle("Usage")
     .navigationBarTitleDisplayMode(.large)
+  }
+
+  /// The days the Daily section draws, which the Activity read has already fetched.
+  private var dailyRows: [UsageDailyFold.Row] {
+    guard case .loaded(let days) = model.activityChart else { return [] }
+    return UsageDailyFold.rows(
+      reported: days,
+      period: model.selectedUsagePeriod,
+      lastDate: model.activityToday
+    )
   }
 
   private var periodPicker: some View {
@@ -74,6 +90,8 @@ struct UsageView: View {
 struct UsageTotalsSection: View {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
+  /// Absent for one day of the activity chart, which is priced but carries no saving of its own.
+  let cacheSaved: UsageCacheSaved?
   let partial: Bool
   var partialCopy: String = "Some hours in this period were scanned incompletely."
   var identifier: String = "usage.headline"
@@ -81,6 +99,7 @@ struct UsageTotalsSection: View {
   init(period: UsagePeriod, identifier: String = "usage.headline") {
     totals = period.totals
     cost = period.cost
+    cacheSaved = period.cacheSaved
     partial = period.partial
     self.identifier = identifier
   }
@@ -88,15 +107,26 @@ struct UsageTotalsSection: View {
   init(
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
+    cacheSaved: UsageCacheSaved? = nil,
     partial: Bool,
     partialCopy: String = "Some hours in this period were scanned incompletely.",
     identifier: String = "usage.headline"
   ) {
     self.totals = totals
     self.cost = cost
+    self.cacheSaved = cacheSaved
     self.partial = partial
     self.partialCopy = partialCopy
     self.identifier = identifier
+  }
+
+  private var cacheHitLabel: String {
+    UsageMetrics.cacheHitPercentLabel(
+      basisPoints: UsageMetrics.cacheHitBasisPoints(
+        cacheReadInputTokens: totals.cacheReadInputTokens,
+        inputTokens: totals.inputTokens
+      )
+    ) ?? "—"
   }
 
   var body: some View {
@@ -123,6 +153,26 @@ struct UsageTotalsSection: View {
       )
       .accessibilityIdentifier("\(identifier).cost")
 
+      LabeledContent("Cache hit") {
+        Text(cacheHitLabel)
+          .font(.body.monospacedDigit().weight(.medium))
+          .foregroundStyle(.primary)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Cache hit")
+      .accessibilityValue(cacheHitAccessibilityValue)
+      .accessibilityIdentifier("\(identifier).cache-hit")
+
+      LabeledContent("Reasoning") {
+        Text(QuotaFormat.compactCount(totals.reasoningTokens))
+          .font(.body.monospacedDigit().weight(.medium))
+          .foregroundStyle(.primary)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Reasoning")
+      .accessibilityValue("\(QuotaFormat.accessibleCount(totals.reasoningTokens)) tokens of output")
+      .accessibilityIdentifier("\(identifier).reasoning")
+
       VStack(alignment: .leading, spacing: 4) {
         Text(
           "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
@@ -133,6 +183,12 @@ struct UsageTotalsSection: View {
         Text(QuotaFormat.costBasis(cost))
           .font(.body)
           .foregroundStyle(Color.primary)
+        if let saved = cacheSaved.flatMap(QuotaFormat.cacheSaved) {
+          Text("Cache hit \(cacheHitLabel) · \(saved)")
+            .font(.body)
+            .foregroundStyle(Color.primary)
+            .accessibilityHidden(true)
+        }
         if partial {
           Text(partialCopy)
             .font(.body)
@@ -144,14 +200,55 @@ struct UsageTotalsSection: View {
     }
   }
 
+  private var cacheHitAccessibilityValue: String {
+    let saved = cacheSaved.flatMap(QuotaFormat.cacheSaved)
+    return cacheHitLabel + (saved.map { ", \($0)" } ?? "")
+  }
+
   private var footerAccessibilityLabel: String {
     "\(QuotaFormat.accessibleCount(totals.inputTokens)) in · \(QuotaFormat.accessibleCount(totals.outputTokens)) out. Cost basis, \(QuotaFormat.costBasis(cost))"
       + (partial ? ". \(partialCopy)" : "")
   }
 }
 
+/// The three models this period was mostly spent on, above the tree that holds all of them.
+struct UsageTopModelsSection: View {
+  let sections: [UsageBreakdown.AgentSection]
+  let periodTokens: Int
+
+  var body: some View {
+    let ranked = Array(UsageBreakdown.rankedModels(in: sections).prefix(3))
+    if ranked.count > 1 {
+      Section {
+        ForEach(ranked) { row in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(row.displayName)
+              .font(.subheadline)
+            Spacer(minLength: 8)
+            Text(
+              "\(QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—") · \(QuotaFormat.compactCount(row.totals.totalTokens))"
+            )
+            .font(.subheadline.monospacedDigit())
+            .foregroundStyle(.primary)
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(row.displayName)
+          .accessibilityValue(
+            "\(QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "no share"), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens"
+          )
+          .accessibilityIdentifier("usage.top-model")
+        }
+      } header: {
+        Text("Top models")
+          .accessibilityIdentifier("section.header.top-models")
+      }
+    }
+  }
+}
+
 struct UsageAgentListSections: View {
   let sections: [UsageBreakdown.AgentSection]
+  var periodTokens: Int = 0
   @Binding var expandedProviderIDs: Set<String>
   var modelIdentifier: String = "usage.model"
   var showMoreIdentifier: String = "usage.show-more"
@@ -180,11 +277,26 @@ struct UsageAgentListSections: View {
     let visible = provider.visibleModels(expanded: expanded)
     let hidden = provider.hiddenCount(expanded: expanded)
 
-    Text(provider.displayName)
-      .font(.subheadline)
-      .foregroundStyle(.primary)
-      .accessibilityAddTraits(.isHeader)
-      .accessibilityIdentifier("usage.provider.\(provider.id)")
+    let providerTokens = UsageBreakdown.providerTokens(provider)
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(provider.displayName)
+        .font(.subheadline)
+        .foregroundStyle(.primary)
+        .accessibilityAddTraits(.isHeader)
+      Spacer(minLength: 8)
+      Text(QuotaFormat.share(providerTokens, of: periodTokens) ?? "—")
+        .font(.subheadline.monospacedDigit())
+        .foregroundStyle(.primary)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(provider.displayName)
+    .accessibilityValue(
+      "\(QuotaFormat.share(providerTokens, of: periodTokens) ?? "no share") of this period"
+    )
+    .accessibilityIdentifier("usage.provider.\(provider.id)")
+
+    ProviderShareBar(share: shareFraction(providerTokens, of: periodTokens))
+      .accessibilityHidden(true)
 
     ForEach(visible) { row in
       modelRow(row)
@@ -209,14 +321,20 @@ struct UsageAgentListSections: View {
     }
   }
 
+  private func shareFraction(_ part: Int, of whole: Int) -> Double {
+    guard whole > 0 else { return 0 }
+    return min(1, Double(part) / Double(whole))
+  }
+
   private func modelRow(_ row: UsageBreakdown.ModelRow) -> some View {
     let tokens = QuotaFormat.compactCount(row.totals.totalTokens)
     let cost = QuotaFormat.cost(row.cost)
+    let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens)
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(row.displayName)
         .font(.subheadline)
       Spacer(minLength: 8)
-      Text("\(tokens) · \(cost)")
+      Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
         .font(.subheadline.monospacedDigit())
         .foregroundStyle(.primary)
         .multilineTextAlignment(.trailing)
@@ -226,5 +344,23 @@ struct UsageAgentListSections: View {
       "\(row.displayName), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost))"
     )
     .accessibilityIdentifier(modelIdentifier)
+  }
+}
+
+/// A provider's share of the period, drawn once under its name.
+private struct ProviderShareBar: View {
+  let share: Double
+
+  var body: some View {
+    GeometryReader { proxy in
+      ZStack(alignment: .leading) {
+        Capsule().fill(Color.primary.opacity(0.12))
+        Capsule()
+          .fill(Color.primary.opacity(0.55))
+          .frame(width: proxy.size.width * share)
+      }
+    }
+    .frame(height: 4)
+    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
   }
 }

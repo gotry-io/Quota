@@ -54,6 +54,22 @@ enum UsageBreakdown {
     sections(agents: day.agents ?? [])
   }
 
+  /// Every model leaf, largest first, so a reader sees what the period was mostly spent on.
+  static func rankedModels(in sections: [AgentSection]) -> [ModelRow] {
+    sections
+      .flatMap { section in section.providers.flatMap(\.models) }
+      .sorted {
+        $0.totals.totalTokens != $1.totals.totalTokens
+          ? $0.totals.totalTokens > $1.totals.totalTokens
+          : $0.model < $1.model
+      }
+  }
+
+  /// A provider's tokens across every agent that billed through it.
+  static func providerTokens(_ provider: ProviderSection) -> Int {
+    provider.models.reduce(0) { $0 + $1.totals.totalTokens }
+  }
+
   static func sections(agents: [UsageAgentUsage]) -> [AgentSection] {
     agents.map { agent in
       AgentSection(

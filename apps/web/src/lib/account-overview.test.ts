@@ -38,6 +38,7 @@ const emptyPeriod: UsagePeriodRead = {
     assumptions: [],
     unpriced: [],
   },
+  cache_saved: { amount_microusd: "0", status: "complete", unpriced_rows: 0 },
   partial: false,
   agents: [],
 };

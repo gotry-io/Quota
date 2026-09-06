@@ -606,22 +606,67 @@ public struct UsageAgentUsage: Codable, Equatable, Sendable {
   }
 }
 
-/// One period of Usage: its totals, its cost, whether any hour behind it was scanned
-/// incompletely, and the agent tree that makes up the difference.
+/// What reading from a cache saved, against paying the uncached input price for the same tokens.
+///
+/// A period with no cache reads saved nothing, completely. A row whose price the catalog could
+/// not resolve is counted rather than guessed at, which is what separates `partial` from
+/// `complete`. See [ADR 0036](../../../../docs/decisions/0036-usage-derived-metrics.md).
+public struct UsageCacheSaved: Codable, Equatable, Sendable {
+  public let amountMicrousd: String?
+  public let status: UsageCostStatus
+  public let unpricedRows: Int
+
+  public init(amountMicrousd: String?, status: UsageCostStatus, unpricedRows: Int) {
+    self.amountMicrousd = amountMicrousd
+    self.status = status
+    self.unpricedRows = unpricedRows
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    amountMicrousd = try container.decode(String?.self, forKey: .amountMicrousd)
+    status = try container.decode(UsageCostStatus.self, forKey: .status)
+    unpricedRows = try container.decode(Int.self, forKey: .unpricedRows)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .amountMicrousd,
+        in: container,
+        debugDescription: "Invalid Usage cache saving."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    unpricedRows >= 0 && (status == .unavailable) == (amountMicrousd == nil)
+      && (status == .complete) == (unpricedRows == 0)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case amountMicrousd
+    case status
+    case unpricedRows
+  }
+}
+
+/// One period of Usage: its totals, its cost, what its cache reads saved, whether any hour behind
+/// it was scanned incompletely, and the agent tree that makes up the difference.
 public struct UsagePeriod: Codable, Equatable, Sendable {
   public let totals: UsageSummaryTotals
   public let cost: UsageCostOutcome
+  public let cacheSaved: UsageCacheSaved
   public let partial: Bool
   public let agents: [UsageAgentUsage]
 
   public init(
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
+    cacheSaved: UsageCacheSaved,
     partial: Bool,
     agents: [UsageAgentUsage]
   ) {
     self.totals = totals
     self.cost = cost
+    self.cacheSaved = cacheSaved
     self.partial = partial
     self.agents = agents
   }
@@ -630,6 +675,7 @@ public struct UsagePeriod: Codable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
     partial = try container.decode(Bool.self, forKey: .partial)
     agents = try container.decode([UsageAgentUsage].self, forKey: .agents)
     guard isValid else {
@@ -642,15 +688,25 @@ public struct UsagePeriod: Codable, Equatable, Sendable {
   }
 
   public var isValid: Bool {
-    totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
+    totals.isValid && cost.isValid && cacheSaved.isValid
+      && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
   }
 
   public var hasTruncatedDetails: Bool { cost.hasUnpricedTruncatedDetails }
 
+  /// How much of this period's input came back from a cache, in basis points.
+  public var cacheHitBasisPoints: Int? {
+    UsageMetrics.cacheHitBasisPoints(
+      cacheReadInputTokens: totals.cacheReadInputTokens,
+      inputTokens: totals.inputTokens
+    )
+  }
+
   private enum CodingKeys: String, CodingKey {
     case totals
     case cost
+    case cacheSaved
     case partial
     case agents
   }

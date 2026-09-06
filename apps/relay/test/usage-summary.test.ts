@@ -68,6 +68,32 @@ describe("Account Usage periods", () => {
     }
   });
 
+  it("prices what every period's cache reads saved, and says which rows it could not", () => {
+    const cached = {
+      ...usageRow(null, 0),
+      date: today,
+      input_tokens: 1_000_000,
+      cache_read_tokens: 900_000,
+    };
+    const unpriceable = { ...cached, model: "a-model-no-catalog-names", requests: 1 };
+    const usage = accountUsage([cached, unpriceable]);
+
+    expect(usage.today.cache_saved).toMatchObject({ status: "partial", unpriced_rows: 1 });
+    expect(BigInt(usage.today.cache_saved.amount_microusd ?? "0")).toBeGreaterThan(0n);
+    // The saving of a period is the saving of the rows inside it, and `all` holds both.
+    expect(usage.all.cache_saved).toStrictEqual(usage.today.cache_saved);
+  });
+
+  it("saves nothing, completely, for a period whose rows never read a cache", () => {
+    const usage = accountUsage([{ ...usageRow(null, 0), date: today }]);
+
+    expect(usage.today.cache_saved).toStrictEqual({
+      amount_microusd: "0",
+      status: "complete",
+      unpriced_rows: 0,
+    });
+  });
+
   it("folds a boundary's hours into the periods that name it and nothing else", () => {
     // The hours between local midnight and the UTC day it cuts belong to `today` alone: every
     // wider period already covers that UTC day through the rollup row beside them.

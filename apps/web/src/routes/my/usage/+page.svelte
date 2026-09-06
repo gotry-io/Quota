@@ -10,9 +10,11 @@ import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
+import UsageDaily from "$lib/components/UsageDaily.svelte";
 import UsagePeriodTabs from "$lib/components/UsagePeriodTabs.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
+import { cacheHitLabel, cacheSavedLabel, usageDailyRows } from "$lib/usage-metrics";
 import {
   type UsagePeriodQuery,
   usagePeriodFromQuery,
@@ -41,6 +43,11 @@ const activityError = $derived(activityEntry?.status === "error" ? activityEntry
 const detailEntry = $derived(selectedDay ? store.dayDetail[selectedDay] : undefined);
 const dayDetail = $derived(detailEntry?.data ?? null);
 const dayError = $derived(detailEntry?.error ?? null);
+const dailyRows = $derived(
+  activityDays ? usageDailyRows(activityDays, selectedQuery, activityRange.to) : [],
+);
+const cacheHit = $derived(period ? cacheHitLabel(period.totals) : null);
+const cacheSaved = $derived(period ? cacheSavedLabel(period.cache_saved) : null);
 const detailLoading = $derived(
   selectedDay !== null &&
     (detailEntry === undefined ||
@@ -120,7 +127,26 @@ function writeDay(day: string | null): void {
       <span>Messages</span>
       <strong id="message-total">{formatCount(period.totals.messages)}</strong>
     </article>
+    <article>
+      <span>Cache hit</span>
+      <strong id="cache-hit">{cacheHit ?? "—"}</strong>
+      <small id="cache-saved">{cacheSaved ?? "Nothing priced to compare"}</small>
+    </article>
+    <article>
+      <span>Reasoning</span>
+      <strong id="reasoning-total">{formatCount(period.totals.reasoning_tokens)}</strong>
+      <small>tokens of output</small>
+    </article>
   </div>
+
+  {#if dailyRows.length > 0}
+    <section class="usage-daily-panel" aria-labelledby="usage-daily-title">
+      <div class="usage-panel-heading">
+        <h2 id="usage-daily-title">Daily</h2>
+      </div>
+      <UsageDaily rows={dailyRows} />
+    </section>
+  {/if}
 
   <div class="usage-columns">
     <section class="usage-tree-panel" aria-labelledby="usage-tree-title">

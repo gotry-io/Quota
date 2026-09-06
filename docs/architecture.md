@@ -181,7 +181,13 @@ no version of its own and moves with `ipc_version`. State snapshots separately c
 7 Days, 30 Days, and All summaries with exact totals, cost, and `agents[].providers[].models[]`
 detail. `total_tokens` is input plus output; cache-read and cache-write tokens are named input
 subsets; reasoning is an output subset; `messages` sums normalized usage-bearing model output facts
-and is not a session count, because sessions are not collected. The Rust report groups facts by the
+and is not a session count, because sessions are not collected. Each summary also carries
+`cache_saved` — what its cache reads saved against the uncached input price — and, for the three
+periods bounded by two local midnights, `days[]` on local dates and `hours_of_day[24]` on the local
+clock; `all` carries neither, because the per-day shape of every retained day is what the activity
+chart answers ([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
+carried at all: every reader derives it from the two counts it already holds, by the one rule that
+ADR states. The Rust report groups facts by the
 agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
 model's name by the model catalog's family rules — the agent and the billing channel never choose
 that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).
@@ -312,7 +318,8 @@ or a report.
   semantics and on QuotaWire for the managed wire types and `ProviderID`, and must not depend on
   QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this product.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
-  quota, plan and account labels, compact counts, Usage cost, compact relative age, the
+  quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
+  [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, the
   observation-freshness rule each snapshot type conforms to, and the subscription selector every
   Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
   evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode

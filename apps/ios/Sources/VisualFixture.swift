@@ -353,6 +353,11 @@ enum VisualFixture: String, CaseIterable, Sendable {
           messages: messages
         ),
         cost: completeCost(microusd: microusd, rows: messages),
+        cacheSaved: UsageCacheSaved(
+          amountMicrousd: "412500",
+          status: .complete,
+          unpricedRows: 0
+        ),
         partial: false,
         agents: agents(scale: scale)
       )
@@ -546,6 +551,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           assumptions: [],
           unpriced: []
         ),
+        cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
         partial: false,
         agents: []
       )

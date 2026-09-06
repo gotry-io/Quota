@@ -275,9 +275,25 @@ card. Settings is a grouped form: Appearance; Account (GitHub login and Delete A
 `?delete=account` focusing the delete heading); Legal (Privacy, Terms, Support). Sign out stays in
 the header account menu. Notification rules are documented at `/support#notifications`.
 
-Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens / Cost
-column headers, and one `<tbody>` per agent. Group title rows (`<th scope="rowgroup">`) name the
-agent, then each inference provider. Model rows follow; the `other` fold bucket reads **Other**.
+The Usage totals card carries five tiles: Tokens, API-equivalent cost, Messages, Cache hit, and
+Reasoning. Cache hit is whole percent with `saved $X.XX` under it, or **—** with **Nothing priced to
+compare** when the period's cache reads could not be priced
+([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). At 640 px the card is one column.
+
+Under it, for every period but **Up to 2 years**, a **Daily** panel: one bar per UTC day of the
+period, a **Tokens** / **Cost** pair of `aria-pressed` text buttons deciding what they measure, and
+a **Show daily breakdown** disclosure over a semantic table with Date / Total / In / Out / Cached /
+Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input, and output, which
+add up to the day's total, using the three darkest activity steps; a day with nothing in it is drawn
+in `--activity-0` rather than left out. The panel is labelled **UTC**, the calendar the activity
+read answers. **Up to 2 years** has no Daily panel: its per-day shape is the Activity graph beside
+it. No period has a Rhythm — Relay stores hours on UTC keys and does not fold a local clock.
+
+Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens /
+Share / Cost column headers, and one `<tbody>` per agent. Above it sit the three largest models as
+an ordered list of `share · tokens`, and one share bar per provider. Group title rows
+(`<th scope="rowgroup">`) name the agent, then each inference provider. Model rows follow; the
+`other` fold bucket reads **Other**.
 Each provider shows five models and a **Show N more** / **Show fewer** control (`aria-expanded`)
 for the rest. A
 period with no agents reads **No Usage in this period.** Empty and loading states use a skeleton

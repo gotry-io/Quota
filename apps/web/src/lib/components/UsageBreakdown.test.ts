@@ -90,6 +90,34 @@ it("shows Other for the overflow model leaf", () => {
   expect(screen.queryByRole("rowheader", { name: "other" })).toBeNull();
 });
 
+it("names each model's share of the period and ranks the three largest", () => {
+  render(UsageBreakdown, {
+    period: period({
+      totals: totals(320, 80),
+      agents: [
+        {
+          agent: "codex",
+          providers: [
+            {
+              provider: "openai",
+              models: [
+                { model: "gpt-5", totals: totals(240, 60), cost: cost("10000") },
+                { model: "gpt-5-mini", totals: totals(80, 20), cost: cost("1000") },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  // Three quarters of the period's tokens against one quarter, stated on the row and in the rank.
+  expect(screen.getByRole("cell", { name: "75%" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "25%" })).toBeTruthy();
+  expect(screen.getByText("75% · 300")).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: "Share" })).toBeTruthy();
+});
+
 it("states the empty period", () => {
   render(UsageBreakdown, { period: period({ agents: [], partial: false }) });
   expect(screen.getByText("No Usage in this period.")).toBeTruthy();

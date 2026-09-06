@@ -34,7 +34,15 @@ The v6 data contract is four routes
   The rollup is read newest day first, so an account with more retained rows than one response can
   carry gets a shorter `all` rather than no summary at all.
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
+  day's `totals` carries `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+  `cache_write_input_tokens`, `reasoning_tokens`, and `messages` beside `total_tokens`, and its
+  `cost` is priced the same way a period's is — so a per-day table needs no second read. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
+
+Each period of `usage` also carries `cache_saved`: what its cache reads saved against paying the
+uncached input price for the same tokens, folded from the rows it already priced and therefore
+costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache
+hit rate is not on the wire; every client derives it from the totals beside it.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
