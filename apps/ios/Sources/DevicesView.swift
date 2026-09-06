@@ -8,9 +8,9 @@ struct DeviceRowContent: Equatable {
   var platform: String
   var age: String
 
-  /// This iPhone, as a row. It is not an Account Device — nothing here is registered with Relay
-  /// ([ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md)) — so its verdict comes
-  /// from the last local collection rather than from anything Relay witnessed.
+  /// This iPhone, as a row of its own. It is the one a phone that registered no Device gets:
+  /// its verdict comes from the last local collection rather than from anything Relay witnessed
+  /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
   static func thisIPhone(lastCollectedAt: Date?, now: Date = Date()) -> Self {
     let activity = DeviceActivity.make(
       lastSeenAt: lastCollectedAt,
@@ -30,6 +30,7 @@ struct DeviceRowContent: Equatable {
     let platform =
       switch device.platform {
       case .macos: "macOS"
+      case .ios: "iOS"
       case .unknown: "Unknown"
       }
     return DeviceRowContent(
@@ -95,8 +96,11 @@ struct DevicesView: View {
           .listRowBackground(Color.clear)
           .listRowSeparator(.hidden)
         }
-        // Last, because it is the one row that reports to nobody but this phone.
-        ThisIPhoneRow(lastCollectedAt: model.localCollection?.collectedAt)
+        // Last, and only when the Account does not already list this phone: a registered
+        // iPhone is one of the Devices above, not a second row beside itself.
+        if !model.isRegisteredDevice {
+          ThisIPhoneRow(lastCollectedAt: model.localCollection?.collectedAt)
+        }
       }
     }
     .listStyle(.insetGrouped)

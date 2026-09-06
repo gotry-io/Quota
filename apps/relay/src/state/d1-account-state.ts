@@ -18,6 +18,7 @@ import type {
   ConsumeEmailChallengeResult,
   ConsumeLoginGrantInput,
   CreateIosSessionInput,
+  CreateIosSessionResult,
   CreateEmailChallengeInput,
   CreateLoginGrantInput,
   CreateWebSessionInput,
@@ -49,9 +50,9 @@ import type {
 } from "@gotry-io/relay-core";
 import {
   decodeSessionScopes,
+  DEVICE_SESSION_SCOPES,
   encodeScopes,
-  IOS_SESSION_SCOPES,
-  QUOTABAR_SESSION_SCOPES,
+  READER_SESSION_SCOPES,
   type RateLimitRow,
   rateLimitResult,
   validateRateLimitInput,
@@ -287,11 +288,13 @@ export class D1AccountState implements AccountState {
    *
    * The Device is found or created by installation, every session it already had is revoked, and
    * one row is written carrying both what this login may read and what it may write. A second
-   * sign-in on the same Mac therefore leaves exactly one live token, not two families to keep in
-   * step.
+   * sign-in on the same device therefore leaves exactly one live token, not two families to keep
+   * in step. Which client asked decides only what the row is labelled, so a Mac and a phone that
+   * presented an installation take the same path
+   * ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
    */
   async consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult> {
-    const scopes = encodeScopes(QUOTABAR_SESSION_SCOPES);
+    const scopes = encodeScopes(DEVICE_SESSION_SCOPES);
     let results: D1Result<unknown>[];
     try {
       results = await this.database.batch([
@@ -302,6 +305,7 @@ export class D1AccountState implements AccountState {
            WHERE id = ?1 AND code_hash = ?2
              AND account_id IS NOT NULL AND completed_at IS NOT NULL
              AND consumed_at IS NULL AND expires_at > ?4
+             AND client_id = ?5
            RETURNING account_id`,
           )
           .bind(
@@ -309,6 +313,7 @@ export class D1AccountState implements AccountState {
             input.credential_hash,
             input.completion_nonce_hash,
             input.consumed_at,
+            input.client_id,
           ),
         this.database
           .prepare(
@@ -371,7 +376,7 @@ export class D1AccountState implements AccountState {
              access_token_hash, refresh_token_hash, scopes_json,
              authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
            )
-           SELECT ?1, ?2, grants.account_id, devices.id, devices.generation, 'quotabar',
+           SELECT ?1, ?2, grants.account_id, devices.id, devices.generation, ?12,
                   ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?6
            FROM login_grants AS grants
            INNER JOIN devices ON devices.account_id = grants.account_id
@@ -391,6 +396,7 @@ export class D1AccountState implements AccountState {
             input.installation_id_hash,
             input.grant_id,
             input.completion_nonce_hash,
+            input.client_kind,
           ),
         this.database
           .prepare(
@@ -448,7 +454,7 @@ export class D1AccountState implements AccountState {
   async consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult> {
-    const scopes = encodeScopes(IOS_SESSION_SCOPES);
+    const scopes = encodeScopes(READER_SESSION_SCOPES);
     let results: D1Result<unknown>[];
     try {
       results = await this.database.batch([
@@ -541,32 +547,101 @@ export class D1AccountState implements AccountState {
    * the whole credential — so revoking the family revokes exactly this cookie and no other client.
    */
   /**
-   * The iOS viewer's one session, written straight from a proved native identity.
+   * The iOS app's one session, written straight from a proved native identity.
    *
-   * The row is the one `consumeAccountLoginGrant` writes; only what proved the Account differs,
-   * so a session opened through Apple is revoked, refreshed, and swept exactly like the others.
+   * The row is the one the authorization-code exchange writes; only what proved the Account
+   * differs, so a session opened through Apple is revoked, refreshed, and swept exactly like the
+   * others. A phone that presented an installation gets the Device half of that path too: the
+   * Device is found or created, the sessions it already had end, and this one names it
+   * ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
    */
-  async createIosSession(input: CreateIosSessionInput): Promise<void> {
-    await this.database
-      .prepare(
-        `INSERT INTO sessions (
+  async createIosSession(input: CreateIosSessionInput): Promise<CreateIosSessionResult> {
+    const device = input.device;
+    if (!device) {
+      await this.database
+        .prepare(
+          `INSERT INTO sessions (
            id, family_id, account_id, device_id, device_generation, client_kind,
            access_token_hash, refresh_token_hash, scopes_json,
            authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
          ) VALUES (?1, ?2, ?3, NULL, NULL, 'ios', ?4, ?5, ?6, ?7, ?8, ?9, ?7, ?7)`,
-      )
-      .bind(
-        input.session.session_id,
-        input.family_id,
-        input.account_id,
-        input.session.access_token_hash,
-        input.session.refresh_token_hash,
-        encodeScopes(IOS_SESSION_SCOPES),
-        input.authenticated_at,
-        input.session.access_expires_at,
-        input.session.refresh_expires_at,
-      )
-      .run();
+        )
+        .bind(
+          input.session.session_id,
+          input.family_id,
+          input.account_id,
+          input.session.access_token_hash,
+          input.session.refresh_token_hash,
+          encodeScopes(READER_SESSION_SCOPES),
+          input.authenticated_at,
+          input.session.access_expires_at,
+          input.session.refresh_expires_at,
+        )
+        .run();
+      return { device: null };
+    }
+    const results = await this.database.batch([
+      this.database
+        .prepare(
+          `INSERT INTO devices (
+             id, account_id, installation_id_hash, display_name, platform,
+             created_at, last_login_at, last_seen_at
+           )
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6)
+           ON CONFLICT(account_id, installation_id_hash) DO UPDATE SET
+             display_name = excluded.display_name,
+             platform = excluded.platform,
+             last_login_at = excluded.last_login_at,
+             last_seen_at = excluded.last_seen_at,
+             signed_out_at = NULL,
+             deleted_at = NULL
+           RETURNING id, account_id, display_name, platform, generation,
+                     usage_sync_revision, created_at, last_login_at,
+                     last_seen_at, signed_out_at, deleted_at, deleted_before`,
+        )
+        .bind(
+          device.device_id,
+          input.account_id,
+          device.installation_id_hash,
+          device.display_name,
+          device.platform,
+          input.authenticated_at,
+        ),
+      // One device, one live session: signing in again on this phone ends what it held before.
+      this.database
+        .prepare(
+          `UPDATE sessions SET revoked_at = ?3
+           WHERE device_id = (
+             SELECT id FROM devices WHERE account_id = ?1 AND installation_id_hash = ?2
+           ) AND revoked_at IS NULL`,
+        )
+        .bind(input.account_id, device.installation_id_hash, input.authenticated_at),
+      this.database
+        .prepare(
+          `INSERT INTO sessions (
+             id, family_id, account_id, device_id, device_generation, client_kind,
+             access_token_hash, refresh_token_hash, scopes_json,
+             authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+           )
+           SELECT ?1, ?2, ?3, devices.id, devices.generation, 'ios', ?4, ?5, ?6, ?7, ?8, ?9, ?7, ?7
+           FROM devices
+           WHERE devices.account_id = ?3 AND devices.installation_id_hash = ?10
+             AND devices.deleted_at IS NULL AND devices.signed_out_at IS NULL`,
+        )
+        .bind(
+          input.session.session_id,
+          input.family_id,
+          input.account_id,
+          input.session.access_token_hash,
+          input.session.refresh_token_hash,
+          encodeScopes(DEVICE_SESSION_SCOPES),
+          input.authenticated_at,
+          input.session.access_expires_at,
+          input.session.refresh_expires_at,
+          device.installation_id_hash,
+        ),
+    ]);
+    return { device: resultRow<DeviceRecord>(results[0]) };
   }
 
   async createWebSession(input: CreateWebSessionInput): Promise<void> {

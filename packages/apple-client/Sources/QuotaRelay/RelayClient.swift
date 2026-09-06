@@ -26,6 +26,8 @@ public enum RelayRoute: CaseIterable, Sendable {
   case accountIdentities
   case accountSummary
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?)
+  case deviceSync
+  case deviceSnapshots
 
   public static var allCases: [RelayRoute] {
     [
@@ -35,13 +37,16 @@ public enum RelayRoute: CaseIterable, Sendable {
       .accountIdentities,
       .accountSummary,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil),
+      .deviceSync,
+      .deviceSnapshots,
     ]
   }
 
   public var method: String {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
-    case .accountIdentities, .accountSummary, .accountUsageActivity: "GET"
+    case .accountIdentities, .accountSummary, .accountUsageActivity, .deviceSync: "GET"
+    case .deviceSnapshots: "PUT"
     }
   }
 
@@ -53,6 +58,8 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .accountIdentities: "/api/v2/account"
     case .accountSummary: "/api/v6/account/summary"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
+    case .deviceSync: "/api/v2/device/sync"
+    case .deviceSnapshots: "/api/v6/device/snapshots"
     }
   }
 
@@ -66,7 +73,8 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("detail", detail.rawValue))
       }
       return items
-    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary:
+    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .deviceSync,
+      .deviceSnapshots:
       return []
     }
   }
@@ -95,14 +103,18 @@ public struct RelayClient: Sendable {
     self.transport = transport
   }
 
-  public func exchangeAuthorizationCode(code: String, verifier: String) async throws
-    -> IosOAuthTokenResponse
-  {
+  /// Trade the authorization code for this app's one session, naming the Device it is to speak
+  /// for when `device` is given.
+  public func exchangeAuthorizationCode(
+    code: String,
+    verifier: String,
+    device: IosDeviceRegistration? = nil
+  ) async throws -> IosOAuthTokenResponse {
     guard WireValidation.isSecret(code), WireValidation.isPKCEVerifier(verifier) else {
       throw RelayClientError.invalidResponse
     }
     let body = try WireCodec.encodeRequest(
-      IosLoginExchangeRequest(code: code, codeVerifier: verifier))
+      IosLoginExchangeRequest(code: code, codeVerifier: verifier, device: device))
     return try await send(
       route: .token,
       query: [],
@@ -113,15 +125,17 @@ public struct RelayClient: Sendable {
     )
   }
 
-  /// Trade the identity token Apple signed on this device for the viewer's one session.
-  public func exchangeAppleIdentityToken(identityToken: String, nonce: String) async throws
-    -> IosOAuthTokenResponse
-  {
+  /// Trade the identity token Apple signed on this device for this app's one session.
+  public func exchangeAppleIdentityToken(
+    identityToken: String,
+    nonce: String,
+    device: IosDeviceRegistration? = nil
+  ) async throws -> IosOAuthTokenResponse {
     guard WireValidation.isCompactJWS(identityToken), WireValidation.isPKCEVerifier(nonce) else {
       throw RelayClientError.invalidResponse
     }
     let body = try WireCodec.encodeRequest(
-      AppleNativeSignInRequest(identityToken: identityToken, nonce: nonce))
+      AppleNativeSignInRequest(identityToken: identityToken, nonce: nonce, device: device))
     return try await send(
       route: .appleSignIn,
       query: [],
@@ -266,6 +280,44 @@ public struct RelayClient: Sendable {
       bearer: accessToken,
       expectedStatus: 200,
       decode: AccountUsageActivityResponse.self
+    )
+  }
+
+  /// The Device's control document, and the first half of an upload.
+  ///
+  /// It answers the generation the envelope must name. It is also the boundary that says paid
+  /// sync is off, so a phone learns that before it sends a reading anywhere.
+  public func fetchDeviceSync(accessToken: String) async throws -> DeviceSyncResponse {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    return try await send(
+      route: .deviceSync,
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: DeviceSyncResponse.self
+    )
+  }
+
+  /// Upload what this device read. Nothing but the readings goes: no credential, and no Usage.
+  public func uploadSnapshots(accessToken: String, envelope: QuotaSnapshotEnvelope) async throws
+    -> QuotaSnapshotUploadResponse
+  {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    guard envelope.isValid else {
+      throw RelayClientError.invalidResponse
+    }
+    return try await send(
+      route: .deviceSnapshots,
+      query: [],
+      body: try WireCodec.encodeRequest(envelope),
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: QuotaSnapshotUploadResponse.self
     )
   }
 

@@ -416,7 +416,7 @@ describe("quota protocol", () => {
     ).toBe(true);
   });
 
-  it("adds a strictly additive quota-ios account-only token contract", () => {
+  it("lets quota-ios exchange a reader's session or a Device's", () => {
     const iosExchange = {
       protocol_version: 2,
       grant_type: "authorization_code",
@@ -427,12 +427,28 @@ describe("quota protocol", () => {
     };
     expect(IosLoginExchangeRequestSchema.safeParse(iosExchange).success).toBe(true);
     expect(BrowserLoginExchangeRequestSchema.safeParse(iosExchange).success).toBe(false);
+    // An installation, the name to list it under, and the platform it runs travel together.
     expect(
       IosLoginExchangeRequestSchema.safeParse({
         ...iosExchange,
         installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
         device_display_name: "iPhone",
         platform: "ios",
+      }).success,
+    ).toBe(true);
+    expect(
+      IosLoginExchangeRequestSchema.safeParse({
+        ...iosExchange,
+        installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+      }).success,
+    ).toBe(false);
+    // A phone cannot register itself as a Mac.
+    expect(
+      IosLoginExchangeRequestSchema.safeParse({
+        ...iosExchange,
+        installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+        device_display_name: "iPhone",
+        platform: "macos",
       }).success,
     ).toBe(false);
     expect(
@@ -447,10 +463,10 @@ describe("quota protocol", () => {
         redirect_uri: "io.gotry.quota://oauth/callback",
       }).success,
     ).toBe(false);
-    expect(protocol.PlatformSchema.safeParse("ios").success).toBe(false);
-    // QuotaBar is the only client that registers a Device, and it runs on one platform.
-    expect(protocol.PlatformSchema.options).toEqual(["macos"]);
+    // Both Apple clients register a Device, so both platforms are ones a Device can report.
+    expect(protocol.PlatformSchema.options).toEqual(["macos", "ios"]);
     expect(protocol.platformDisplayName("macos")).toBe("macOS");
+    expect(protocol.platformDisplayName("ios")).toBe("iOS");
     expect(protocol.platformDisplayName("linux")).toBe("Unknown");
 
     const session = {
@@ -468,9 +484,17 @@ describe("quota protocol", () => {
     };
     expect(IosOAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(true);
     expect(OAuthTokenResponseSchema.safeParse(iosResponse).success).toBe(false);
+    // The Device a session names is stated with the generation it was opened at, or not at all.
     expect(
       IosOAuthTokenResponseSchema.safeParse({ ...iosResponse, device_id: "device_01" }).success,
     ).toBe(false);
+    expect(
+      IosOAuthTokenResponseSchema.safeParse({
+        ...iosResponse,
+        device_id: "device_01",
+        device_generation: 1,
+      }).success,
+    ).toBe(true);
     // Signing in names the Account, so a client says whose account it reached before it has
     // read one. An Account that kept no label still states the key.
     expect(

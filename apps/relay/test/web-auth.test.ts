@@ -2,14 +2,14 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { AccountService } from "../src/account/service.ts";
-import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { GitHubIdentityProvider } from "../src/account/github-identity.ts";
 import { SignInHandoff } from "../src/account/identity.ts";
+import { AccountService } from "../src/account/service.ts";
+import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { WebSessions } from "../src/account/web-session.ts";
 import { createRelayApp } from "../src/app.ts";
-import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
+import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 
@@ -643,11 +643,13 @@ describe("an Account owns the identities that reach it", () => {
       await env.DB.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
     ).toBe(2);
 
-    const asHtml = await linkGitHub(relay, cookie, "taken-again", { Accept: "text/html" });
-    expect(asHtml.status).toBe(200);
-    const page = await asHtml.text();
-    expect(page).toContain("identity_taken");
-    expect(page).toContain("That GitHub account is already linked to another Quota account.");
+    const asHtml = await linkGitHub(relay, cookie, "taken-again", {
+      Accept: "text/html",
+      returnTo: "/my/settings",
+    });
+    expect(asHtml.status).toBe(302);
+    expect(asHtml.headers.get("location")).toBe("/my/settings?linked=taken");
+    expect(asHtml.headers.get("content-type")).not.toMatch(/text\/html/);
   });
 
   it("keeps the last way into an Account", async () => {
@@ -754,9 +756,13 @@ async function linkGitHub(
   relay: ReturnType<typeof harness>,
   cookie: string,
   code: string,
-  headers: Record<string, string> = {},
+  headers: Record<string, string> & { returnTo?: string } = {},
 ): Promise<Response> {
-  const started = await relay.app.request(`${origin}/api/auth/github/start?intent=link`, {
+  const { returnTo, ...requestHeaders } = headers;
+  const start = new URL(`${origin}/api/auth/github/start`);
+  start.searchParams.set("intent", "link");
+  if (returnTo !== undefined) start.searchParams.set("return_to", returnTo);
+  const started = await relay.app.request(start, {
     headers: { Cookie: cookie },
   });
   expect(started.status).toBe(302);
@@ -764,7 +770,7 @@ async function linkGitHub(
   const handoff = onlyCookie(started);
   return relay.app.request(
     `${origin}/api/auth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-    { headers: { Cookie: `${cookie}; ${handoff.name}=${handoff.value}`, ...headers } },
+    { headers: { Cookie: `${cookie}; ${handoff.name}=${handoff.value}`, ...requestHeaders } },
   );
 }
 

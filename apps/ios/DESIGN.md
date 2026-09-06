@@ -22,7 +22,7 @@ Core rules:
    open on whatever this phone read for itself.
 3. Last-good Account data stays visible across transient failures. A status line states that in
    words, not color alone.
-4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
+8. Views render typed `packages/apple-client` results. They never show tokens, opaque session
    material, raw JSON, or device identifiers.
 5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, Reduce
    Transparency, and light or dark appearance. System controls handle Reduce Transparency; the app
@@ -299,12 +299,13 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Period totals
-come from the same Account summary as Overview: the four precomputed periods `today`,
-`last_7_days`, `last_30_days`, and `all`. Opening Usage requests the last 365 UTC days of activity
-once (`from = today-364`, `to = today`) and keeps that answer in memory; it does not write it to
-disk. A failure stays in the Activity section and does not block the period totals or model
-sections.
+Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Four periods —
+`today`, `last_7_days`, `last_30_days`, `all` — come precomputed from the same Account summary as
+Overview. Every other period is added up on this iPhone from the activity days it already holds,
+which is why it has totals and cost but no model breakdown. Opening Usage requests the last 365 UTC
+days of activity once (`from = today-364`, `to = today`) and keeps that answer in memory; it does
+not write it to disk. A failure stays in the Activity section and does not block the period totals
+or model sections, but it does leave a folded period and the budget bar with nothing to add up.
 
 Header:
 
@@ -312,32 +313,47 @@ Header:
 
 Body, in order:
 
-1. A segmented period control in the first List row: **Today**, **7 Days**, **30 Days**, and
-   **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
+1. A segmented period control in the first List row: **Day**, **Week**, **Month**, **7D**, **30D**,
+   and **All**, whose VoiceOver names are the full ones in Shared product vocabulary. Default is
+   **Last 30 days**. A custom range selects none of the six, so the control shows nothing selected.
    The selection lives in memory for the signed-in session. It is a system content filter, not a
    floating navigation action, and it scrolls with the List.
-2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
+2. A stepper row under it: a **Previous period** chevron, the range the period covers, a **Next
+   period** chevron, and a calendar button. Stepping applies to Day, Week, and Month only, and the
+   current unit is the last, so both chevrons are disabled on a fixed window and **Next period** is
+   disabled on the current one. The calendar button opens a **Custom range** sheet of two
+   `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
+3. A **Monthly budget** section: a `ProgressView` and one monospaced-digit line of
+   `spent / budget · percent` for this month, or **No budget is set for this month.**, then a
+   **Set budget** / **Edit budget** row opening a sheet with the amount in USD and a **Tell me at
+   80% and 100%** toggle. Both fields are `UserDefaults` on this iPhone and are never uploaded.
+   The two crossings post one local notification each per calendar month.
+4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
    **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
    **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
    section is `{input} in · {output} out`, the cost-basis line, `Cache hit {percent} · saved $X.XX`
    when the period's cache reads could be priced, and **Some hours in this period were scanned
    incompletely.** when `partial` is true. Cache hit and its saving follow
    [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text
-   styles, primary color, so contrast and Dynamic Type stay system-owned.
-3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+   styles, primary color, so contrast and Dynamic Type stay system-owned. A period this iPhone
+   added up itself carries no cache saving, so that line is absent there.
+5. When the period was added up here rather than read from the summary, one line saying so, in
+   place of the model sections: the breakdown is on Today, Last 7 days, Last 30 days, and All.
+6. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
-3a. Daily section, headed **Daily**, for any period but 2 Years and only when those days reported
-   something. A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
+6a. Daily section, headed **Daily**, for any period but All and only when those days reported
+   something. It covers the days the period covers, bounded by the activity days this phone holds.
+   A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
    bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
    is one fill. The bars are `Color.primary` at 25% / 55% / 90%, and a day with nothing in it is
    drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
    days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
-   messages` beneath. The section footer names the calendar: **UTC days.** The 2 Years period has no
+   messages` beneath. The section footer names the calendar: **UTC days.** The All period has no
    Daily section, and neither has any period a Rhythm — Relay stores hours on UTC keys and does not
    fold a local clock, so the hour-of-day view is QuotaBar's alone
    ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-4. Activity section, headed **Activity**:
+7. Activity section, headed **Activity**:
    - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
      activity**.
    - Failure: **Couldn't load activity.** plus a native **Retry** row.
@@ -353,9 +369,9 @@ Body, in order:
      increment/decrement changes the same selection. Under the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
      that day.
-4a. Top models section, headed **Top models**, when the period has more than one model leaf: the
+7a. Top models section, headed **Top models**, when the period has more than one model leaf: the
    three largest, each as `{share} · {tokens}`.
-5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+8. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
    Cursor). Provider names are subhead rows (`InferenceProvider.displayName`) ending in that
    provider's whole-percent share of the period, with a 4pt share bar under them; models are
    standard rows with the model name leading and `{tokens} · {cost} · {share}` trailing. The model `other` is
@@ -729,7 +745,10 @@ provider and support, and no custom card chrome beyond the system widget contain
   - contrast on an element that cannot be hit while a sheet's Done button is up: the presentation
     dims what is behind it, and that dimming is the system's;
   - contrast on `usage.activity.selected-day`: the date label shares its row container with the
-    selected heatmap cell, whose accent ring the auditor reads as the label's background
+    selected heatmap cell, whose accent ring the auditor reads as the label's background;
+  - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which
+    iOS 26.3 passes and the 26.5 simulator reports as failing for the second row only — an
+    exception to remove once that report reproduces
     (inset by 40 pt horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit
     over the last visible rows, so the contrast auditor samples the glass, not the row, and the
     clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never
@@ -749,13 +768,15 @@ provider and support, and no custom card chrome beyond the system widget contain
     full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today rows the
     bullet above names by frame. Named identifiers:
     `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
-    `usage.show-fewer`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
+    `usage.show-fewer`, `usage.daily.table`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
     `overview.today.cost`, `overview.today.input`, `overview.today.output`,
     `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
     `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
     `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
-    `usage.provider.<provider id>`, the About **License** and **Version** labels, the Notifications
-    **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
+    `usage.provider.<provider id>`, the totals-row labels **Tokens**, **API-equivalent cost**,
+    **Cache hit**, and **Reasoning**, the Daily **Daily breakdown** disclosure label, the
+    About **License** and **Version** labels, the
+    Notifications **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
     **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
     Mac**, **Download QuotaBar**.
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry

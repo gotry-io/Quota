@@ -10,6 +10,7 @@ import {
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
+  type AppleNativeSignInRequest,
   AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
@@ -17,10 +18,11 @@ import {
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   IanaTimezoneSchema,
+  IdentityLinkResponseSchema,
   type IdentityProvider,
   IdentityProviderSchema,
+  type IosLoginExchangeRequest,
   IosLoginExchangeRequestSchema,
-  IdentityLinkResponseSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
@@ -50,11 +52,11 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
-  PublicProfileRecord,
   AccountUsageVersionStamp,
   AccountVersionStamp,
   DeviceRecord,
   DeviceWriterPrincipal,
+  PublicProfileRecord,
   SessionPrincipal,
   SessionScope,
   StoredEntitlement,
@@ -63,7 +65,9 @@ import type {
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import {
+  acceptsHtml,
   type BrowserSignInFailureReason,
   htmlOrJsonSignInError,
 } from "./account/browser-error-page.ts";
@@ -80,24 +84,21 @@ import {
   AccountFlowError,
   type AccountService,
   accessTokenDomain,
+  type IosDeviceRegistration,
   isIosRedirect,
   isLoopbackRedirect,
   refreshTokenDomain,
 } from "./account/service.ts";
-import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import {
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
+  linkedTakenReturnPath,
   type RegisteredIdentityProvider,
   safeReturnPath,
   type WebSessionPort,
   type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
-import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
-import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
-import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import {
   type BillingBindings,
   foldWebhookEvent,
@@ -111,6 +112,10 @@ import {
   webhookEventId,
   webhookEventType,
 } from "./entitlement.ts";
+import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
+import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
+import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
 /** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
@@ -741,7 +746,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         }),
       );
     }
-    const issued = await apple.signIn(request.identity_token, request.nonce, now());
+    const issued = await apple.signIn(
+      request.identity_token,
+      request.nonce,
+      iosDeviceRegistration(request),
+      now(),
+    );
     if (isNativeIdentityRefusal(issued)) return appleTokenRefused(context);
     return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
   });
@@ -817,7 +827,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       }
       if (iosTokenRequest.success) {
         const issued = await options.accountService.exchangeIosAuthorizationCode(
-          iosTokenRequest.data,
+          { ...iosTokenRequest.data, device: iosDeviceRegistration(iosTokenRequest.data) },
           now(),
         );
         return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
@@ -1580,21 +1590,21 @@ function answerWebSignIn(
     // code when a sign-in fails in production, and nothing a log reader could replay.
     console.warn("web_signin_rejected", { provider, reason: completed.reason });
     context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+    if (completed.reason === "identity_taken") {
+      // A JSON client still sees the 409. A browser that asked to link is sent back to the
+      // page it named so that page can say the channel is already how another Account is reached.
+      const json = relayError(
+        context,
+        409,
+        "conflict",
+        "That identity already belongs to another Quota account.",
+      );
+      if (!acceptsHtml(context.req.header("Accept"))) return json;
+      return context.redirect(linkedTakenReturnPath(completed.return_to), 302);
+    }
     return browserSignInFailure(
       context,
-      completed.reason === "identity_taken"
-        ? relayError(
-            context,
-            409,
-            "conflict",
-            "That identity already belongs to another Quota account.",
-          )
-        : relayError(
-            context,
-            400,
-            "invalid_request",
-            "The sign-in request could not be completed.",
-          ),
+      relayError(context, 400, "invalid_request", "The sign-in request could not be completed."),
       signInFailureReason(completed.reason),
       identityProviderDisplayName(provider),
     );
@@ -1852,14 +1862,35 @@ function publicDevice(device: DeviceRecord, lastObserved: ReadonlyMap<string, st
   };
 }
 
+/**
+ * What the phone presented, or null when it presented nothing.
+ *
+ * The three fields are one answer on the wire, so they are one answer here: a request carrying
+ * an installation carries the name and platform beside it, and the schema has already refused
+ * one that does not.
+ */
+function iosDeviceRegistration(
+  request: AppleNativeSignInRequest | IosLoginExchangeRequest,
+): IosDeviceRegistration | null {
+  return "installation_id" in request
+    ? {
+        installation_id: request.installation_id,
+        device_display_name: request.device_display_name,
+        platform: request.platform,
+      }
+    : null;
+}
+
 function iosOAuthTokenResponse(
   issued: Awaited<ReturnType<AccountService["exchangeIosAuthorizationCode"]>>,
 ) {
+  const device = issued.device;
   return {
     protocol_version: PROTOCOL_VERSION,
     token_type: issued.token_type,
     account_id: issued.account_id,
     display_label: issued.display_label,
+    ...(device ? { device_id: device.id, device_generation: device.generation } : {}),
     session: sessionToken(issued.session),
   };
 }

@@ -251,6 +251,14 @@ pub trait LocalBackend: Send + Sync {
         let _ = (cancel, updates, trigger);
         unavailable_refresh_outcome()
     }
+    /// One custom period, folded from the hours this device has stored.
+    ///
+    /// `from` and `to` are inclusive local dates. The four periods `get_state` carries are
+    /// folded on every refresh; a range someone picked is folded when it is asked for.
+    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        let _ = (from, to);
+        Err(BackendError::unavailable())
+    }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -643,6 +651,7 @@ impl LocalService {
             Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
             Operation::ResetCache => self.reset_cache(&request).map(as_json),
+            Operation::UsagePeriod => self.usage_period(&request),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
@@ -709,6 +718,15 @@ impl LocalService {
     fn ping(request: &IpcRequest) -> Result<PingResult, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
         Ok(PingResult { ok: true })
+    }
+
+    /// Folds one custom local period, which `get_state` does not carry.
+    fn usage_period(&self, request: &IpcRequest) -> Result<Value, IpcError> {
+        let payload = request.decode_payload::<UsagePeriodPayload>()?;
+        self.inner
+            .backend
+            .usage_period(&payload.from, &payload.to)
+            .map_err(|error| error.error)
     }
 
     fn get_state(&self, request: &IpcRequest) -> Result<StateSnapshot, IpcError> {

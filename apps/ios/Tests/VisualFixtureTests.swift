@@ -181,7 +181,10 @@ struct VisualFixtureParserTests {
       let codex = try #require(
         model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
       #expect(codex.sources.count == 2)
-      #expect(model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
+      #expect(
+        model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac", "Kyle iPhone"])
+      // This phone is one of them, so Devices does not draw a second row for it.
+      #expect(model.isRegisteredDevice)
       let readings = SubscriptionDetailContent.make(
         subscription: codex,
         deviceNames: model.readingDeviceNames,
@@ -208,7 +211,7 @@ struct VisualFixtureParserTests {
         .models ?? []
       #expect(openaiModels.count > 5)
       #expect(openaiModels.contains { $0.model == "other" })
-      #expect(model.selectedUsagePeriod == .last30Days)
+      #expect(model.usagePeriod == .last30Days)
 
       guard case .loaded(let days) = model.activityChart else {
         Issue.record("content fixture should preload activity")

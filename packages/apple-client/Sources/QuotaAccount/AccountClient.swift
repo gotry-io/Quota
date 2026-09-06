@@ -15,6 +15,8 @@ public enum AccountClientError: Error, Equatable, Sendable {
   /// It is a state of the account rather than a transport failure, so it is named here instead of
   /// reaching callers as one more rejected status.
   case subscriptionRequired
+  /// This session registered no Device, so there is nothing for it to write.
+  case notADevice
   case relay(RelayClientError)
 
   init(_ error: RelayClientError) {
@@ -98,9 +100,16 @@ public actor AccountClient {
     try loadBoundCachedSummary()
   }
 
-  public func completeLogin(callback: URL, expected: AuthorizationAttempt) async throws
-    -> AccountSession
-  {
+  /// Finish a browser sign-in, presenting this device's installation when it has one.
+  ///
+  /// A phone that presents one gets a session naming a Device and may upload what it reads; one
+  /// that presents none is the reader
+  /// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+  public func completeLogin(
+    callback: URL,
+    expected: AuthorizationAttempt,
+    device: IosDeviceRegistration? = nil
+  ) async throws -> AccountSession {
     let code: String
     do {
       code = try OAuthCallback.parse(callback, expected: expected)
@@ -110,7 +119,8 @@ public actor AccountClient {
     do {
       let tokens = try await relay.exchangeAuthorizationCode(
         code: code,
-        verifier: expected.verifier
+        verifier: expected.verifier,
+        device: device
       )
       let session = AccountSession(tokens)
       try persist(session)
@@ -124,11 +134,16 @@ public actor AccountClient {
   ///
   /// The session it writes is `pending`, exactly as a browser sign-in's is: which Account this
   /// reached is still a question the person answers on the confirm screen.
-  public func exchangeApple(identityToken: String, nonce: String) async throws -> AccountSession {
+  public func exchangeApple(
+    identityToken: String,
+    nonce: String,
+    device: IosDeviceRegistration? = nil
+  ) async throws -> AccountSession {
     do {
       let tokens = try await relay.exchangeAppleIdentityToken(
         identityToken: identityToken,
-        nonce: nonce
+        nonce: nonce,
+        device: device
       )
       let session = AccountSession(tokens)
       try persist(session)
@@ -220,6 +235,35 @@ public actor AccountClient {
       return .failure(AccountClientError(error))
     } catch {
       return .failure(.relay(.unavailable))
+    }
+  }
+
+  /// Send what this device read to the Account it belongs to.
+  ///
+  /// The control document is read first: it answers the generation the envelope must name, and
+  /// it is where a 402 says paid sync is off, so nothing is sent before this Account is known to
+  /// accept it ([ADR 0033](../../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
+  /// A session that names no Device has nothing to upload with and says so rather than asking.
+  public func uploadSnapshots(_ snapshots: [QuotaSnapshot]) async -> AccountClientError? {
+    do {
+      _ = try await withAuthorizedSession { session in
+        guard session.deviceID != nil else { throw AccountClientError.notADevice }
+        let control = try await relay.fetchDeviceSync(accessToken: session.accessToken)
+        return try await relay.uploadSnapshots(
+          accessToken: session.accessToken,
+          envelope: QuotaSnapshotEnvelope(
+            generation: control.deviceGeneration,
+            snapshots: snapshots
+          )
+        )
+      }
+      return nil
+    } catch let error as AccountClientError {
+      return error
+    } catch let error as RelayClientError {
+      return AccountClientError(error)
+    } catch {
+      return .relay(.unavailable)
     }
   }
 
@@ -356,7 +400,8 @@ public actor AccountClient {
       guard rotated.accountID == current.accountID else {
         throw AccountClientError.accountMismatch
       }
-      let session = AccountSession(rotated, activation: current.activation)
+      let session = AccountSession(
+        rotated, deviceID: current.deviceID, activation: current.activation)
       try persist(session)
       return session
     } catch RelayClientError.invalidGrant {

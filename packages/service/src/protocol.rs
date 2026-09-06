@@ -7,12 +7,14 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub const IPC_VERSION: u32 = 1;
+pub const IPC_VERSION: u32 = 2;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 /// Allowed Quota collection intervals, in seconds. The default is five minutes.
 pub const QUOTA_REFRESH_INTERVALS_SECONDS: [u64; 5] = [60, 120, 300, 600, 900];
 pub const DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS: u64 = 300;
+/// How many local days one `usage_period` request may fold, which is a year and a leap day.
+pub const MAXIMUM_USAGE_PERIOD_DAYS: i64 = 366;
 /// How often a signed-in helper asks Relay for an Account summary without collecting quota.
 pub const ACCOUNT_SYNC_INTERVAL_SECONDS: u64 = 60;
 /// How often the helper polls each catalog status page. Failures keep the last reading.
@@ -27,6 +29,7 @@ pub enum Operation {
     RecheckDiagnostics,
     Refresh,
     ResetCache,
+    UsagePeriod,
     Login,
     CancelLogin,
     Logout,
@@ -341,6 +344,18 @@ pub struct ReplaceProviderBrowserSessionsPayload {
     pub cookie_headers: Vec<String>,
     #[serde(default)]
     pub access_denials: Vec<ProviderBrowserAccessDenial>,
+}
+
+/// The custom period a Usage page asks this device to fold, as two inclusive local dates.
+///
+/// `get_state` carries the four periods every panel opens on. Anything else — a week, a month,
+/// a range someone picked — is asked for one range at a time rather than folded four more times
+/// on every refresh.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsagePeriodPayload {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1252,9 +1252,13 @@ enum Fixtures {
   static let accessToken = "qia_synthetic_access_token"
   static let refreshToken = "qiar_synthetic_refresh_token"
 
-  static func session(activation: AccountSessionActivation = .active) -> AccountSession {
+  static func session(
+    activation: AccountSessionActivation = .active,
+    deviceID: String? = nil
+  ) -> AccountSession {
     AccountSession(
       accountID: "account_01",
+      deviceID: deviceID,
       accessToken: accessToken,
       accessExpiresAt: date("2026-08-14T12:15:00Z"),
       refreshToken: refreshToken,
@@ -1305,7 +1309,8 @@ enum Fixtures {
 
   static func accountSummaryJSON(
     accountID: String = "account_01",
-    entitlement: [String: Any]? = nil
+    entitlement: [String: Any]? = nil,
+    devices: [[String: Any]] = []
   ) throws -> Data {
     let entitlement = entitlement ?? Self.entitlement()
     let period: [String: Any] = [
@@ -1346,7 +1351,7 @@ enum Fixtures {
           "display_label": "octocat",
           "created_at": "2026-07-01T00:00:00Z",
         ],
-        "devices": [],
+        "devices": devices,
         "subscriptions": [],
         "usage": [
           "today": period,

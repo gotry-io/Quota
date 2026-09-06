@@ -43,19 +43,17 @@ The site has these routes:
    control lives in the footer.
 2. `/sign-in` is where every sign-in starts, including the one QuotaBar and Quota for iPhone
    open in a browser. Signed out, it is `Sign in to Quota`, one sentence that an Account is
-   reached the same way however you sign in, and one button per channel this build offers
-   (**Continue with GitHub** and **Continue with Apple** today), each linking
-   `/api/auth/<provider>/start?return_to=…`. Apple's button is its own: black with a white mark
-   and label in a light appearance, white with a black one in dark, drawn from Apple's mark
-   rather than any emoji or substitute glyph, and it does not take the site's ink tokens.
-   Signed in, it asks which Account this is: **Continue as \<display label\>** and **Use a
-   different account**, which signs this browser out and comes back here. `return_to` defaults
-   to `/my`, and anything but a same-origin path is a 400. The page is `noindex, nofollow`.
-   reached the same way however you sign in, **Continue with GitHub** linking
-   `/api/auth/github/start?return_to=…`, and an email field with **Send sign-in link**. After a
-   202, the same page becomes **Check your email** with **Use another way** to return to the
-   methods. Signed in, it asks which Account this is: **Continue as \<display label\>** and
-   **Use a different account**, which signs this browser out and comes back here. `return_to`
+   reached the same way however you sign in, then the channels in this order: **Continue with
+   Apple**, **Continue with GitHub**, and an email field with **Send sign-in link**. Apple and
+   GitHub link `/api/auth/<provider>/start?return_to=…`. Apple's button is its own: black with a
+   white mark and label in a light appearance, white with a black one in dark, drawn from
+   Apple's mark rather than any emoji or substitute glyph, and it does not take the site's ink
+   tokens. After a 202, the same page becomes **Check your email** with **Use another way** to
+   return to the methods. Signed in, it asks which Account this is: **Continue as \<display
+   label\>** and **Use a different account**, which signs this browser out and comes back here.
+   When the return is Delete Account (`return_to` carries `delete=account`), the heading is
+   **Sign in again to delete your account** and the methods are shown so the session is
+   authenticated again — **Continue as** does not refresh `authenticated_at`. `return_to`
    defaults to `/my`, and anything but a same-origin path is a 400. The page is
    `noindex, nofollow`.
 3. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
@@ -124,8 +122,15 @@ The site has these routes:
    - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Sync
      (status `Active · renews Oct 5` / `Active · ends Oct 5` / `Grace period · update your
      payment` / `Not subscribed`, with `· last checked <relative>` when the entitlement is
-     stale; Subscribe or Manage subscription opens `purchase.web_url` in a new tab); Account
-     (GitHub login and Delete Account); Public profile; Legal. `?delete=account` scrolls to the
+     stale; Subscribe or Manage subscription opens `purchase.web_url` in a new tab); Sign-in
+     methods (Apple, GitHub, Email in that order. A bound channel shows its label and
+     **Unlink**; the last one is disabled with **Keep at least one way to sign in**, and unlinking
+     uses the same ten-minute freshness as Delete Account. An unbound Apple or GitHub is
+     **Link** to `/api/auth/<provider>/start?intent=link&return_to=/my/settings`. Unbound Email
+     is **Link**, then an inline form `POST /api/auth/email/start` with `intent: "link"`, then
+     **Check your email**. `?linked=taken` shows **That account is already linked to another
+     Quota account.** once at the top of the page and then drops the query); Account (the
+     display label and Delete Account); Public profile; Legal. `?delete=account` scrolls to the
      delete region and focuses its heading. Legal links Privacy, Terms, and Support. Sign out
      stays in the header account menu. Public profile is the handle field (prefixed
      `quota.gotry.io/u/`), **Publish this page**, **Show which models**, **Show API-equivalent
@@ -267,9 +272,25 @@ entitlement is `active` or `grace`. Under Usage, period tabs sit on the same row
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
-**30 Days**, and **Up to 2 years** (`all`); **30 Days** is the default. The selected tab is
-`?period=today|7d|30d|all`, so a refresh keeps it. At 1024 px and above the model tree and Activity
+partial cost uses a lower bound marker. The Usage page period tabs are **Day**, **Week**, **Month**,
+**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
+vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
+sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and
+Month only, and **Next period** is disabled on the current unit. **Custom** opens two native date
+inputs bounded by the activity range and an **Apply**. The selection is
+`?period=day|week|month|7d|30d|all|custom`, plus `&offset=` on a stepped period and `&from=&to=` on
+a custom one, so a refresh keeps it. Today, 7D, 30D, and All are read from the Account summary;
+every other period is folded in the browser from the activity days the page already holds, so it
+shows totals and cost and says in one line that the model breakdown is on the four the summary
+carries.
+
+Above the totals is a **Monthly budget** card: an amount in USD, a **Tell me at 80% and 100%**
+switch, and a meter reading `spent / budget · percent` against this month's fold. Both fields live
+in `localStorage` and never reach Relay. Crossing 80% and then 100% shows one `role="status"` line
+each per calendar month with a **Got it** button that records the crossing, because a browser page
+posts no notification. With no budget set the card reads **No budget is set for this month.**
+
+At 1024 px and above the model tree and Activity
 sit side by side; below 1024 px they stack, tree first. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
@@ -326,8 +347,10 @@ must say that both the Device and its Quota/Usage data are removed. Empty Device
 card. Settings is a grouped form: Appearance; Sync (status `Active · renews Oct 5` / `Active ·
 ends Oct 5` / `Grace period · update your payment` / `Not subscribed`, plus `· last checked
 <relative>` when stale; **Subscribe** or **Manage subscription** opens the RevenueCat Web Purchase
-Link in a new tab); Account (GitHub login and Delete Account, with `?delete=account` focusing the
-delete heading); Legal (Privacy, Terms, Support). Sign out stays in the header account menu.
+Link in a new tab); Sign-in methods (Apple, GitHub, Email; bound label plus **Unlink**, last
+**Unlink** disabled with **Keep at least one way to sign in**; unbound **Link** or the Email
+form); Account (display label and Delete Account, with `?delete=account` focusing the delete
+heading); Legal (Privacy, Terms, Support). Sign out stays in the header account menu.
 Notification rules are documented at `/support#notifications`.
 
 The Usage totals card carries five tiles: Tokens, API-equivalent cost, Messages, Cache hit, and

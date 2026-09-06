@@ -184,6 +184,9 @@ export interface CompleteIdentityLoginResult {
 
 export interface ConsumeLoginGrantInput {
   grant_id: string;
+  /** The public client whose grant this is. A grant is consumed by the client that opened it. */
+  client_id: string;
+  client_kind: SessionClientKind;
   credential_hash: string;
   completion_nonce_hash: string;
   installation_id_hash: string;
@@ -219,17 +222,38 @@ export interface CreateWebSessionInput {
 }
 
 /**
- * The iOS viewer's one session, opened for an Account a native sign-in has already proved.
+ * The installation a phone presents when its session is to name a Device.
+ *
+ * The Device is found or created by installation exactly as a Mac's is, so a phone that signs in
+ * twice is one Device with one live session rather than two
+ * ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+ */
+export interface DeviceRegistrationInput {
+  installation_id_hash: string;
+  device_id: string;
+  display_name: string;
+  platform: string;
+}
+
+/**
+ * The iOS app's one session, opened for an Account a native sign-in has already proved.
  *
  * Sign in with Apple proves who this is inside the app, so there is no browser round trip and no
  * grant to consume; what is written is the same `sessions` row `/oauth/v2/token` writes, with the
  * same scopes and the same credential domains ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+ * `device` is what the phone presented, and decides whether the row names a Device.
  */
 export interface CreateIosSessionInput {
   account_id: string;
   family_id: string;
   session: SessionCredentialHashes;
   authenticated_at: string;
+  device: DeviceRegistrationInput | null;
+}
+
+/** What opening a session answered: the Device it named, when one was presented. */
+export interface CreateIosSessionResult {
+  device: DeviceRecord | null;
 }
 
 /**
@@ -483,7 +507,7 @@ export interface AccountState {
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
   createWebSession(input: CreateWebSessionInput): Promise<void>;
-  createIosSession(input: CreateIosSessionInput): Promise<void>;
+  createIosSession(input: CreateIosSessionInput): Promise<CreateIosSessionResult>;
   createEmailChallenge(input: CreateEmailChallengeInput): Promise<void>;
   /**
    * Spend a mailed token once. An unknown, already-spent, or unreadable hash is `invalid`; a

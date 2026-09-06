@@ -11,7 +11,6 @@ struct MenuBarContentView: View {
   @State private var navigationTransitionGeneration = 0
   @State private var isLogoutConfirmationPresented = false
   @State private var usageSource: UsageSource = .account
-  @State private var usagePeriod: UsagePeriod = .today
   @State private var diagnostics = DiagnosticsPageModel()
   @State private var isResetConfirmationPresented = false
   private let performsInitialRefresh: Bool
@@ -249,7 +248,7 @@ struct MenuBarContentView: View {
     case .devices:
       AccountDevicesView(model: model)
     case .usage:
-      AccountUsageView(model: model, source: $usageSource, period: $usagePeriod, now: now)
+      AccountUsageView(model: model, source: $usageSource, now: now)
     case .notifications:
       NotificationsSettingsView(model: model)
     case .menuBarStyle:

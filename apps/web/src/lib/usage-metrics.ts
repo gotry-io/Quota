@@ -11,7 +11,7 @@
  */
 import { usageCacheHitBasisPoints } from "@gotry-io/quota-model";
 import { formatCost, formatCount, WEB_LOCALE } from "./format.ts";
-import type { UsagePeriodQuery } from "./usage-period.ts";
+import type { UsageDateRange } from "./usage-period.ts";
 
 type TotalsView = {
   total_tokens: number;
@@ -70,19 +70,17 @@ export type UsageDailyRow = {
  *
  * The activity read answers UTC dates — 400 local days would cut 400 UTC days, which is the
  * history the rollup exists to keep closed (ADR 0024) — so this table is UTC too, and says so.
- * `all` has no table: two years of rows is what the activity graph beside it already answers.
+ * The range is the period's own dates, already clamped to the days the page holds; `all` passes
+ * `null`, because two years of rows is what the activity graph beside it already answers.
  */
 export function usageDailyRows(
   days: readonly { date: string; totals: TotalsView; cost: CostView; partial: boolean }[],
-  period: UsagePeriodQuery,
-  lastDate: string,
+  range: UsageDateRange | null,
 ): UsageDailyRow[] {
-  const span = dailySpan(period);
-  if (span === null) return [];
+  if (range === null || range.from > range.to) return [];
   const byDate = new Map(days.map((day) => [day.date, day]));
   const rows: UsageDailyRow[] = [];
-  for (let offset = span - 1; offset >= 0; offset -= 1) {
-    const date = shiftUtcDate(lastDate, -offset);
+  for (let date = range.from; date <= range.to; date = shiftUtcDate(date, 1)) {
     const day = byDate.get(date);
     const totals = day?.totals ?? emptyTotals();
     rows.push({
@@ -98,20 +96,6 @@ export function usageDailyRows(
     });
   }
   return rows;
-}
-
-/** How many UTC days each period's table covers, or `null` for the period that has no table. */
-export function dailySpan(period: UsagePeriodQuery): number | null {
-  switch (period) {
-    case "today":
-      return 1;
-    case "7d":
-      return 7;
-    case "30d":
-      return 30;
-    case "all":
-      return null;
-  }
 }
 
 /** The tallest bar in the table, which every other bar is drawn against. */

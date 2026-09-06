@@ -41,15 +41,37 @@ public struct SessionToken: Codable, Equatable, Sendable {
   }
 }
 
-/// What signing in answers with: the Account, its name, and the one session that reads it.
+/// The installation this phone presents when it is asking to be a Device.
+///
+/// The three parts travel together, because a Device with no name to list it under is not one
+/// this Account could ever show
+/// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+public struct IosDeviceRegistration: Equatable, Sendable {
+  public static let platform = "ios"
+
+  public let installationID: String
+  public let displayName: String
+
+  public init(installationID: String, displayName: String) {
+    self.installationID = installationID
+    self.displayName = displayName
+  }
+}
+
+/// What signing in answers with: the Account, its name, the Device this session speaks for when
+/// it registered one, and the one session that reads them.
 ///
 /// `displayLabel` is what the Account is called, the same value an Account read carries. It is
 /// read tolerantly — an absent or null label is an Account with no name, not a refused sign-in.
+/// `deviceID` and `deviceGeneration` are answered together or not at all: a session either names
+/// the Device it speaks for, at the generation that Device had when it opened, or names none.
 public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int
   public let tokenType: String
   public let accountID: String
   public let displayLabel: String?
+  public let deviceID: String?
+  public let deviceGeneration: Int?
   public let session: SessionToken
 
   public init(from decoder: Decoder) throws {
@@ -58,11 +80,16 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
     tokenType = try container.decode(String.self, forKey: .tokenType)
     accountID = try container.decode(String.self, forKey: .accountID)
     displayLabel = try container.decodeIfPresent(String.self, forKey: .displayLabel)
+    deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
+    deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
     session = try container.decode(SessionToken.self, forKey: .session)
     guard protocolVersion == WireCodec.oauthProtocolVersion,
       tokenType == "Bearer",
       WireValidation.isOpaqueID(accountID),
       displayLabel.map({ WireValidation.isTrimmedText($0, maximum: 128) }) ?? true,
+      (deviceID == nil) == (deviceGeneration == nil),
+      deviceID.map(WireValidation.isOpaqueID) ?? true,
+      deviceGeneration.map { $0 > 0 } ?? true,
       WireValidation.isIOSAccessToken(session.accessToken),
       WireValidation.isIOSRefreshToken(session.refreshToken)
     else {
@@ -79,6 +106,8 @@ public struct IosOAuthTokenResponse: Decodable, Equatable, Sendable {
     case tokenType
     case accountID = "accountId"
     case displayLabel
+    case deviceID = "deviceId"
+    case deviceGeneration
     case session
   }
 }
@@ -90,10 +119,13 @@ public struct IosLoginExchangeRequest: Encodable, Equatable, Sendable {
   public let code: String
   public let codeVerifier: String
   public let redirectURI = QuotaIOSOAuth.redirectURI
+  /// Absent when this phone is only reading the Account.
+  public let device: IosDeviceRegistration?
 
-  public init(code: String, codeVerifier: String) {
+  public init(code: String, codeVerifier: String, device: IosDeviceRegistration? = nil) {
     self.code = code
     self.codeVerifier = codeVerifier
+    self.device = device
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -104,6 +136,11 @@ public struct IosLoginExchangeRequest: Encodable, Equatable, Sendable {
     try container.encode(code, forKey: .code)
     try container.encode(codeVerifier, forKey: .codeVerifier)
     try container.encode(redirectURI, forKey: .redirectURI)
+    if let device {
+      try container.encode(device.installationID, forKey: .installationID)
+      try container.encode(device.displayName, forKey: .deviceDisplayName)
+      try container.encode(IosDeviceRegistration.platform, forKey: .platform)
+    }
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -113,6 +150,9 @@ public struct IosLoginExchangeRequest: Encodable, Equatable, Sendable {
     case code
     case codeVerifier
     case redirectURI = "redirectUri"
+    case installationID = "installationId"
+    case deviceDisplayName
+    case platform
   }
 }
 
@@ -129,11 +169,19 @@ public struct AppleNativeSignInRequest: Encodable, Equatable, Sendable {
   public let nonce: String
   /// Absent when signing in. `link` binds Apple to the Account the session already names.
   public let intent: String?
+  /// Absent when this phone is only reading the Account, and on a link, which opens no session.
+  public let device: IosDeviceRegistration?
 
-  public init(identityToken: String, nonce: String, intent: String? = nil) {
+  public init(
+    identityToken: String,
+    nonce: String,
+    intent: String? = nil,
+    device: IosDeviceRegistration? = nil
+  ) {
     self.identityToken = identityToken
     self.nonce = nonce
     self.intent = intent
+    self.device = device
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -143,6 +191,11 @@ public struct AppleNativeSignInRequest: Encodable, Equatable, Sendable {
     try container.encode(identityToken, forKey: .identityToken)
     try container.encode(nonce, forKey: .nonce)
     try container.encodeIfPresent(intent, forKey: .intent)
+    if let device {
+      try container.encode(device.installationID, forKey: .installationID)
+      try container.encode(device.displayName, forKey: .deviceDisplayName)
+      try container.encode(IosDeviceRegistration.platform, forKey: .platform)
+    }
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -151,6 +204,9 @@ public struct AppleNativeSignInRequest: Encodable, Equatable, Sendable {
     case identityToken
     case nonce
     case intent
+    case installationID = "installationId"
+    case deviceDisplayName
+    case platform
   }
 }
 
@@ -226,6 +282,10 @@ public enum AccountSessionActivation: String, Codable, Equatable, Sendable {
 
 public struct AccountSession: Codable, Equatable, Sendable {
   public let accountID: String
+  /// The Device this session speaks for, or nil when it registered none. A session that names
+  /// one may write it; whether that write is accepted is the Account's entitlement to answer
+  /// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+  public let deviceID: String?
   public let accessToken: String
   public let accessExpiresAt: Date
   public let refreshToken: String
@@ -234,6 +294,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
 
   public init(
     accountID: String,
+    deviceID: String? = nil,
     accessToken: String,
     accessExpiresAt: Date,
     refreshToken: String,
@@ -241,6 +302,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
     activation: AccountSessionActivation
   ) {
     self.accountID = accountID
+    self.deviceID = deviceID
     self.accessToken = accessToken
     self.accessExpiresAt = accessExpiresAt
     self.refreshToken = refreshToken
@@ -250,11 +312,13 @@ public struct AccountSession: Codable, Equatable, Sendable {
 
   public init(
     accountID: String,
+    deviceID: String? = nil,
     token: SessionToken,
     activation: AccountSessionActivation
   ) {
     self.init(
       accountID: accountID,
+      deviceID: deviceID,
       accessToken: token.accessToken,
       accessExpiresAt: token.accessExpiresAt,
       refreshToken: token.refreshToken,
@@ -264,16 +328,33 @@ public struct AccountSession: Codable, Equatable, Sendable {
   }
 
   public init(_ response: IosOAuthTokenResponse) {
-    self.init(accountID: response.accountID, token: response.session, activation: .pending)
+    self.init(
+      accountID: response.accountID,
+      deviceID: response.deviceID,
+      token: response.session,
+      activation: .pending
+    )
   }
 
-  public init(_ response: SessionRefreshResponse, activation: AccountSessionActivation) {
-    self.init(accountID: response.accountID, token: response.session, activation: activation)
+  /// A rotated session. Rotation answers the tokens, not the Device: the session speaks for the
+  /// one it was opened for until it is replaced.
+  public init(
+    _ response: SessionRefreshResponse,
+    deviceID: String?,
+    activation: AccountSessionActivation
+  ) {
+    self.init(
+      accountID: response.accountID,
+      deviceID: deviceID,
+      token: response.session,
+      activation: activation
+    )
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     accountID = try container.decode(String.self, forKey: .accountID)
+    deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     accessToken = try container.decode(String.self, forKey: .accessToken)
     accessExpiresAt = try container.decode(Date.self, forKey: .accessExpiresAt)
     refreshToken = try container.decode(String.self, forKey: .refreshToken)
@@ -290,6 +371,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
 
   public var isValid: Bool {
     WireValidation.isOpaqueID(accountID)
+      && deviceID.map(WireValidation.isOpaqueID) ?? true
       && WireValidation.isIOSAccessToken(accessToken)
       && WireValidation.isIOSRefreshToken(refreshToken)
   }
@@ -297,6 +379,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
   public func withActivation(_ activation: AccountSessionActivation) -> AccountSession {
     AccountSession(
       accountID: accountID,
+      deviceID: deviceID,
       accessToken: accessToken,
       accessExpiresAt: accessExpiresAt,
       refreshToken: refreshToken,
@@ -307,6 +390,7 @@ public struct AccountSession: Codable, Equatable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case accountID = "accountId"
+    case deviceID = "deviceId"
     case accessToken
     case accessExpiresAt
     case refreshToken

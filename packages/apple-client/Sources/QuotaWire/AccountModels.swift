@@ -45,10 +45,12 @@ public struct QuotaUserAccount: Codable, Equatable, Sendable {
   }
 }
 
-/// What a Device runs. QuotaBar is the only client that registers one, so there is one member
-/// besides the one every tolerant read keeps for a value this build cannot name.
+/// What a Device runs. Both Apple clients register one — a Mac always, a phone once it presents
+/// an installation ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md))
+/// — beside the member every tolerant read keeps for a value this build cannot name.
 public enum AccountDevicePlatform: String, Codable, Sendable, TolerantWireEnum {
   case macos
+  case ios
   case unknown
 }
 

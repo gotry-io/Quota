@@ -68,9 +68,10 @@ test("sorts devices by last-seen, newest first, and never-seen last", () => {
   );
 });
 
-test("platform icons treat only macos as mac and everything else as generic", () => {
+test("platform icons name the two platforms a Device reports, and nothing else", () => {
   assert.equal(platformIconKind("macos"), "mac");
-  assert.equal(platformIconKind("ios"), "generic");
+  assert.equal(platformIconKind("ios"), "iphone");
+  // The wire member is `ios`; a value this build cannot name draws the generic device.
   assert.equal(platformIconKind("iphone"), "generic");
   assert.equal(platformIconKind("linux"), "generic");
 });

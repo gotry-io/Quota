@@ -32,6 +32,14 @@ public enum WireValidation {
     return value.range(of: #"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
   }
 
+  /// The shape the exchange states an installation id in: a lowercase UUID.
+  public static func isUUID(_ value: String) -> Bool {
+    value.range(
+      of: #"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#,
+      options: .regularExpression
+    ) != nil
+  }
+
   public static func isPKCEVerifier(_ value: String) -> Bool {
     value.range(of: #"^[A-Za-z0-9._~-]{43,128}$"#, options: .regularExpression) != nil
   }

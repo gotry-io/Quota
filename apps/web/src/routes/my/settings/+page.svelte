@@ -1,17 +1,23 @@
 <script lang="ts">
+import type { AccountResponse } from "@gotry-io/quota-protocol";
+import { onMount } from "svelte";
+import { replaceState } from "$app/navigation";
 import { page } from "$app/state";
 import { deleteAccount, fetchAccount } from "$lib/account-client";
 import {
   type AccountError,
   accountNoticeActionLabel,
   accountNoticeRetry,
+  IDENTITY_TAKEN_COPY,
 } from "$lib/account-errors";
 import { entitlementStatusLine, subscribeActionLabel, viewerInitial } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import PublicProfileSettings from "$lib/components/PublicProfileSettings.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
+import SignInMethodSettings from "$lib/components/SignInMethodSettings.svelte";
 import ThemeToggle from "$lib/components/ThemeToggle.svelte";
+import { DELETE_ACCOUNT_RETURN_PATH, isLinkedTaken, LINKED_TAKEN_PARAM } from "$lib/routes";
 import type { WebDocumentViewer } from "$lib/server/document-port";
 
 const store = getAccountStore();
@@ -19,26 +25,40 @@ const viewer = $derived((page.data.viewer as WebDocumentViewer | null | undefine
 const initial = $derived(viewerInitial(viewer?.displayLabel));
 const now = $derived(store.now);
 const entitlement = $derived(store.summary?.entitlement ?? null);
-let purchaseUrl = $state<string | null>(null);
+let account = $state<AccountResponse | null>(null);
 let purchaseError = $state<AccountError | null>(null);
 let deleteHeading = $state<HTMLHeadingElement | null>(null);
+let linkedTakenNotice = $state(isLinkedTaken(page.url));
 
-async function loadPurchase(): Promise<void> {
+const purchaseUrl = $derived(account?.purchase.web_url ?? null);
+
+async function loadAccount(): Promise<void> {
   const result = await fetchAccount();
   if (result.status === "ok") {
-    purchaseUrl = result.account.purchase.web_url;
+    account = result.account;
     purchaseError = null;
     return;
   }
   purchaseError = result;
 }
 
+onMount(() => {
+  if (!linkedTakenNotice || !isLinkedTaken(page.url)) return;
+  const stripped = new URL(page.url);
+  stripped.searchParams.delete(LINKED_TAKEN_PARAM);
+  const path = `${stripped.pathname}${stripped.search}${stripped.hash}`;
+  const id = window.setTimeout(() => {
+    replaceState(path, page.state);
+  }, 0);
+  return () => window.clearTimeout(id);
+});
+
 $effect(() => {
   let cancelled = false;
   void fetchAccount().then((result) => {
     if (cancelled) return;
     if (result.status === "ok") {
-      purchaseUrl = result.account.purchase.web_url;
+      account = result.account;
       purchaseError = null;
       return;
     }
@@ -62,7 +82,7 @@ async function onDeleteAccount(event: Event): Promise<void> {
   }
   const button = event.currentTarget;
   if (button instanceof HTMLButtonElement) button.disabled = true;
-  const outcome = await deleteAccount(`${page.url.pathname}${page.url.search}`);
+  const outcome = await deleteAccount(DELETE_ACCOUNT_RETURN_PATH);
   if (outcome !== "ok") {
     if (button instanceof HTMLButtonElement) button.disabled = false;
     store.setError(outcome);
@@ -76,6 +96,10 @@ async function onDeleteAccount(event: Event): Promise<void> {
   <title>Settings · Quota</title>
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
+
+{#if linkedTakenNotice}
+  <p class="notice" role="alert">{IDENTITY_TAKEN_COPY}</p>
+{/if}
 
 {#if store.loadError}
   <RetryNotice
@@ -91,7 +115,7 @@ async function onDeleteAccount(event: Event): Promise<void> {
     id="purchase-error"
     message={purchaseError.message}
     actionLabel={accountNoticeActionLabel(purchaseError)}
-    onRetry={accountNoticeRetry(purchaseError, () => void loadPurchase())}
+    onRetry={accountNoticeRetry(purchaseError, () => void loadAccount())}
   />
 {/if}
 
@@ -122,10 +146,23 @@ async function onDeleteAccount(event: Event): Promise<void> {
   {/if}
 </section>
 
+{#if account}
+  <SignInMethodSettings
+    identities={account.identities}
+    onChanged={loadAccount}
+    onError={(error) => store.setError(error)}
+  />
+{:else if !purchaseError}
+  <section class="settings-group" aria-labelledby="sign-in-methods-title">
+    <h2 id="sign-in-methods-title">Sign-in methods</h2>
+    <LoadingBlock lines={3} label="Loading sign-in methods" />
+  </section>
+{/if}
+
 <section class="settings-group" aria-labelledby="account-title">
   <h2 id="account-title">Account</h2>
   <div class="settings-row">
-    <p>GitHub</p>
+    <p>Signed in as</p>
     <div class="settings-account-id">
       <span class="account-avatar-fallback" aria-hidden="true">{initial}</span>
       <span>{viewer?.displayLabel ?? "—"}</span>

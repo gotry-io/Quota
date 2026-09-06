@@ -65,7 +65,9 @@ final class AppModel {
   private let activity: any ActivityLoading
   private let localStore: any LocalCollectionStoring
   private let localCollector: LocalCollector
+  private let installation: any InstallationIdentifying
   private let providerStatusClient: any ProviderStatusServing
+  private let budgetStore: UsageBudgetStore
   private let now: @Sendable () -> Date
 
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
@@ -85,7 +87,9 @@ final class AppModel {
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
-  var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
+  var usagePeriod: UsagePeriodSelection = .last30Days
+  /// The monthly budget this device keeps, which is a preference and never leaves it.
+  var budget: UsageBudget
   /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
@@ -98,6 +102,13 @@ final class AppModel {
   /// a visual fixture states it the way it states `phase`: what Usage, Devices, and the Settings
   /// account group show turns on whether there is an account, not on which phase the app is in.
   var sessionActivation: AccountSessionActivation?
+  /// The Device this phone's session speaks for, or nil when it registered none. Devices lists
+  /// that row as the Account's rather than synthesizing a second one beside it.
+  var sessionDeviceID: String?
+  /// Whether Relay refused this phone's last upload because paid sync is off. The entitlement on
+  /// the summary usually says the same thing; this is the write boundary saying it
+  /// ([ADR 0033](../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
+  private(set) var uploadRefusedAsUnpaid = false
   /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
   private var appleNonce: AppleSignInNonce?
   /// Whether the sign-in sheet — the one page that offers every way in — is showing.
@@ -141,12 +152,17 @@ final class AppModel {
     localCollector: LocalCollector? = nil,
     purchases: any PurchasesFacade = UnconfiguredPurchases(),
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
+    budgetStore: UsageBudgetStore = UsageBudgetStore(),
+    installation: any InstallationIdentifying = KeychainInstallationIdentity(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
+    self.installation = installation
     self.providers = ProvidersModel(store: providerSessions)
     self.localStore = localStore
     self.localCollector =
       localCollector ?? LocalCollector(sessions: providerSessions, now: now)
+    self.budgetStore = budgetStore
+    self.budget = budgetStore.load()
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
@@ -165,6 +181,7 @@ final class AppModel {
       self.alertCoordinator = AlertCoordinator(
         rulesStore: alertRulesStore ?? IOSAlertRulesStore(),
         stateStore: alertStateStore ?? InMemoryIOSAlertStateStore(),
+        budgetStore: budgetStore,
         sink: sink,
         now: now
       )
@@ -207,7 +224,13 @@ final class AppModel {
   }
 
   var isSyncOn: Bool {
-    entitlement.status.allowsSync
+    entitlement.status.allowsSync && !uploadRefusedAsUnpaid
+  }
+
+  /// What this phone presents when it signs in, so its session names a Device and what it reads
+  /// can reach the Macs ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+  private var deviceRegistration: IosDeviceRegistration? {
+    ThisIPhone.registration(identity: installation)
   }
 
   /// The Overview banner a signed-in Account without paid sync gets. Its Macs keep collecting;
@@ -232,6 +255,14 @@ final class AppModel {
   /// Whether a session for the managed Account exists on this device, whatever state it is in.
   var hasAccountSession: Bool { sessionActivation != nil }
 
+  /// Whether the Account already lists this phone as one of its Devices. It does once the
+  /// session that named it has been read back in a summary, and Devices then shows that row
+  /// rather than the one this phone would draw for itself.
+  var isRegisteredDevice: Bool {
+    guard let sessionDeviceID else { return false }
+    return summary?.devices.contains { $0.id == sessionDeviceID } ?? false
+  }
+
   /// The subscriptions this app shows: what this iPhone read for itself, merged with what Relay
   /// resolved from every Mac. One rule, stated in `QuotaObservations` and judged by
   /// `quota-observation-conformance.json`.
@@ -239,6 +270,7 @@ final class AppModel {
     LocalObservationMerge.subscriptions(
       local: localCollection?.snapshots ?? [],
       resolved: summary?.subscriptions ?? [],
+      selfDeviceID: sessionDeviceID,
       now: now()
     )
   }
@@ -270,6 +302,7 @@ final class AppModel {
     let cached = try? await account.loadCachedSummary()
     let session = try? await account.loadSession()
     sessionActivation = session?.activation
+    sessionDeviceID = session?.deviceID
     summary = cached?.summary
     fetchedAt = cached?.fetchedAt
     fromCache = cached != nil
@@ -372,8 +405,12 @@ final class AppModel {
   }
 
   private func keepSession(callback: URL, expected: AuthorizationAttempt) async throws {
-    let session = try await account.completeLogin(callback: callback, expected: expected)
-    sessionActivation = session.activation
+    let session = try await account.completeLogin(
+      callback: callback,
+      expected: expected,
+      device: deviceRegistration
+    )
+    apply(session)
     expiredMessage = nil
     banner = nil
     await refresh()
@@ -448,8 +485,12 @@ final class AppModel {
     banner = nil
     expiredMessage = nil
     do {
-      let session = try await account.exchangeApple(identityToken: identityToken, nonce: nonce)
-      sessionActivation = session.activation
+      let session = try await account.exchangeApple(
+        identityToken: identityToken,
+        nonce: nonce,
+        device: deviceRegistration
+      )
+      apply(session)
       await refresh()
     } catch AccountClientError.sessionExpired {
       applyExpired()
@@ -458,6 +499,19 @@ final class AppModel {
     } catch {
       presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
     }
+  }
+
+  /// Keep what a sign-in answered: how far along the session is, and the Device it speaks for.
+  private func apply(_ session: AccountSession) {
+    sessionActivation = session.activation
+    sessionDeviceID = session.deviceID
+    uploadRefusedAsUnpaid = false
+  }
+
+  private func forgetSession() {
+    sessionActivation = nil
+    sessionDeviceID = nil
+    uploadRefusedAsUnpaid = false
   }
 
   private func presentConnectFailure(_ message: String) {
@@ -512,7 +566,7 @@ final class AppModel {
     banner = nil
     expiredMessage = nil
     await account.logout()
-    sessionActivation = nil
+    forgetSession()
     summary = nil
     fetchedAt = nil
     fromCache = false
@@ -553,6 +607,7 @@ final class AppModel {
     if let collection { applyLocalCollection(collection) }
     if let result {
       await apply(result, collected: collection != nil)
+      await uploadLocalReadings(collection)
       scheduleBackgroundRefresh()
     } else {
       applyWithoutAccount()
@@ -567,6 +622,25 @@ final class AppModel {
   func providerSessionsChanged() async {
     updateBackgroundRefreshAsk()
     await refresh()
+  }
+
+  /// Send what this phone just read to the Account, when it is a Device and sync is paid for.
+  ///
+  /// Only the readings go: the provider sessions behind them stay in this device's Keychain, and
+  /// Usage is a Mac's, because this phone has none
+  /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)). A 402 is
+  /// the boundary saying sync is off, and it stops this phone uploading until a summary says
+  /// otherwise.
+  private func uploadLocalReadings(_ collection: LocalCollection?) async {
+    // Each refresh asks again: an entitlement that has just been bought is not still refused.
+    uploadRefusedAsUnpaid = false
+    guard let collection, !collection.snapshots.isEmpty else { return }
+    guard sessionDeviceID != nil, sessionActivation == .active,
+      entitlement.status.allowsSync
+    else { return }
+    if await account.uploadSnapshots(collection.snapshots) == .subscriptionRequired {
+      uploadRefusedAsUnpaid = true
+    }
   }
 
   /// Keep what this pass read, and let Settings say which sessions the provider refused.
@@ -740,6 +814,83 @@ final class AppModel {
     UsageActivityCalendar.range(endingOn: activityToday)
   }
 
+  /// The dates the selected period covers, or nil for `all`, which names no first day.
+  var usagePeriodRange: (from: String, to: String)? {
+    usagePeriod.range(today: now())
+  }
+
+  /// The title above the totals: the range the selected period covers.
+  var usagePeriodTitle: String {
+    UsagePeriodTitle.text(for: usagePeriod, today: now())
+  }
+
+  /// The days a folded period may reach back over, which is what the activity read answered.
+  var usageEarliestDay: String {
+    activityDateRange.from
+  }
+
+  /// The activity days this device has, which is what a folded period is added up from.
+  var activityDays: [UsageActivityDay] {
+    if case .loaded(let days) = activityChart { return days }
+    return []
+  }
+
+  /// The selected period, read from the summary when it folds it and added up here when not.
+  ///
+  /// The summary answers four periods exactly, in the caller's own calendar. Anything else is
+  /// the activity days the page already holds, which are UTC days: a range is chosen in this
+  /// device's calendar and folded from the UTC days carrying those dates.
+  var usagePeriodValue: UsagePeriod? {
+    if let key = usagePeriod.summaryKey, let usage = summary?.usage {
+      return period(usage, key)
+    }
+    guard let range = usagePeriodRange, case .loaded(let days) = activityChart else { return nil }
+    return UsageDayFold.period(days, from: range.from, to: range.to)
+  }
+
+  /// Whether the shown period was added up here, which is why it has no model breakdown.
+  var usagePeriodIsFolded: Bool {
+    usagePeriod.summaryKey == nil
+  }
+
+  /// How far into this month's budget its spend has gone, or nil when there is no budget yet.
+  var budgetProgress: UsageBudgetProgress? {
+    guard let amount = budget.amountUSD,
+      let range = UsagePeriodSelection.thisMonth.range(today: now()),
+      case .loaded(let days) = activityChart
+    else { return nil }
+    let month = UsageDayFold.period(days, from: range.from, to: range.to)
+    let spent = UsageBudgetProgress.dollars(microusd: month.cost.amountMicrousd) ?? 0
+    return UsageBudgetProgress(
+      spentUSD: spent,
+      budgetUSD: amount,
+      partial: month.cost.status != .complete
+    )
+  }
+
+  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
+    usagePeriod = selection
+  }
+
+  func setBudget(_ next: UsageBudget) {
+    budget = budgetStore.save(next)
+    evaluateBudgetAlerts()
+  }
+
+  /// Says once per month that 80% and then 100% of the budget has been spent.
+  func evaluateBudgetAlerts() {
+    alertCoordinator.evaluateBudget(budget: budget, progress: budgetProgress)
+  }
+
+  private func period(_ usage: AccountUsage, _ key: UsageSummaryPeriodKey) -> UsagePeriod {
+    switch key {
+    case .today: usage.today
+    case .last7Days: usage.last7Days
+    case .last30Days: usage.last30Days
+    case .all: usage.all
+    }
+  }
+
   /// First visit to Usage asks once. Retry is explicit. The answer stays in memory.
   func loadActivity(force: Bool = false) async {
     guard phase == .signedIn else { return }
@@ -806,6 +957,7 @@ final class AppModel {
     switch result {
     case .activity(let response):
       activityChart = .loaded(response.days)
+      evaluateBudgetAlerts()
     case .failure(.sessionExpired):
       applyExpired()
     case .failure(.notSignedIn):
@@ -900,7 +1052,7 @@ final class AppModel {
         symbolName: "exclamationmark.triangle"
       )
     case .notSignedIn:
-      sessionActivation = nil
+      forgetSession()
       applySignedOut()
     case .some(let error) where isExpiredConnectError(error):
       await revokePendingSession()
@@ -921,7 +1073,7 @@ final class AppModel {
 
   private func revokePendingSession() async {
     await account.logout()
-    sessionActivation = nil
+    forgetSession()
   }
 
   private func presentPendingRefreshFailure(message: String) {
@@ -979,13 +1131,13 @@ final class AppModel {
     fromCache = false
     banner = nil
     expiredMessage = nil
-    sessionActivation = nil
+    forgetSession()
     phase = .signedOut
     identities = .idle
     linkingProvider = nil
     linkFailure = nil
     selectedTab = .overview
-    selectedUsagePeriod = .last30Days
+    usagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     overviewPath = []
     activityChart = .idle

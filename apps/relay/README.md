@@ -40,6 +40,13 @@ The v6 data contract is four routes
   `cost` is priced the same way a period's is — so a per-day table needs no second read. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
 
+The four periods in a summary are the four every client opens on. Any other period a Usage page
+offers — a week, a month, a range someone picked — is these same days added up by the client, which
+is why this read answers a range rather than one more named period. A day carries no agent tree
+unless it was asked for on its own, so a client-folded period carries totals and cost only. The
+fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
+website and both Apple apps answer that file.
+
 Each period of `usage` also carries `cache_saved`: what its cache reads saved against paying the
 uncached input price for the same tokens, folded from the rows it already priced and therefore
 costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache
@@ -108,13 +115,11 @@ an Account owns the channels it is reached through
 
 | Route | What it does |
 | --- | --- |
-| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. |
+| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. Email is not this route. |
 | `GET /api/auth/:provider/callback` | The callback of a provider that redirects. Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
 | `POST /api/auth/:provider/callback` | The same completion for a provider that answers with a cross-site form POST, which today is Apple alone. Each provider accepts one delivery; the other is 404. |
-| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. Email is not this route. |
-| `GET /api/auth/:provider/callback` | Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
 | `POST /api/auth/email/start` | JSON `{ email, return_to?, intent? }`. Writes a fifteen-minute one-time challenge, mails a link through Resend, and always answers 202. One send per address per minute and five per hour; the IP shares the `web-signin` bucket. `intent=link` requires a web session. |
-| `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the same browser error page (`expired` / `invalid_request` / `identity_taken`). |
+| `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the browser error page (`expired` / `invalid_request`) except `identity_taken`, which is a 302 to `return_to?linked=taken`. |
 | `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
 | `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
 | `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
@@ -123,29 +128,30 @@ an Account owns the channels it is reached through
 | `GET /oauth/v2/complete` | Turns the web session into an authorization code. |
 | `POST /oauth/v2/apple` | Sign in with Apple from inside the iOS app. Takes `{client_id: 'quota-ios', identity_token, nonce, intent?}`, checks the token against Apple's published keys, and answers with the `quota-ios` session — or, with `intent: 'link'` and a Bearer iOS session, binds Apple to that Account. |
 
-`github` and `apple` are the providers registered today; `email` is the remaining channel an Account
-can hold. Apple is asked for `name email`, which requires `response_mode=form_post`, so its handoff
-cookie alone is sealed `SameSite=None` — still `__Host-`, still signed, still ten minutes. Its
-`client_secret` is an ES256 JWT signed per exchange rather than a stored string. A browser whose `Accept` includes `text/html` and that fails on
-`/api/auth/:provider/callback` or `/oauth/v2/complete` (no session, expired grant, rate limited,
-invalid request, or a channel that already reaches another Account) gets a 200 HTML page titled
-**Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try again.** —
-never a token. Callers that do not ask for HTML still receive the original JSON status and body. See
-GitHub is the OAuth provider registered today; email is a mailed one-time link on its own routes.
-`github`, `apple`, and `email` are the channels an Account can hold. A browser whose `Accept`
-includes `text/html` and that fails on `/api/auth/:provider/callback`, `/api/auth/email/verify`, or
-`/oauth/v2/complete` (no session, expired grant, rate limited, invalid request, or a channel that
-already reaches another Account) gets a 200 HTML page titled **Sign-in didn't finish**, one
-sentence for that reason, and **Return to Quota and try again.** — never a token. Callers that do
-not ask for HTML still receive the original JSON status and body. See
-[ADR 0025](../../docs/decisions/0025-one-session-system.md).
+`github` and `apple` are the OAuth providers registered today; `email` is a mailed one-time link on
+its own routes. Apple is asked for `name email`, which requires `response_mode=form_post`, so its
+handoff cookie alone is sealed `SameSite=None` — still `__Host-`, still signed, still ten minutes.
+Its `client_secret` is an ES256 JWT signed per exchange rather than a stored string. A browser whose
+`Accept` includes `text/html` and that fails on `/api/auth/:provider/callback`,
+`/api/auth/email/verify`, or `/oauth/v2/complete` (no session, expired grant, rate limited, or
+invalid request) gets a 200 HTML page titled **Sign-in didn't finish**, one sentence for that
+reason, and **Return to Quota and try again.** — never a token. A channel that already reaches
+another Account (`identity_taken`) is different: a browser is 302'd to `return_to?linked=taken` so
+Settings can say **That account is already linked to another Quota account.** once; callers that
+do not ask for HTML still receive the original 409 JSON. See
+[ADR 0025](../../docs/decisions/0025-one-session-system.md) and
+[ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md).
 
 Every client's session is a row in that same table, and one login issues one access/refresh family
 ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)). The `quotabar` client exchanges an
 authorization code over a loopback redirect for a session scoped `[account:read, device:write]`,
-which is the only way a Device is registered; Authorization Code with PKCE is the only grant Relay
-offers. The registered `quota-ios` public client is a read-only Account login over the exact
-redirect `io.gotry.quota:/oauth/callback`, scoped `[account:read]`, and it registers no Device. Both
+and Authorization Code with PKCE is the only grant Relay offers. The registered `quota-ios` public
+client signs in over the exact redirect `io.gotry.quota:/oauth/callback`, and its exchange takes an
+optional `installation_id`, `device_display_name`, and `platform: ios` — the three present together
+or not at all. Presenting them registers a Device on the same path `quotabar` takes and issues
+`[account:read, device:write]`; presenting none issues `[account:read]` and registers no Device
+([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+`POST /oauth/v2/apple` takes the same optional installation. Both
 exchanges answer with the Account's `display_label` beside the session, read in the same batch that
 issued it, so a client can name the account before its first Account read. The checked-in Worker
 enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.

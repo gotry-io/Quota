@@ -783,6 +783,10 @@ private actor FlowService: LocalServiceServing {
     enabledScans = state.browserScanEnabled
   }
 
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    throw LocalServiceClientError.invalidMessage
+  }
+
   func state() async throws -> LocalServiceState {
     LocalServiceState(
       ipcVersion: stateValue.ipcVersion,
@@ -952,7 +956,7 @@ private func flowState(
     quota = empty()
   }
   return LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: revision,
     usageUploadEnabled: true,
     groupUsageByProject: true,

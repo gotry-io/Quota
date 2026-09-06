@@ -1,7 +1,7 @@
 import type { AccountState, LinkIdentityOutcome } from "@gotry-io/relay-core";
 import { appleNativeNonceClaim, type AppleIdentityTokens } from "./apple-identity-token.ts";
 import { appleLabel } from "./apple-identity.ts";
-import type { AccountService, AccountTokenResponse } from "./service.ts";
+import type { AccountService, AccountTokenResponse, IosDeviceRegistration } from "./service.ts";
 import { identitySubjectHash } from "./identity.ts";
 
 /** The token proved nothing: a bad signature, the wrong audience, a stale nonce, an expiry. */
@@ -34,10 +34,17 @@ export interface AppleNativeEnvironment {
 export class AppleNativeSignIn {
   constructor(private readonly environment: AppleNativeEnvironment) {}
 
-  /** The Account this token reaches, opening one when it reaches none. */
+  /**
+   * The Account this token reaches, opening one when it reaches none.
+   *
+   * `registration` is the installation the phone presented, and decides whether the session it
+   * gets names a Device
+   * ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+   */
   async signIn(
     identityToken: string,
     nonce: string,
+    registration: IosDeviceRegistration | null,
     now: Date,
   ): Promise<AccountTokenResponse | NativeIdentityRefusal> {
     const identity = await this.#prove(identityToken, nonce, now);
@@ -50,7 +57,12 @@ export class AppleNativeSignIn {
       new_account_id: `account_${crypto.randomUUID()}`,
       now: now.toISOString(),
     });
-    return this.environment.accountService.openIosSession(account.id, account.display_label, now);
+    return this.environment.accountService.openIosSession(
+      account.id,
+      account.display_label,
+      registration,
+      now,
+    );
   }
 
   /** Bind Apple to the Account this session already names. */

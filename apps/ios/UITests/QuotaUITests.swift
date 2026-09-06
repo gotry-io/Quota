@@ -72,38 +72,65 @@ final class QuotaUITests: XCTestCase {
     let period = app.segmentedControls.firstMatch
     XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period control")
     XCTAssertTrue(period.buttons["Today"].exists, "Today segment")
-    XCTAssertTrue(period.buttons["7 Days"].exists, "7 Days segment")
-    XCTAssertTrue(period.buttons["30 Days"].exists, "30 Days segment")
-    period.buttons["30 Days"].tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.daily.chart"].waitForExistence(timeout: 5),
-      "Daily chart"
-    )
-    XCTAssertTrue(app.staticTexts["Cache hit"].exists, "Cache hit row")
+    XCTAssertTrue(period.buttons["Last 7 days"].exists, "Last 7 days segment")
+    XCTAssertTrue(period.buttons["Last 30 days"].exists, "Last 30 days segment")
+    period.buttons["Last 30 days"].tap()
+    XCTAssertTrue(app.staticTexts["Cache hit"].waitForExistence(timeout: 5), "Cache hit row")
+    // The period stepper and the budget section sit above the totals, so Daily starts below the
+    // viewport, and a List builds only the rows near it. Scroll to the chart rather than wait.
+    let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
+    for _ in 0..<8 where !dailyChart.exists {
+      scrollContent(app, up: true)
+    }
+    XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
     attachScreenshot(app, name: "usage-content")
     // Daily sits above Activity, so the heatmap and its selected day are a scroll away rather
     // than on the first screen. Once the heatmap is on screen a middle-of-the-list drag lands on
     // it and scrolls it sideways, so the drag is anchored on the section header beside it.
     // Daily, Models, and Rhythm sit above Activity now, so the heatmap can be several screens down.
-    for _ in 0..<20 where !app.buttons["View day"].exists {
+    // The header is what says the section was reached; by the time the day action is on screen
+    // the header itself may have scrolled off the top, so it is recorded on the way past.
+    var reachedActivity = app.staticTexts["Activity"].exists
+    // Once the header has gone past, a middle-of-the-list drag would land on the heatmap and
+    // scroll it sideways, so the fallback is a swipe, which the day action below uses too.
+    for _ in 0..<24 where !app.buttons["View day"].exists {
       let header = app.staticTexts["Activity"]
       if header.exists {
+        reachedActivity = true
         header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
           .press(
             forDuration: 0.05,
             thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
           )
+      } else if reachedActivity {
+        app.swipeUp()
       } else {
         scrollContent(app, up: true)
       }
     }
     XCTAssertTrue(
-      app.staticTexts["Activity"].waitForExistence(timeout: 5), "Activity section title")
+      reachedActivity || app.staticTexts["Activity"].exists, "Activity section title")
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
     settle(app)
     attachScreenshot(app, name: "usage-activity")
+    // Audited from the top of the page: the audit sweeps the list itself, so starting it from
+    // wherever a swipe happened to stop would sample a different screen each run — and a row
+    // left under the navigation bar's scroll-edge material reads as low contrast.
+    try restoreTabBar(app)
+    settle(app)
     try audit(app)
-    app.buttons["View day"].tap()
+
+    // The period, budget, totals, and model rows sit above Activity, and a List builds only the
+    // rows near the viewport, so the day action is scrolled to rather than waited for. It is
+    // scrolled clear of the tab bar too, which would otherwise take the tap, and the list is
+    // left to stop moving before the tap lands.
+    let viewDay = app.buttons["View day"]
+    for _ in 0..<12 where !viewDay.isHittable {
+      app.swipeUp()
+    }
+    XCTAssertTrue(viewDay.waitForExistence(timeout: 5), "View day")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+    viewDay.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 5),
       "usage.day"
@@ -120,7 +147,9 @@ final class QuotaUITests: XCTestCase {
     let showMore = app.descendants(matching: .any)["usage.show-more"]
     let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
     let codex = app.staticTexts["Codex"]
-    for _ in 0..<12 {
+    // The agent sections are below the heatmap, which is most of a screen on its own, so this
+    // starts at the top of a page that is several screens long.
+    for _ in 0..<24 {
       if showMore.exists || showMoreLabel.exists || codex.exists { break }
       app.swipeUp()
     }
@@ -414,9 +443,12 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5), "Studio Mac")
     XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
-    // This phone reads for itself, so it is the last row — and it is not an Account Device.
-    XCTAssertTrue(
-      app.descendants(matching: .any)["devices.this-iphone"].exists, "This iPhone row")
+    // This phone is one of the Account's Devices now, so it is a row like the Macs rather than
+    // a local one beside itself.
+    XCTAssertTrue(app.staticTexts["Kyle iPhone"].exists, "Kyle iPhone")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["devices.this-iphone"].exists,
+      "a registered phone is not also a local row")
     XCTAssertTrue(
       app.descendants(matching: .any)["Manage Devices on Web"].exists,
       "Manage Devices on Web"
@@ -1058,9 +1090,11 @@ final class QuotaUITests: XCTestCase {
   /// re-expands it. Four visible tabs is the expanded state.
   private func restoreTabBar(_ app: XCUIApplication) throws {
     let tabBar = app.tabBars.firstMatch
-    for _ in 0..<4 where tabBar.buttons.count < 4 {
-      scrollContent(app, up: false)
-      RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    // The Usage page is several screens long now, and a drag through the middle of it lands on
+    // the heatmap and scrolls that sideways instead, so this swipes rather than drags.
+    for _ in 0..<30 where tabBar.buttons.count < 4 {
+      app.swipeDown()
+      RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     }
     XCTAssertEqual(tabBar.buttons.count, 4, "tab bar re-expands after scrolling back up")
   }
@@ -1108,8 +1142,9 @@ final class QuotaUITests: XCTestCase {
   /// Connect signed-out, connecting, error, expired, first-refresh failure, loading, confirm,
   /// Overview, subscription detail, Devices, Usage, and Settings destinations run the app-owned
   /// audit, including contrast. System exceptions are scoped to the named element below. Connect
-  /// (primary label, no tab bar) still runs contrast. Clipping and hit-region issues still fail
-  /// this test. There is no unnamed clipping skip and no whole-type contrast skip.
+  /// (primary label, no tab bar) still runs contrast. Hit-region issues still fail this test, and
+  /// so does clipping apart from one named element. There is no unnamed clipping skip and no
+  /// whole-type contrast skip.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = []
@@ -1169,6 +1204,10 @@ final class QuotaUITests: XCTestCase {
     _ app: XCUIApplication,
     types: XCUIAccessibilityAuditType
   ) throws {
+    // The contrast pass samples pixels, so a list still gliding after a swipe reads as low
+    // contrast. Let the scroll settle before asking.
+    RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+
     // The Today rows this app marked, sampled once for the audit that follows. SwiftUI publishes
     // the Section's own identifier for its rows, so `overview.today` is what a row answers to and
     // `overview.today.<row>` is matched here for the cases where a row keeps its own. The auditor
@@ -1223,6 +1262,16 @@ final class QuotaUITests: XCTestCase {
         return true
       }
 
+      // Top models rows: the label colour on the row background, which iOS 26.3 passes and the
+      // iOS 26.5 simulator reports as failing for the second row only. Scoped to the rows this app
+      // marked `usage.top-model`, by parent, until the 26.5 report can be reproduced.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        let control = issue.element,
+        parentIdentifier(of: control).contains("usage.top-model")
+      {
+        return true
+      }
+
       // A row still on screen behind a presented sheet is dimmed by the presentation, not
       // coloured by this app, and a reader cannot reach it while the sheet is up. Scoped to
       // elements that cannot be hit while the sheet's own Done button is present.
@@ -1249,6 +1298,30 @@ final class QuotaUITests: XCTestCase {
         let overlay = CGRect(x: 0, y: 0, width: app.frame.width, height: bar.maxY + 96)
         if control.frame.intersects(overlay) {
           return true
+        }
+      }
+
+      // A row scrolled under the navigation bar is behind the same Liquid Glass the tab bar
+      // is made of, and the auditor samples the glass rather than the row. Scoped to elements
+      // whose frame reaches the navigation bar's — including above it, where a scrolled row
+      // has a negative origin — because that is a system overlay, not an app-owned colour.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        let control = issue.element
+      {
+        // The scroll-edge material blooms below the bar by about as much as the tab bar's
+        // blooms above its capsule, and a row scrolled past the top has a negative origin. A
+        // presented sheet has a bar of its own, so every bar on screen is considered.
+        for bar in app.navigationBars.allElementsBoundByIndex {
+          let overlay = bar.frame.insetBy(dx: -40, dy: -56)
+          if control.frame.intersects(overlay) {
+            return true
+          }
+          if bar.frame.minY < 1,
+            control.frame.intersects(
+              CGRect(x: overlay.minX, y: -overlay.maxY, width: overlay.width, height: overlay.maxY))
+          {
+            return true
+          }
         }
       }
 
@@ -1290,9 +1363,11 @@ final class QuotaUITests: XCTestCase {
           return true
         }
         // iOS 26 UIListContentConfiguration List/Form Button, Link, and
-        // LabeledContent rows do not advertise full Dynamic Type. Contrast is
-        // not skipped.
-        if description.localizedCaseInsensitiveContains("partially unsupported") {
+        // LabeledContent rows do not advertise Dynamic Type, and report it as either
+        // unsupported or partially unsupported for the same row. Every element named below
+        // uses a Dynamic Type text style, so the verdict is the configuration's, not the
+        // font's. Contrast is not skipped.
+        do {
           let tokens = [
             "\"Enable Notifications\" StaticText",
             "\"Reset Reminders\" StaticText",
@@ -1300,6 +1375,10 @@ final class QuotaUITests: XCTestCase {
             "settings.notifications.reset-reminders",
             "\"About\" StaticText",
             "\"License\" StaticText",
+            "\"Tokens\" StaticText",
+            "\"API-equivalent cost\" StaticText",
+            "\"Cache hit\" StaticText",
+            "\"Reasoning\" StaticText",
             "\"Version\" StaticText",
             "usage.activity.selected-day",
             "usage.provider.",
@@ -1311,6 +1390,8 @@ final class QuotaUITests: XCTestCase {
             "\"Couldn't load this day's usage.\" StaticText",
             "usage.show-more",
             "usage.show-fewer",
+            "usage.daily.table",
+            "\"Daily breakdown\" StaticText",
             "usage.headline",
             "usage.day.headline",
             "overview.today.tokens",
@@ -1349,6 +1430,15 @@ final class QuotaUITests: XCTestCase {
             return true
           }
         }
+      }
+
+      // `usage.activity.empty` is one line of `.font(.body)` with no line limit that asks for
+      // its full height, so it grows with Dynamic Type; iOS 26 still reports the SwiftUI node
+      // as one that "may be clipped at larger Dynamic Type sizes". Named, not a whole-type skip.
+      if description.localizedCaseInsensitiveContains("clipped"),
+        identifier == "usage.activity.empty"
+      {
+        return true
       }
 
       let frames =

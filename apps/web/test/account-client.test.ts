@@ -8,6 +8,7 @@ import {
   fetchAccountActivity,
   fetchAccountSummary,
   requestEmailSignInLink,
+  unlinkIdentity,
 } from "../src/lib/account-client.ts";
 import { classifyAccountError } from "../src/lib/account-errors.ts";
 import {
@@ -125,6 +126,60 @@ test("asks Relay to mail a sign-in link and treats 202 as accepted", async () =>
     assert.equal(result, "accepted");
     assert.equal(requested, "/api/auth/email/start");
     assert.equal(body, JSON.stringify({ email: "person@example.test", return_to: "/my" }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("asks Relay to mail a link that binds an address, with intent link", async () => {
+  const originalFetch = globalThis.fetch;
+  let body = "";
+  globalThis.fetch = (async (_input, init) => {
+    body = String(init?.body ?? "");
+    return new Response("{}", { status: 202 });
+  }) as typeof fetch;
+  try {
+    const result = await requestEmailSignInLink({
+      email: "person@example.test",
+      returnTo: "/my/settings",
+      intent: "link",
+    });
+    assert.equal(result, "accepted");
+    assert.equal(
+      body,
+      JSON.stringify({
+        email: "person@example.test",
+        return_to: "/my/settings",
+        intent: "link",
+      }),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unbinds a channel and treats the last one as a conflict", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; method: string }> = [];
+  const statuses = [204, 409, 403] as const;
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ url: String(input), method: String(init?.method ?? "GET") });
+    const status = statuses[requests.length - 1] ?? 500;
+    return new Response(null, { status });
+  }) as typeof fetch;
+  try {
+    assert.equal(await unlinkIdentity("github"), "ok");
+    assert.equal(await unlinkIdentity("email"), "last_identity");
+    const stale = await unlinkIdentity("apple", "/my/settings");
+    assert.equal(
+      stale === "ok" || stale === "last_identity" ? stale : stale.status,
+      "recent_auth_required",
+    );
+    assert.deepEqual(requests, [
+      { url: "/api/v2/account/identities/github", method: "DELETE" },
+      { url: "/api/v2/account/identities/email", method: "DELETE" },
+      { url: "/api/v2/account/identities/apple", method: "DELETE" },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

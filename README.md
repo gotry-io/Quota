@@ -168,7 +168,8 @@ providers, or the account behind it, and there is no leaderboard
 Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
 the last parse stopped, local hourly facts a scan recomputes only where records moved,
 effective-dated cost calculation with a separately versioned model catalog that regroups reports
-without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-app updates, and the
+without rewriting facts, a registered `quota-ios` client whose session names a Device once the
+phone presents an installation, Sparkle in-app updates, and the
 Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
 and file failures are isolated.
 

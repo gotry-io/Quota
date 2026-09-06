@@ -14,8 +14,11 @@ links to it rather than restating it.
   all: Overview then shows what the phone read for itself. With an account it also signs in with the
   registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
   two are merged into one row per subscription by the rule below. Either way it publishes the
-  non-secret App Group snapshot its widgets render. It is still not a collection Device: it
-  registers no Device and writes nothing to Relay, so a reading taken here reaches no other client. It is also where paid sync is bought:
+  non-secret App Group snapshot its widgets render. Signing in presents this phone's installation,
+  so its session names a Device on platform `ios` and its own readings are uploaded on each
+  refresh while sync is paid for; the provider sessions behind them stay in this device's
+  Keychain, and it uploads no Usage because it runs no agent
+  ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). It is also where paid sync is bought:
   the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
   to an Account is read from the Relay `entitlement` rather than from the store on the device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
@@ -52,16 +55,16 @@ official provider sessions       agent JSON/JSONL logs
         providers.json  SQLite     managed HTTPS
                  │        │            │
                  └────────┴──────┬─────┘
-                                 │ stdin/stdout NDJSON v1
+                                 │ stdin/stdout NDJSON v2
                                  ▼
                           QuotaBar Swift UI
 ```
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
-Operations are ping, state read, diagnose/recheck, refresh, cache reset, login/cancel, logout,
-provider configuration, provider browser-session validate/commit/remove, Usage upload
-configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
+Operations are ping, state read, diagnose/recheck, refresh, cache reset, one custom Usage period
+fold, login/cancel, logout, provider configuration, provider browser-session
+validate/commit/remove, Usage upload configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
 before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
 answers `ping` on the thread that reads stdin, so an operation that blocks never stops the helper
 from saying it is alive. That is the only liveness signal QuotaBar uses: requests are never on a
@@ -229,7 +232,24 @@ history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are
 instants this device's own calendar puts around them — the rule the managed read follows, so both
 sides of the panel agree. Signed-in Account
 periods arrive in the one Account read and commit only as a complete set; QuotaBar reads them from
-`get_state`, so changing the period performs no collection or network request. Collection and report
+`get_state`, so changing the period performs no collection or network request.
+
+A period outside those four — a week, a month, a range someone picked — is the same stored hours
+added up over a different window, so it is asked for one range at a time rather than folded four
+more times on every refresh. `usage_period { from, to }` takes two inclusive local dates spanning
+at most 366 days and answers with the same local report shape, folded against the catalogs this
+device already holds; it collects nothing and reaches no network. A state change discards the
+folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS have no
+local hours to ask about: they add the same period up from the daily totals the activity read
+already gave them, and the rule all three follow is
+`packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
+period folded from days carries totals and cost with no model breakdown.
+
+The monthly spend budget is a device preference and is never uploaded: it is one amount and one
+alert switch in `UserDefaults` on Apple and `localStorage` on the website, evaluated against the
+current month's fold by the same dedup rule the quota alerts use. A budget says what someone wants
+to be warned about, which is not a fact about their Account, so no managed store and no wire
+contract names one. Collection and report
 generation continue when Usage upload is disabled: the service neither stages nor drains the outbox,
 `get_state` omits cached Account Usage so QuotaBar stays local-only, and quota and account
 synchronization stay independent.
@@ -290,10 +310,14 @@ once onto Sparkle. Both that appcast and the website `.dmg` button resolve throu
 hold it.
 
 The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKCE route with the
-exact redirect `io.gotry.quota:/oauth/callback`. Its exchange rejects installation identity and
-Device fields and returns only an account session: it is not a collection Device, is absent from
-`PlatformSchema`, and never receives write authority. Quota iOS consumes that session through
-`packages/apple-client` and fetches `GET /api/v6/account/summary`. Connect with GitHub presents
+exact redirect `io.gotry.quota:/oauth/callback`. Its exchange takes an optional `installation_id`,
+`device_display_name`, and `platform: ios` — present together or not at all — and issues a session
+naming a Device with `[account:read, device:write]` when they are, and a read-only one when they
+are not; the Device half is the path QuotaBar's exchange already takes
+([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Quota iOS consumes that session
+through `packages/apple-client`, fetches `GET /api/v6/account/summary`, and — when its session
+names a Device — sends what it read on the phone through `GET /api/v2/device/sync` and
+`PUT /api/v6/device/snapshots`, which answer 402 until paid sync is on. Connect with GitHub presents
 `ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. `/sign-in` now asks which Account this is before the
@@ -306,8 +330,8 @@ the attempt it is still holding, and ends the sheet that is waiting for nothing.
 `POST /oauth/v2/apple`; every other bind, and every unbind, is the website's
 ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). Continue with Apple takes no browser at all:
 `ASAuthorizationAppleIDProvider` proves the identity on the device and the app posts that identity
-token and its nonce to `POST /oauth/v2/apple`, which answers with the same `quota-ios` session and
-the same confirmation flow. The Keychain session is stored with `activation: pending` at exchange and
+token and its nonce to `POST /oauth/v2/apple`, which takes the same optional installation and
+answers with the same `quota-ios` session and the same confirmation flow. The Keychain session is stored with `activation: pending` at exchange and
 becomes `active` only when Continue confirms it; **Use a different account** revokes the session
 just opened and repeats authorize in an ephemeral browser session. The app process alone holds OAuth
 and network authority — on screen and under the `io.gotry.quota.refresh` background app refresh, no
