@@ -371,9 +371,14 @@ struct UsageDayDetailSheet: View {
           .accessibilityIdentifier("usage.day.empty")
       }
     case .loaded(let agents):
+      // Shares are of the rows on screen: the tree is the day's own fold, so its agents sum to
+      // what the headline says, and a headline behind the tree can only make a share overstate.
+      let daySections = UsageBreakdown.sections(agents: agents)
+      let treeTokens = daySections.flatMap(\.providers).flatMap(\.models)
+        .reduce(0) { $0 + $1.totals.totalTokens }
       UsageAgentListSections(
-        sections: UsageBreakdown.sections(agents: agents),
-        periodTokens: sheet.headline.totals.totalTokens,
+        sections: daySections,
+        periodTokens: max(sheet.headline.totals.totalTokens, treeTokens),
         expandedProviderIDs: $expandedProviderIDs,
         modelIdentifier: "usage.day.model"
       )

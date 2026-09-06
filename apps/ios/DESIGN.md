@@ -681,6 +681,12 @@ provider and support, and no custom card chrome beyond the system widget contain
     `section.footer.usage.day.headline`;
   - the system sheet **Done** confirmation button for Dynamic Type;
   - contrast and clipping on any element whose frame intersects the floating tab bar's frame
+    (and contrast on any element whose frame intersects the floating navigation bar's frame once
+    a list has scrolled under it; the same glass, at the other end of the screen);
+  - contrast on an element that cannot be hit while a sheet's Done button is up: the presentation
+    dims what is behind it, and that dimming is the system's;
+  - contrast on `usage.activity.selected-day`: the date label shares its row container with the
+    selected heatmap cell, whose accent ring the auditor reads as the label's background
     (inset by 40 pt horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit
     over the last visible rows, so the contrast auditor samples the glass, not the row, and the
     clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never

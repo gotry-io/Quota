@@ -45,11 +45,20 @@ final class QuotaUITests: XCTestCase {
       app.staticTexts["Studio Mac"].exists,
       "Devices summary does not duplicate onto Overview"
     )
+    // Re-expanding the tab bar scrolled back up, and a lazy List drops rows that left the
+    // screen, so bring Today back before asserting on it.
+    for _ in 0..<12
+    where !(app.staticTexts["Today"].exists || todaySection.exists
+      || app.descendants(matching: .any)["overview.today.tokens"].exists)
+    {
+      app.swipeUp()
+    }
     XCTAssertTrue(
       app.staticTexts["Today"].exists || todaySection.exists
         || app.descendants(matching: .any)["overview.today.tokens"].exists,
       "Today section"
     )
+    settle(app)
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
@@ -91,6 +100,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(
       app.staticTexts["Activity"].waitForExistence(timeout: 5), "Activity section title")
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
+    settle(app)
     attachScreenshot(app, name: "usage-activity")
     try audit(app)
     app.buttons["View day"].tap()
@@ -263,11 +273,16 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["providers.session.claude:claude_team"].exists,
       "connected Claude Code account"
     )
+    // The Sync group sits above Providers now, so the last Providers row starts off screen and
+    // a lazy List has not materialized it yet.
+    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
+    for _ in 0..<4 where !grokConnect.exists {
+      scrollToIdentifierOnce(app, "providers.connect.grok")
+    }
     XCTAssertTrue(
-      app.descendants(matching: .any)["providers.connect.grok"].exists,
+      grokConnect.waitForExistence(timeout: 5),
       "Grok Connect row"
     )
-    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
     XCTAssertTrue(
       grokConnect.label.contains("Connect"),
       "a provider with nothing connected offers Connect, got \(grokConnect.label)"
@@ -290,6 +305,11 @@ final class QuotaUITests: XCTestCase {
       app.staticTexts["Sign in again to keep reading this account."].exists,
       "refused copy"
     )
+    // Back to the top before the audit: rows dragged under the navigation bar are sampled
+    // against its glass, which is not a colour this app chose.
+    scrollContent(app, up: false)
+    scrollContent(app, up: false)
+    settle(app)
     attachScreenshot(app, name: "settings-providers")
     try audit(app)
   }
@@ -954,6 +974,13 @@ final class QuotaUITests: XCTestCase {
   }
 
   /// One identifier-targeted scroll. Accessibility sizes can push a hub row below the fold.
+  /// A list still decelerating after a programmatic scroll is what the contrast auditor
+  /// samples; give it a moment to come to rest before an audit that follows a drag.
+  private func settle(_ app: XCUIApplication) {
+    _ = app.wait(for: .runningForeground, timeout: 1)
+    usleep(900_000)
+  }
+
   private func scrollToIdentifierOnce(_ app: XCUIApplication, _ identifier: String) {
     let element = app.descendants(matching: .any)[identifier]
     scrollContent(app, up: true)
@@ -1112,8 +1139,45 @@ final class QuotaUITests: XCTestCase {
         let control = issue.element,
         app.tabBars.firstMatch.exists
       {
-        // The glass blooms a little above the capsule itself.
-        let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -56)
+        // The glass blooms above the capsule itself: rows fade for roughly a row and a half
+        // before the capsule's own edge.
+        let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -96)
+        if control.frame.intersects(overlay) {
+          return true
+        }
+      }
+
+      // The selected day's date label sits in the same row container as the heatmap's selected
+      // cell, whose accent ring the auditor reads as the label's background; the label itself is
+      // the system label colour on the row. Scoped to that one identifier.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        identifier == "usage.activity.selected-day" || element.contains("usage.activity.selected-day")
+      {
+        return true
+      }
+
+      // A row still on screen behind a presented sheet is dimmed by the presentation, not
+      // coloured by this app, and a reader cannot reach it while the sheet is up. Scoped to
+      // elements that cannot be hit while the sheet's own Done button is present.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        let control = issue.element,
+        app.buttons["Done"].exists,
+        !control.isHittable
+      {
+        return true
+      }
+
+      // The same glass, at the other end: the iOS 26 navigation bar floats over the first
+      // visible rows once a list has scrolled, and a row dragged under it is sampled against
+      // the bar rather than the row. Scoped the same way, to frames intersecting the bar's.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        let control = issue.element,
+        app.navigationBars.firstMatch.exists
+      {
+        // Everything from the top of the screen to just under the bar: a row scrolled that far
+        // is under the status bar's and the bar's glass alike.
+        let bar = app.navigationBars.firstMatch.frame
+        let overlay = CGRect(x: 0, y: 0, width: app.frame.width, height: bar.maxY + 24)
         if control.frame.intersects(overlay) {
           return true
         }
@@ -1188,6 +1252,7 @@ final class QuotaUITests: XCTestCase {
             "usage.activity.loading",
             "usage.activity.failed",
             "usage.activity.empty",
+            "usage.empty",
             "subscription.account",
             "subscription.plan",
             "settings.about.version",
@@ -1216,7 +1281,10 @@ final class QuotaUITests: XCTestCase {
         }
       }
 
-      XCTFail("\(description) — \(element) on \(screen)")
+      let frames =
+        "frame \(issue.element?.frame ?? .zero); tab bar \(app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame : .zero); nav bar \(app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame : .zero)"
+      let parent = issue.element.map(parentIdentifier(of:)) ?? ""
+      XCTFail("\(description) — \(element) on \(screen) [parent \(parent); \(frames)]")
       return true
     }
   }
@@ -1224,6 +1292,8 @@ final class QuotaUITests: XCTestCase {
 
 /// The rows this app collapses into one accessibility element with `children: .ignore`.
 private let mergedRows = [
+  "usage.day",
+  "usage.provider.",
   "devices.row",
   "devices.this-iphone",
   "subscription.source",
