@@ -1,12 +1,15 @@
 # Quota iOS
 
-Quota is the native iOS 26+ account viewer. It signs in with the registered `quota-ios` public
-client and reads the GitHub Account's remaining quota and Today Usage from the fixed Relay origin.
-One read answers all of it: Relay resolves an account's readings into one subscription per key, so
-the app renders those rows rather than collapsing one card per reporting Mac. It can also sign in
-to a provider's own web session on the phone, for the accounts no Mac reports.
-The app also publishes a non-secret App Group snapshot for Home Screen and Lock Screen widgets.
-Widgets are configurable.
+Quota is the native iOS 26+ quota app. It reads two things and shows one list.
+
+It signs in to a provider's own web session on the phone and reads that provider on this device,
+which is all it needs to be useful — no Quota account required. With one, it also signs in with the
+registered `quota-ios` public client and reads the GitHub Account's remaining quota and Today Usage
+from the fixed Relay origin; Relay resolves an account's readings into one subscription per key, so
+the app renders those rows rather than one card per reporting Mac. Overview is the two merged by
+the rule in [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md), so
+an account both a Mac and this phone read is one row with both sources. The app also publishes a
+non-secret App Group snapshot for Home Screen and Lock Screen widgets. Widgets are configurable.
 
 ## Runtime boundary
 
@@ -15,9 +18,11 @@ and WidgetKit timeline reloads. [`packages/apple-client`](../../packages/apple-c
 owns wire decoding, PKCE values, the fixed-origin HTTPS client, session refresh/revoke, Keychain
 session storage, last-good Account summary cache, the provider web collectors
 (`QuotaProviderWeb`) and their Keychain store (`QuotaProviderSessions`), and the Foundation-only
-`QuotaWidgetData` snapshot types/store. [`packages/apple-shared`](../../packages/apple-shared)
-owns remaining-quota, plan/account label, compact count, Usage cost, and compact relative-age
-presentation. Views never call `URLSession`, Security, or decode JSON. `QuotaWire` is the one definition of the
+`QuotaWidgetData` snapshot types/store. The app owns the local collection pass over those sessions
+and the app-container file holding its result.
+[`packages/apple-shared`](../../packages/apple-shared) owns remaining-quota, plan/account label,
+compact count, Usage cost, and compact relative-age presentation, and — in `QuotaObservations` —
+the subscription key and the observation merge this app resolves Overview with. Views never call `URLSession`, Security, or decode JSON. `QuotaWire` is the one definition of the
 managed wire types and `ProviderID`; QuotaBar reads the same module, so a decoding rule written once
 protects both products.
 
@@ -27,7 +32,9 @@ Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
 Quota iOS is not a collection Device. It uploads no snapshot or Usage, collects no local logs, and
-adds no `ios` member to `PlatformSchema`. The Devices tab lists the collection Devices with their
+adds no `ios` member to `PlatformSchema` — what it reads for itself stays on the phone. The Devices
+tab is the Account's, so it asks for a sign-in when there is no account; with one it lists the
+collection Devices, then **This iPhone** for what this device read itself, with their
 platform and how recently each one spoke — Active, Idle, or Not reporting — without requesting
 credentials for them. See [ADR 0013](../../docs/decisions/0013-readonly-ios-account-client.md).
 
@@ -39,7 +46,14 @@ cookies, assembles the header `packages/provider/catalog.json` declares, and kee
 Keychain — one item per provider and account fingerprint,
 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronized to iCloud — and are never
 uploaded. The first Connect for a provider asks for consent naming that provider's cookies and
-hosts. Nothing is injected into the page and no page content is read. See
+hosts. Nothing is injected into the page and no page content is read.
+
+Every refresh — pull-to-refresh and background alike — reads every stored session in parallel and
+writes the result to `local-observations.json` in the app container, beside the Account summary
+cache and under the same protection. That file holds readings, never a cookie. A provider that
+refuses a cookie marks that session **Sign in again** in Settings; one that could not be reached
+leaves no mark. A successful read moves that session's `lastValidatedAt`, which is the
+"Checked …" age the Providers list shows. See
 [ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
@@ -56,14 +70,16 @@ may run with signing disabled for verification scripts.
 ## Background refresh
 
 The app registers `io.gotry.quota.refresh` as a `BGAppRefreshTask` and asks for it no sooner than
-thirty minutes out after every refresh that found a session. When the system grants a window, the
-app process runs the same refresh a pull-to-refresh runs — Keychain session, last-good cache, one
-Relay read — republishes the App Group snapshot, reloads widget timelines, asks for the next window,
-and reports the outcome to the scheduler. A refresh that does not reach Relay leaves the published
-snapshot in place and says nothing; Overview states the failed refresh the next time the app is
-opened. Signing out, an expired session, and a launch with no session withdraw the pending request
-instead: there is nothing to read, so there is nothing to be woken for. The extension is unchanged:
-it still only reads the snapshot.
+thirty minutes out after every refresh, while this phone has anything to read: an account session,
+a provider session, or both. When the system grants a window, the app process runs the same refresh
+a pull-to-refresh runs — the local collection pass over its provider sessions, and, with an account,
+the Keychain session, last-good cache and one Relay read — merges them, republishes the App Group
+snapshot, reloads widget timelines, asks for the next window, and reports the outcome to the
+scheduler. Local collection there is bounded at twenty seconds; a pass that runs past it leaves the
+last reading in place. A refresh that learns nothing leaves the published snapshot alone and says
+nothing; Overview states the failed refresh the next time the app is opened. A phone with neither
+an account nor a provider session withdraws the pending request: there is nothing to read, so there
+is nothing to be woken for. The extension is unchanged: it still only reads the snapshot.
 
 ## Privacy manifest
 
@@ -115,11 +131,11 @@ project. Pass `--no-commit` to skip the commit.
 `usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
 sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
 opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
-setup Section for `no-devices`, the Providers group's three connection states for `providers`,
-Devices content and empty states, the cached-error status Label, the
-Connect with GitHub and Continue with Apple controls for `signed-out`, connecting /
-connect-error / expired / loading
-fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
+setup Section for `no-devices`, the Providers group's three connection states plus a refused
+session for `providers`, Devices content and empty states, the cached-error status Label, the two
+invitations on the empty Overview for `signed-out`, the locally collected Overview and its
+**This iPhone** reading for `local-only`, the one merged row for `merged`, connecting /
+connect-error / expired / loading fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
 hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
 Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
 Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
@@ -146,7 +162,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

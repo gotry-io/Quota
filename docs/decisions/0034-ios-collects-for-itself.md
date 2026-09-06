@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-05
+- Updated: 2026-09-06 — where those readings live and how they reach Overview, inline below
 - Related: [ADR 0010](./0010-provider-browser-session-auth.md),
   [ADR 0013](./0013-readonly-ios-account-client.md),
   [ADR 0014](./0014-nonsecret-ios-widget-snapshot.md)
@@ -58,6 +59,39 @@ with `quota-ios` is unchanged.
   own quota in this app. It is not a sign-in for Quota — [ADR 0013](./0013-readonly-ios-account-client.md)
   keeps GitHub as the only identity — and it collects nothing from the page beyond the session
   cookie the sign-in leaves. `apps/ios/metadata/review-notes.md` states this for reviewers.
+
+## Where a local reading lives, and how it merges
+
+Updated 2026-09-06. A session this phone holds is only worth holding if something reads it, so the
+app collects on the same refresh a pull-to-refresh and a `BGAppRefreshTask` already run.
+
+- **A pass reads every stored session, in parallel, and answers what it could.** A provider that
+  refuses the cookie marks that session as needing a fresh sign-in, which is the only thing that
+  fixes it, and the Providers row says so instead of aging quietly. A provider that could not be
+  reached leaves no mark: a network that was down says nothing about a session. A successful read
+  moves that session's `lastValidatedAt`, so "Checked …" is when the provider last answered rather
+  than when the reader signed in.
+- **The result is a file in the app's own container**, beside the Account summary cache and under
+  the same protection, excluded from backup. It is not in the App Group: the widget renders the
+  published snapshot and never a second data path
+  ([ADR 0014](./0014-nonsecret-ios-widget-snapshot.md)). It holds readings, never a cookie — the
+  session stays in the Keychain.
+- **Overview is the merge, not two lists.** This phone's readings and the `subscriptions[]` Relay
+  resolved from every Mac go through one rule — the Swift statement of
+  [ADR 0003](./0003-observation-preserving-subscription-merge.md) in `QuotaObservations`, judged by
+  `quota-observation-conformance.json` alongside the TypeScript and Rust ones. An account both a
+  Mac and this phone read is one row with both sources, and the local reading wins a tie because
+  it is the authority for the device in front of you. Subscription detail lists **This iPhone**
+  beside the Macs; the widget projects the merged rows without distinguishing where each came from.
+- **No account is not an empty app.** Signing in to Quota stops being a wall in front of the tabs
+  and becomes one of the two invitations on an empty Overview, beside connecting a provider. What
+  an account still adds is what it always was: the Macs, and the Usage fold across them. Devices
+  and Today Usage stay account-only, because this phone registers no Device and uploads no usage.
+- **A background window is asked for while anything is readable** — an account, or a provider
+  session. Local collection there is bounded at twenty seconds, and a pass that runs past it
+  leaves the last reading in place rather than nothing.
+
+Nothing here changes what may be uploaded. The merge happens on the phone, for the phone.
 
 ## What was given up
 

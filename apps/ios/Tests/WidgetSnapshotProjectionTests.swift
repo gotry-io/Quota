@@ -176,7 +176,8 @@ struct WidgetSnapshotProjectionTests {
       ]
     )
     let snapshot = WidgetSnapshotProjection.make(
-      summary: summary,
+      subscriptions: summary.subscriptions,
+      today: summary.usage.today,
       fetchedAt: date("2026-08-14T16:00:00Z"),
       salt: testSalt
     )
@@ -185,6 +186,34 @@ struct WidgetSnapshotProjectionTests {
     #expect(snapshot.today.outputTokens == 200)
     #expect(snapshot.today.cost.status == .complete)
     #expect(snapshot.today.cost.amountMicrousd == "3138")
+  }
+
+  /// A phone with no Quota account has no Today fold to project: Today is the Account's sum of
+  /// what every device reported, and this device uploads nothing.
+  @Test
+  func withoutAnAccountTodayIsUnavailableRatherThanZero() throws {
+    let summary = try decodeSummary(
+      subscriptions: [
+        observation(
+          provider: "codex",
+          fingerprint: "fp_codex_01",
+          windowID: "weekly",
+          title: "Weekly",
+          usedPercent: 29
+        )
+      ]
+    )
+    let snapshot = WidgetSnapshotProjection.make(
+      subscriptions: summary.subscriptions,
+      today: nil,
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      salt: testSalt
+    )
+    #expect(snapshot.items.count == 1)
+    #expect(snapshot.today.inputTokens == 0)
+    #expect(snapshot.today.outputTokens == 0)
+    #expect(snapshot.today.cost.status == .unavailable)
+    #expect(snapshot.today.cost.amountMicrousd == nil)
   }
 
   @Test
@@ -249,7 +278,8 @@ struct WidgetSnapshotProjectionTests {
       accountID: "account_01"
     )
     let snapshot = WidgetSnapshotProjection.make(
-      summary: summary,
+      subscriptions: summary.subscriptions,
+      today: summary.usage.today,
       fetchedAt: date("2026-08-14T16:00:00Z"),
       salt: testSalt
     )

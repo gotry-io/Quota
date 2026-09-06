@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import QuotaAccount
+import QuotaProviderSessions
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -890,6 +891,9 @@ func makeModel(
   alertCoordinator: AlertCoordinator? = nil,
   alertRulesStore: IOSAlertRulesStore? = nil,
   notificationCenter: (any NotificationCentering)? = nil,
+  providerSessions: any ProviderSessionStoring = MemoryProviderSessionStore(),
+  localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
+  localCollector: LocalCollector? = nil,
   now: @escaping @Sendable () -> Date = { Date() }
 ) -> AppModel {
   AppModel(
@@ -907,6 +911,10 @@ func makeModel(
     alertCoordinator: alertCoordinator,
     alertRulesStore: alertRulesStore,
     notificationCenter: notificationCenter,
+    providerSessions: providerSessions,
+    localStore: localStore,
+    localCollector: localCollector
+      ?? LocalCollector(sessions: providerSessions, collectors: { _, _ in nil }, now: now),
     now: now
   )
 }

@@ -7,12 +7,15 @@ links to it rather than restating it.
 
 ## Product boundaries
 
-- **Quota** is the iOS 26+ presentation product. It signs in with the registered `quota-ios` public
-  client, reads Account remaining quota and Today Usage, and publishes the non-secret App Group
-  snapshot its widgets render. It is not a collection Device: it writes nothing to Relay. It does
-  sign in to a provider's own web session for itself, inside the app and with the reader watching,
-  and reads that provider on the phone; those sessions stay in this device's Keychain and are never
-  uploaded ([ADR 0034](decisions/0034-ios-collects-for-itself.md)).
+- **Quota** is the iOS 26+ presentation product, and a collection client for itself. It signs in to
+  a provider's own web session inside the app, with the reader watching, and reads that provider on
+  the phone; those sessions stay in this device's Keychain and are never uploaded
+  ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). It is usable with no Quota account at
+  all: Overview then shows what the phone read for itself. With an account it also signs in with the
+  registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
+  two are merged into one row per subscription by the rule below. Either way it publishes the
+  non-secret App Group snapshot its widgets render. It is still not a collection Device: it
+  registers no Device and writes nothing to Relay, so a reading taken here reaches no other client.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
@@ -116,13 +119,16 @@ the website derive their own, and Relay neither stores nor carries one.
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
 `{device_id, observed_at}` behind it. That rule is stated once in
-[ADR 0003](decisions/0003-observation-preserving-subscription-merge.md), implemented once in
-`packages/quota-model`, and restated by no client. Global fingerprints merge across observation
-sources and source-scoped fingerprints stay separate; selection favors a valid non-expired
-observation, then newest observation time, then local source, then stable source ID — never when
-Relay last wrote the row. QuotaBar merges twice rather than five ways: the resolved row against its
-own local collection, the only authority for this device. Rust returns that merged Overview and Swift
-never reimplements the policy. `quota-observation-conformance.json` states both rules as cases and
+[ADR 0003](decisions/0003-observation-preserving-subscription-merge.md) and written once per
+runtime — TypeScript in `packages/quota-model`, Rust in `packages/service`, Swift in
+`packages/apple-shared`'s `QuotaObservations` — with one fixture holding all three to the same
+answer. Global fingerprints merge across observation sources and source-scoped fingerprints stay
+separate; selection favors a valid non-expired observation, then newest observation time, then
+local source, then stable source ID — never when Relay last wrote the row. QuotaBar merges twice
+rather than five ways: the resolved row against its own local collection, the only authority for
+this device. Rust returns that merged Overview and Swift never reimplements the policy. Quota iOS
+makes the same two-way comparison, against the providers it read on the phone.
+`quota-observation-conformance.json` states both rules as cases and
 `wire-conformance.json` does the same for the contracts themselves: read contracts bind all three
 runtimes, while a write is judged by the boundary schema that guards it — the sending side states
 only bounds, and its types are held to the exported schema by test
@@ -355,8 +361,13 @@ or a report.
   Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
   evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
   wire types, network, persist, or reach Relay; `QuotaAlerts` may depend on `QuotaPresentation`.
+  `QuotaObservations`, beside them, owns the subscription key and the observation merge — the one
+  Swift statement of [ADR 0003](decisions/0003-observation-preserving-subscription-merge.md),
+  generic over the snapshot type so it converts nothing and reads no quota value; it may depend on
+  `QuotaPresentation` for freshness and on nothing else.
   `packages/apple-client` may depend on it so a wire type can answer a presentation question about
-  itself. QuotaWire's `ProviderID` carries only
+  itself; `QuotaSnapshot` conforms to `QuotaObservationSnapshot` there, so neither Apple product
+  restates how a reading is addressed. QuotaWire's `ProviderID` carries only
   providers that sync to an account, because a local-only collector there would force QuotaBar's
   enum to diverge again.
 - `QuotaProviderSessions`, in `packages/apple-client`, keeps the provider web sessions a device
@@ -370,7 +381,8 @@ or a report.
   client, account session refresh/revoke, the last-good Account summary cache, the activity
   read (not cached), and the Foundation-only `QuotaWidgetData` snapshot types and store. `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
-  non-persistent data store, App Group snapshot publish/clear, the app-private
+  non-persistent data store, the local collection pass over its stored provider sessions and the
+  app-container file holding its result, App Group snapshot publish/clear, the app-private
   selection-salt Keychain item, and the WidgetKit extension; its views do not call `URLSession` or
   Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, or Security, or use `URLSession` or

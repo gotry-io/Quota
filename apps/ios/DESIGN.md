@@ -6,9 +6,10 @@ belongs in `apps/menubar/DESIGN.md`.
 
 ## Product character
 
-Quota on iPhone is a native iOS 26 read-only Account instrument: remaining quota first, Today Usage
-second, collection/setup and account-management support third. Liquid Glass belongs to the system
-navigation and control layer. Quota data, settings rows, status text, meters, charts, and
+Quota on iPhone is a native iOS 26 quota instrument: remaining quota first, Today Usage second,
+collection/setup and account-management support third. It reads the providers it is signed in to on
+this device and, when there is a Quota account, what QuotaBar reports from the Macs; Overview is
+those merged, not two lists. Liquid Glass belongs to the system navigation and control layer. Quota data, settings rows, status text, meters, charts, and
 empty-state explanations are content and do not use glass. It is not a compressed website and not
 the QuotaBar menu panel.
 
@@ -16,7 +17,9 @@ Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
 2. Connect with GitHub, Continue with Apple, and Log Out are the only account actions this device
-   performs. Delete Account starts on the website after a fresh sign-in.
+   performs. Delete Account starts on the website after a fresh sign-in. Signing in is an
+   invitation inside the app, never a wall in front of it: without an account the tabs still
+   open on whatever this phone read for itself.
 3. Last-good Account data stays visible across transient failures. A status line states that in
    words, not color alone.
 4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
@@ -44,8 +47,7 @@ through `QuotaAlerts`, including the pace warning Settings can turn off.
 ## Surfaces
 
 ```text
-Connect with GitHub
-TabView
+TabView (always; a sign-in in flight takes the screen)
   Overview
   Usage
   Devices
@@ -53,8 +55,12 @@ TabView
 Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
-Signed-out Connect is presented directly, without an empty NavigationStack. Signed-in tabs use the
-iOS 26 `Tab` initializer and `tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
+The tabs are the app. Connect takes the whole screen only while a sign-in is in flight —
+`connecting`, the pending-confirmation screen, and a pending session whose first read failed —
+because those are questions waiting for an answer. A phone that is simply signed out shows the
+tabs, and the Overview empty state carries both invitations. Connect is presented directly, without
+an empty NavigationStack. Tabs use the iOS 26 `Tab` initializer and
+`tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
 
 ### Connect Account
 
@@ -134,9 +140,17 @@ Connect failures use a specific sentence when one is known, otherwise the defaul
 
 ### Overview
 
-Shown when an `active` session exists. Content comes from the last complete Account summary, then from a
-refresh of Today. An inset-grouped `List`. Pull to refresh runs one Today fetch. A fetch in flight
-ignores additional refresh requests.
+Always shown behind the tab bar. Its content is one merged list, whichever sides answered:
+
+| Sources | What Overview shows |
+| --- | --- |
+| Only this iPhone | Title **Quota**. Quota rows from what this phone read. No Today section, because Today is the Account's fold and this phone uploads nothing. |
+| Only the Account | Title is the account label. Quota rows from `subscriptions[]`, plus Today. Unchanged from before. |
+| Both | One row per subscription, merged by [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md) — an account both a Mac and this phone read is one row, and a tie goes to this phone because it is the authority for the device in front of you. Today is still the Account's. |
+
+Content comes from the last complete Account summary and the last local collection, then from a
+refresh of both. An inset-grouped `List`. Pull to refresh runs the local pass and, with an account,
+one Today fetch. A refresh in flight ignores additional refresh requests.
 
 Header:
 
@@ -161,9 +175,14 @@ Body, in order:
    **Balance** plus the unit amount. Empty windows: **No quota windows yet.** The canonical
    **Updated** age is the quota Section footer; it wraps and is spoken in full.
 3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
-   `gauge.with.dots.needle.33percent`, description **Set up QuotaBar on a Mac to start reporting.**
-4. Today, before setup or device support: Tokens, API-equivalent cost, Input, and Output, with
-   monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
+   `gauge.with.dots.needle.33percent`, and the two ways to change that as buttons. Without an
+   account the description is **Connect a provider to read your quota on this iPhone, or sign in to
+   Quota to see what your Macs report.** with **Connect a provider** (switches to Settings, where
+   the Providers group is) and **Sign in to Quota**. With one it is **Set up QuotaBar on a Mac to
+   start reporting, or connect a provider to read it on this iPhone.** and only **Connect a
+   provider**.
+4. Today, only when an account answered, before setup or device support: Tokens, API-equivalent
+   cost, Input, and Output, with monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
    Empty: **No usage today.**
 5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
@@ -190,9 +209,9 @@ The title is the provider display name. An inset-grouped `List`:
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
 
-Each device row is that device's display name (or **Device** when the name is missing), the primary
-remaining figure from that source, and freshness. The page never shows a device id, fingerprint,
-subscription key, or a custom surface. There is no independent loading or error state on this
+Each device row is that device's display name — **This iPhone** for what this device read itself,
+or **Device** when a name is missing — the primary remaining figure from that source, and
+freshness. The page never shows a device id, fingerprint, subscription key, or a custom surface. There is no independent loading or error state on this
 pushed view; it renders the selected last-good subscription.
 
 ### Widget overview
@@ -320,9 +339,18 @@ asks `detail=agents` for that date. There is no custom material.
 
 ### Devices
 
-An inset-grouped `List` of the Account's collection devices. Do not repeat **Devices** inside the
-body. Each row is display name, an **Active** / **Idle** / **Not reporting** verdict, platform, and
-the last-reading age that verdict came from. Use text as well as any symbol; color cannot carry the
+The Account's list, so without an account it is one `ContentUnavailableView`: title **Sign in to
+see your Macs**, image `desktopcomputer`, description **Quota lists the Macs reporting to your
+account. This iPhone reads the providers you connect here whether or not you sign in.**, action
+**Sign in to Quota**. The Manage Devices toolbar link is absent then, and so is the This iPhone row:
+there is no list for it to end.
+
+With an account, an inset-grouped `List` of the Account's collection devices, then **This iPhone**
+as the last row — platform **iOS**, verdict and age from the last local collection. It is not an
+Account Device and carries no Manage or Remove control; what it reads is removed by removing a
+provider sign-in in Settings. Do not repeat **Devices** inside the body. Each row is display name,
+an **Active** / **Idle** / **Not reporting** verdict, platform, and the last-reading age that
+verdict came from. Use text as well as any symbol; color cannot carry the
 verdict. VoiceOver speaks name, verdict, platform, and age. Never infer failure from sleep,
 shutdown, or a closed app, and never show raw Device IDs or request a remote Device's credentials.
 
@@ -330,10 +358,10 @@ A top-trailing system toolbar `Link` uses the `arrow.up.right` symbol. Visible a
 label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my/devices`, the same
 URL Settings uses. The toolbar supplies its own Liquid Glass.
 
-Empty state is `ContentUnavailableView`: title **No Macs connected**, image `desktopcomputer`,
-description **Install QuotaBar on a Mac signed in with this GitHub account.**, action **Download
-QuotaBar**. No QR code or custom surface. Root loading covers summary loading. Device status is
-last-good account content.
+An account with no Macs is `ContentUnavailableView`: title **No Macs connected**, image
+`desktopcomputer`, description **Install QuotaBar on a Mac signed in with this GitHub account.**,
+action **Download QuotaBar** — with the This iPhone row still beneath it. No QR code or custom
+surface. Root loading covers summary loading. Device status is last-good account content.
 
 ### Settings
 
@@ -351,10 +379,13 @@ that already has an account shows **Add Account** instead, because a second acco
 is a second row rather than a replacement. A connected row is the catalog `display_name`, then
 **Connected as <masked label>** and **Checked <age> ago** in footnote rows — primary foreground, as
 a Devices row does, because `.secondary` at that size does not clear this app's contrast bar — with
-a trailing
-**Remove**. That button is standard, not red: the system destructive red on a Form row does not
-clear this app's contrast bar, and what is destructive about it is said by the confirmation it
-opens, whose **Remove** is the destructive one. Remove confirms in a native dialog — **Remove this <Provider> sign-in?** — and says the
+a trailing **Remove**. When the last local collection was refused for that session, the second line
+is **Sign in again to keep reading this account.** and a **Sign in again** control precedes Remove:
+only a fresh sign-in fixes a refused cookie, so the row says that instead of an age that will never
+move. A provider that could not be reached leaves the row alone. That button is standard, not red:
+the system destructive red on a Form row does not clear this app's contrast bar, and what is
+destructive about it is said by the confirmation it opens, whose **Remove** is the destructive one.
+Remove confirms in a native dialog — **Remove this <Provider> sign-in?** — and says the
 cookies are deleted from this iPhone's Keychain and that Quota stops reading that provider here.
 The footer is **Sign-in cookies stay in this iPhone's Keychain. Quota never uploads them, and
 Remove deletes them.**, replaced by **Couldn't read the sign-ins saved on this iPhone.** when the
@@ -378,13 +409,17 @@ it: no injected script, no read of page content, no intercepted form or navigati
 **Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
 (`https://quota.gotry.io/support`). NavigationLink **About**.
 
-**Account.** Link **Manage Devices on Web** (`https://quota.gotry.io/my/devices`). **Delete
-Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
+**Account.** With an account: Link **Manage Devices on Web**
+(`https://quota.gotry.io/my/devices`). **Delete Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
 `ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
 `https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount`. The
 callback scheme is nil: the sheet ending returns to the app. Quota then prompts **If you deleted
 the Account, sign out here too.** **Log Out** keeps the native confirmation: remote Account data
-remains; this device forgets the session.
+remains; this device forgets the session and its saved overview, and keeps every provider sign-in.
+
+Without an account the group is one button, **Sign in to Quota**, with the footer **Sign in to see
+what QuotaBar reports from your Macs, and your usage across them.** There are no devices to manage
+and nothing to delete, so those rows are absent rather than disabled.
 
 #### Notifications
 
@@ -481,9 +516,10 @@ Rules:
 | State | Presentation |
 | --- | --- |
 | Loading, no cache | Centered progress and **Loading account…**. No surface. |
-| Empty quota | **No quota yet** with **Set up QuotaBar on a Mac to start reporting.** |
+| Empty quota, with an account | **No quota yet** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and **Connect a provider** |
 | Empty Today | **No usage today.** |
 | Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
+| Usage with no account | `ContentUnavailableView` **Sign in to see your usage** / **Usage is what QuotaBar reports from your Macs. This iPhone reads quota here, and measures no usage of its own.** with **Sign in to Quota** |
 | Loading activity | Skeleton in the Activity section. Accessibility value **Loading activity** |
 | Activity failed | **Couldn't load activity.** with **Retry** |
 | Empty activity | **No activity in the last year.** |
@@ -493,9 +529,11 @@ Rules:
 | Device quiet or never heard from | **Idle** / **Not reporting** beside its age, or `no readings yet` |
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved data. Couldn't refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Couldn't refresh. Pull to try again.** |
-| Expired session | Connect with GitHub plus **Session expired. Connect again.** |
+| Expired session | Overview status **Session expired. Connect again.** above whatever this phone still reads |
+| Signed out, nothing read | **No quota yet** with **Connect a provider** and **Sign in to Quota** |
+| Provider refused a stored session | That Providers row reads **Sign in again to keep reading this account.** with a **Sign in again** control |
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
-| Connect failure | Connect with GitHub plus one plain status Label. Default **Couldn't connect. Try again.** |
+| Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
 | Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
 | Notification permission denied | **Allow notifications for Quota in Settings.** with **Open Settings** |
 | No quota alerts | **No quota alerts are available yet.** below the Notifications master controls |
@@ -663,6 +701,8 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture cached-error
 --visual-fixture empty
 --visual-fixture no-devices
+--visual-fixture local-only
+--visual-fixture merged
 --visual-fixture providers
 --visual-fixture activity-loading
 --visual-fixture activity-failed
@@ -672,10 +712,10 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 | Fixture | UI state |
 | --- | --- |
-| `signed-out` | Connect with GitHub and Continue with Apple: mark, both buttons, and footnote. No session restore |
+| `signed-out` | Signed-in tabs with nothing read: **No quota yet** and both invitations. No session restore |
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
-| `connect-error` | Connect with GitHub plus **Couldn't connect. Try again.** |
-| `expired` | Connect with GitHub plus **Session expired. Connect again.** |
+| `connect-error` | Empty Overview plus the **Couldn't connect. Try again.** status |
+| `expired` | Empty Overview plus the **Session expired. Connect again.** status |
 | `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
 | `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
@@ -683,7 +723,9 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
-| `providers` | Signed-in Settings with the Providers group in its three states: Codex with two connected accounts, Claude Code with one, and Grok with none. The stored fixture cookie is not a session and reaches no provider |
+| `local-only` | No account, two subscriptions this phone read for itself: Overview titled **Quota**, no Today section, and **This iPhone** as the only reading on subscription detail |
+| `merged` | The `content` account plus a newer local reading of the same Codex subscription: one row, three sources, **This iPhone** reporting |
+| `providers` | Signed-in Settings with the Providers group in its three states: Codex with two connected accounts, Claude Code with one, and Grok with none. The second Codex account was refused on the last collection, so it shows **Sign in again**. The stored fixture cookie is not a session and reaches no provider |
 | `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |
 | `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |
 | `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |

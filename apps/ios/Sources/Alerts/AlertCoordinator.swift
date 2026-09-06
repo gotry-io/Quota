@@ -3,7 +3,8 @@ import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 
-/// Evaluates local remaining-quota alert rules against an Account summary.
+/// Evaluates local remaining-quota alert rules against the subscriptions this app shows —
+/// whether a Mac reported them or this iPhone read them itself.
 ///
 /// Delivery is `AlertSink`. Sign-out clears the state store and leaves rules in place.
 @MainActor
@@ -25,10 +26,10 @@ final class AlertCoordinator {
     self.now = now
   }
 
-  func evaluate(summary: AccountSummary) {
+  func evaluate(subscriptions: [QuotaSubscription]) {
     let rules = rulesStore.load()
     let previous = (try? stateStore.load()) ?? .empty
-    let current = Self.readings(from: summary.subscriptions)
+    let current = Self.readings(from: subscriptions)
     let result = AlertEvaluator.evaluate(
       rules: rules,
       previous: previous,

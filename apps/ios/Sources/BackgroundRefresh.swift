@@ -1,9 +1,9 @@
 import BackgroundTasks
 import Foundation
 
-/// The background account refresh. The app process wakes, reads the account summary through the
-/// same `AccountClient` path a pull-to-refresh takes, and republishes the App Group widget
-/// snapshot. The WidgetKit extension still only reads that file and never fetches
+/// The background refresh. The app process wakes, reads its own provider sessions and the
+/// account summary through the same path a pull-to-refresh takes, and republishes the App Group
+/// widget snapshot. The WidgetKit extension still only reads that file and never fetches
 /// (`docs/decisions/0014-nonsecret-ios-widget-snapshot.md`).
 enum BackgroundRefresh {
   /// Must match `BGTaskSchedulerPermittedIdentifiers` in `Sources/Info.plist`.
@@ -11,7 +11,9 @@ enum BackgroundRefresh {
 
   /// The earliest instant the app asks to be woken at. Collecting Macs poll every five minutes
   /// and Relay resolves the account from what they last sent, so waking the phone more often
-  /// than every half hour spends battery on a number that has barely moved.
+  /// than every half hour spends battery on a number that has barely moved. A phone collecting
+  /// for itself keeps the same cadence: it is spending the reader's battery and a provider's
+  /// rate limit on the same barely-moved number.
   static let earliestInterval: TimeInterval = 30 * 60
 
   /// Register the launch handler for a scheduled background refresh. `BGTaskScheduler` refuses
@@ -27,15 +29,18 @@ enum BackgroundRefresh {
     }
   }
 
-  /// Run one background refresh and report its outcome to the system. A refresh that does not
-  /// reach Relay completes the task unsuccessfully and says nothing: the on-screen app already
-  /// states a failed refresh when the user opens it. A signed-out app reads nothing at all —
-  /// `refresh()` answers from the absent session before it reaches Relay, and withdraws the
-  /// standing ask on its way out.
+  /// Run one background refresh and report its outcome to the system. A refresh that learns
+  /// nothing — neither a Relay read nor a local collection — completes the task unsuccessfully
+  /// and says nothing: the on-screen app already states a failed refresh when the user opens it.
+  ///
+  /// Local collection is bounded by `LocalCollector.backgroundBudget`, because the system grants
+  /// this task seconds. A pass that runs past it leaves the last reading in place.
   @MainActor
   static func run(_ task: BGTask, model: AppModel) {
     let work = Task { @MainActor in
-      task.setTaskCompleted(success: await model.refresh())
+      task.setTaskCompleted(
+        success: await model.refresh(budget: LocalCollector.backgroundBudget)
+      )
     }
     // Cancelling ends the Relay read, which returns a failure result, so the task is completed
     // exactly once whether it finishes or the system cuts it short.

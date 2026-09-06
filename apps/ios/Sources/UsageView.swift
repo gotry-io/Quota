@@ -8,32 +8,15 @@ struct UsageView: View {
 
   var body: some View {
     List {
-      Section {
-        periodPicker
-      }
-
-      if let usage = model.summary?.usage {
-        let period = model.selectedUsagePeriod.period(in: usage)
-        let sections = UsageBreakdown.sections(in: period)
-        UsageTotalsSection(period: period)
-        if sections.isEmpty {
-          emptyPeriod
+      // Usage is the Account's fold across every device. This phone measures none of it, so
+      // without an account there is nothing to pick a period of.
+      if !model.hasAccountSession {
+        signedOutInvitation
+      } else {
+        Section {
+          periodPicker
         }
-        if model.selectedTab == .usage {
-          if UsageDailyFold.hasUsage(dailyRows) {
-            UsageDailySection(rows: dailyRows)
-          }
-          UsageActivitySection(model: model)
-          UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
-          UsageAgentListSections(
-            sections: sections,
-            periodTokens: period.totals.totalTokens,
-            expandedProviderIDs: $expandedProviderIDs
-          )
-        }
-      } else if model.selectedTab == .usage {
-        emptyPeriod
-        UsageActivitySection(model: model)
+        signedInContent
       }
     }
     .listStyle(.insetGrouped)
@@ -57,6 +40,59 @@ struct UsageView: View {
       period: model.selectedUsagePeriod,
       lastDate: model.activityToday
     )
+  }
+
+  private var signedOutInvitation: some View {
+    ContentUnavailableView {
+      Label(UsageCopy.signedOutTitle, systemImage: "chart.bar")
+    } description: {
+      Text(UsageCopy.signedOutDetail)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    } actions: {
+      Button(UsageCopy.signIn) { Task { await model.connectAccount() } }
+        .frame(minHeight: QuotaTheme.minimumTouchTarget)
+        .accessibilityIdentifier("usage.signin")
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .frame(maxWidth: .infinity, minHeight: 220)
+    .listRowBackground(Color.clear)
+    .listRowSeparator(.hidden)
+  }
+
+  @ViewBuilder
+  private var signedInContent: some View {
+    if let usage = model.summary?.usage {
+      let period = model.selectedUsagePeriod.period(in: usage)
+      let sections = UsageBreakdown.sections(in: period)
+      UsageTotalsSection(period: period)
+      if sections.isEmpty {
+        emptyPeriod
+      }
+      if model.selectedTab == .usage {
+        if UsageDailyFold.hasUsage(dailyRows) {
+          UsageDailySection(rows: dailyRows)
+        }
+        UsageActivitySection(model: model)
+        UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
+        UsageAgentListSections(
+          sections: sections,
+          periodTokens: period.totals.totalTokens,
+          expandedProviderIDs: $expandedProviderIDs
+        )
+      }
+    } else if model.selectedTab == .usage {
+      emptyPeriod
+      UsageActivitySection(model: model)
+    }
+  }
+
+  private enum UsageCopy {
+    static let signedOutTitle = "Sign in to see your usage"
+    static let signedOutDetail =
+      "Usage is what QuotaBar reports from your Macs. This iPhone reads quota here, and measures "
+      + "no usage of its own."
+    static let signIn = "Sign in to Quota"
   }
 
   private var periodPicker: some View {

@@ -40,8 +40,9 @@ enum SettingsCopy {
   static let appearance = "Appearance"
   static let about = "About"
   static let productSentence =
-    "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
-  static let privacySentence = "This iPhone does not collect or upload local usage."
+    "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
+    + "and usage QuotaBar reports from your Macs."
+  static let privacySentence = "This iPhone does not upload anything it reads."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
   static let manageDevices = "Manage Devices on Web"
@@ -50,6 +51,10 @@ enum SettingsCopy {
     "Deletion happens on the website after you sign in again."
   static let deleteAccountFollowUp = "If you deleted the Account, sign out here too."
   static let logOut = "Log Out"
+  static let signIn = "Sign in to Quota"
+  /// What an account adds to a phone that already reads its own providers.
+  static let signInExplanation =
+    "Sign in to see what QuotaBar reports from your Macs, and your usage across them."
   static let license = "License"
   static let licenseValue = "MIT"
   static let website = "Website"

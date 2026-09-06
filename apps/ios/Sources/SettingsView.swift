@@ -53,28 +53,7 @@ struct SettingsView: View {
         Text(SettingsCopy.privacyAndSupport)
           .accessibilityIdentifier("section.header.privacy-and-support")
       }
-      Section {
-        Link(SettingsCopy.manageDevices, destination: QuotaWebLinks.manageDevices)
-        Button(SettingsCopy.deleteAccount, role: .destructive) {
-          Task {
-            await model.presentDeleteAccount()
-            promptSignOutAfterDelete = true
-          }
-        }
-        .accessibilityLabel(SettingsCopy.deleteAccount)
-        .accessibilityIdentifier("settings.delete-account")
-        Button(SettingsCopy.logOut, role: .destructive) {
-          confirmLogout = true
-        }
-        .accessibilityLabel(SettingsCopy.logOut)
-        .accessibilityIdentifier("settings.logout")
-      } header: {
-        Text(SettingsCopy.account)
-          .accessibilityIdentifier("section.header.account")
-      } footer: {
-        Text(SettingsCopy.deleteAccountExplanation)
-          .accessibilityIdentifier("section.footer.account")
-      }
+      accountSection
     }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("settings.root")
@@ -91,7 +70,8 @@ struct SettingsView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "The remote Account stays signed in on the website. This device forgets the session and saved overview."
+        "The remote Account stays signed in on the website. This device forgets the session and "
+          + "saved overview."
       )
     }
     .alert(SettingsCopy.deleteAccountFollowUp, isPresented: $promptSignOutAfterDelete) {
@@ -120,6 +100,7 @@ struct SettingsView: View {
     ) { session in
       Button(ProvidersCopy.remove, role: .destructive) {
         model.providers.remove(session)
+        Task { await model.providerSessionsChanged() }
       }
       Button(ProvidersCopy.cancel, role: .cancel) {}
     } message: { session in
@@ -128,7 +109,47 @@ struct SettingsView: View {
     .sheet(item: $loginProvider) { provider in
       ProviderLoginView(provider: provider, store: model.providers.sessionStore) { session in
         model.providers.keep(session)
+        Task { await model.providerSessionsChanged() }
       }
+    }
+  }
+
+  /// The managed Account, when there is one. A phone that only reads its own providers has no
+  /// devices to manage and nothing to delete, so the group is the one invitation instead.
+  @ViewBuilder
+  private var accountSection: some View {
+    Section {
+      if model.hasAccountSession {
+        Link(SettingsCopy.manageDevices, destination: QuotaWebLinks.manageDevices)
+        Button(SettingsCopy.deleteAccount, role: .destructive) {
+          Task {
+            await model.presentDeleteAccount()
+            promptSignOutAfterDelete = true
+          }
+        }
+        .accessibilityLabel(SettingsCopy.deleteAccount)
+        .accessibilityIdentifier("settings.delete-account")
+        Button(SettingsCopy.logOut, role: .destructive) {
+          confirmLogout = true
+        }
+        .accessibilityLabel(SettingsCopy.logOut)
+        .accessibilityIdentifier("settings.logout")
+      } else {
+        Button(SettingsCopy.signIn) {
+          Task { await model.connectAccount() }
+        }
+        .accessibilityIdentifier("settings.signin")
+      }
+    } header: {
+      Text(SettingsCopy.account)
+        .accessibilityIdentifier("section.header.account")
+    } footer: {
+      Text(
+        model.hasAccountSession
+          ? SettingsCopy.deleteAccountExplanation
+          : SettingsCopy.signInExplanation
+      )
+      .accessibilityIdentifier("section.footer.account")
     }
   }
 
@@ -164,15 +185,27 @@ struct SettingsView: View {
           .font(.footnote)
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
-        Text(ProvidersCopy.checked(at: session.lastValidatedAt, now: Date()))
-          .font(.footnote)
-          .foregroundStyle(.primary)
+        Text(
+          model.providers.needsSignIn(session)
+            ? ProvidersCopy.refused
+            : ProvidersCopy.checked(at: session.lastValidatedAt, now: Date())
+        )
+        .font(.footnote)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
       }
       .accessibilityIdentifier("providers.session.\(session.key)")
       Spacer(minLength: 12)
       // The row's control is a standard button, not a red one: the system red on a Form row does
       // not clear the contrast bar this app holds itself to. What is destructive about it is said
       // by the confirmation it opens, whose Remove is the destructive one.
+      if model.providers.needsSignIn(session) {
+        Button(ProvidersCopy.signInAgain) {
+          loginProvider = session.provider
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("providers.signin-again.\(session.key)")
+      }
       Button(ProvidersCopy.remove) {
         removing = session
       }

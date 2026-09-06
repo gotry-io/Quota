@@ -111,9 +111,10 @@ struct SettingsModelTests {
     #expect(SettingsCopy.licenseValue == "MIT")
     #expect(
       SettingsCopy.productSentence
-        == "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
+        == "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
+        + "and usage QuotaBar reports from your Macs."
     )
-    #expect(SettingsCopy.privacySentence == "This iPhone does not collect or upload local usage.")
+    #expect(SettingsCopy.privacySentence == "This iPhone does not upload anything it reads.")
   }
 
   @Test func subscriptionsUseCatalogOrderMaskedLabelsAndDefaultThresholds() {
