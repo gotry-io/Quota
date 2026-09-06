@@ -25,6 +25,20 @@ final class AppModel {
     case signedIn
   }
 
+  /// What the Sign-in methods group has to show. A failed read is not a signed-out Account and
+  /// not an empty list, so it is a state of its own rather than an empty array.
+  enum IdentitiesPhase: Equatable {
+    case idle
+    case loading
+    case loaded([AccountIdentity])
+    case failed
+
+    var identities: [AccountIdentity] {
+      if case .loaded(let identities) = self { return identities }
+      return []
+    }
+  }
+
   enum BannerKind: Equatable {
     case offlineCached
     case refreshFailed
@@ -97,6 +111,20 @@ final class AppModel {
   private(set) var uploadRefusedAsUnpaid = false
   /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
   private var appleNonce: AppleSignInNonce?
+  /// Whether the sign-in sheet — the one page that offers every way in — is showing.
+  var presentsSignIn = false
+  /// The browser round trip this app is waiting on, and the verifier only it can spend.
+  ///
+  /// It is cleared by whichever end answers first: the session sheet, or the authorization
+  /// callback an emailed sign-in link sends back through the system browser. Kept in memory
+  /// alone, so a relaunch while the person is in their mail app has nothing to exchange.
+  private var pendingWebSignIn: AuthorizationAttempt?
+  /// The channels that reach this Account, as Relay last answered. Read when Settings asks.
+  var identities: IdentitiesPhase = .idle
+  /// The channel a native bind is in flight for, so its row draws the busy state.
+  var linkingProvider: IdentityProvider?
+  /// Why the last bind did not happen, said under the Sign-in methods group.
+  var linkFailure: String?
   /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
   var providerStatus: [ProviderID: ProviderStatusReading] = [:]
 
@@ -306,42 +334,103 @@ final class AppModel {
     }
   }
 
+  /// Open the one page that offers every way in. Nothing is started until a way is chosen.
+  func showSignIn() {
+    guard phase == .signedOut || phase == .signedIn else { return }
+    banner = nil
+    expiredMessage = nil
+    presentsSignIn = true
+  }
+
+  /// Sign in through the browser: the Relay authorize URL, which asks which Account this is and
+  /// offers every channel that reaches one.
+  ///
+  /// Two ends can answer it. GitHub and the confirm page come back inside
+  /// `ASWebAuthenticationSession`; an emailed link is opened in the system browser instead, and
+  /// its authorization callback reaches `openDeepLink`. Whichever answers first takes
+  /// `pendingWebSignIn`, and the other finds it gone and stands down.
   func connectAccount(switchingAccount: Bool = false) async {
     if !switchingAccount {
       guard phase != .connecting else { return }
     }
+    presentsSignIn = false
     phase = .connecting
     banner = nil
     expiredMessage = nil
     do {
       let attempt = try makeAuthorizationAttempt()
+      pendingWebSignIn = attempt
       let callback = try await authenticator.authenticate(
         url: attempt.authorizationURL,
         callbackScheme: QuotaIOSOAuth.callbackScheme,
         prefersEphemeralWebBrowserSession: switchingAccount
       )
-      let session = try await account.completeLogin(
-        callback: callback,
-        expected: attempt,
-        device: deviceRegistration
-      )
-      apply(session)
-      expiredMessage = nil
-      banner = nil
-      await refresh()
+      guard pendingWebSignIn != nil else { return }
+      pendingWebSignIn = nil
+      try await keepSession(callback: callback, expected: attempt)
     } catch is CancellationError {
+      pendingWebSignIn = nil
       applySignedOut()
     } catch AuthorizationError.cancelled, AccountClientError.cancelled {
+      // Cancel is also how the sheet ends when the emailed link was answered outside it, and
+      // that completion has already taken the attempt.
+      guard pendingWebSignIn != nil else { return }
+      pendingWebSignIn = nil
       applySignedOut()
-    } catch AccountClientError.sessionExpired {
-      applyExpired()
-    } catch let error as AccountClientError {
-      presentConnectFailure(error.userFacingMessage)
-    } catch let error as AuthorizationError {
-      presentConnectFailure(error.userFacingMessage)
     } catch {
-      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      pendingWebSignIn = nil
+      applyConnectFailure(error)
     }
+  }
+
+  /// Finish the browser round trip an emailed sign-in link completed in the system browser.
+  ///
+  /// The link is opened by the mail app, so the verifying navigation never passes through the
+  /// authentication session; Relay's redirect to the app is what comes back. The sheet is still
+  /// waiting on a callback it will never see, so it is ended here.
+  private func completeEmailedSignIn(_ callback: URL) async {
+    guard let attempt = pendingWebSignIn else {
+      // Nothing here started this round trip — the app has been relaunched since — so there is
+      // no verifier left to spend the code with.
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      return
+    }
+    pendingWebSignIn = nil
+    authenticator.cancelPresentation()
+    do {
+      try await keepSession(callback: callback, expected: attempt)
+    } catch {
+      applyConnectFailure(error)
+    }
+  }
+
+  private func keepSession(callback: URL, expected: AuthorizationAttempt) async throws {
+    let session = try await account.completeLogin(
+      callback: callback,
+      expected: expected,
+      device: deviceRegistration
+    )
+    apply(session)
+    expiredMessage = nil
+    banner = nil
+    await refresh()
+  }
+
+  /// What a sign-in failure leaves on screen. Both ends of the round trip answer it the same way.
+  private func applyConnectFailure(_ error: any Error) {
+    if let error = error as? AccountClientError {
+      if error == .sessionExpired {
+        applyExpired()
+      } else {
+        presentConnectFailure(error.userFacingMessage)
+      }
+      return
+    }
+    if let error = error as? AuthorizationError {
+      presentConnectFailure(error.userFacingMessage)
+      return
+    }
+    presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
   }
 
   /// Bind the Sign in with Apple request the button is about to make.
@@ -391,6 +480,7 @@ final class AppModel {
   }
 
   private func exchangeApple(identityToken: String, nonce: String) async {
+    presentsSignIn = false
     phase = .connecting
     banner = nil
     expiredMessage = nil
@@ -583,6 +673,74 @@ final class AppModel {
     applySignedOut()
   }
 
+  /// Read the channels that reach this Account. Settings asks on appearance and after a bind.
+  func loadIdentities() async {
+    #if DEBUG
+      // A visual fixture states what it shows; it opens no network and reads no Keychain.
+      if skipsRestore { return }
+    #endif
+    guard hasAccountSession else {
+      identities = .idle
+      return
+    }
+    linkFailure = nil
+    if identities.identities.isEmpty { identities = .loading }
+    do {
+      identities = .loaded(try await account.fetchIdentities())
+    } catch {
+      identities = .failed
+    }
+  }
+
+  /// Bind Apple to this Account with what Apple proved on the device.
+  ///
+  /// The same proof as signing in with Apple, asked for the same way; what makes it a bind is the
+  /// session it is sent under
+  /// ([ADR 0032](../../../docs/decisions/0032-an-account-owns-its-identities.md)).
+  func linkApple(_ result: Result<ASAuthorization, any Error>) async {
+    guard let nonce = appleNonce else { return }
+    appleNonce = nil
+    linkFailure = nil
+    guard case .success(let authorization) = result else {
+      // Cancel and a refusal at Apple both leave the Account exactly as it was.
+      return
+    }
+    guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+      let data = credential.identityToken,
+      let identityToken = String(data: data, encoding: .utf8)
+    else {
+      linkFailure = SettingsCopy.linkFailed
+      return
+    }
+    linkingProvider = .apple
+    do {
+      _ = try await account.linkApple(identityToken: identityToken, nonce: nonce.value)
+      linkingProvider = nil
+      await loadIdentities()
+    } catch AccountClientError.relay(.rejected(_, 409)) {
+      linkingProvider = nil
+      linkFailure = SettingsCopy.linkTaken
+    } catch {
+      linkingProvider = nil
+      linkFailure = SettingsCopy.linkFailed
+    }
+  }
+
+  /// Open the website's Sign-in methods, which is where a channel is bound through a browser and
+  /// the only place one is unbound.
+  ///
+  /// Unbinding is a destructive account change the website asks for a recent sign-in before
+  /// allowing, so this app sends the person to it rather than holding a second copy of that rule
+  /// ([ADR 0032](../../../docs/decisions/0032-an-account-owns-its-identities.md)).
+  func presentSignInMethodsOnWeb() async {
+    try? await authenticator.present(
+      url: QuotaWebLinks.signInMethodsStart,
+      callbackScheme: nil,
+      prefersEphemeralWebBrowserSession: false
+    )
+    await loadIdentities()
+  }
+
   /// Opens the website Delete Account flow in `ASWebAuthenticationSession` with shared cookies.
   /// The sheet ending — including cancel — returns here so Settings can prompt to sign out.
   func presentDeleteAccount() async {
@@ -599,8 +757,15 @@ final class AppModel {
   }
 
   func openDeepLink(_ url: URL) {
+    let link = DeepLink.parse(url)
+    // A sign-in answering itself is not a place in the app to go to, so it is taken before the
+    // tab and the Overview stack are moved.
+    if link == .oauthCallback {
+      Task { await completeEmailedSignIn(url) }
+      return
+    }
     selectedTab = .overview
-    if case .subscription(let id) = DeepLink.parse(url) {
+    if case .subscription(let id) = link {
       pendingSubscriptionSelection = id
       resolvePendingSubscriptionSelection()
     } else {
@@ -968,6 +1133,9 @@ final class AppModel {
     expiredMessage = nil
     forgetSession()
     phase = .signedOut
+    identities = .idle
+    linkingProvider = nil
+    linkFailure = nil
     selectedTab = .overview
     usagePeriod = .last30Days
     pendingSubscriptionSelection = nil

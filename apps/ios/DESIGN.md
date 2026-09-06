@@ -60,14 +60,15 @@ Widget overview (small, medium, large, circular, rectangular, inline)
 The tabs are the app. Connect takes the whole screen only while a sign-in is in flight —
 `connecting`, the pending-confirmation screen, and a pending session whose first read failed —
 because those are questions waiting for an answer. A phone that is simply signed out shows the
-tabs, and the Overview empty state carries both invitations. Connect is presented directly, without
-an empty NavigationStack. Tabs use the iOS 26 `Tab` initializer and
+tabs, and the Overview empty state carries both invitations. **Sign in to Quota**, wherever it is
+offered, presents the sign-in page as a sheet over what is already on screen; nothing opens until a
+way in is chosen there. Connect is presented directly, without an empty NavigationStack. Tabs use the iOS 26 `Tab` initializer and
 `tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
 
 ### Connect Account
 
-Shown when no Keychain account session exists, including after logout and after an expired refresh,
-and while a session is still `pending` (issued but not confirmed).
+The sign-in page, presented as a sheet from every **Sign in to Quota** invitation, and the whole
+screen while a sign-in is in flight or a `pending` session's first read has failed.
 
 The Keychain record is one session with `activation: pending | active`. `completeLogin` writes
 `pending`. A pending session may fetch the identifying Account summary. `restore()` of a pending
@@ -77,17 +78,23 @@ different account** and Log Out revoke and clear either state.
 
 - A 56-point Quota app mark, shared with confirmation. It is content, not glass. The glyph fills
   the 56-point frame.
-- Primary action **Connect with GitHub**. Connecting: **Connecting…** with an inline ProgressView,
-  disabled. Minimum hit height 50pt. Idle uses `buttonStyle(.glassProminent)` and the emerald tint.
-  Connecting uses neutral system `.glass` with explicit label-color foreground so the spinner and
-  **Connecting…** stay readable. The accessibility label stays **Connect with GitHub**; the value
-  is **Connecting** and the control is not actionable.
-- Second action **Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control
-  drawn by Apple, 50pt tall, capsule-clipped to match, black in light appearance and white in dark
-  as Apple's guidelines pair them. It is 12pt below Connect with GitHub. Its label, mark, and sheet
-  are Apple's; the app draws no substitute glyph and adds no tint. Connecting draws Connect with
-  GitHub's busy state alone — Apple's control has no busy presentation of its own, so it is not
-  drawn then rather than shown disabled.
+- Three ways in, 12pt apart, in the order every Quota surface lists them — Apple, GitHub, Email.
+  Each is 50pt tall.
+- **Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control drawn by Apple,
+  capsule-clipped to match, black in light appearance and white in dark as Apple's guidelines pair
+  them. Its label, mark, and sheet are Apple's; the app draws no substitute glyph and adds no tint.
+- **Continue with GitHub** (`buttonStyle(.glassProminent)`, emerald tint) and **Continue with
+  Email** (neutral system `.glass`, explicit label-color foreground). Both open the same Relay
+  authorize URL, because that is one round trip: Relay's `/sign-in` page is what asks which Account
+  this is and offers every channel that reaches one
+  ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). Their accessibility
+  hint is **Opens Quota sign-in in your browser.**
+- While a sign-in is in flight the three are replaced by one disabled control, `connect.connecting`:
+  **Connecting…** with an inline ProgressView on neutral `.glass`. Its accessibility label is
+  **Connecting** and it is not actionable. Which channel opened the browser is not something the
+  app knows once the sheet is up — the page asks — so the busy label names none of them, and
+  Apple's control, which has no busy presentation of its own, is not drawn then rather than shown
+  disabled.
 - Footnote: **This iPhone only reads data reported by QuotaBar.**
 - No product title, value-proposition paragraph, card, banner container, or raw URL.
 - The longer product and privacy explanation lives on Settings › About, not on Connect.
@@ -102,11 +109,19 @@ no `return_to`. Cancelling at Apple returns to the normal signed-out state witho
 other failure shows the connect-failure copy. Confirmation, Retry, and Use a different account are
 the same screens either way.
 
-Connect with GitHub starts `ASWebAuthenticationSession` for the Relay authorize URL with
+The browser channels start `ASWebAuthenticationSession` for the Relay authorize URL with
 `prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
 an account already signed in in Safari; the session lives in the system browser, not in the app.
 The system sheet owns cancel and is the connecting progress presentation. Cancellation returns to
 the normal signed-out state without an error. The app never embeds a web view.
+
+Email finishes somewhere else. The link Relay mails is opened by the mail app, so the navigation
+that proves the address runs in the system browser rather than inside the authentication session,
+and Relay's redirect to `io.gotry.quota:/oauth/callback` arrives as a URL open. The app exchanges
+that code against the attempt it is still holding, then ends the sheet that is waiting for a
+callback it will never see — so cancel there is not a sign-out. The attempt is held in memory
+alone: a relaunch while the person is in their mail app leaves no verifier to spend, and the app
+says **Couldn't connect. Try again.** rather than pretending it can finish.
 
 After Relay issues a session the first Account refresh must succeed and name a non-blank
 `summary.account.displayLabel` before confirmation is constructed. The app does not open the
@@ -456,13 +471,41 @@ or **<Provider> doesn't report quota for this account.** A proven session closes
 Providers row becomes **Connected as <masked label>**. The web view carries none of this app inside
 it: no injected script, no read of page content, no intercepted form or navigation.
 
+**Sign-in methods.** With an account, one row per channel an Account can be reached through, in
+the order every Quota surface lists them: Apple, GitHub, Email. An Account owns its identities
+rather than being one ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)),
+so this is a group of channels, not one account name. Each row is the channel name in
+`subheadline` medium over a footnote line — primary foreground, as a Providers row is — reading
+the bound channel's label, **Linked** when it is bound with no label (Apple hands over an address
+only while the person is sharing one), **Linking…** while a bind is in flight, or **Not linked**.
+
+A channel that is not bound carries its own way to bind it. Apple's is
+`SignInWithAppleButton(.continue)` at 132 × 36pt, drawn by Apple in the same pairing as the
+sign-in page, because Apple asks on the device and no browser is involved: the token it signs is
+posted to `POST /oauth/v2/apple` with `intent: link` under this device's session. GitHub and Email
+carry **Link on Web**, which opens `https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings` in
+`ASWebAuthenticationSession` with shared Safari cookies and a nil callback scheme; binding writes
+to an Account, so the browser has to be signed in as one, and `/sign-in` is what asks which. The
+group ends with **Manage on Web**, the same trip, which is also the only way to unbind: unbinding
+is a destructive account change the website asks for a recent sign-in before allowing, and this
+app does not hold a second copy of that rule. The rows are re-read when that sheet ends.
+
+The list is `GET /api/v2/account`'s `identities[]`, read when Settings appears and again after any
+bind. It is not cached: what may sign in to an Account is read when it is asked for. Footer:
+**Bind another way in, or remove one, on the website. An Account keeps at least one.**, replaced by
+**Couldn't read how you sign in to this Account.** when the read failed — an empty list would say
+the opposite of what happened — or by the last bind's failure, **Couldn't add that way in. Try
+again.** or **That Apple ID already belongs to another Quota account.** Cancelling at Apple leaves
+the Account exactly as it was and says nothing.
+
 **Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
 (`https://quota.gotry.io/support`). NavigationLink **About**.
 
 **Account.** With an account: Link **Manage Devices on Web**
-(`https://quota.gotry.io/my/devices`). **Delete Account…** explains that deletion happens on the website after a fresh GitHub sign-in, then opens
-`ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
-`https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount`. The
+(`https://quota.gotry.io/my/devices`). **Delete Account…** explains that deletion happens on the website after signing in again, then
+opens `ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
+`https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount` — the page that
+asks which Account this browser is, not one channel's round trip. The
 callback scheme is nil: the sheet ending returns to the app. Quota then prompts **If you deleted
 the Account, sign out here too.** **Log Out** keeps the native confirmation: remote Account data
 remains; this device forgets the session and its saved overview, and keeps every provider sign-in.
@@ -806,11 +849,14 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture sync-active
 --visual-fixture paywall
 --visual-fixture paywall-unavailable
+--visual-fixture sign-in
+--visual-fixture sign-in-methods
 ```
 
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Signed-in tabs with nothing read: **No quota yet** and both invitations. No session restore |
+| `sign-in` | The sign-in sheet over a phone that read its own providers: **Continue with Apple**, **Continue with GitHub**, **Continue with Email** |
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Empty Overview plus the **Couldn't connect. Try again.** status |
 | `expired` | Empty Overview plus the **Session expired. Connect again.** status |
@@ -832,6 +878,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `sync-active` | Settings with the Sync group showing **Active · renews `<date>`** and **Manage** |
 | `paywall` | Settings with the paywall's two plans priced from a fixture store, no network |
 | `paywall-unavailable` | The same screen in a build with no RevenueCat key: **Purchases unavailable in this build.** |
+| `sign-in-methods` | Signed-in Settings with the Sign-in methods group in every row state: GitHub bound as **octocat**, Apple bound with no label (**Linked**), Email **Not linked** with **Link on Web** |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
 access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time

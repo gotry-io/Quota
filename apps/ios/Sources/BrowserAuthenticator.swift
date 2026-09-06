@@ -16,6 +16,9 @@ protocol BrowserSessionAuthenticating: AnyObject {
     callbackScheme: String?,
     prefersEphemeralWebBrowserSession: Bool
   ) async throws
+  /// End whatever session is showing, as cancel does. Used when a sign-in was answered somewhere
+  /// else — an emailed link opened in the system browser — and the sheet is waiting for nothing.
+  func cancelPresentation()
 }
 
 @MainActor
@@ -102,6 +105,11 @@ final class SystemBrowserAuthenticator: NSObject, BrowserSessionAuthenticating,
       self.session = nil
       completion(nil, AuthorizationError.cancelled)
     }
+  }
+
+  func cancelPresentation() {
+    session?.cancel()
+    session = nil
   }
 
   func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {

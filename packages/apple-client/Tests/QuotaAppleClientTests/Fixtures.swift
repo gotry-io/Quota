@@ -135,6 +135,54 @@ enum Fixtures {
     ]
   }
 
+  static let identityToken =
+    "\(String(repeating: "a", count: 20)).\(String(repeating: "b", count: 40))."
+    + String(repeating: "c", count: 43)
+
+  static func accountIdentitiesJSON(
+    identities: [[String: Any]]? = nil,
+    extraRoot: [String: Any] = [:]
+  ) throws -> Data {
+    var object: [String: Any] = [
+      "protocol_version": 2,
+      "account": [
+        "account_id": "account_01",
+        "display_label": "octocat",
+        "created_at": "2026-01-04T12:00:00Z",
+      ],
+      "identities": identities
+        ?? [
+          ["provider": "github", "label": "octocat", "linked_at": "2026-01-04T12:00:00Z"],
+          ["provider": "apple", "label": NSNull(), "linked_at": "2026-02-04T12:00:00Z"],
+        ],
+      "entitlement": [
+        "status": "none",
+        "expires_at": NSNull(),
+        "will_renew": false,
+        "product_id": NSNull(),
+        "store": NSNull(),
+        "stale": false,
+        "checked_at": NSNull(),
+      ],
+      "purchase": ["web_url": "https://pay.rev.cat/testtoken/account_01"],
+    ]
+    for (key, value) in extraRoot {
+      object[key] = value
+    }
+    return try JSONSerialization.data(withJSONObject: object)
+  }
+
+  static func identityLinkJSON(
+    provider: String = "apple",
+    status: String = "linked"
+  ) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "protocol_version": 2,
+      "provider": provider,
+      "status": status,
+    ])
+  }
+
   static func accountSummaryJSON(
     accountID: String = "account_01",
     extraRoot: [String: Any] = [:],

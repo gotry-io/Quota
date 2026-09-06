@@ -23,6 +23,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   case token
   case appleSignIn
   case revoke
+  case accountIdentities
   case accountSummary
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?)
   case deviceSync
@@ -33,6 +34,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       .token,
       .appleSignIn,
       .revoke,
+      .accountIdentities,
       .accountSummary,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil),
       .deviceSync,
@@ -43,7 +45,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   public var method: String {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
-    case .accountSummary, .accountUsageActivity, .deviceSync: "GET"
+    case .accountIdentities, .accountSummary, .accountUsageActivity, .deviceSync: "GET"
     case .deviceSnapshots: "PUT"
     }
   }
@@ -53,6 +55,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .token: "/oauth/v2/token"
     case .appleSignIn: "/oauth/v2/apple"
     case .revoke: "/oauth/v2/revoke"
+    case .accountIdentities: "/api/v2/account"
     case .accountSummary: "/api/v6/account/summary"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
     case .deviceSync: "/api/v2/device/sync"
@@ -70,7 +73,8 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("detail", detail.rawValue))
       }
       return items
-    case .token, .appleSignIn, .revoke, .accountSummary, .deviceSync, .deviceSnapshots:
+    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .deviceSync,
+      .deviceSnapshots:
       return []
     }
   }
@@ -139,6 +143,52 @@ public struct RelayClient: Sendable {
       bearer: nil,
       expectedStatus: 200,
       decode: IosOAuthTokenResponse.self
+    )
+  }
+
+  /// Bind Apple to the Account this session already names.
+  ///
+  /// The same route and the same proof as signing in with Apple; what makes it a bind rather than
+  /// a sign-in is `intent` and the session it is sent under
+  /// ([ADR 0032](../../../../docs/decisions/0032-an-account-owns-its-identities.md)).
+  public func linkAppleIdentityToken(
+    identityToken: String,
+    nonce: String,
+    accessToken: String
+  ) async throws -> IdentityLinkResponse {
+    guard WireValidation.isCompactJWS(identityToken), WireValidation.isPKCEVerifier(nonce) else {
+      throw RelayClientError.invalidResponse
+    }
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    let body = try WireCodec.encodeRequest(
+      AppleNativeSignInRequest(identityToken: identityToken, nonce: nonce, intent: "link"))
+    return try await send(
+      route: .appleSignIn,
+      query: [],
+      body: body,
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: IdentityLinkResponse.self
+    )
+  }
+
+  /// The channels that reach this Account. Read on its own rather than folded into the summary:
+  /// it changes when someone binds or unbinds one, not when a Mac reports.
+  public func fetchAccountIdentities(accessToken: String) async throws
+    -> AccountIdentitiesResponse
+  {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    return try await send(
+      route: .accountIdentities,
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: AccountIdentitiesResponse.self
     )
   }
 

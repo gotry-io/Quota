@@ -67,7 +67,7 @@ struct DevicesView: View {
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
         } actions: {
-          Button(DevicesCopy.signIn) { Task { await model.connectAccount() } }
+          Button(DevicesCopy.signIn) { model.showSignIn() }
             .frame(minHeight: QuotaTheme.minimumTouchTarget)
             .accessibilityIdentifier("devices.signin")
         }

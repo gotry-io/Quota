@@ -3,11 +3,18 @@ import Foundation
 enum DeepLink: Equatable, Sendable {
   case overview
   case subscription(id: String)
+  /// The end of a browser sign-in that finished outside `ASWebAuthenticationSession`.
+  ///
+  /// An emailed sign-in link is opened in the system browser, not in the session sheet, so the
+  /// authorization callback reaches the app the way any link to it does. The URL itself is not
+  /// carried here: `OAuthCallback` reads it against the attempt this app is waiting on.
+  case oauthCallback
 
   private static let scheme = "io.gotry.quota"
 
-  /// `io.gotry.quota:/overview` and `io.gotry.quota:/subscriptions/<selection_id>`.
-  /// `selection_id` is twelve lowercase hex digits after percent-decoding each path segment.
+  /// `io.gotry.quota:/overview`, `io.gotry.quota:/subscriptions/<selection_id>`, and
+  /// `io.gotry.quota:/oauth/callback`. `selection_id` is twelve lowercase hex digits after
+  /// percent-decoding each path segment.
   static func parse(_ url: URL) -> DeepLink? {
     guard let scheme = url.scheme, scheme.caseInsensitiveCompare(Self.scheme) == .orderedSame else {
       return nil
@@ -27,6 +34,9 @@ enum DeepLink: Equatable, Sendable {
 
     if segments == ["overview"] {
       return .overview
+    }
+    if segments == ["oauth", "callback"] {
+      return .oauthCallback
     }
     if segments.count == 2, segments[0] == "subscriptions" {
       let id = segments[1]

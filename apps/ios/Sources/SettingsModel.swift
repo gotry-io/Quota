@@ -51,6 +51,22 @@ enum SettingsCopy {
     "Deletion happens on the website after you sign in again."
   static let deleteAccountFollowUp = "If you deleted the Account, sign out here too."
   static let logOut = "Log Out"
+  static let signInMethods = "Sign-in methods"
+  static let signInMethodsFooter =
+    "Bind another way in, or remove one, on the website. An Account keeps at least one."
+  static let signInMethodsUnreadable = "Couldn't read how you sign in to this Account."
+  static let linkOnWeb = "Link on Web"
+  static let notLinked = "Not linked"
+  static let linking = "Linking…"
+  static let manageSignInMethods = "Manage on Web"
+  static let linkFailed = "Couldn't add that way in. Try again."
+  static let linkTaken = "That Apple ID already belongs to another Quota account."
+
+  /// What a bound channel is called under its name. Apple hands over an address only while the
+  /// person is sharing one, so a channel with no label says it is bound rather than nothing.
+  static func linkedLabel(_ label: String?) -> String {
+    label ?? "Linked"
+  }
   static let signIn = "Sign in to Quota"
   /// What an account adds to a phone that already reads its own providers.
   static let signInExplanation =
@@ -93,9 +109,17 @@ enum QuotaWebLinks {
   static let support = URL(string: "\(origin)/support")!
   static let manageDevices = URL(string: "\(origin)/my/devices")!
   static let deleteAccountReturnTo = "/my/settings?delete=account"
+  static let settingsReturnTo = "/my/settings"
 
   static var deleteAccountStart: URL {
     signInURL(returnTo: deleteAccountReturnTo)
+  }
+
+  /// Where a channel is bound through a browser, and the only place one is unbound. Binding
+  /// writes to an Account, so it takes a browser signed in as that Account; the sign-in page is
+  /// what asks which Account this browser is, so the trip starts there rather than at Settings.
+  static var signInMethodsStart: URL {
+    signInURL(returnTo: settingsReturnTo)
   }
 
   /// Where the website asks, or confirms, which Account this browser is signing in as.

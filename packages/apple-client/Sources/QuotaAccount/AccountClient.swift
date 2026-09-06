@@ -153,6 +153,37 @@ public actor AccountClient {
     }
   }
 
+  /// Bind Apple to the Account this device is signed in to, with what Apple proved on the device.
+  ///
+  /// Nothing about the session changes: it already names the Account, and binding a channel adds
+  /// a way back to it rather than opening a new one.
+  public func linkApple(identityToken: String, nonce: String) async throws -> IdentityLinkResponse
+  {
+    do {
+      return try await withAuthorizedSession { session in
+        try await relay.linkAppleIdentityToken(
+          identityToken: identityToken,
+          nonce: nonce,
+          accessToken: session.accessToken
+        )
+      }
+    } catch let error as RelayClientError {
+      throw AccountClientError(error)
+    }
+  }
+
+  /// The channels that reach this Account. Nothing is stored: what may sign in to an Account is
+  /// read when it is asked for, and there is no last-good copy of it to show.
+  public func fetchIdentities() async throws -> [AccountIdentity] {
+    do {
+      return try await withAuthorizedSession { session in
+        try await relay.fetchAccountIdentities(accessToken: session.accessToken).identities
+      }
+    } catch let error as RelayClientError {
+      throw AccountClientError(error)
+    }
+  }
+
   public func fetchTodaySummary() async -> AccountRefreshResult {
     let cached = try? loadBoundCachedSummary()
     do {

@@ -84,5 +84,14 @@ struct RootView: View {
       }
     }
     .tabBarMinimizeBehavior(.onScrollDown)
+    // Signing in is a question asked over the tabs, not a wall in front of them: this phone is
+    // showing what it read for itself either way
+    // ([ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md)). It hangs on the
+    // TabView rather than the phase switch above it, because a presentation attached outside the
+    // TabView stops the iOS 26 tab bar re-expanding when a list is scrolled back up.
+    .sheet(isPresented: $model.presentsSignIn) {
+      ConnectAccountView(model: model)
+        .presentationDragIndicator(.visible)
+    }
   }
 }

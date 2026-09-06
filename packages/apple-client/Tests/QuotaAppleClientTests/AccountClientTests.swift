@@ -374,6 +374,75 @@ struct AccountClientTests {
   }
 
   @Test
+  func linkingApplePostsTheIntentUnderTheSessionAndKeepsIt() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.identityLinkJSON())
+    ])
+    let sessions = MemoryAccountSessionStore()
+    try sessions.save(Fixtures.session())
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let nonce = try AppleSignIn.generateNonce()
+
+    let response = try await client.linkApple(
+      identityToken: Fixtures.identityToken,
+      nonce: nonce.value
+    )
+    #expect(response.provider == .apple)
+    #expect(response.status == .linked)
+    #expect(transport.recordedURLs.map(\.path) == ["/oauth/v2/apple"])
+    #expect(transport.recordedAuthorization == ["Bearer \(Fixtures.accessToken)"])
+    let body =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[0]) as? [String: Any] ?? [:]
+    #expect(body["intent"] as? String == "link")
+    // Binding a channel is not a sign-in: the session this device holds is untouched.
+    #expect(try sessions.load()?.accessToken == Fixtures.accessToken)
+  }
+
+  @Test
+  func linkingAppleWithoutASessionNeverReachesRelay() async throws {
+    let transport = ScriptedTransport([])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let nonce = try AppleSignIn.generateNonce()
+    await #expect(throws: AccountClientError.notSignedIn) {
+      _ = try await client.linkApple(identityToken: Fixtures.identityToken, nonce: nonce.value)
+    }
+    #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
+  func identitiesAreReadUnderTheSessionAndNotStored() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.accountIdentitiesJSON())
+    ])
+    let sessions = MemoryAccountSessionStore()
+    try sessions.save(Fixtures.session())
+    let cache = MemoryAccountSummaryStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache
+    )
+
+    let identities = try await client.fetchIdentities()
+    #expect(identities.map(\.provider) == [.github, .apple])
+    #expect(identities[0].label == "octocat")
+    #expect(identities[1].label == nil)
+    #expect(transport.recordedURLs.map(\.path) == ["/api/v2/account"])
+    #expect(transport.recordedMethods == ["GET"])
+    #expect(transport.recordedAuthorization == ["Bearer \(Fixtures.accessToken)"])
+    // What may sign in to an Account is read when asked for; nothing keeps a copy of it.
+    #expect(try cache.load() == nil)
+  }
+
+  @Test
   func appleSignInRefusesAnythingThatIsNotASignedToken() async throws {
     let transport = ScriptedTransport([
       .init(status: 200, body: try Fixtures.tokenResponse())

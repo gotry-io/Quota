@@ -35,14 +35,15 @@ struct ConnectAccountView: View {
     if model.phase == .pendingRefreshFailed {
       retryButton
       switchAccountButton
+    } else if connecting {
+      // Apple's control has no busy presentation of its own, so connecting draws the one
+      // button that does rather than a live second way in.
+      connectingButton
     } else {
       VStack(spacing: 12) {
-        connectButton
-        // Apple's control has no busy presentation of its own, so connecting draws the one
-        // button that does rather than a live second way in.
-        if !connecting {
-          appleButton
-        }
+        appleButton
+        githubButton
+        emailButton
       }
     }
   }
@@ -68,31 +69,54 @@ struct ConnectAccountView: View {
     model.phase == .connecting
   }
 
-  private var connectButton: some View {
+  private var githubButton: some View {
+    webSignInButton(title: "Continue with GitHub", identifier: "connect.github")
+      .buttonStyle(.glassProminent)
+      .tint(QuotaTheme.emerald)
+  }
+
+  private var emailButton: some View {
+    webSignInButton(title: "Continue with Email", identifier: "connect.email")
+      .buttonStyle(.glass)
+      .foregroundStyle(.primary)
+  }
+
+  /// Both browser channels open the same Relay sign-in page, which asks which Account this is
+  /// and offers every channel that reaches one.
+  private func webSignInButton(title: String, identifier: String) -> some View {
     Button {
       Task { await model.connectAccount() }
     } label: {
+      Text(title)
+        .font(.headline)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 50)
+    }
+    .accessibilityLabel(title)
+    .accessibilityHint("Opens Quota sign-in in your browser.")
+    .accessibilityIdentifier(identifier)
+  }
+
+  /// The one button a sign-in in flight draws. Which channel opened the browser is not something
+  /// this app knows once the sheet is up — the page asks — so the busy label names neither.
+  private var connectingButton: some View {
+    Button {
+    } label: {
       HStack(spacing: 8) {
-        if connecting {
-          ProgressView()
-            .tint(.primary)
-            .accessibilityHidden(true)
-          connectingTitle
-        } else {
-          Text("Connect with GitHub")
-            .font(.headline)
-        }
+        ProgressView()
+          .tint(.primary)
+          .accessibilityHidden(true)
+        connectingTitle
       }
       .frame(maxWidth: .infinity)
       .frame(minHeight: 50)
     }
-    .connectChrome(connecting: connecting)
-    .disabled(connecting)
-    .accessibilityLabel("Connect with GitHub")
-    .accessibilityValue(connecting ? "Connecting" : "")
-    .accessibilityHint("Opens GitHub sign-in in your browser.")
-    .accessibilityRespondsToUserInteraction(!connecting)
-    .accessibilityIdentifier("connect.github")
+    .buttonStyle(.glass)
+    .foregroundStyle(.primary)
+    .disabled(true)
+    .accessibilityLabel("Connecting")
+    .accessibilityRespondsToUserInteraction(false)
+    .accessibilityIdentifier("connect.connecting")
   }
 
   /// Drawn in Canvas so the contrast auditor does not treat the title as a child StaticText
@@ -129,7 +153,7 @@ struct ConnectAccountView: View {
     .tint(QuotaTheme.emerald)
     .disabled(model.isRefreshing)
     .accessibilityLabel("Retry")
-    .accessibilityHint("Tries to load this GitHub account again.")
+    .accessibilityHint("Tries to load this account again.")
     .accessibilityIdentifier("connect.retry")
   }
 
@@ -144,7 +168,7 @@ struct ConnectAccountView: View {
     .buttonStyle(.bordered)
     .disabled(model.isRefreshing)
     .accessibilityLabel("Use a different account")
-    .accessibilityHint("Signs out and opens GitHub so you can pick another account.")
+    .accessibilityHint("Signs out and opens sign-in so you can pick another account.")
     .accessibilityIdentifier("connect.switch")
   }
 
@@ -162,21 +186,6 @@ struct ConnectAccountView: View {
       StatusMessage(symbolName: "lock.slash", text: expired)
     } else if let banner = model.banner {
       StatusMessage(symbolName: banner.symbolName, text: banner.text)
-    }
-  }
-}
-
-extension View {
-  @ViewBuilder
-  fileprivate func connectChrome(connecting: Bool) -> some View {
-    if connecting {
-      self
-        .buttonStyle(.glass)
-        .foregroundStyle(.primary)
-    } else {
-      self
-        .buttonStyle(.glassProminent)
-        .tint(QuotaTheme.emerald)
     }
   }
 }

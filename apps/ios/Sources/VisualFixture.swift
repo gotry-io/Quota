@@ -32,6 +32,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case syncActive = "sync-active"
   case paywall
   case paywallUnavailable = "paywall-unavailable"
+  case signIn = "sign-in"
+  case signInMethods = "sign-in-methods"
 
   /// Parse `--visual-fixture <name>` from process arguments. Returns nil when absent or unknown.
   static func parse(arguments: [String]) -> VisualFixture? {
@@ -53,13 +55,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
     /// Devices, the Settings account group — read the session rather than the phase.
     var accountActivation: AccountSessionActivation? {
       switch self {
-      case .signedOut, .connecting, .connectError, .expired, .loading, .localOnly:
+      case .signedOut, .connecting, .connectError, .expired, .loading, .localOnly, .signIn:
         nil
       case .confirmAccount, .connectRefreshFailed:
         .pending
       case .content, .cachedError, .empty, .noDevices, .merged, .providers, .activityLoading,
         .activityFailed, .activityDayEmpty, .activityDayFailed, .syncOff, .syncActive, .paywall,
-        .paywallUnavailable:
+        .paywallUnavailable, .signInMethods:
         .active
       }
     }
@@ -201,6 +203,34 @@ enum VisualFixture: String, CaseIterable, Sendable {
           to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
         Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
         model.selectedTab = .settings
+      case .signIn:
+        // The one page that offers every way in, over the tabs it is asked from.
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+        Self.applyLocal(VisualFixtureContent.localCollection(at: now), to: model)
+        model.presentsSignIn = true
+      case .signInMethods:
+        applySignedInContent(
+          to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
+        model.selectedTab = .settings
+        // Two channels bound and one still open, which is every state a row has.
+        model.identities = .loaded([
+          AccountIdentity(
+            provider: .github,
+            label: "octocat",
+            linkedAt: now.addingTimeInterval(-86_400 * 210)
+          ),
+          AccountIdentity(
+            provider: .apple,
+            label: nil,
+            linkedAt: now.addingTimeInterval(-86_400 * 30)
+          ),
+        ])
       case .syncOff:
         applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
       case .syncActive:
@@ -992,10 +1022,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
       let days: [UsageActivityDay]
       switch fixture {
       case .content, .cachedError, .activityLoading, .activityFailed, .activityDayEmpty,
-        .activityDayFailed, .syncOff, .syncActive, .paywall, .paywallUnavailable:
+        .activityDayFailed, .syncOff, .syncActive, .paywall, .paywallUnavailable, .signInMethods:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
-        .loading, .empty, .noDevices, .localOnly, .providers:
+        .loading, .empty, .noDevices, .localOnly, .providers, .signIn:
         days = []
       case .merged:
         days = VisualFixtureContent.activityDays(ending: now)
@@ -1117,5 +1147,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
       callbackScheme: String?,
       prefersEphemeralWebBrowserSession: Bool
     ) async throws {}
+
+    func cancelPresentation() {}
   }
 #endif
