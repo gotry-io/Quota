@@ -149,9 +149,11 @@ final class QuotaUITests: XCTestCase {
     let codex = app.staticTexts["Codex"]
     // The agent sections are below the heatmap, which is most of a screen on its own, so this
     // starts at the top of a page that is several screens long.
-    for _ in 0..<24 {
+    for _ in 0..<40 {
       if showMore.exists || showMoreLabel.exists || codex.exists { break }
       app.swipeUp()
+      // A swipe that lands while the list is still decelerating is absorbed by the bounce.
+      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
     }
     XCTAssertTrue(
       showMore.exists || showMoreLabel.exists || codex.exists,

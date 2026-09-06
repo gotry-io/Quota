@@ -214,6 +214,9 @@ struct UsageView: View {
       }
       .foregroundStyle(Color.primary)
       .frame(maxWidth: .infinity)
+      // The row takes the view's ideal height, so the wrapped description is never cut by a
+      // row sized before the text wrapped.
+      .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityIdentifier("usage.empty")
   }
