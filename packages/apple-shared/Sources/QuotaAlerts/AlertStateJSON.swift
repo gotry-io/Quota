@@ -35,12 +35,14 @@ private struct AlertDedupStateDTO: Codable {
 }
 
 private struct AlertDedupKeyDTO: Codable {
+  var kind: AlertKind
   var selector: String
   var windowID: String
   var resetsAt: Date?
   var threshold: Int?
 
   init(_ key: AlertDedupKey) {
+    kind = key.kind
     selector = key.selector
     windowID = key.windowID
     resetsAt = key.resetsAt
@@ -49,6 +51,7 @@ private struct AlertDedupKeyDTO: Codable {
 
   var model: AlertDedupKey {
     AlertDedupKey(
+      kind: kind,
       selector: selector,
       windowID: windowID,
       resetsAt: resetsAt,
@@ -57,6 +60,7 @@ private struct AlertDedupKeyDTO: Codable {
   }
 
   enum CodingKeys: String, CodingKey {
+    case kind
     case selector
     case windowID = "window_id"
     case resetsAt = "resets_at"

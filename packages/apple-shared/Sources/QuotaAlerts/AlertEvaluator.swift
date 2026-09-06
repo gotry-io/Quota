@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 /// Pure evaluation of local remaining-quota alert rules.
 ///
@@ -37,6 +38,7 @@ public enum AlertEvaluator {
           fired = fired.filter { $0.selector != id.selector || $0.windowID != id.windowID }
           if rules.resetReminders {
             let key = AlertDedupKey(
+              kind: .reset,
               selector: id.selector,
               windowID: id.windowID,
               resetsAt: window.resetsAt,
@@ -54,6 +56,7 @@ public enum AlertEvaluator {
 
         for threshold in rules.thresholds(for: subscription.selector) {
           let key = AlertDedupKey(
+            kind: .threshold,
             selector: id.selector,
             windowID: id.windowID,
             resetsAt: window.resetsAt,
@@ -81,6 +84,28 @@ public enum AlertEvaluator {
               resetsAt: window.resetsAt
             )
           )
+        }
+
+        if rules.paceAlerts {
+          let pace = QuotaPace.evaluate(window.paceReading, now: now)
+          let key = AlertDedupKey(
+            kind: .pace,
+            selector: id.selector,
+            windowID: id.windowID,
+            resetsAt: window.resetsAt,
+            threshold: nil
+          )
+          if case .runsOut = pace, !fired.contains(key) {
+            fired.insert(key)
+            events.append(
+              .paceRunsOut(
+                selector: id.selector,
+                windowID: id.windowID,
+                pace: pace,
+                resetsAt: window.resetsAt
+              )
+            )
+          }
         }
 
         readings[id] = AlertStoredReading(

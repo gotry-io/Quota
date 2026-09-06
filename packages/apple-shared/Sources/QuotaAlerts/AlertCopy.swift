@@ -32,4 +32,9 @@ public enum AlertCopy {
   public static func resetBody(windowTitle: String) -> String {
     "\(windowTitle) quota reset"
   }
+
+  /// The shared pace line, so the notification says exactly what the window row says.
+  public static func paceBody(pace: QuotaPace, resetsAt: Date?) -> String? {
+    QuotaPaceCopy.line(pace, resetsAt: resetsAt)
+  }
 }

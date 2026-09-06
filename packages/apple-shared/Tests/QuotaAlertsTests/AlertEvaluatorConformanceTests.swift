@@ -1,12 +1,13 @@
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import Testing
 
 /// QuotaBar and Quota iOS both answer this file. A case one of them changes cannot quietly drift.
 struct AlertEvaluatorConformanceTests {
   @Test func everyAlertTransitionCaseMatchesTheSharedFixture() throws {
     let fixture = try AlertTransitionFixture.load()
-    #expect(fixture.cases.count >= 8)
+    #expect(fixture.cases.count >= 11)
     for testCase in fixture.cases {
       if testCase.signOut {
         #expect(eventsMatch([], testCase.expectedEvents), "\(testCase.name)")
@@ -46,8 +47,19 @@ private func eventsMatch(
         && rhs.threshold == nil
         && rhs.remainingPercent == nil
         && rhs.resetsAt == resetsAt
+    case .paceRunsOut(let selector, let windowID, let pace, let resetsAt):
+      rhs.type == "pace_runs_out"
+        && rhs.selector == selector
+        && rhs.windowID == windowID
+        && rhs.resetsAt == resetsAt
+        && exhaustsAt(pace) == rhs.exhaustsAt
     }
   }
+}
+
+private func exhaustsAt(_ pace: QuotaPace) -> Date? {
+  guard case .runsOut(_, let exhaustsAt) = pace else { return nil }
+  return exhaustsAt
 }
 
 private func statesMatch(_ actual: AlertDedupState, _ expected: AlertDedupState) -> Bool {
@@ -75,6 +87,7 @@ private struct AlertTransitionFixture: Decodable {
     var threshold: Int?
     var remainingPercent: Double?
     var resetsAt: Date?
+    var exhaustsAt: Date?
 
     enum CodingKeys: String, CodingKey {
       case type
@@ -83,17 +96,20 @@ private struct AlertTransitionFixture: Decodable {
       case threshold
       case remainingPercent = "remaining_percent"
       case resetsAt = "resets_at"
+      case exhaustsAt = "exhausts_at"
     }
   }
 
   struct RulesDTO: Decodable {
     var enabled: Bool
     var resetReminders: Bool
+    var paceAlerts: Bool
     var thresholds: [String: [Int]]
 
     enum CodingKeys: String, CodingKey {
       case enabled
       case resetReminders = "reset_reminders"
+      case paceAlerts = "pace_alerts"
       case thresholds
     }
   }
@@ -104,12 +120,14 @@ private struct AlertTransitionFixture: Decodable {
   }
 
   struct FiredDTO: Decodable {
+    var kind: AlertKind
     var selector: String
     var windowID: String
     var resetsAt: Date?
     var threshold: Int?
 
     enum CodingKeys: String, CodingKey {
+      case kind
       case selector
       case windowID = "window_id"
       case resetsAt = "resets_at"
@@ -142,6 +160,7 @@ private struct AlertTransitionFixture: Decodable {
     var title: String
     var remainingPercent: Double
     var resetsAt: Date?
+    var durationSeconds: Int?
     var primaryCadence: String?
 
     enum CodingKeys: String, CodingKey {
@@ -149,6 +168,7 @@ private struct AlertTransitionFixture: Decodable {
       case title
       case remainingPercent = "remaining_percent"
       case resetsAt = "resets_at"
+      case durationSeconds = "duration_seconds"
       case primaryCadence = "primary_cadence"
     }
   }
@@ -183,6 +203,7 @@ private struct AlertTransitionFixture: Decodable {
           rules: AlertRules(
             enabled: rules.enabled,
             resetReminders: rules.resetReminders,
+            paceAlerts: rules.paceAlerts,
             thresholds: rules.thresholds
           ),
           previous: previous.map(Self.state),
@@ -196,6 +217,7 @@ private struct AlertTransitionFixture: Decodable {
                   title: $0.title,
                   remainingPercent: $0.remainingPercent,
                   resetsAt: $0.resetsAt,
+                  durationSeconds: $0.durationSeconds,
                   primaryCadence: $0.primaryCadence
                 )
               }
@@ -215,6 +237,7 @@ private struct AlertTransitionFixture: Decodable {
     AlertDedupState(
       fired: dto.fired.map {
         AlertDedupKey(
+          kind: $0.kind,
           selector: $0.selector,
           windowID: $0.windowID,
           resetsAt: $0.resetsAt,

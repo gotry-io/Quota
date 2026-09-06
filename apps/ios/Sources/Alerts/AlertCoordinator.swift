@@ -88,6 +88,7 @@ final class AlertCoordinator {
             title: window.title,
             remainingPercent: RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent),
             resetsAt: window.resetsAt,
+            durationSeconds: window.durationSeconds,
             primaryCadence: window.primaryCadenceKind?.rawValue
           )
         }

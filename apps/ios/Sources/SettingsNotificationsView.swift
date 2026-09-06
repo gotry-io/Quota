@@ -44,6 +44,16 @@ struct SettingsNotificationsView: View {
       .accessibilityLabel(SettingsCopy.resetReminders)
       .accessibilityHint("Notify when a quota window refills")
 
+      Toggle(
+        SettingsCopy.paceAlerts,
+        isOn: Binding(
+          get: { settings.rules.paceAlerts },
+          set: { settings.setPaceAlerts($0) }
+        )
+      )
+      .accessibilityLabel(SettingsCopy.paceAlerts)
+      .accessibilityHint("Notify when a window stops lasting to its reset")
+
       if settings.authorizationDenied {
         Text(SettingsCopy.permissionDenied)
           .font(.footnote)

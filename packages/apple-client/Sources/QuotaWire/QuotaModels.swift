@@ -85,6 +85,12 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   public let remainingValue: Double?
   public let limitValue: Double?
   public let valueUnit: QuotaValueUnit?
+  /// Whether this window's burn rate lasts to its reset, as the reading's holder derived it.
+  ///
+  /// QuotaBar's service states it on every window of the IPC state it publishes, because the
+  /// rule is answered once per runtime and Rust is QuotaBar's. A managed read carries no
+  /// pace: the client that reads it derives its own with ``QuotaPace``. See ADR 0035.
+  public let pace: QuotaPace?
 
   public init(
     id: String,
@@ -95,7 +101,8 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     remainingValue: Double? = nil,
     limitValue: Double? = nil,
     valueUnit: QuotaValueUnit? = nil,
-    primaryCadence: PrimaryCadence? = nil
+    primaryCadence: PrimaryCadence? = nil,
+    pace: QuotaPace? = nil
   ) {
     self.id = id
     self.title = title
@@ -106,6 +113,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     self.remainingValue = remainingValue
     self.limitValue = limitValue
     self.valueUnit = valueUnit
+    self.pace = pace
   }
 
   public init(from decoder: Decoder) throws {
@@ -119,6 +127,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
     limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     valueUnit = try container.decodeIfPresent(QuotaValueUnit.self, forKey: .valueUnit)
+    pace = try container.decodeIfPresent(QuotaPace.self, forKey: .pace)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .id,
@@ -148,6 +157,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     case remainingValue
     case limitValue
     case valueUnit
+    case pace
   }
 }
 
@@ -256,6 +266,17 @@ extension QuotaWindow: RemainingQuotaWindow {
     RemainingQuotaFormat.showsPercentMeter(
       remainingValue: remainingValue,
       hasLimit: limitValue != nil
+    )
+  }
+
+  /// This window as the pace rule reads it. A client without a stated ``pace`` — every
+  /// managed read — derives its own from this.
+  public var paceReading: QuotaPaceReading {
+    QuotaPaceReading(
+      usedPercent: usedPercent,
+      resetsAt: resetsAt,
+      cadenceSeconds: durationSeconds,
+      isBalanceOnly: isBalanceOnly
     )
   }
 

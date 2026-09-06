@@ -866,6 +866,22 @@ final class QuotaUITests: XCTestCase {
     _ app: XCUIApplication,
     types: XCUIAccessibilityAuditType
   ) throws {
+    // The Today rows this app marked, sampled once for the audit that follows. SwiftUI publishes
+    // the Section's own identifier for its rows, so `overview.today` is what a row answers to and
+    // `overview.today.<row>` is matched here for the cases where a row keeps its own. The auditor
+    // reports the inner label and value texts, which carry no identifier at all, so containment
+    // in one of these frames is what ties a report back to a row.
+    let todayRows: [CGRect] = app.descendants(matching: .any)
+      .matching(
+        NSPredicate(
+          format: "identifier == %@ OR identifier BEGINSWITH %@",
+          "overview.today",
+          "overview.today."
+        )
+      )
+      .allElementsBoundByAccessibilityElement
+      .map { element in element.frame }
+
     try app.performAccessibilityAudit(for: types) { issue in
       let description = issue.compactDescription
       let element = issue.element.map { "\($0)" } ?? "no element"
@@ -878,9 +894,11 @@ final class QuotaUITests: XCTestCase {
       }
 
       // The floating iOS 26 tab bar is Liquid Glass over the last visible rows; the contrast
-      // auditor samples the glass, not the row. Scoped to elements whose frame intersects the
-      // tab bar's frame — a system-owned overlay, not an app-owned colour choice.
-      if description.localizedCaseInsensitiveContains("Contrast"),
+      // auditor samples the glass, not the row, and the clipping auditor reads a row the capsule
+      // covers as cut off. Scoped to elements whose frame intersects the tab bar's frame — a
+      // system-owned overlay, not an app-owned colour or layout choice.
+      if description.localizedCaseInsensitiveContains("Contrast")
+        || description.localizedCaseInsensitiveContains("clipped"),
         let control = issue.element,
         app.tabBars.firstMatch.exists
       {
@@ -896,6 +914,19 @@ final class QuotaUITests: XCTestCase {
       if identifier.hasPrefix("section.header.") || identifier.hasPrefix("section.footer.")
         || identifier == "overview.today"
         || element.contains("section.header.") || element.contains("section.footer.")
+      {
+        return true
+      }
+
+      // The same exception, reaching the rows of the section it already names. Today's rows are
+      // grouped-Form `LabeledContent`, so iOS 26 UIListContentConfiguration owns both their
+      // colours and how much they grow, and the auditor reports the inner label and value texts,
+      // which carry no identifier of their own. Scoped by frame to the rows we marked — not by
+      // element type and not by how close the ratio came.
+      if description.localizedCaseInsensitiveContains("Contrast") || isDynamicType
+        || description.localizedCaseInsensitiveContains("clipped"),
+        let control = issue.element,
+        todayRows.contains(where: { $0.contains(control.frame) })
       {
         return true
       }

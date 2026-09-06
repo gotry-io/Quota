@@ -1,4 +1,12 @@
 import Foundation
+import QuotaPresentation
+
+/// Which rule fired. One window can fire each of these once per reset cycle.
+public enum AlertKind: String, Equatable, Hashable, Sendable, Codable {
+  case threshold
+  case reset
+  case pace
+}
 
 /// One local remaining-quota alert the evaluator decided to fire.
 public enum AlertEvent: Equatable, Sendable {
@@ -10,11 +18,14 @@ public enum AlertEvent: Equatable, Sendable {
     resetsAt: Date?
   )
   case windowReset(selector: String, windowID: String, resetsAt: Date?)
+  /// This window's burn rate no longer lasts to its reset.
+  case paceRunsOut(selector: String, windowID: String, pace: QuotaPace, resetsAt: Date?)
 
   public var selector: String {
     switch self {
     case .thresholdCrossed(let selector, _, _, _, _): selector
     case .windowReset(let selector, _, _): selector
+    case .paceRunsOut(let selector, _, _, _): selector
     }
   }
 
@@ -22,6 +33,7 @@ public enum AlertEvent: Equatable, Sendable {
     switch self {
     case .thresholdCrossed(_, let windowID, _, _, _): windowID
     case .windowReset(_, let windowID, _): windowID
+    case .paceRunsOut(_, let windowID, _, _): windowID
     }
   }
 
@@ -29,10 +41,14 @@ public enum AlertEvent: Equatable, Sendable {
     switch self {
     case .thresholdCrossed(let selector, let windowID, let threshold, _, let resetsAt):
       AlertDedupKey(
-        selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: threshold)
+        kind: .threshold, selector: selector, windowID: windowID, resetsAt: resetsAt,
+        threshold: threshold)
     case .windowReset(let selector, let windowID, let resetsAt):
       AlertDedupKey(
-        selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
+        kind: .reset, selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
+    case .paceRunsOut(let selector, let windowID, _, let resetsAt):
+      AlertDedupKey(
+        kind: .pace, selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
     }
   }
 }
@@ -52,14 +68,22 @@ public struct AlertStoredReading: Equatable, Sendable {
   }
 }
 
-/// `(selector, windowID, resetsAt ?? none, threshold?)` — one fire per reset cycle.
+/// `(kind, selector, windowID, resetsAt ?? none, threshold?)` — one fire per reset cycle.
 public struct AlertDedupKey: Equatable, Hashable, Sendable {
+  public var kind: AlertKind
   public var selector: String
   public var windowID: String
   public var resetsAt: Date?
   public var threshold: Int?
 
-  public init(selector: String, windowID: String, resetsAt: Date?, threshold: Int?) {
+  public init(
+    kind: AlertKind,
+    selector: String,
+    windowID: String,
+    resetsAt: Date?,
+    threshold: Int?
+  ) {
+    self.kind = kind
     self.selector = selector
     self.windowID = windowID
     self.resetsAt = resetsAt
@@ -69,10 +93,8 @@ public struct AlertDedupKey: Equatable, Hashable, Sendable {
   /// `UNNotificationRequest.identifier` — the same string the scheduler and the sink use.
   public var requestIdentifier: String {
     let reset = Self.dateToken(resetsAt)
-    if let threshold {
-      return "threshold:\(selector):\(windowID):\(reset):\(threshold)"
-    }
-    return "reset:\(selector):\(windowID):\(reset)"
+    guard let threshold else { return "\(kind.rawValue):\(selector):\(windowID):\(reset)" }
+    return "\(kind.rawValue):\(selector):\(windowID):\(reset):\(threshold)"
   }
 
   /// Pending reset reminders for one window, regardless of which `resets_at` they were booked for.
@@ -127,6 +149,8 @@ public struct AlertWindowReading: Equatable, Sendable {
   public var title: String
   public var remainingPercent: Double
   public var resetsAt: Date?
+  /// The window cadence, which is what turns a remaining percent into a rate.
+  public var durationSeconds: Int?
   public var primaryCadence: String?
 
   public init(
@@ -134,13 +158,25 @@ public struct AlertWindowReading: Equatable, Sendable {
     title: String,
     remainingPercent: Double,
     resetsAt: Date?,
+    durationSeconds: Int? = nil,
     primaryCadence: String?
   ) {
     self.id = id
     self.title = title
     self.remainingPercent = remainingPercent
     self.resetsAt = resetsAt
+    self.durationSeconds = durationSeconds
     self.primaryCadence = primaryCadence
+  }
+
+  /// This window as the pace rule reads it.
+  public var paceReading: QuotaPaceReading {
+    QuotaPaceReading(
+      usedPercent: 100 - remainingPercent,
+      resetsAt: resetsAt,
+      cadenceSeconds: durationSeconds,
+      isBalanceOnly: false
+    )
   }
 }
 
@@ -149,6 +185,7 @@ extension AlertDedupState {
     AlertDedupState(
       fired: fired.sorted { lhs, rhs in
         if lhs.selector != rhs.selector { return lhs.selector < rhs.selector }
+        if lhs.kind != rhs.kind { return lhs.kind.rawValue < rhs.kind.rawValue }
         if lhs.windowID != rhs.windowID { return lhs.windowID < rhs.windowID }
         switch (lhs.threshold, rhs.threshold) {
         case let (left?, right?) where left != right:

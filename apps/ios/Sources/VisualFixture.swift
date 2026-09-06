@@ -241,7 +241,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
               id: "five_hour",
               title: "5 Hours",
               usedPercent: 47,
-              resetsAt: date.addingTimeInterval(7_200)
+              resetsAt: date.addingTimeInterval(9_000),
+              durationSeconds: 18_000
             )
           ],
           observedAt: date.addingTimeInterval(-120),
@@ -590,13 +591,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
             id: "five_hour",
             title: "5 Hours",
             usedPercent: 32,
-            resetsAt: date.addingTimeInterval(2_700)
+            resetsAt: date.addingTimeInterval(2_700),
+            durationSeconds: 18_000
           ),
           window(
             id: "weekly",
             title: "Weekly",
-            usedPercent: 16,
-            resetsAt: date.addingTimeInterval(4 * 86_400)
+            usedPercent: 60,
+            resetsAt: date.addingTimeInterval(4 * 86_400),
+            durationSeconds: 604_800
           ),
         ],
         status: .available,
@@ -615,13 +618,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
             id: "five_hour",
             title: "5 Hours",
             usedPercent: 41,
-            resetsAt: date.addingTimeInterval(2_100)
+            resetsAt: date.addingTimeInterval(2_100),
+            durationSeconds: 18_000
           ),
           window(
             id: "weekly",
             title: "Weekly",
             usedPercent: 22,
-            resetsAt: date.addingTimeInterval(4 * 86_400)
+            resetsAt: date.addingTimeInterval(4 * 86_400),
+            durationSeconds: 604_800
           ),
         ],
         status: .available,
@@ -702,14 +707,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
       id: String,
       title: String,
       usedPercent: Double,
-      resetsAt: Date?
+      resetsAt: Date?,
+      durationSeconds: Int? = nil
     ) -> QuotaWindow {
       QuotaWindow(
         id: id,
         title: title,
         usedPercent: usedPercent,
         resetsAt: resetsAt,
-        durationSeconds: nil
+        durationSeconds: durationSeconds
       )
     }
 

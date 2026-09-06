@@ -44,6 +44,18 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   **Resets Sep 12** (month abbreviation and day). A reset that has already passed prints no Resets
   line; the reading is **Not current**, or the status word the source reported. The `reset` array in
   the same fixture is the shared statement of these thresholds.
+- **A pace line says whether the current rate lasts to the reset.** One line under the window, in
+  two halves: the tempo, then the outcome — **On track · lasts to reset**, **Ahead +42% · runs out
+  ~2h before reset**, **Behind −30% · lasts to reset**. *On track* carries no number; *Ahead* and
+  *Behind* carry the signed difference from an even burn rate. The duration in *runs out* is the
+  shared compact format (`2h`, `27m`, `1d`) and always reads `~`, because it is a projection. A
+  window the rule cannot answer for — no cadence, a balance with no limit, or too little of the
+  window elapsed or used — shows no line and takes no space. *runs out* is the warning color;
+  everything else is secondary text. The rule and these phrases are
+  `packages/protocol/fixtures/quota-pace-conformance.json`, answered by `packages/quota-model`,
+  `packages/service`, `packages/apple-shared` (`QuotaPace`, `QuotaPaceCopy`), and
+  `apps/web/src/lib/format.ts`; see
+  [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
   window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
@@ -67,7 +79,8 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
   When a remaining-quota reading should fire a local threshold or reset notification is
   `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
-  answer that file through `QuotaAlerts`.
+  answer that file through `QuotaAlerts`. A pace warning reuses the pace line as its body, and fires
+  at most once per window per reset cycle.
 - **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
   days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
   it **2 Years**; the accessibility name stays **Up to 2 years**.

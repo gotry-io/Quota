@@ -1142,3 +1142,88 @@ function compareUnpricedItems(left: UsageUnpricedItem, right: UsageUnpricedItem)
 
 export type { DatedUsageRow, PricingCatalog, PricingCatalogEntry, PricingRates, UsageRow };
 export { PROTOCOL_VERSION };
+
+/** Whether a window's current burn rate lasts to its reset, and how far off the even rate it is. */
+export type QuotaPaceTempo = "ahead" | "on_track" | "behind";
+
+/**
+ * The pace of one window. `none` is a window this cannot answer for: no cadence, a wallet
+ * with no budget to spend against, or too little of the window behind it to mean anything.
+ */
+export type QuotaPace =
+  | { kind: "none" }
+  | {
+      kind: "lasts" | "runs_out";
+      tempo: QuotaPaceTempo;
+      delta_percent: number;
+      projected_at_reset: number;
+      exhausts_at?: string;
+    };
+
+/** A window as pace reads it. */
+type PaceWindow = RemainingQuotaWindow & {
+  used_percent: number;
+  resets_at?: string | undefined;
+  duration_seconds?: number | undefined;
+};
+
+/** Below this much of the window elapsed, the sample says nothing about the rest of it. */
+export const MINIMUM_PACE_ELAPSED_FRACTION = 0.05;
+
+/** Below this much used, the sample says nothing either: a few percent is noise, not a rate. */
+export const MINIMUM_PACE_USED_PERCENT = 2;
+
+/** The projection is a ratio of a small number and runs away; this is where it stops. */
+export const MAXIMUM_PACE_PROJECTION_PERCENT = 999;
+
+/** Inside this band of the even rate, a window is neither ahead nor behind. */
+export const PACE_ON_TRACK_BAND: readonly [number, number] = [0.9, 1.1];
+
+/** Half away from zero, so every runtime rounds a negative delta the same way. */
+function roundAwayFromZero(value: number): number {
+  return Math.sign(value) * Math.round(Math.abs(value));
+}
+
+/**
+ * Whether this window's burn rate lasts to its reset, derived from the reading alone.
+ *
+ * `used_percent`, `resets_at`, and `duration_seconds` are the whole input, so a reader
+ * answers it without history and without a collector having projected anything. The window
+ * started one cadence before it resets; how much of it is behind the reader is what turns a
+ * used percent into a rate. See ADR 0035.
+ */
+export function quotaPace(window: PaceWindow, now: Date): QuotaPace {
+  const cadence = window.duration_seconds;
+  if (window.resets_at === undefined || cadence === undefined || cadence <= 0) {
+    return { kind: "none" };
+  }
+  if (isBalanceOnly(window)) return { kind: "none" };
+  const resetsAt = Date.parse(window.resets_at);
+  if (Number.isNaN(resetsAt)) return { kind: "none" };
+  const windowStart = resetsAt - cadence * 1_000;
+  const elapsed = Math.min(Math.max((now.getTime() - windowStart) / 1_000 / cadence, 0), 1);
+  const used = window.used_percent;
+  if (elapsed < MINIMUM_PACE_ELAPSED_FRACTION || used < MINIMUM_PACE_USED_PERCENT) {
+    return { kind: "none" };
+  }
+  const projected = Math.min(used / elapsed, MAXIMUM_PACE_PROJECTION_PERCENT);
+  const ratio = projected / 100;
+  const [low, high] = PACE_ON_TRACK_BAND;
+  const tempo: QuotaPaceTempo = ratio > high ? "ahead" : ratio < low ? "behind" : "on_track";
+  const shared = {
+    tempo,
+    delta_percent: roundAwayFromZero((ratio - 1) * 100),
+    projected_at_reset: projected,
+  };
+  if (projected <= 100) return { kind: "lasts", ...shared };
+  // At the current rate the window is spent this far into itself, stated to the second so
+  // every runtime names the same instant.
+  const offsetSeconds = roundAwayFromZero(cadence * (100 / used) * elapsed);
+  return {
+    kind: "runs_out",
+    ...shared,
+    exhausts_at: new Date(windowStart + offsetSeconds * 1_000)
+      .toISOString()
+      .replace(/\.\d+Z$/, "Z"),
+  };
+}

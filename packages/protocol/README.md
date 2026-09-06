@@ -40,6 +40,10 @@ shape of a released contract still moves its version.
 - `fixtures/alert-transition-conformance.json` states when a remaining-quota reading should fire a
   local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS
   both answer it.
+- `fixtures/quota-pace-conformance.json` states whether a window's current burn rate lasts to its
+  reset, and the one line every surface prints for it. `packages/quota-model`, `packages/service`,
+  and `packages/apple-shared` each answer the rule; `apps/web/src/lib/format.ts` and `QuotaPaceCopy`
+  answer the copy ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge

@@ -704,6 +704,7 @@ func signingOutClearsNotificationDedupState() throws {
     state: AlertDedupState(
       fired: [
         AlertDedupKey(
+          kind: .threshold,
           selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
       ],
       readings: [
@@ -748,6 +749,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(
     firstID
       == AlertDedupKey(
+        kind: .reset,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: firstReset, threshold: nil
       ).requestIdentifier
   )
@@ -761,6 +763,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(
     center.pending.first?.identifier
       == AlertDedupKey(
+        kind: .reset,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: secondReset, threshold: nil
       ).requestIdentifier
   )

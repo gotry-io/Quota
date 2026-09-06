@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use crate::catalog::ProviderId;
 use crate::observation::snapshot_is_current;
+use crate::pace::snapshot_with_pace;
 use crate::pricing;
 use crate::protocol::{
     BrowserAccessDenialReason, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAttemptCode,
@@ -4100,6 +4101,9 @@ fn overview_item(
     let scope = account.get("fingerprint_scope")?.as_str()?.to_owned();
     let observed_at = snapshot.get("observed_at")?.as_str()?.to_owned();
     let stale = !snapshot_is_current(snapshot, now);
+    // Pace is derived from the reading, and this service is the one runtime that derives it
+    // for QuotaBar: the app prints the answer it is handed rather than keeping a second rule.
+    let paced = snapshot_with_pace(snapshot, now);
     Some(QuotaOverviewItem {
         identity: QuotaOverviewIdentity {
             provider,
@@ -4107,7 +4111,7 @@ fn overview_item(
             scope: scope.clone(),
             source_id: (scope == "source").then(|| source_id.to_owned()),
         },
-        snapshot: snapshot.clone(),
+        snapshot: paced.clone(),
         sources: vec![QuotaOverviewSource {
             source_id: source_id.to_owned(),
             kind: if device_id.is_some() {
@@ -4120,7 +4124,7 @@ fn overview_item(
             display_name: display_name.to_owned(),
             observed_at,
             is_stale: stale,
-            snapshot: Some(snapshot.clone()),
+            snapshot: Some(paced),
         }],
         selected_source_id: source_id.to_owned(),
         selected_source_display_name: display_name.to_owned(),

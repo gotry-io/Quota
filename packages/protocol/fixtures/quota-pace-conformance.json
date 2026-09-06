@@ -1,0 +1,304 @@
+{
+  "$comment": "Whether a quota window's current burn rate lasts to its reset, derived from the reading alone. `used_percent`, `resets_at`, and `duration_seconds` are the whole input; `now` is the reader's clock. Every runtime answers this file: `packages/quota-model` (`quotaPace`), `packages/service` (`pace`), and `packages/apple-shared` (`QuotaPace`). `expected_copy` is the one line every surface prints, answered by `apps/web/src/lib/format.ts` and `QuotaPaceCopy`; it is null where there is no pace. See ADR 0035.",
+  "cases": [
+    {
+      "name": "half the allowance at half the window is on track and lasts",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 50,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "on_track",
+        "delta_percent": 0,
+        "projected_at_reset": 100.0
+      },
+      "expected_copy": "On track · lasts to reset"
+    },
+    {
+      "name": "burning ahead of the window runs out before it resets",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 85,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "expected": {
+        "kind": "runs_out",
+        "tempo": "ahead",
+        "delta_percent": 70,
+        "projected_at_reset": 170.0,
+        "exhausts_at": "2026-09-05T09:56:28Z"
+      },
+      "expected_copy": "Ahead +70% · runs out ~2h before reset"
+    },
+    {
+      "name": "spending slower than the week lasts to reset",
+      "now": "2026-09-04T12:00:00Z",
+      "window": {
+        "id": "weekly",
+        "title": "Weekly",
+        "used_percent": 35,
+        "resets_at": "2026-09-08T00:00:00Z",
+        "duration_seconds": 604800,
+        "primary_cadence": "weekly"
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "behind",
+        "delta_percent": -30,
+        "projected_at_reset": 70.0
+      },
+      "expected_copy": "Behind −30% · lasts to reset"
+    },
+    {
+      "name": "a window that just reset has too little of itself behind it",
+      "now": "2026-09-05T07:06:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 5,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "the smallest sample the rule accepts still answers",
+      "now": "2026-09-05T07:15:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 10,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "runs_out",
+        "tempo": "ahead",
+        "delta_percent": 100,
+        "projected_at_reset": 200.0,
+        "exhausts_at": "2026-09-05T09:30:00Z"
+      },
+      "expected_copy": "Ahead +100% · runs out ~2h before reset"
+    },
+    {
+      "name": "under two percent used is not a pace",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 1.5,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "exactly two percent used is",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 2,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "behind",
+        "delta_percent": -96,
+        "projected_at_reset": 4.0
+      },
+      "expected_copy": "Behind −96% · lasts to reset"
+    },
+    {
+      "name": "a window with no cadence has no pace",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "credits",
+        "title": "Credits",
+        "used_percent": 60,
+        "resets_at": "2026-09-05T12:00:00Z"
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "a window with no reset instant has no pace",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "monthly",
+        "title": "Monthly",
+        "used_percent": 60,
+        "duration_seconds": 2592000
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "a balance-only wallet has no pace",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "balance",
+        "title": "Balance",
+        "used_percent": 0,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "remaining_value": 12.5,
+        "value_unit": "usd"
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "a budget window with a limit does have one",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "budget",
+        "title": "Budget",
+        "used_percent": 70,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "remaining_value": 3.0,
+        "limit_value": 10.0,
+        "value_unit": "usd"
+      },
+      "expected": {
+        "kind": "runs_out",
+        "tempo": "ahead",
+        "delta_percent": 40,
+        "projected_at_reset": 140.0,
+        "exhausts_at": "2026-09-05T10:34:17Z"
+      },
+      "expected_copy": "Ahead +40% · runs out ~1h before reset"
+    },
+    {
+      "name": "the upper tempo boundary is on track, not ahead",
+      "now": "2026-09-05T10:45:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 82.5,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "runs_out",
+        "tempo": "on_track",
+        "delta_percent": 10,
+        "projected_at_reset": 110.0,
+        "exhausts_at": "2026-09-05T11:32:44Z"
+      },
+      "expected_copy": "On track · runs out ~27m before reset"
+    },
+    {
+      "name": "the lower tempo boundary is on track, not behind",
+      "now": "2026-09-05T09:30:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 45,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "on_track",
+        "delta_percent": -10,
+        "projected_at_reset": 90.0
+      },
+      "expected_copy": "On track · lasts to reset"
+    },
+    {
+      "name": "a clock before the window start reads as no sample",
+      "now": "2026-09-05T06:00:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 40,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "none"
+      },
+      "expected_copy": null
+    },
+    {
+      "name": "past the reset the window is fully elapsed",
+      "now": "2026-09-05T13:00:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 40,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "behind",
+        "delta_percent": -60,
+        "projected_at_reset": 40.0
+      },
+      "expected_copy": "Behind −60% · lasts to reset"
+    },
+    {
+      "name": "an offset instant answers the same as its UTC equivalent",
+      "now": "2026-09-05T17:30:00+08:00",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 50,
+        "resets_at": "2026-09-05T20:00:00+08:00",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "lasts",
+        "tempo": "on_track",
+        "delta_percent": 0,
+        "projected_at_reset": 100.0
+      },
+      "expected_copy": "On track · lasts to reset"
+    },
+    {
+      "name": "a projection past the cap is stated at the cap",
+      "now": "2026-09-05T07:15:00Z",
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 100,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000
+      },
+      "expected": {
+        "kind": "runs_out",
+        "tempo": "ahead",
+        "delta_percent": 899,
+        "projected_at_reset": 999.0,
+        "exhausts_at": "2026-09-05T07:15:00Z"
+      },
+      "expected_copy": "Ahead +899% · runs out ~4h before reset"
+    }
+  ]
+}

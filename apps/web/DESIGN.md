@@ -19,11 +19,13 @@ open-source tool, not a hosting console or a promotional SaaS dashboard.
 
 ## Shared product vocabulary
 
-Freshness copy, reset copy, the one no-reset phrase, provider display names, quota window titles, period names, and Devices copy follow
+Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
 **Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, which
-`src/lib/format.ts` answers in its tests. The site does not restate those rules and does not keep a
-provider or agent name table of its own.
+and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json` and
+`packages/protocol/fixtures/quota-pace-conformance.json`, which `src/lib/format.ts` answers in its
+tests. A window's pace prints under its reset line, in `--meter-warn` when the rate runs the window
+out before it resets and in the meta color otherwise. The site does not restate those rules and does
+not keep a provider or agent name table of its own.
 
 ## Information architecture
 

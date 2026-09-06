@@ -28,6 +28,7 @@ enum SettingsCopy {
   static let notifications = "Notifications"
   static let enableNotifications = "Enable Notifications"
   static let resetReminders = "Reset Reminders"
+  static let paceAlerts = "Pace Warnings"
   static let footer = "Alerts are checked when Quota refreshes."
   static let permissionDenied = "Allow notifications for Quota in Settings."
   static let openSettings = "Open Settings"
@@ -247,6 +248,10 @@ final class SettingsModel {
 
   func setResetReminders(_ enabled: Bool) {
     persist { $0.resetReminders = enabled }
+  }
+
+  func setPaceAlerts(_ enabled: Bool) {
+    persist { $0.paceAlerts = enabled }
   }
 
   func setFirstThreshold(_ value: Int, for selector: String) {

@@ -1,26 +1,31 @@
 import Foundation
 
-/// Local remaining-quota alert rules: a master switch, reset reminders, and remaining-percent
-/// thresholds keyed by subscription selector.
+/// Local remaining-quota alert rules: a master switch, reset reminders, pace warnings, and
+/// remaining-percent thresholds keyed by subscription selector.
 ///
 /// Thresholds are remaining-percent integers 1–99, kept descending and unique. A selector
 /// that has never been edited uses `[20, 10]`. Persistence is each app's own UserDefaults.
 public struct AlertRules: Equatable, Sendable {
   public var enabled: Bool
   public var resetReminders: Bool
+  /// Warn once when a window's burn rate stops lasting to its reset.
+  public var paceAlerts: Bool
   public var thresholds: [String: [Int]]
 
   public static let defaultEnabled = false
   public static let defaultResetReminders = true
+  public static let defaultPaceAlerts = true
   public static let defaultThresholds = [20, 10]
 
   public init(
     enabled: Bool = defaultEnabled,
     resetReminders: Bool = defaultResetReminders,
+    paceAlerts: Bool = defaultPaceAlerts,
     thresholds: [String: [Int]] = [:]
   ) {
     self.enabled = enabled
     self.resetReminders = resetReminders
+    self.paceAlerts = paceAlerts
     self.thresholds = thresholds.mapValues(Self.normalized)
   }
 
