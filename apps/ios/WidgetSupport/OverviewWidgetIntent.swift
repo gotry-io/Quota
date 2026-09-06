@@ -6,7 +6,7 @@ import WidgetKit
 struct OverviewWidgetIntent: WidgetConfigurationIntent {
   static var title: LocalizedStringResource { "Overview" }
   static var description: IntentDescription {
-    IntentDescription("Remaining quota and Today Usage at a glance.")
+    IntentDescription("Remaining quota, reset, and Today Usage at a glance.")
   }
 
   @Parameter(title: "Subscription")

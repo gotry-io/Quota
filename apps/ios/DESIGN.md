@@ -182,17 +182,22 @@ pushed view; it renders the selected last-good subscription.
 
 Widgets use the information hierarchy inspired by Nowdex: strongest remaining label first, then
 provider and window, then reset and updated age. Do not copy Nowdex assets or layout chrome.
+Home Screen families show remaining quota. Lock Screen accessory families show the Weekly
+window's used percent (`100 − remaining`) plus **Resets in …**.
 
 Families:
 
 | Family | Content |
 | --- | --- |
-| systemSmall | Primary (most constrained, or the configured subscription) item: remaining, provider, window, reset/updated age |
-| systemMedium | Up to two most constrained items, compact Today tokens and cost, and **Updated** age |
-| systemLarge | Up to six items as a list: provider · window, remaining, meter, countdown, then a trailing **Updated** age when a snapshot exists |
-| accessoryCircular | Percent windows use an `accessoryCircular` Gauge ring; balance-only shows the amount |
-| accessoryRectangular | Primary remaining, provider · window, optional reset age |
-| accessoryInline | `<Provider> <remaining>%` |
+| systemSmall | One subscription (most constrained, or the configured one): provider, two windows shortest-cadence first, remaining, reset, **Updated** age |
+| systemMedium | Up to three providers, one row each (most constrained window, remaining, meter, reset). A configured subscription shows that subscription's windows instead. Compact Today tokens and cost, and **Updated** age |
+| systemLarge | Up to three providers × two windows: remaining, meter, countdown, then Today tokens/cost and **Updated** age |
+| accessoryCircular | Weekly used percent in an `accessoryCircularCapacity` Gauge ring; balance-only shows the amount |
+| accessoryRectangular | Three stacked lines: Weekly used percent, its **Resets in …**, then the subscription's second window with its own reset |
+| accessoryInline | `Weekly <used>% · Resets in …` |
+
+A window whose snapshot carries `pace` `runs_out` uses the system orange warning color for its
+remaining or used figure. No pace means no extra color. The extension never derives pace.
 
 Widgets are configurable through `AppIntentConfiguration`. The parameter is an optional
 subscription (`nil` is **Automatic**: the most constrained subscription in the snapshot). Each
@@ -207,14 +212,21 @@ Shared rules:
   `CompactAgeFormat`, and `FreshnessCopy`. Digits are monospaced. Semantic text styles and colors
   only.
 - Mark the strongest remaining value with `widgetAccentable()`.
+- A meter is a `linearCapacity` Gauge over the remaining percent, tinted `.secondary`. A row is
+  text, not a link: a medium or large row's `Link` is tinted `.primary` so the hierarchical text
+  styles inside it do not resolve against the accent color.
+- The Lock Screen families are narrow. Neither the circular ring's window title nor a second
+  column of reset copy fits, so those lines stack instead of sitting side by side.
 - Use `containerBackground(for: .widget)`. Do not call `glassEffect`. The system owns widget
   Liquid Glass, accented, and vibrant rendering inside that container.
 - A future reset under 24 hours uses `Text(timerInterval:countsDown:)` so the system ticks seconds
   without a new timeline entry. Otherwise the line is static `FreshnessCopy.resetCopy`. A reset
   instant at or before the entry date prints no Resets line.
-- Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A medium or large
-  widget with more than one item keeps `io.gotry.quota:/overview` for the widget as a whole; a
-  large row is a `Link` to that row's subscription.
+- Each item's `widgetURL` is `io.gotry.quota:/subscriptions/<selection_id>`. A widget whose
+  visible rows share one `selection_id` opens that subscription. Several subscriptions keep
+  `io.gotry.quota:/overview` for the widget as a whole; a medium or large row is a `Link` to
+  that row's subscription. Small and Lock Screen families are one tap target — the whole widget
+  opens its `widgetURL`, and no row is a `Link` there.
 - Placeholder is a redacted/skeleton overview. Xcode previews cover content, no-data, and
   placeholder for every supported family (small, medium, large, circular, rectangular, inline).
   Inspect standard, accented, and vibrant rendering in those previews; do not encode those

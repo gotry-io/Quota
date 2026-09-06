@@ -647,6 +647,22 @@ name, or the underlying error's text. The scan continues with the other browsers
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
 
+## Desktop widgets
+
+QuotaBar does not embed a WidgetKit extension in this build: SwiftPM plus
+`scripts/package-menubar.sh` cannot produce an `.appex`. When packaging can embed one, the
+widgets read the same non-secret `WidgetSnapshot` as iOS (`group.io.gotry.quota`,
+[ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)). They never talk to Relay
+or the private service.
+
+| Kind | Families | Content |
+| --- | --- | --- |
+| Overview | systemSmall, systemMedium | Remaining quota across the most constrained subscriptions, reset, **Updated** age |
+| Today | systemSmall | Today's tokens and API-equivalent cost |
+
+Home Screen remaining figures follow the same information order as iOS widgets. A carried
+`pace` of `runs_out` uses the existing warning color; no pace means no extra color.
+
 ## Shared components
 
 | Component | Contract |

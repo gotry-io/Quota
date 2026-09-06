@@ -11,7 +11,9 @@ links to it rather than restating it.
   client, reads Account remaining quota and Today Usage, and publishes the non-secret App Group
   snapshot its widgets render. It is not a collection Device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
-  owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
+  owns views, UI preferences, accessibility, Launch at Login, and wire decoding only. Desktop
+  WidgetKit extensions, when packaging can embed one, read the same non-secret `WidgetSnapshot`
+  as iOS ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)).
 - **QuotaRelay** owns GitHub-backed Accounts, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
@@ -249,7 +251,8 @@ and network authority — on screen and under the `io.gotry.quota.refresh` backg
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
 `group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may
 carry a locally salted `selection_id`; the salt stays in the app-private Keychain and is never
-written to the App Group.
+written to the App Group. The same snapshot shape is what a QuotaBar widget extension would read
+from the macOS App Group; this build does not embed that extension.
 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
