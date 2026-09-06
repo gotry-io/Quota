@@ -142,12 +142,12 @@ final class AppModel {
       )
     }
     self.activity = activity ?? AccountClientActivityLoading(client: account)
+    self.providerStatusClient = providerStatusClient
     let subscription = SubscriptionModel(purchases: purchases)
     self.subscription = subscription
     subscription.onStoreChange = { [weak self] in
       await self?.refresh()
     }
-    self.providerStatusClient = providerStatusClient
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
