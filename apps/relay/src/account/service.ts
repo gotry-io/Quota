@@ -2,6 +2,7 @@ import { IOS_OAUTH_CLIENT_ID, IOS_OAUTH_REDIRECT_URI } from "@gotry-io/quota-pro
 import type {
   AccountState,
   LoginGrantRecord,
+  SessionClientKind,
   SessionCredentialHashes,
   SessionPrincipal,
 } from "@gotry-io/relay-core";
@@ -96,6 +97,21 @@ export interface IosAuthorizationCodeExchangeInput {
   client_id: string;
   redirect_uri: string;
   code_verifier: string;
+  /** What the phone presented, or null when it asked only to read. */
+  device: IosDeviceRegistration | null;
+}
+
+/** What a phone presents when its session is to name a Device. */
+export interface IosDeviceRegistration {
+  installation_id: string;
+  device_display_name: string;
+  platform: string;
+}
+
+/** The Device a session speaks for, at the generation it was opened at. */
+export interface IssuedDevice {
+  id: string;
+  generation: number;
 }
 
 export interface IssuedSession {
@@ -120,6 +136,8 @@ export interface AccountTokenResponse {
   token_type: "Bearer";
   account_id: string;
   display_label: string | null;
+  /** Null when this session registered no Device, which is what a reader's session is. */
+  device: IssuedDevice | null;
   session: IssuedSession;
 }
 
@@ -225,6 +243,13 @@ export class AccountService {
     );
   }
 
+  /**
+   * The phone's one session: a Device's when it presented an installation, a reader's when it
+   * did not ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+   *
+   * The Device half is the path QuotaBar's exchange takes, not a second one beside it: same
+   * installation hashing, same Device upsert, same one-live-session rule.
+   */
   async exchangeIosAuthorizationCode(
     input: IosAuthorizationCodeExchangeInput,
     now: Date,
@@ -233,7 +258,34 @@ export class AccountService {
       throw new AccountFlowError("invalid_client");
     }
     const { grant, codeHash } = await this.loadAuthorizationCodeGrant(input, now);
-    return this.consumeAccountOnlyGrant(grant, codeHash, now);
+    const registration = input.device;
+    if (!registration) {
+      return this.consumeAccountOnlyGrant(grant, codeHash, now);
+    }
+    if (!grant.account_id) {
+      throw new AccountFlowError("invalid_grant");
+    }
+    const installationHash = await this.accountInstallationHash(
+      grant.account_id,
+      await this.installationDigest(registration.installation_id),
+    );
+    const issued = await this.consumeDeviceGrant(
+      grant,
+      codeHash,
+      iosClientId,
+      "ios",
+      installationHash,
+      sanitizeLabel(registration.device_display_name, 128),
+      sanitizeLabel(registration.platform, 64),
+      now,
+    );
+    return {
+      token_type: "Bearer",
+      account_id: issued.account_id,
+      display_label: issued.display_label,
+      device: { id: issued.device_id, generation: issued.device_generation },
+      session: issued.session,
+    };
   }
 
   /**
@@ -247,19 +299,39 @@ export class AccountService {
   async openIosSession(
     accountId: string,
     displayLabel: string | null,
+    registration: IosDeviceRegistration | null,
     now: Date,
   ): Promise<AccountTokenResponse> {
     const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[iosClientId], now);
-    await this.state.createIosSession({
+    const written = await this.state.createIosSession({
       account_id: accountId,
       family_id: `family_${crypto.randomUUID()}`,
       session: hashes(credentials),
       authenticated_at: now.toISOString(),
+      device: registration
+        ? {
+            installation_id_hash: await this.accountInstallationHash(
+              accountId,
+              await this.installationDigest(registration.installation_id),
+            ),
+            device_id: `device_${crypto.randomUUID()}`,
+            display_name: sanitizeLabel(registration.device_display_name, 128),
+            platform: sanitizeLabel(registration.platform, 64),
+          }
+        : null,
     });
+    if (registration && !written.device) {
+      // The batch writes the Device and the session that names it together, so a session with
+      // no Device behind it is not an answer this can round off into a reader's.
+      throw new Error("The device session was not written");
+    }
     return {
       token_type: "Bearer",
       account_id: accountId,
       display_label: displayLabel,
+      device: written.device
+        ? { id: written.device.id, generation: written.device.generation }
+        : null,
       session: issued(credentials),
     };
   }
@@ -333,9 +405,58 @@ export class AccountService {
     platform: string,
     now: Date,
   ): Promise<NativeTokenResponse> {
-    const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[nativeClientId], now);
+    const issuedSession = await this.consumeDeviceGrant(
+      grant,
+      credentialHash,
+      nativeClientId,
+      "quotabar",
+      installationHash,
+      displayName,
+      platform,
+      now,
+    );
+    return {
+      token_type: "Bearer",
+      account_id: issuedSession.account_id,
+      display_label: issuedSession.display_label,
+      device_id: issuedSession.device_id,
+      device_generation: issuedSession.device_generation,
+      usage_deleted_before: issuedSession.usage_deleted_before,
+      usage_sync_revision: issuedSession.usage_sync_revision,
+      session: issuedSession.session,
+    };
+  }
+
+  /**
+   * The one path a Device's session is opened on, whichever client asked for it.
+   *
+   * The client id fences the grant to the client that opened it, and the client kind is what the
+   * session row is labelled with. Everything else — the installation, the Device, the scopes, and
+   * the rule that a device holds one live session — is the same for a Mac and for a phone.
+   */
+  private async consumeDeviceGrant(
+    grant: LoginGrantRecord,
+    credentialHash: string,
+    clientId: RegisteredClientId,
+    clientKind: SessionClientKind,
+    installationHash: string,
+    displayName: string,
+    platform: string,
+    now: Date,
+  ): Promise<{
+    account_id: string;
+    display_label: string | null;
+    device_id: string;
+    device_generation: number;
+    usage_deleted_before: string | null;
+    usage_sync_revision: number;
+    session: IssuedSession;
+  }> {
+    const credentials = await this.newSessionCredentials(CLIENT_CREDENTIALS[clientId], now);
     const result = await this.state.consumeLoginGrant({
       grant_id: grant.id,
+      client_id: clientId,
+      client_kind: clientKind,
       credential_hash: credentialHash,
       completion_nonce_hash: await this.hasher.hash("consume", randomOpaqueSecret()),
       installation_id_hash: installationHash,
@@ -350,7 +471,6 @@ export class AccountService {
       throw new AccountFlowError(result.outcome === "expired" ? "expired_token" : "invalid_grant");
     }
     return {
-      token_type: "Bearer",
       account_id: result.account_id,
       display_label: result.display_label,
       device_id: result.device.id,
@@ -382,6 +502,7 @@ export class AccountService {
       token_type: "Bearer",
       account_id: result.account_id,
       display_label: result.display_label,
+      device: null,
       session: issued(credentials),
     };
   }

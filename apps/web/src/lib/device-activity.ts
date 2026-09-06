@@ -44,9 +44,10 @@ export function deviceActivity(
   return { label: quietLabel, tone: "unavailable", since };
 }
 
-/** macOS glyph, or a generic device for every other platform value. */
-export function platformIconKind(platform: string): "mac" | "generic" {
-  return platform === "macos" ? "mac" : "generic";
+/** The glyph a Device is drawn with, or a generic device for a platform this build cannot name. */
+export function platformIconKind(platform: string): "mac" | "iphone" | "generic" {
+  if (platform === "macos") return "mac";
+  return platform === "ios" ? "iphone" : "generic";
 }
 
 /** Last-seen descending. A Device that has never called sorts last. */

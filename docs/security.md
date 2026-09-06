@@ -44,7 +44,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   page content, and intercepts no form or navigation; it reads that store's cookies, assembles the
   header the catalog declares, and keeps it only if the provider validates it. Cookies stay in this
   device's Keychain, one item per provider and account fingerprint, and reach only that provider's
-  fixed endpoints — never Relay, the App Group snapshot, a file, a log, or a diagnostic.
+  fixed endpoints — never Relay, the App Group snapshot, a file, a log, or a diagnostic. What that
+  session *reads* does reach Relay once the phone is a Device and sync is paid for
+  ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)): the quota snapshot goes, the
+  cookie behind it never does.
 
 - The local service's HTTP client follows no redirects and caps bodies at 1 MiB. On macOS it
   speaks TLS through Secure Transport (`reqwest` `native-tls`) rather than rustls: cursor.com's
@@ -157,7 +160,12 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   ([ADR 0025](decisions/0025-one-session-system.md)). It is the only grant a collection client has:
   there is no headless or second-screen flow to authorize.
 - The `quota-ios` client's authority is scoped by
-  [ADR 0013](decisions/0013-readonly-ios-account-client.md) and its widget snapshot by
+  [ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md), which supersedes
+  [ADR 0013](decisions/0013-readonly-ios-account-client.md)'s read-only rule: presenting an
+  installation opens a session that names a Device and may write that Device's snapshots, and
+  presenting none opens the reader's. The installation id is one Keychain item,
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and not synchronizable, so a restored backup
+  does not make two phones one Device. Its widget snapshot is scoped by
   [ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md). `ASWebAuthenticationSession` stays in
   the app target. Connect Account shares Safari cookies (`prefersEphemeralWebBrowserSession =
   false`) so GitHub can finish Relay's browser round trip; the GitHub login state is the system
@@ -236,8 +244,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Quota and Usage uploads require `device:write` and a session whose Device ID and generation match
   the envelope. That scope is only ever granted to a session that names a Device, and such a session
   stops authorizing the moment its Device moves past the generation it was opened at, so Delete
-  Device ends every token issued before it. A session that names no Device — the browser's, the iOS
-  viewer's — cannot write device data at all. The device profile endpoint writes only the Device its
+  Device ends every token issued before it. A session that names no Device — the browser's, and a
+  phone that presented no installation — cannot write device data at all. The device profile endpoint writes only the Device its
   own session names, and only that Device's bounded display name and platform: it cannot select a
   Device ID, read Account data, or change authorization.
 - An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by

@@ -209,12 +209,23 @@ struct DecodingTests {
       summary.usage.today.agents.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
     #expect(summary.usage.last7Days.agents.isEmpty)
 
-    // A response shaped for a different client carries keys this one does not read. It reads
-    // the session it came for and leaves the rest alone.
-    let tokens = try Fixtures.tokenResponse(extra: ["device_id": "device_01"])
-    #expect(try WireCodec.decode(IosOAuthTokenResponse.self, from: tokens).session
-      .accessToken.hasPrefix("qia_"))
+    // A session either names the Device it speaks for, at the generation it was opened at, or
+    // names none. Half an answer is not one.
+    let device = try WireCodec.decode(
+      IosOAuthTokenResponse.self,
+      from: try Fixtures.tokenResponse(extra: ["device_id": "device_01", "device_generation": 2])
+    )
+    #expect(device.deviceID == "device_01")
+    #expect(device.deviceGeneration == 2)
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        IosOAuthTokenResponse.self,
+        from: try Fixtures.tokenResponse(extra: ["device_id": "device_01"])
+      )
+    }
 
+    // Rotation answers the tokens; the Device the session speaks for is not restated, so keys
+    // meant for another client are read past.
     let widerRefresh = try Fixtures.refreshResponse(extra: [
       "device_id": "device_01",
       "device_generation": 3,
@@ -231,6 +242,7 @@ struct DecodingTests {
     // Signing in names the Account. A build talking to a Relay that does not say so yet, or to
     // an Account that kept no name, reads a session without one rather than refusing it.
     #expect(validTokens.displayLabel == nil)
+    #expect(validTokens.deviceID == nil)
     #expect(
       try WireCodec.decode(
         IosOAuthTokenResponse.self,

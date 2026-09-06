@@ -443,9 +443,12 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5), "Studio Mac")
     XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
-    // This phone reads for itself, so it is the last row — and it is not an Account Device.
-    XCTAssertTrue(
-      app.descendants(matching: .any)["devices.this-iphone"].exists, "This iPhone row")
+    // This phone is one of the Account's Devices now, so it is a row like the Macs rather than
+    // a local one beside itself.
+    XCTAssertTrue(app.staticTexts["Kyle iPhone"].exists, "Kyle iPhone")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["devices.this-iphone"].exists,
+      "a registered phone is not also a local row")
     XCTAssertTrue(
       app.descendants(matching: .any)["Manage Devices on Web"].exists,
       "Manage Devices on Web"

@@ -12,12 +12,14 @@ enum Fixtures {
 
   static func session(
     accountID: String = "account_01",
+    deviceID: String? = nil,
     access: String = accessToken,
     refresh: String = refreshToken,
     activation: AccountSessionActivation = .active
   ) -> AccountSession {
     AccountSession(
       accountID: accountID,
+      deviceID: deviceID,
       accessToken: access,
       accessExpiresAt: date("2026-08-14T12:15:00Z"),
       refreshToken: refresh,
@@ -215,6 +217,41 @@ enum Fixtures {
       "last_seen_at": "2026-08-14T15:00:05Z",
       "last_observed_at": "2026-08-14T15:00:00Z",
     ]
+  }
+
+  /// The control document an upload reads first.
+  static func deviceSync(generation: Int) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "protocol_version": 2,
+      "account_id": "account_01",
+      "device_id": "device_01",
+      "device_generation": generation,
+      "usage_deleted_before": NSNull(),
+      "usage_sync_revision": 0,
+    ])
+  }
+
+  static func uploadResponse(generation: Int) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "protocol_version": 6,
+      "device_id": "device_01",
+      "device_generation": generation,
+      "accepted": ["codex"],
+      "ignored": [],
+    ])
+  }
+
+  /// A reading taken on this device, as the upload envelope carries it.
+  static func localSnapshot() -> QuotaSnapshot {
+    QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(fingerprint: "fp", fingerprintScope: .global),
+      windows: [
+        QuotaWindow(id: "weekly", title: "Weekly", usedPercent: 20, durationSeconds: 604_800)
+      ],
+      status: .available,
+      observedAt: date("2026-08-14T15:00:00Z")
+    )
   }
 
   static func tokenResponse(

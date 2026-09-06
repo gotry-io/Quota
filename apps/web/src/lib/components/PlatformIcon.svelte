@@ -28,6 +28,26 @@ const label = $derived(platformDisplayName(platform));
       stroke-linecap="round"
     />
   </svg>
+{:else if kind === "iphone"}
+  <svg class="platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+    <rect
+      x="7.25"
+      y="2.75"
+      width="9.5"
+      height="18.5"
+      rx="2.2"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+    />
+    <path
+      d="M10.5 18.5h3"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+    />
+  </svg>
 {:else}
   <svg class="platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
     <rect

@@ -422,6 +422,118 @@ struct AccountClientTests {
   }
 
   @Test
+  func aDeviceSessionReadsTheControlDocumentThenUploadsWhatItRead() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.deviceSync(generation: 4)),
+      .init(status: 200, body: try Fixtures.uploadResponse(generation: 4)),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(deviceID: "device_01")
+      ),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+
+    #expect(await client.uploadSnapshots([Fixtures.localSnapshot()]) == nil)
+    #expect(transport.recordedURLs.map(\.path) == [
+      "/api/v2/device/sync",
+      "/api/v6/device/snapshots",
+    ])
+    let envelope =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[1]) as? [String: Any] ?? [:]
+    // The generation is the one the control document just answered.
+    #expect(envelope["generation"] as? Int == 4)
+    #expect(envelope["protocol_version"] as? Int == 6)
+    #expect((envelope["snapshots"] as? [[String: Any]])?.count == 1)
+    #expect(!String(decoding: transport.recordedBodies[1], as: UTF8.self).contains("cookie"))
+  }
+
+  @Test
+  func aRefusedUploadIsSubscriptionRequiredAndSendsNoReading() async throws {
+    let transport = ScriptedTransport([
+      .init(
+        status: 402,
+        body: try Fixtures.errorBody(code: "subscription_required", message: "Sync is off.")
+      )
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(deviceID: "device_01")
+      ),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+
+    #expect(await client.uploadSnapshots([Fixtures.localSnapshot()]) == .subscriptionRequired)
+    #expect(transport.recordedURLs.map(\.path) == ["/api/v2/device/sync"])
+  }
+
+  @Test
+  func aSessionThatNamesNoDeviceHasNothingToUploadWith() async throws {
+    let transport = ScriptedTransport([])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+
+    #expect(await client.uploadSnapshots([Fixtures.localSnapshot()]) == .notADevice)
+    #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
+  func signingInPresentsAnInstallationOrNone() async throws {
+    let transport = ScriptedTransport([
+      .init(
+        status: 200,
+        body: try Fixtures.tokenResponse(
+          extra: ["device_id": "device_01", "device_generation": 1]
+        )
+      ),
+      .init(status: 200, body: try Fixtures.tokenResponse()),
+    ])
+    let sessions = MemoryAccountSessionStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let attempt = AuthorizationAttempt(
+      authorizationURL: URL(string: "https://quota.gotry.io/oauth/v2/authorize")!,
+      state: "client-state-123456789",
+      verifier: String(repeating: "a", count: 43),
+      challenge: "challenge"
+    )
+    let callback = URL(
+      string:
+        "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
+    )!
+
+    let registered = try await client.completeLogin(
+      callback: callback,
+      expected: attempt,
+      device: IosDeviceRegistration(
+        installationID: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998",
+        displayName: "Kyle iPhone"
+      )
+    )
+    #expect(registered.deviceID == "device_01")
+    let asked =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[0]) as? [String: Any] ?? [:]
+    #expect(asked["installation_id"] as? String == "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998")
+    #expect(asked["device_display_name"] as? String == "Kyle iPhone")
+    #expect(asked["platform"] as? String == "ios")
+
+    let reader = try await client.completeLogin(callback: callback, expected: attempt)
+    #expect(reader.deviceID == nil)
+    let second =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[1]) as? [String: Any] ?? [:]
+    #expect(second["installation_id"] == nil)
+    #expect(second["platform"] == nil)
+  }
+
+  @Test
   func activateSessionPromotesPendingAndLeavesActiveUnchanged() async throws {
     let sessions = MemoryAccountSessionStore(session: Fixtures.session(activation: .pending))
     let client = AccountClient(

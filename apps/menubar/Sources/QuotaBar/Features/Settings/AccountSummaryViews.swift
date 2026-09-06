@@ -78,7 +78,7 @@ struct AccountDevicesView: View {
                 SettingsListRow(
                   title: device.displayName,
                   subtitle: deviceSubtitle(device, activity: activity, now: now),
-                  systemImage: device.platform == .macos ? "desktopcomputer" : "terminal",
+                  systemImage: platformSymbol(device.platform),
                   height: QuotaDesign.Layout.settingsListRowHeight
                 ) {
                   Text(activity.label)
@@ -114,9 +114,20 @@ struct AccountDevicesView: View {
     let platform =
       switch device.platform {
       case .macos: "macOS"
+      case .ios: "iOS"
       case .unknown: "Unknown"
       }
     return "\(platform) · \(FreshnessCopy.lastReading(since: activity.since, now: now))"
+  }
+
+  /// The glyph a Device is listed under. A phone is a Device here like any other
+  /// ([ADR 0041](../../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+  private func platformSymbol(_ platform: AccountDevicePlatform) -> String {
+    switch platform {
+    case .macos: "desktopcomputer"
+    case .ios: "iphone"
+    case .unknown: "terminal"
+    }
   }
 
 }
