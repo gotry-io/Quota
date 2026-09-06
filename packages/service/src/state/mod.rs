@@ -2679,6 +2679,8 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
         "opencode" => UsageAgent::OpenCode,
         "pi" => UsageAgent::Pi,
         "cursor" => UsageAgent::Cursor,
+        "gemini" => UsageAgent::Gemini,
+        "copilot" => UsageAgent::Copilot,
         _ => return None,
     })
 }

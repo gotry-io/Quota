@@ -25,12 +25,18 @@ describe("managed pricing catalog", () => {
         "claude-opus-5",
         "claude-sonnet-5",
         "claude-fable-5",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-pro-preview",
       ]),
     );
-    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-09-01-1"');
+    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-09-06-1"');
     // Pins the dimension expansion so a refactor cannot silently drop entries.
-    expect(PRICING_CATALOG.entries).toHaveLength(188);
-    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(188);
+    expect(PRICING_CATALOG.entries).toHaveLength(236);
+    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(236);
   });
 
   it("prices Grok 4.5 short and long context rows", () => {

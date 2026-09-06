@@ -555,7 +555,8 @@ extension InferenceProvider {
     case .moonshot: "kimi"
     case .deepseek: "deepseek"
     case .cursor: "cursor"
-    case .google, .unknown: nil
+    case .google: "gemini"
+    case .unknown: nil
     }
   }
 

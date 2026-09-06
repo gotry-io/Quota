@@ -19,6 +19,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
   case `kimi`
   case `litellm`
   case `cursor`
+  case `gemini`
+  case `copilot`
   case unknown(String)
 
   /// Every provider this build knows. An unknown id is not one of them.
@@ -31,6 +33,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     .`kimi`,
     .`litellm`,
     .`cursor`,
+    .`gemini`,
+    .`copilot`,
   ]
 
   public init?(rawValue: String) {
@@ -58,6 +62,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
+    case .`gemini`: "gemini"
+    case .`copilot`: "copilot"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -76,6 +82,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: "Kimi Code"
     case .`litellm`: "LiteLLM"
     case .`cursor`: "Cursor"
+    case .`gemini`: "Gemini CLI"
+    case .`copilot`: "GitHub Copilot"
     case .unknown: "Unknown provider"
     }
   }
@@ -90,6 +98,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: 5
     case .`litellm`: 6
     case .`cursor`: 7
+    case .`gemini`: 8
+    case .`copilot`: 9
     case .unknown: Int.max
     }
   }

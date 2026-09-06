@@ -53,7 +53,16 @@ function period(overrides: Partial<UsagePeriodRead> = {}): UsagePeriodRead {
 }
 
 it("maps agent ids to their display names", () => {
-  const agents = ["codex", "claude_code", "grok", "opencode", "pi", "cursor"] as const;
+  const agents = [
+    "codex",
+    "claude_code",
+    "grok",
+    "opencode",
+    "pi",
+    "cursor",
+    "gemini",
+    "copilot",
+  ] as const;
   render(UsageBreakdown, {
     period: period({
       agents: agents.map((agent) => ({

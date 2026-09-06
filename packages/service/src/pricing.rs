@@ -928,6 +928,7 @@ fn is_vendor_direct_channel(channel: BillingChannel) -> bool {
             | BillingChannel::XaiDirect
             | BillingChannel::MoonshotDirect
             | BillingChannel::DeepseekDirect
+            | BillingChannel::GoogleDirect
     )
 }
 

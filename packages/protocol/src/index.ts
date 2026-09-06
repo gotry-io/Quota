@@ -514,7 +514,16 @@ export const DeleteDeviceResponseSchema = z
   })
   .strict();
 
-export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi", "cursor"] as const;
+export const BILLING_AGENTS = [
+  "codex",
+  "claude_code",
+  "grok",
+  "opencode",
+  "pi",
+  "cursor",
+  "gemini",
+  "copilot",
+] as const;
 const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
 
@@ -525,6 +534,8 @@ const AGENT_DISPLAY_NAMES: Readonly<Record<BillingAgent, string>> = {
   opencode: "OpenCode",
   pi: "Pi",
   cursor: "Cursor",
+  gemini: "Gemini CLI",
+  copilot: "GitHub Copilot",
 };
 
 /** An agent this build has never heard of is named as what it is. */
@@ -578,6 +589,7 @@ export const BillingChannelSchema = z.enum([
   "anthropic_direct",
   "aws_bedrock",
   "google_vertex",
+  "google_direct",
   "openrouter",
   "xai_direct",
   "moonshot_direct",

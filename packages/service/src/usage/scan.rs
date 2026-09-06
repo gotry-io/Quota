@@ -114,6 +114,8 @@ pub fn scan_local_usage(
         UsageAgent::OpenCode => super::opencode::scan_opencode_usage(options),
         UsageAgent::Pi => super::pi::scan_pi_usage(options),
         UsageAgent::Cursor => super::cursor::scan_cursor_usage(options),
+        UsageAgent::Gemini => super::gemini::scan_gemini_usage(options),
+        UsageAgent::Copilot => super::copilot::scan_copilot_usage(options),
     }
 }
 
@@ -183,6 +185,13 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
                 home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
                 xdg.join("Cursor/User/globalStorage/state.vscdb"),
             ]
+        }
+        UsageAgent::Gemini => {
+            vec![home.join(".gemini").join("tmp")]
+        }
+        UsageAgent::Copilot => {
+            let root = env("COPILOT_HOME").unwrap_or_else(|| home.join(".copilot"));
+            vec![root.join("session-state")]
         }
     }
 }
@@ -932,6 +941,10 @@ pub(crate) fn accepts_file(agent: UsageAgent, path: &Path) -> bool {
         UsageAgent::Cursor => {
             name.ends_with(".jsonl") || name == "state.vscdb" || name == "store.db"
         }
+        UsageAgent::Gemini => {
+            name.starts_with("session-") && (name.ends_with(".json") || name.ends_with(".jsonl"))
+        }
+        UsageAgent::Copilot => name == "events.jsonl",
     }
 }
 

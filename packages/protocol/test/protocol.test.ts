@@ -38,6 +38,8 @@ import {
 describe("quota protocol", () => {
   it("accepts every managed provider and keeps local-only collectors out of the wire", () => {
     expect(PROVIDER_IDS).toContain("cursor");
+    expect(PROVIDER_IDS).toContain("gemini");
+    expect(PROVIDER_IDS).toContain("copilot");
     expect(ProviderIdSchema.safeParse("cursor").success).toBe(true);
     expect(LOCAL_PROVIDER_IDS).toEqual(expect.arrayContaining([...PROVIDER_IDS]));
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
@@ -53,6 +55,8 @@ describe("quota protocol", () => {
   it("carries one managed-data version on quota and Usage", () => {
     expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(6);
     expect(protocol.BILLING_AGENTS).toContain("cursor");
+    expect(protocol.BILLING_AGENTS).toContain("gemini");
+    expect(protocol.BILLING_AGENTS).toContain("copilot");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
     // The shared fixture owns the retired managed-data version; this pins the control one,

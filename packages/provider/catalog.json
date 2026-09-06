@@ -220,6 +220,34 @@
       },
       "default_base_url": null,
       "base_url_environment_key": null
+    },
+    {
+      "id": "gemini",
+      "display_name": "Gemini CLI",
+      "order": 8,
+      "default_visible": false,
+      "setup_action": "gemini",
+      "brand_icon_asset": "gemini",
+      "account_sync": true,
+      "environment_keys": ["GOOGLE_CLOUD_PROJECT"],
+      "credential_config": null,
+      "browser_session": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
+    },
+    {
+      "id": "copilot",
+      "display_name": "GitHub Copilot",
+      "order": 9,
+      "default_visible": false,
+      "setup_action": "copilot login",
+      "brand_icon_asset": "copilot",
+      "account_sync": true,
+      "environment_keys": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+      "credential_config": null,
+      "browser_session": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
     }
   ]
 }

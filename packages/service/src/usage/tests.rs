@@ -34,6 +34,8 @@ fn fixture(name: &str) -> &'static str {
         }
         "pi" => include_str!("../../fixtures/usage/pi.jsonl"),
         "cursor" => include_str!("../../fixtures/usage/cursor.jsonl"),
+        "gemini" => include_str!("../../fixtures/usage/gemini.json"),
+        "copilot" => include_str!("../../fixtures/usage/copilot.jsonl"),
         "opencode" => include_str!("../../fixtures/usage/opencode-message.jsonl"),
         "pricing" => {
             include_str!("../../fixtures/usage/pricing.json")
@@ -71,6 +73,8 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
         (UsageAgent::Grok, "grok", 1usize),
         (UsageAgent::Pi, "pi", 1usize),
         (UsageAgent::Cursor, "cursor", 2usize),
+        (UsageAgent::Gemini, "gemini", 2usize),
+        (UsageAgent::Copilot, "copilot", 2usize),
     ];
     for (agent, name, expected_records) in cases {
         let path = root(name);
@@ -78,6 +82,10 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
             format!("rollout-{name}.jsonl")
         } else if agent == UsageAgent::Grok {
             "updates.jsonl".into()
+        } else if agent == UsageAgent::Gemini {
+            format!("session-{name}.json")
+        } else if agent == UsageAgent::Copilot {
+            "events.jsonl".into()
         } else {
             format!("{name}.jsonl")
         };
@@ -174,6 +182,34 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
                 assert_eq!(api.cache_read_tokens, 10);
                 assert_eq!(api.cache_write_inferred_tokens, 5);
                 assert_eq!(api.output_tokens, 20);
+            }
+            UsageAgent::Gemini => {
+                let pro = &result.records[0].event;
+                assert_eq!(pro.model, "gemini-2.5-pro");
+                assert_eq!(pro.billing_channel, BillingChannel::Unknown);
+                assert_eq!(pro.input_tokens, 1_000);
+                assert_eq!(pro.cache_read_tokens, 150);
+                assert_eq!(pro.output_tokens, 200);
+                assert_eq!(pro.reasoning_tokens, 40);
+                assert_eq!(pro.occurred_at, "2026-08-02T10:00:01.000Z");
+                let flash = &result.records[1].event;
+                assert_eq!(flash.model, "gemini-2.5-flash");
+                assert_eq!(flash.input_tokens, 130_000);
+                assert_eq!(flash.context_bucket, ContextBucket::Gt128kLe200k);
+            }
+            UsageAgent::Copilot => {
+                let gpt = &result.records[0].event;
+                assert_eq!(gpt.model, "gpt-5.5");
+                assert_eq!(gpt.billing_channel, BillingChannel::Unknown);
+                assert_eq!(gpt.input_tokens, 1_000);
+                assert_eq!(gpt.cache_read_tokens, 100);
+                assert_eq!(gpt.cache_write_inferred_tokens, 50);
+                assert_eq!(gpt.output_tokens, 200);
+                assert_eq!(gpt.reasoning_tokens, 20);
+                let claude = &result.records[1].event;
+                assert_eq!(claude.model, "claude-opus-4.7");
+                assert_eq!(claude.input_tokens, 95);
+                assert_eq!(claude.output_tokens, 30);
             }
             UsageAgent::OpenCode => unreachable!(),
         }
@@ -1216,6 +1252,7 @@ fn pricing_never_crosses_billing_channels() {
         BillingChannel::AnthropicDirect,
         BillingChannel::AwsBedrock,
         BillingChannel::GoogleVertex,
+        BillingChannel::GoogleDirect,
         BillingChannel::Openrouter,
         BillingChannel::XaiDirect,
     ];

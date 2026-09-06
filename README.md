@@ -11,8 +11,9 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
 - **Quota Web** — public site, GitHub sign-in, and account dashboard.
 
-Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
+Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
+Cursor, Gemini CLI, and GitHub Copilot; local Usage analytics supports Codex, Claude Code, Grok,
+OpenCode, Pi, Cursor, Gemini CLI, and GitHub Copilot logs.
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
 never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
 session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
@@ -156,7 +157,7 @@ Five providers can fall back to a browser session as their last rung, behind a c
 an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.
 
-Around those: eight Rust quota collectors, six Usage parsers that read an appended log from where
+Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
 the last parse stopped, local hourly facts a scan recomputes only where records moved,
 effective-dated cost calculation with a separately versioned model catalog that regroups reports
 without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-app updates, and the

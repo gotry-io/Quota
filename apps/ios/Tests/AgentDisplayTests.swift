@@ -12,6 +12,8 @@ struct AgentDisplayTests {
     #expect(AgentDisplay.name(.opencode) == "OpenCode")
     #expect(AgentDisplay.name(.pi) == "Pi")
     #expect(AgentDisplay.name(.cursor) == "Cursor")
+    #expect(AgentDisplay.name(.gemini) == "Gemini CLI")
+    #expect(AgentDisplay.name(.copilot) == "GitHub Copilot")
     #expect(AgentDisplay.name(.unknown) == "Unknown")
   }
 

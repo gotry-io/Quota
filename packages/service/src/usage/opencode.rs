@@ -537,6 +537,7 @@ fn provider_billing_channel(value: Option<&str>) -> BillingChannel {
         Some("azure-openai") => BillingChannel::AzureOpenai,
         Some("amazon-bedrock") | Some("bedrock") => BillingChannel::AwsBedrock,
         Some("google-vertex") => BillingChannel::GoogleVertex,
+        Some("google") | Some("gemini") => BillingChannel::GoogleDirect,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
         // `kimi-for-coding` and `moonshotai` are registered provider ids that

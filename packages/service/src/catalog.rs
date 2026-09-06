@@ -21,6 +21,10 @@ pub enum ProviderId {
     LiteLlm,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "gemini")]
+    Gemini,
+    #[serde(rename = "copilot")]
+    Copilot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +251,34 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_base_url: None,
         base_url_environment_key: None,
     },
+    ProviderCatalogEntry {
+        id: ProviderId::Gemini,
+        display_name: "Gemini CLI",
+        order: 8,
+        default_visible: false,
+        setup_action: "gemini",
+        brand_icon_asset: "gemini",
+        account_sync: true,
+        environment_keys: &["GOOGLE_CLOUD_PROJECT"],
+        credential_config: None,
+        browser_session: None,
+        default_base_url: None,
+        base_url_environment_key: None,
+    },
+    ProviderCatalogEntry {
+        id: ProviderId::Copilot,
+        display_name: "GitHub Copilot",
+        order: 9,
+        default_visible: false,
+        setup_action: "copilot login",
+        brand_icon_asset: "copilot",
+        account_sync: true,
+        environment_keys: &["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+        credential_config: None,
+        browser_session: None,
+        default_base_url: None,
+        base_url_environment_key: None,
+    },
 ];
 
 impl ProviderId {
@@ -260,6 +292,8 @@ impl ProviderId {
         Self::Kimi,
         Self::LiteLlm,
         Self::Cursor,
+        Self::Gemini,
+        Self::Copilot,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -272,6 +306,8 @@ impl ProviderId {
             Self::Kimi => "kimi",
             Self::LiteLlm => "litellm",
             Self::Cursor => "cursor",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
         }
     }
 
@@ -285,6 +321,8 @@ impl ProviderId {
             "kimi" => Some(Self::Kimi),
             "litellm" => Some(Self::LiteLlm),
             "cursor" => Some(Self::Cursor),
+            "gemini" => Some(Self::Gemini),
+            "copilot" => Some(Self::Copilot),
             _ => None,
         }
     }
@@ -299,6 +337,8 @@ impl ProviderId {
             Self::Kimi => &PROVIDER_CATALOG[5],
             Self::LiteLlm => &PROVIDER_CATALOG[6],
             Self::Cursor => &PROVIDER_CATALOG[7],
+            Self::Gemini => &PROVIDER_CATALOG[8],
+            Self::Copilot => &PROVIDER_CATALOG[9],
         }
     }
 

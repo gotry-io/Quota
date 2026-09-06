@@ -929,7 +929,8 @@ function isVendorDirectChannel(channel: BillingChannel): boolean {
     channel === "anthropic_direct" ||
     channel === "xai_direct" ||
     channel === "moonshot_direct" ||
-    channel === "deepseek_direct"
+    channel === "deepseek_direct" ||
+    channel === "google_direct"
   );
 }
 

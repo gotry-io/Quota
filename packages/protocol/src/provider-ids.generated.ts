@@ -13,6 +13,8 @@ export const PROVIDER_IDS = [
   "kimi",
   "litellm",
   "cursor",
+  "gemini",
+  "copilot",
 ] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const ProviderIdSchema = z.enum(PROVIDER_IDS);
@@ -27,6 +29,8 @@ export const LOCAL_PROVIDER_IDS = [
   "kimi",
   "litellm",
   "cursor",
+  "gemini",
+  "copilot",
 ] as const;
 export type LocalProviderId = (typeof LOCAL_PROVIDER_IDS)[number];
 export const LocalProviderIdSchema = z.enum(LOCAL_PROVIDER_IDS);
@@ -41,6 +45,8 @@ export const PROVIDER_DISPLAY_NAMES: Readonly<Record<LocalProviderId, string>> =
   kimi: "Kimi Code",
   litellm: "LiteLLM",
   cursor: "Cursor",
+  gemini: "Gemini CLI",
+  copilot: "GitHub Copilot",
 };
 
 /** A provider this build has never heard of gets a neutral name, never its wire id (ADR 0023). */
