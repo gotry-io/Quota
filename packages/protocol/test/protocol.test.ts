@@ -752,6 +752,7 @@ describe("quota protocol", () => {
             status: "partial",
           },
         ],
+        sessions: emptySessions(),
       }).success,
     ).toBe(true);
   });
@@ -771,6 +772,7 @@ describe("quota protocol", () => {
           status: "partial",
         },
       ],
+      sessions: emptySessions(),
     };
     const parsed = LocalUsageReportSchema.parse(report);
     expect(parsed.model_catalog_revision).toBe("model_2026_08_02");
@@ -792,6 +794,84 @@ describe("quota protocol", () => {
     ).toBe(false);
     expect(
       LocalUsageReportSchema.safeParse({ ...report, model_catalog_revision: undefined }).success,
+    ).toBe(false);
+  });
+
+  it("lists local sessions without a file identity or a path", () => {
+    const session = {
+      agent: "codex" as const,
+      project_key: "Quota",
+      started_at: "2026-08-02T11:00:00Z",
+      last_activity_at: "2026-08-02T12:28:00Z",
+      messages: 4,
+      tokens: 1300,
+      cost: {
+        ...emptyCost(),
+        basis: "reported" as const,
+        amount_microusd: "12",
+        reported_rows: 1,
+      },
+      top_model: "gpt-5",
+      is_active: true,
+    };
+    const report = {
+      generated_at: "2026-08-02T12:30:00Z",
+      aggregation_timezone: "UTC",
+      range: { from: "2026-08-02", to: "2026-08-02" },
+      status: "complete" as const,
+      model_catalog_revision: null,
+      coverage: [
+        {
+          agent: "codex" as const,
+          start_at: "2026-08-02T00:00:00Z",
+          end_at: "2026-08-03T00:00:00Z",
+          status: "complete" as const,
+        },
+      ],
+      sessions: { active: 1, today: 1, recent: [session] },
+    };
+    expect(LocalUsageReportSchema.parse(report).sessions.recent[0]?.project_key).toBe("Quota");
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { ...report.sessions, recent: [{ ...session, project_key: "src/app" }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: {
+          ...report.sessions,
+          recent: [{ ...session, source_file_id: "abc" }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        status: "unavailable",
+        aggregation_timezone: null,
+        coverage: [],
+        sessions: report.sessions,
+      }).success,
+    ).toBe(false);
+    const older = {
+      ...session,
+      started_at: "2026-08-01T11:00:00Z",
+      last_activity_at: "2026-08-01T12:28:00Z",
+      is_active: false,
+    };
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { active: 1, today: 2, recent: [older, session] },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { active: 1, today: 1, recent: Array.from({ length: 21 }, () => session) },
+      }).success,
     ).toBe(false);
   });
 
@@ -930,6 +1010,10 @@ function emptyCost() {
     assumptions: [],
     unpriced: [],
   };
+}
+
+function emptySessions() {
+  return { active: 0, today: 0, recent: [] };
 }
 
 function emptyPeriod() {

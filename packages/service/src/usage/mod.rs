@@ -21,13 +21,16 @@ pub use cursor::scan_cursor_usage;
 pub use grok::scan_grok_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
-pub use scan::{DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage};
+pub use scan::{
+    DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage,
+    session_project_key,
+};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -47,6 +50,12 @@ pub const USAGE_OTHER_MODEL: &str = "other";
 /// Local v3 report model-detail bound. Exact totals remain available when detail is truncated.
 pub const MAX_USAGE_MODELS: usize = 1_000;
 pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
+/// Local session rows older than this are dropped from `cache.sqlite`.
+pub const USAGE_SESSION_RETENTION_DAYS: i64 = 90;
+/// A session is active when its file was written inside this window.
+pub const USAGE_SESSION_ACTIVE_SECS: i64 = 5 * 60;
+/// Newest local sessions the Usage report lists.
+pub const MAX_USAGE_SESSIONS_RECENT: usize = 20;
 /// No agent this Account accepts existed before this instant, so an hour reaching back past it
 /// was computed from a missing lower bound rather than scanned.
 pub const EARLIEST_USAGE_INSTANT: &str = "2020-01-01T00:00:00Z";
@@ -365,6 +374,8 @@ pub struct UsageScanResult {
     /// Complete replacement units for changed/new files. Each unit's records
     /// cover the requested range and replace that source's persisted rows.
     pub sources: Vec<UsageSourceScan>,
+    /// Basename `project_key` for every discovered file this scan saw, including unchanged ones.
+    pub project_keys: HashMap<String, String>,
 }
 
 impl UsageScanResult {

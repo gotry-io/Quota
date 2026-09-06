@@ -499,6 +499,11 @@ The default page contains:
 - Models: grouped by the vendor whose model it is — the service resolves that from the model's name
   — independent of the collecting client and of who billed the request. Every model remains a
   static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
+- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
+  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
+  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
+  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
+  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset

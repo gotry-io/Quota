@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Duration, SecondsFormat, Timelike};
+use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
 use rusqlite::{
     Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension, Transaction, params,
 };
@@ -37,7 +37,8 @@ use crate::protocol::{
     StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
-    DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
+    DatedUsageRow, NormalizedUsageEvent, USAGE_SESSION_RETENTION_DAYS, UsageAgent, UsageFileIndex,
+    UsageRow, UsageScanResult, session_project_key,
 };
 
 mod legacy_import;
@@ -2307,6 +2308,62 @@ impl StateStore {
         })
     }
 
+    /// Local session rows, newest write first. The file-index hash stays here and never
+    /// crosses into a report or an upload.
+    pub fn usage_sessions(&self) -> Result<Vec<StoredUsageSession>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT source_file_id, agent, project_key, started_at, last_activity_at,
+                        messages, tokens_in, tokens_out, cost_micros, top_model
+                 FROM usage_sessions
+                 ORDER BY last_activity_at DESC, source_file_id ASC",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let agent: String = row.get(1)?;
+                let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        1,
+                        "agent".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok(StoredUsageSession {
+                    source_file_id: row.get(0)?,
+                    agent,
+                    project_key: row.get(2)?,
+                    started_at: row.get(3)?,
+                    last_activity_at: row.get(4)?,
+                    messages: row.get::<_, i64>(5)? as u64,
+                    tokens_in: row.get::<_, i64>(6)? as u64,
+                    tokens_out: row.get::<_, i64>(7)? as u64,
+                    cost_micros: row.get(8)?,
+                    top_model: row.get(9)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StateError::from)
+        })
+    }
+
+    pub fn usage_session_events(
+        &self,
+        source_file_id: &str,
+    ) -> Result<Vec<NormalizedUsageEvent>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT event_json FROM usage_file_records WHERE source_file_id = ?1
+                 ORDER BY occurred_at ASC, record_key ASC",
+            )?;
+            let rows =
+                statement.query_map(params![source_file_id], |row| row.get::<_, String>(0))?;
+            let mut events = Vec::new();
+            for row in rows {
+                events.push(serde_json::from_str::<NormalizedUsageEvent>(&row?)?);
+            }
+            Ok(events)
+        })
+    }
+
     /// Applies one agent's scan and recomputes only the hours it changed.
     ///
     /// A source is replaced whole, or appended to when the bytes already parsed are still
@@ -2321,8 +2378,14 @@ impl StateStore {
         self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let mut changed = 0usize;
+            let mut session_changed = 0usize;
             let mut dirty_hours: BTreeSet<String> = BTreeSet::new();
             for source in &scan.sources {
+                let project_key = scan
+                    .project_keys
+                    .get(&source.source.source_file_id)
+                    .cloned()
+                    .unwrap_or_else(|| session_project_key(&source.source.path));
                 if source.coverage.status != crate::usage::CoverageStatus::Complete {
                     // Preserve the last successful rows and merge newly valid records. This keeps
                     // data useful without allowing an incomplete scan to delete facts. The old file
@@ -2356,6 +2419,15 @@ impl StateStore {
                     remember_partial_progress(&tx, agent, source)?;
                     dirty_hours.extend(hours);
                     changed += 1;
+                    if fold_usage_session(
+                        &tx,
+                        agent,
+                        &source.source.source_file_id,
+                        &project_key,
+                        source.source.modified_ns,
+                    )? {
+                        session_changed += 1;
+                    }
                     continue;
                 }
                 // A complete rescan also restores replace semantics for every hour that was
@@ -2409,6 +2481,15 @@ impl StateStore {
                         source.index.prefix_hash,
                     ],
                 )?;
+                if fold_usage_session(
+                    &tx,
+                    agent,
+                    &source.source.source_file_id,
+                    &project_key,
+                    source.source.modified_ns,
+                )? {
+                    session_changed += 1;
+                }
             }
             for source_file_id in &scan.deleted_source_file_ids {
                 dirty_hours.extend(record_hours(&tx, agent, source_file_id)?);
@@ -2424,7 +2505,38 @@ impl StateStore {
                     "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
                 )?;
+                session_changed += tx.execute(
+                    "DELETE FROM usage_sessions WHERE source_file_id = ?1",
+                    params![source_file_id],
+                )?;
             }
+            for source_file_id in &scan.unchanged_source_file_ids {
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM usage_sessions WHERE source_file_id = ?1",
+                    params![source_file_id],
+                    |row| row.get(0),
+                )?;
+                if exists > 0 {
+                    continue;
+                }
+                let Some(project_key) = scan.project_keys.get(source_file_id) else {
+                    continue;
+                };
+                let modified_ns: String = tx
+                    .query_row(
+                        "SELECT modified_ns FROM usage_file_index
+                         WHERE agent = ?1 AND source_file_id = ?2",
+                        params![agent.as_str(), source_file_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or_else(|| "0".to_owned());
+                let modified_ns = modified_ns.parse::<u128>().unwrap_or(0);
+                if fold_usage_session(&tx, agent, source_file_id, project_key, modified_ns)? {
+                    session_changed += 1;
+                }
+            }
+            session_changed += prune_usage_sessions(&tx)?;
             let mut recomputed = 0usize;
             for hour in &dirty_hours {
                 if recompute_hour(&tx, agent, hour, scan_version)? {
@@ -2436,7 +2548,7 @@ impl StateStore {
             if scan.coverage.status == crate::usage::CoverageStatus::Complete {
                 write_metadata_flag(&tx, REBUILDING_KEY, false)?;
             }
-            if changed == 0 && recomputed == 0 {
+            if changed == 0 && recomputed == 0 && session_changed == 0 {
                 let revision = metadata_u64(&tx, "revision")?;
                 tx.commit()?;
                 return Ok(revision);
@@ -2446,6 +2558,131 @@ impl StateStore {
             Ok(revision)
         })
     }
+}
+
+/// Rebuilds one session from the records that file currently holds.
+///
+/// An appended tail is already in `usage_file_records` by the time this runs, so the fold is
+/// the whole file rather than a running merge, and an empty file drops the row.
+fn fold_usage_session(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+    project_key: &str,
+    modified_ns: u128,
+) -> Result<bool, StateError> {
+    let totals: (Option<String>, Option<String>, i64, i64, i64, Option<i64>, i64, i64) = tx
+        .query_row(
+            "SELECT MIN(occurred_at), MAX(occurred_at),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.requests') AS INTEGER)), 0),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER)), 0),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER)), 0),
+                    SUM(CAST(json_extract(event_json, '$.source_cost_microusd') AS INTEGER)),
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN json_extract(event_json, '$.source_cost_microusd') IS NULL
+                                      THEN 0 ELSE 1 END), 0)
+             FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+            params![agent.as_str(), source_file_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )?;
+    let (
+        Some(started_at),
+        Some(last_event_at),
+        messages,
+        tokens_in,
+        tokens_out,
+        source_cost,
+        count,
+        costed,
+    ) = totals
+    else {
+        let removed = tx.execute(
+            "DELETE FROM usage_sessions WHERE source_file_id = ?1",
+            params![source_file_id],
+        )?;
+        return Ok(removed > 0);
+    };
+    let last_activity_at = match rfc3339_from_nanos(modified_ns) {
+        Some(mtime) if mtime.as_str() > last_event_at.as_str() => mtime,
+        _ => last_event_at,
+    };
+    let cost_micros = if count == costed { source_cost } else { None };
+    let top_model: Option<String> = tx
+        .query_row(
+            "SELECT json_extract(event_json, '$.model') AS model
+             FROM usage_file_records
+             WHERE agent = ?1 AND source_file_id = ?2
+             GROUP BY model
+             ORDER BY SUM(
+                 CAST(json_extract(event_json, '$.input_tokens') AS INTEGER) +
+                 CAST(json_extract(event_json, '$.output_tokens') AS INTEGER)
+             ) DESC, model ASC
+             LIMIT 1",
+            params![agent.as_str(), source_file_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten()
+        .filter(|value: &String| !value.is_empty());
+    let written = tx.execute(
+        "INSERT INTO usage_sessions(
+            source_file_id, agent, project_key, started_at, last_activity_at,
+            messages, tokens_in, tokens_out, cost_micros, top_model
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(source_file_id) DO UPDATE SET
+            agent = excluded.agent,
+            project_key = excluded.project_key,
+            started_at = excluded.started_at,
+            last_activity_at = excluded.last_activity_at,
+            messages = excluded.messages,
+            tokens_in = excluded.tokens_in,
+            tokens_out = excluded.tokens_out,
+            cost_micros = excluded.cost_micros,
+            top_model = excluded.top_model",
+        params![
+            source_file_id,
+            agent.as_str(),
+            project_key,
+            started_at,
+            last_activity_at,
+            messages,
+            tokens_in,
+            tokens_out,
+            cost_micros,
+            top_model,
+        ],
+    )?;
+    Ok(written > 0)
+}
+
+fn prune_usage_sessions(tx: &rusqlite::Transaction<'_>) -> Result<usize, StateError> {
+    let cutoff = (Utc::now() - Duration::days(USAGE_SESSION_RETENTION_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    Ok(tx.execute(
+        "DELETE FROM usage_sessions WHERE last_activity_at < ?1",
+        params![cutoff],
+    )?)
+}
+
+fn rfc3339_from_nanos(ns: u128) -> Option<String> {
+    if ns == 0 {
+        return None;
+    }
+    let secs = i64::try_from(ns / 1_000_000_000).ok()?;
+    let nsecs = u32::try_from(ns % 1_000_000_000).ok()?;
+    DateTime::<Utc>::from_timestamp(secs, nsecs)
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 /// Remembers how far a source this scan could not finish was read.
@@ -2535,6 +2772,21 @@ fn browser_sessions_equivalent(
     left_keys.sort_unstable();
     right_keys.sort_unstable();
     left_keys == right_keys
+}
+
+/// One local session file, folded from the records that file already indexed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredUsageSession {
+    pub source_file_id: String,
+    pub agent: UsageAgent,
+    pub project_key: String,
+    pub started_at: String,
+    pub last_activity_at: String,
+    pub messages: u64,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cost_micros: Option<i64>,
+    pub top_model: Option<String>,
 }
 
 /// One staged upload: an hour, the version of the scan behind it, and its rows.
@@ -5040,6 +5292,90 @@ mod tests {
             3,
             "{rows:?}"
         );
+        let sessions = store.usage_sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].messages, 2);
+        assert_eq!(sessions[0].tokens_in, 3);
+        assert_eq!(sessions[0].project_key, "usage");
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_scan_folds_sessions_from_files_and_drops_them_after_ninety_days() {
+        let root = std::env::temp_dir().join(format!("quota-usage-sessions-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let started_at = crate::usage::canonical_instant(
+            &(Utc::now() - Duration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        )
+        .expect("started");
+        let continued_at = crate::usage::canonical_instant(
+            &(Utc::now() - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        )
+        .expect("continued");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event(&started_at, 4)], 1),
+                1,
+            )
+            .expect("initial scan");
+        let sessions = store.usage_sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent, UsageAgent::Codex);
+        assert_eq!(sessions[0].tokens_in, 4);
+        assert_eq!(sessions[0].tokens_out, 1);
+        assert_eq!(sessions[0].messages, 1);
+        assert_eq!(sessions[0].top_model.as_deref(), Some("gpt-5"));
+        assert_eq!(sessions[0].started_at, started_at);
+        assert!(sessions[0].source_file_id == "source-1");
+
+        let mut appended = usage_scan(vec![usage_event(&continued_at, 6)], 2);
+        appended.sources[0].append = true;
+        appended.sources[0].record_keys = vec!["line:64:0".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &appended, 2)
+            .expect("append scan");
+        let sessions = store.usage_sessions().expect("appended");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].messages, 2);
+        assert_eq!(sessions[0].tokens_in, 10);
+        assert_eq!(sessions[0].started_at, started_at);
+        assert_eq!(sessions[0].last_activity_at, continued_at);
+
+        {
+            let conn = store.cache.lock().expect("cache");
+            conn.execute(
+                "INSERT INTO usage_sessions(
+                    source_file_id, agent, project_key, started_at, last_activity_at,
+                    messages, tokens_in, tokens_out, cost_micros, top_model
+                 ) VALUES (
+                    'old-file', 'codex', 'stale', '2020-01-01T00:00:00.000Z',
+                    '2020-01-02T00:00:00.000Z', 1, 1, 1, NULL, 'gpt-5'
+                 )",
+                [],
+            )
+            .expect("old session");
+        }
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 4)], 3),
+                3,
+            )
+            .expect("prune scan");
+        let sessions = store.usage_sessions().expect("pruned");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source_file_id, "source-1");
+
+        let mut deleted = usage_scan(Vec::new(), 4);
+        deleted.sources.clear();
+        deleted.deleted_source_file_ids = vec!["source-1".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &deleted, 4)
+            .expect("delete scan");
+        assert!(store.usage_sessions().expect("gone").is_empty());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -5731,6 +6067,10 @@ mod tests {
             modified_ns,
             identity: "identity-1".into(),
         };
+        let project_keys = HashMap::from([(
+            source.source_file_id.clone(),
+            crate::usage::session_project_key(&source.path),
+        )]);
         UsageScanResult {
             records: Vec::new(),
             coverage: ScanCoverage {
@@ -5768,6 +6108,7 @@ mod tests {
                     reasons: Vec::new(),
                 },
             }],
+            project_keys,
         }
     }
 }

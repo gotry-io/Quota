@@ -60,6 +60,13 @@ const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
 const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 const MAXIMUM_PRICING_ENTRIES = 4_096;
+/** Recent local sessions the Usage report may list, newest write first. */
+export const MAXIMUM_USAGE_SESSIONS_RECENT = 20;
+/**
+ * A session's project label is a basename, never a path. Claude's encoded project folder and a
+ * generic log's parent directory are the longest values this field is meant to hold.
+ */
+const SESSION_PROJECT_KEY_PATTERN = /^[^\\/\p{Cc}]{1,128}$/u;
 
 /**
  * Whether a schema refused this value for overrunning a bound the contract states.
@@ -1002,6 +1009,62 @@ export const UsageActivityRangeSchema = UsageDateRangeSchema.superRefine((range,
 const LocalUsageReportStatusSchema = UsageCostStatusSchema;
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;
 
+const SessionProjectKeySchema = z.string().regex(SESSION_PROJECT_KEY_PATTERN);
+
+/**
+ * One local session file, as the Usage page lists it. The file-index hash that keys the row
+ * stays in `cache.sqlite` and never appears here.
+ */
+export const LocalUsageSessionSchema = z
+  .object({
+    agent: BillingAgentSchema,
+    project_key: SessionProjectKeySchema,
+    started_at: Rfc3339InstantSchema,
+    last_activity_at: Rfc3339InstantSchema,
+    messages: SafeNonnegativeIntegerSchema,
+    tokens: SafeNonnegativeIntegerSchema,
+    cost: UsageCostOutcomeSchema,
+    top_model: ModelSchema.nullable(),
+    is_active: z.boolean(),
+  })
+  .strict()
+  .superRefine((session, context) => {
+    if (Date.parse(session.last_activity_at) < Date.parse(session.started_at)) {
+      context.addIssue({
+        code: "custom",
+        path: ["last_activity_at"],
+        message: "last_activity_at must not precede started_at.",
+      });
+    }
+  });
+export type LocalUsageSession = z.infer<typeof LocalUsageSessionSchema>;
+
+export const LocalUsageSessionsSchema = z
+  .object({
+    active: SafeNonnegativeIntegerSchema,
+    today: SafeNonnegativeIntegerSchema,
+    recent: z.array(LocalUsageSessionSchema).max(MAXIMUM_USAGE_SESSIONS_RECENT),
+  })
+  .strict()
+  .superRefine((sessions, context) => {
+    for (let index = 1; index < sessions.recent.length; index += 1) {
+      const previous = sessions.recent[index - 1];
+      const current = sessions.recent[index];
+      if (
+        previous !== undefined &&
+        current !== undefined &&
+        Date.parse(current.last_activity_at) > Date.parse(previous.last_activity_at)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["recent", index, "last_activity_at"],
+          message: "recent sessions must be ordered by last_activity_at descending.",
+        });
+      }
+    }
+  });
+export type LocalUsageSessions = z.infer<typeof LocalUsageSessionsSchema>;
+
 export const LocalUsageReportSchema = z
   .object({
     generated_at: Rfc3339InstantSchema,
@@ -1010,6 +1073,7 @@ export const LocalUsageReportSchema = z
     status: LocalUsageReportStatusSchema,
     model_catalog_revision: OpaqueIdSchema.nullable(),
     coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    sessions: LocalUsageSessionsSchema,
   })
   .strict()
   .superRefine((report, context) => {
@@ -1029,6 +1093,18 @@ export const LocalUsageReportSchema = z
         code: "custom",
         path: ["coverage"],
         message: "Unavailable local Usage cannot contain coverage.",
+      });
+    }
+    if (
+      unavailable &&
+      (report.sessions.active !== 0 ||
+        report.sessions.today !== 0 ||
+        report.sessions.recent.length > 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sessions"],
+        message: "Unavailable local Usage cannot contain sessions.",
       });
     }
     if (!unavailable) {

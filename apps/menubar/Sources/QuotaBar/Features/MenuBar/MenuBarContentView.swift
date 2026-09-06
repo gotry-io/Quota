@@ -245,7 +245,7 @@ struct MenuBarContentView: View {
     case .devices:
       AccountDevicesView(model: model)
     case .usage:
-      AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
+      AccountUsageView(model: model, source: $usageSource, period: $usagePeriod, now: now)
     case .notifications:
       NotificationsSettingsView(model: model)
     case .menuBarStyle:

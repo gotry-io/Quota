@@ -1,6 +1,7 @@
 use super::scan::{
     UsageParser, discover_usage_files_at, file_index, finish_scan, is_cancelled,
-    matching_file_info, parse_range, push_reason, roots_for, scan_jsonl_files, source_coverage,
+    matching_file_info, parse_range, push_reason, remember_project_key, roots_for,
+    scan_jsonl_files, source_coverage,
 };
 use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
@@ -11,7 +12,7 @@ use super::{
 };
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MAXIMUM_CURSOR_ROWS: usize = 2_000_000;
@@ -142,6 +143,7 @@ fn scan_databases(
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut rows_seen = 0usize;
     let mut stopped = false;
     for file in discovery_files {
@@ -152,6 +154,7 @@ fn scan_databases(
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -270,6 +273,7 @@ fn scan_databases(
             unchanged_source_file_ids,
             deleted_source_file_ids: Vec::new(),
             sources,
+            project_keys,
         },
     ))
 }
@@ -1001,6 +1005,8 @@ fn merge_scans(
     unchanged_source_file_ids.extend(databases.unchanged_source_file_ids);
     let mut sources = jsonl.sources;
     sources.extend(databases.sources);
+    let mut project_keys = jsonl.project_keys;
+    project_keys.extend(databases.project_keys);
     finish_scan(
         UsageAgent::Cursor,
         options,
@@ -1019,6 +1025,7 @@ fn merge_scans(
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     )
 }

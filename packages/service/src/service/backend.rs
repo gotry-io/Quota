@@ -38,10 +38,12 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageOutboxEntry, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, StoredUsageSession,
+    UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
-    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, UsageAgent, UsageScanOptions,
+    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, MAX_USAGE_SESSIONS_RECENT,
+    USAGE_SESSION_ACTIVE_SECS, UsageAgent, UsageScanOptions,
 };
 
 /// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
@@ -1878,8 +1880,110 @@ impl NativeBackend {
             "range": {"from": from, "to": to},
             "status": status,
             "model_catalog_revision": model_catalog.map(|value| value.revision.clone()),
-            "coverage": coverage
+            "coverage": coverage,
+            "sessions": self.usage_sessions_report(&usage.timezone, generated_at, catalog)?
         }))
+    }
+
+    fn usage_sessions_report(
+        &self,
+        timezone: &str,
+        generated_at: DateTime<Utc>,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<Value, BackendError> {
+        let sessions = self
+            .state
+            .usage_sessions()
+            .map_err(|_| BackendError::unavailable())?;
+        let active_after = generated_at - Duration::seconds(USAGE_SESSION_ACTIVE_SECS);
+        let today_start = usage_period_window(UsagePeriod::Today, timezone, generated_at)?
+            .1
+            .and_then(|span| usage::parse_instant(&span.start));
+        let mut active = 0u64;
+        let mut today = 0u64;
+        for session in &sessions {
+            let Some(last_activity) = usage::parse_instant(&session.last_activity_at) else {
+                continue;
+            };
+            if last_activity >= active_after {
+                active = active.saturating_add(1);
+            }
+            if today_start.is_some_and(|start| last_activity >= start) {
+                today = today.saturating_add(1);
+            }
+        }
+        let mut recent = Vec::new();
+        for session in sessions.into_iter().take(MAX_USAGE_SESSIONS_RECENT) {
+            recent.push(self.usage_session_json(session, generated_at, catalog)?);
+        }
+        Ok(json!({
+            "active": active,
+            "today": today,
+            "recent": recent
+        }))
+    }
+
+    fn usage_session_json(
+        &self,
+        session: StoredUsageSession,
+        generated_at: DateTime<Utc>,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<Value, BackendError> {
+        let last_activity = usage::parse_instant(&session.last_activity_at).ok_or_else(|| {
+            BackendError::new(IpcError::new(
+                ErrorCode::InvalidState,
+                RecoveryAction::Retry,
+            ))
+        })?;
+        let tokens = session
+            .tokens_in
+            .checked_add(session.tokens_out)
+            .filter(|value| *value <= usage::MAX_SAFE_COUNT)
+            .ok_or_else(|| BackendError::unavailable())?;
+        let cost = self.session_cost(&session, catalog)?;
+        Ok(json!({
+            "agent": session.agent,
+            "project_key": session.project_key,
+            "started_at": session.started_at,
+            "last_activity_at": session.last_activity_at,
+            "messages": session.messages,
+            "tokens": tokens,
+            "cost": cost,
+            "top_model": session.top_model,
+            "is_active": last_activity >= generated_at - Duration::seconds(USAGE_SESSION_ACTIVE_SECS)
+        }))
+    }
+
+    fn session_cost(
+        &self,
+        session: &StoredUsageSession,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<pricing::UsageCostOutcome, BackendError> {
+        let events = self
+            .state
+            .usage_session_events(&session.source_file_id)
+            .map_err(|_| BackendError::unavailable())?;
+        if !events.is_empty() {
+            let mut dated = Vec::with_capacity(events.len());
+            for event in &events {
+                let Some(date) = event.occurred_at.get(..10) else {
+                    continue;
+                };
+                dated.push(DatedUsageRow {
+                    date: date.to_owned(),
+                    row: usage_row_from_event(event),
+                });
+            }
+            if let Ok(outcome) =
+                pricing::calculate_usage_cost(&dated, catalog, pricing::UsageCostMode::Auto)
+            {
+                return Ok(outcome);
+            }
+        }
+        Ok(session_cost_from_stored(
+            session.cost_micros,
+            session.top_model.as_deref(),
+        ))
     }
 
     /// One period, folded from the hours this device has stored.
@@ -3874,6 +3978,70 @@ fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
         },
         "reason_counts": reason_counts,
     })
+}
+
+fn usage_row_from_event(event: &usage::NormalizedUsageEvent) -> usage::UsageRow {
+    usage::UsageRow {
+        agent: event.agent,
+        billing_channel: event.billing_channel,
+        channel_source: event.channel_source,
+        model: event.model.clone(),
+        context_bucket: event.context_bucket,
+        service_tier: event.service_tier.clone(),
+        speed: event.speed.clone(),
+        inference_geo: event.inference_geo.clone(),
+        input_tokens: event.input_tokens,
+        cache_read_tokens: event.cache_read_tokens,
+        cache_write_5m_tokens: event.cache_write_5m_tokens,
+        cache_write_1h_tokens: event.cache_write_1h_tokens,
+        cache_write_inferred_tokens: event.cache_write_inferred_tokens,
+        output_tokens: event.output_tokens,
+        reasoning_tokens: event.reasoning_tokens,
+        requests: event.requests,
+        web_search_requests: event.billable_tools.web_search,
+        web_fetch_requests: event.billable_tools.web_fetch,
+        source_cost_microusd: event.source_cost_microusd.clone(),
+        source_cost_covered_requests: event.source_cost_covered_requests,
+    }
+}
+
+fn session_cost_from_stored(
+    cost_micros: Option<i64>,
+    top_model: Option<&str>,
+) -> pricing::UsageCostOutcome {
+    match cost_micros {
+        Some(amount) => pricing::UsageCostOutcome {
+            mode: pricing::UsageCostMode::Auto,
+            basis: pricing::UsageCostBasis::Reported,
+            status: pricing::UsageCostStatus::Complete,
+            amount_microusd: Some(amount.to_string()),
+            catalog_revision: None,
+            calculated_rows: 0,
+            reported_rows: 1,
+            unpriced_rows: 0,
+            assumptions: vec![pricing::UsageCostAssumption::SourceReported],
+            unpriced: Vec::new(),
+            unpriced_truncated: false,
+        },
+        None => pricing::UsageCostOutcome {
+            mode: pricing::UsageCostMode::Auto,
+            basis: pricing::UsageCostBasis::None,
+            status: pricing::UsageCostStatus::Unavailable,
+            amount_microusd: None,
+            catalog_revision: None,
+            calculated_rows: 0,
+            reported_rows: 0,
+            unpriced_rows: 1,
+            assumptions: Vec::new(),
+            unpriced: vec![pricing::UsageUnpricedItem {
+                billing_channel: usage::BillingChannel::Unknown,
+                model: top_model.unwrap_or(usage::USAGE_OTHER_MODEL).to_owned(),
+                reason: pricing::UsageUnpricedReason::IncompleteSourceCost,
+                rows: 1,
+            }],
+            unpriced_truncated: false,
+        },
+    }
 }
 
 /// The instant before which this device uploads nothing.
@@ -8295,6 +8463,10 @@ mod tests {
         );
         assert!(report.get("usage").is_none());
         assert!(report.get("today").is_none());
+        assert_eq!(
+            report["sessions"],
+            json!({"active": 0, "today": 0, "recent": []})
+        );
         assert!(
             report
                 .get("coverage")
@@ -8335,6 +8507,56 @@ mod tests {
         );
         assert!(cached.usage_periods.local.last_30_days.is_some());
         assert!(cached.usage_periods.local.all.is_some());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn local_sessions_stay_on_this_mac_and_out_of_uploads() {
+        let root = std::env::temp_dir().join(format!("quota-sessions-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let sessions = home.join(".codex").join("sessions");
+        fs::create_dir_all(&sessions).expect("sessions");
+        fs::write(
+            sessions.join("rollout-quota.jsonl"),
+            include_str!("../../fixtures/usage/codex.jsonl"),
+        )
+        .expect("fixture");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        let collection = backend
+            .collect_usage(Arc::new(AtomicBool::new(false)))
+            .expect("scan");
+        let report = backend
+            .usage_report(&collection, None, None)
+            .expect("report");
+        let recent = report["sessions"]["recent"].as_array().expect("recent");
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0]["agent"], json!("codex"));
+        assert_eq!(recent[0]["project_key"], json!("rollout-quota"));
+        assert!(recent[0].get("source_file_id").is_none());
+        assert_eq!(report["sessions"]["active"], json!(1));
+        assert_eq!(report["sessions"]["today"], json!(1));
+        assert_eq!(recent[0]["is_active"], json!(true));
+        assert!(
+            serde_json::to_string(&report)
+                .expect("report json")
+                .contains("\"sessions\"")
+        );
+
+        let dirty = state
+            .dirty_usage_hour_batch("1970-01-01T00:00:00Z", "2100-01-01T00:00:00Z", 256)
+            .expect("dirty");
+        assert!(!dirty.is_empty());
+        let upload = usage_upload(UsageAgent::Codex, 1, &dirty).expect("upload");
+        let serialized = serde_json::to_string(&upload).expect("upload json");
+        assert!(!serialized.contains("sessions"));
+        assert!(!serialized.contains("project_key"));
+        assert!(!serialized.contains("source_file_id"));
+        assert!(!serialized.contains("rollout-quota"));
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
         fs::remove_dir_all(root).expect("cleanup");
     }
 
