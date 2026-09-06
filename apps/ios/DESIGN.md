@@ -702,7 +702,10 @@ provider and support, and no custom card chrome beyond the system widget contain
   - contrast on an element that cannot be hit while a sheet's Done button is up: the presentation
     dims what is behind it, and that dimming is the system's;
   - contrast on `usage.activity.selected-day`: the date label shares its row container with the
-    selected heatmap cell, whose accent ring the auditor reads as the label's background
+    selected heatmap cell, whose accent ring the auditor reads as the label's background;
+  - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which
+    iOS 26.3 passes and the 26.5 simulator reports as failing for the second row only — an
+    exception to remove once that report reproduces
     (inset by 40 pt horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit
     over the last visible rows, so the contrast auditor samples the glass, not the row, and the
     clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never
