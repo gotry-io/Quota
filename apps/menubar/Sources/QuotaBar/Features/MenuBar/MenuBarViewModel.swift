@@ -18,17 +18,20 @@ struct ProviderQuotaPresentation: Equatable, Identifiable {
   let provider: ProviderID
   let accounts: [AccountQuotaPresentation]
   let status: ProviderStatusCopy?
+  let serviceStatus: LocalServiceProviderStatus?
 
   var id: ProviderID { provider }
 
   init(
     provider: ProviderID,
     accounts: [AccountQuotaPresentation],
-    status: ProviderStatusCopy? = nil
+    status: ProviderStatusCopy? = nil,
+    serviceStatus: LocalServiceProviderStatus? = nil
   ) {
     self.provider = provider
     self.accounts = accounts
     self.status = status
+    self.serviceStatus = serviceStatus
   }
 }
 
@@ -95,6 +98,7 @@ enum AccountDisconnectReason: Equatable {
     let authStatus: LocalServiceAuthStatus
     let overview: [LocalServiceOverviewItem]
     var cache: LocalServiceCacheState = .settled
+    var providerStatus: [LocalServiceProviderStatus] = []
   }
 #endif
 
@@ -121,6 +125,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var accountDisconnectReason: AccountDisconnectReason?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
+  private(set) var providerStatus: [ProviderID: LocalServiceProviderStatus] = [:]
   private(set) var providerBrowserSessions: [ProviderID: [LocalServiceProviderBrowserSession]] = [:]
   private(set) var browserScanEnabled: Set<ProviderID> = []
   private(set) var browserSessionPopup: ProviderBrowserSessionPopup?
@@ -389,6 +394,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       authStatus = visualTestState.authStatus
       overview = visualTestState.overview
       cache = visualTestState.cache
+      providerStatus = Dictionary(
+        uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
+      )
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals
@@ -1114,7 +1122,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
 
   /// One line under a provider's name in the Agents list.
   func agentStatusLine(for provider: ProviderID) -> String {
-    SignInRungPresentation.statusLine(
+    if let serviceStatus = providerStatus[provider] {
+      return serviceStatus.settingsLine
+    }
+    return SignInRungPresentation.statusLine(
       rungs: signInRungs(for: provider),
       accountCount: overviewItems(for: provider).count,
       reportedByDevices: accountReportingProviders().contains(provider)
@@ -1163,7 +1174,12 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         accounts.isEmpty || showsThisMacsReading(for: provider)
         ? result.flatMap(ProviderStatusCopy.from) : nil
       guard !accounts.isEmpty || status != nil else { return nil }
-      return ProviderQuotaPresentation(provider: provider, accounts: accounts, status: status)
+      return ProviderQuotaPresentation(
+        provider: provider,
+        accounts: accounts,
+        status: status,
+        serviceStatus: providerStatus[provider]
+      )
     }
 
     guard !providers.isEmpty else {
@@ -1237,6 +1253,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }
+    )
+    providerStatus = Dictionary(
+      uniqueKeysWithValues: state.providerStatus.map { ($0.provider, $0) }
     )
     providerBrowserSessions = Dictionary(grouping: state.providerBrowserSessions, by: \.provider)
     browserScanEnabled = Set(state.browserScanEnabled)

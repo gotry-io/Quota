@@ -572,6 +572,14 @@ impl StateStore {
                 usage_periods.account = Default::default();
             }
             let pricing = read_component(conn, ComponentName::Pricing)?;
+            let providers_component = read_component(conn, ComponentName::Providers)?;
+            let provider_status = crate::provider_status::views_in_catalog_order(
+                &crate::provider_status::readings_from_component(
+                    providers_component
+                        .as_ref()
+                        .and_then(|record| record.value.as_ref()),
+                ),
+            );
             let providers = match read_provider_views(&self.root) {
                 Ok(providers) => providers,
                 Err(_) if tolerate_invalid_provider_config => Vec::new(),
@@ -595,6 +603,7 @@ impl StateStore {
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                     .to_wire(),
                 providers,
+                provider_status,
                 provider_browser_sessions,
                 browser_scan_enabled,
                 overview,
@@ -4580,6 +4589,39 @@ mod tests {
             2
         );
         assert_eq!(store.pricing_etag().expect("cleared etag"), None);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn provider_status_is_a_field_of_the_providers_component() {
+        let root = std::env::temp_dir().join(format!("quota-provider-status-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let mut readings = std::collections::BTreeMap::new();
+        readings.insert(
+            "codex".to_owned(),
+            crate::provider_status::ProviderStatusReading {
+                provider: "codex".to_owned(),
+                indicator: "minor".to_owned(),
+                description: "Partial System Outage".to_owned(),
+                checked_at: "2026-09-06T00:00:00Z".to_owned(),
+            },
+        );
+        store
+            .set_component(
+                ComponentName::Providers,
+                ComponentStatus::Ready,
+                Some(crate::provider_status::component_value(&readings)),
+                Some("2026-09-06T00:00:00Z".to_owned()),
+                None,
+                false,
+            )
+            .expect("write");
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.provider_status.len(), 1);
+        assert_eq!(snapshot.provider_status[0].provider, "codex");
+        assert_eq!(snapshot.provider_status[0].indicator, "minor");
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

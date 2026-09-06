@@ -1,5 +1,7 @@
 import Foundation
 import QuotaAccount
+import QuotaPresentation
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWire
 
@@ -115,6 +117,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+        model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .cachedError:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.summary(at: now)
@@ -128,6 +131,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         )
         model.expiredMessage = nil
         model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+        model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .empty:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(
@@ -217,6 +221,17 @@ enum VisualFixture: String, CaseIterable, Sendable {
           lastSeenAt: date.addingTimeInterval(-300),
           lastObservedAt: date.addingTimeInterval(-360)
         ),
+      ]
+    }
+
+    static func incidentStatus(at date: Date) -> [ProviderID: ProviderStatusReading] {
+      [
+        .claude: ProviderStatusReading(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: date
+        )
       ]
     }
 

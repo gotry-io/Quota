@@ -1,5 +1,7 @@
 import Foundation
 import QuotaAccount
+import QuotaPresentation
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -74,6 +76,29 @@ struct AppModelTests {
     #expect(model.banner == nil)
     #expect(scheduler.scheduleCount == 0)
     #expect(scheduler.cancelCount == 1)
+  }
+
+  @Test
+  func refreshStoresLastGoodProviderStatusFromThisDevice() async {
+    let client = ScriptedProviderStatusClient(
+      readings: [
+        ProviderStatusReading(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: Date(timeIntervalSince1970: 0)
+        )
+      ]
+    )
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      providerStatusClient: client
+    )
+    #expect(await model.refresh() == false)
+    #expect(model.providerStatus[.claude]?.indicator == .minor)
+    #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
   }
 
   @Test
@@ -839,6 +864,7 @@ func makeModel(
   alertCoordinator: AlertCoordinator? = nil,
   alertRulesStore: IOSAlertRulesStore? = nil,
   notificationCenter: (any NotificationCentering)? = nil,
+  providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
   now: @escaping @Sendable () -> Date = { Date() }
 ) -> AppModel {
   AppModel(
@@ -856,8 +882,17 @@ func makeModel(
     alertCoordinator: alertCoordinator,
     alertRulesStore: alertRulesStore,
     notificationCenter: notificationCenter,
+    providerStatusClient: providerStatusClient,
     now: now
   )
+}
+
+private struct ScriptedProviderStatusClient: ProviderStatusServing {
+  let readings: [ProviderStatusReading]
+
+  func refresh() async -> [ProviderStatusReading] {
+    readings
+  }
 }
 
 private func decodeSummary() throws -> AccountSummary {

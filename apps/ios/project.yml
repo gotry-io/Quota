@@ -55,6 +55,8 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaProviderStatus
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared
@@ -120,6 +122,8 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaProviderStatus
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared

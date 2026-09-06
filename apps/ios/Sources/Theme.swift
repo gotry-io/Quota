@@ -12,6 +12,8 @@ enum QuotaTheme {
   static let meterTrack = Color(uiColor: .tertiarySystemFill)
 
   static let minimumTouchTarget: CGFloat = 44
+  /// Official status-page incident mark beside a provider name.
+  static let statusDotSize: CGFloat = 8
   static let activityCellSize: CGFloat = 14
   static let activityCellGap: CGFloat = 4
   static let activityCellCorner: CGFloat = 3

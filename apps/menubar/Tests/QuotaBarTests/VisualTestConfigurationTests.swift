@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import QuotaPresentation
   import QuotaWire
   import Testing
 
@@ -108,6 +109,11 @@
     }
     #expect(warning == nil)
     #expect(providers.map(\.provider) == [.codex, .claude, .grok])
+    let claude = try #require(providers.first { $0.provider == .claude })
+    #expect(claude.serviceStatus?.indicator == .minor)
+    #expect(claude.serviceStatus?.description == "Partial System Outage")
+    #expect(model.agentStatusLine(for: .claude) == "Degraded · Partial System Outage")
+    #expect(providers.first { $0.provider == .codex }?.serviceStatus == nil)
     // Every fixture row is an account device's reading, and the row's spoken label — the only
     // place the source and its age survive — names that device.
     #expect(

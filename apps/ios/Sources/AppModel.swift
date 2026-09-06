@@ -3,6 +3,7 @@ import Observation
 import QuotaAccount
 import QuotaAlerts
 import QuotaPresentation
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
@@ -43,6 +44,7 @@ final class AppModel {
   private let iosAlertSink: IOSAlertSink?
   private let resetScheduler: IOSResetReminderScheduler
   private let activity: any ActivityLoading
+  private let providerStatusClient: any ProviderStatusServing
   private let now: @Sendable () -> Date
 
   var phase: Phase = .launching
@@ -62,6 +64,8 @@ final class AppModel {
   var activityChart: ActivityChartPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
+  /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
+  var providerStatus: [ProviderID: ProviderStatusReading] = [:]
   private var sessionActivation: AccountSessionActivation?
 
   #if DEBUG
@@ -83,6 +87,7 @@ final class AppModel {
       try AuthorizationRequest.make()
     },
     activity: (any ActivityLoading)? = nil,
+    providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.account = account
@@ -108,6 +113,7 @@ final class AppModel {
       )
     }
     self.activity = activity ?? AccountClientActivityLoading(client: account)
+    self.providerStatusClient = providerStatusClient
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -122,7 +128,8 @@ final class AppModel {
       selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
       alertStateStore: FileIOSAlertStateStore.applicationSupport(),
-      notificationCenter: IOSNotificationCenter()
+      notificationCenter: IOSNotificationCenter(),
+      providerStatusClient: ProviderStatusClient()
     )
   }
 
@@ -294,10 +301,22 @@ final class AppModel {
     defer { isRefreshing = false }
     let result = await account.fetchTodaySummary()
     await apply(result)
+    #if DEBUG
+      if !skipsRestore {
+        await refreshProviderStatus()
+      }
+    #else
+      await refreshProviderStatus()
+    #endif
     if phase == .signedIn {
       backgroundRefresh.scheduleNextRefresh()
     }
     return result.error == nil
+  }
+
+  func refreshProviderStatus() async {
+    let readings = await providerStatusClient.refresh()
+    providerStatus = Dictionary(uniqueKeysWithValues: readings.map { ($0.provider, $0) })
   }
 
   func logout() async {

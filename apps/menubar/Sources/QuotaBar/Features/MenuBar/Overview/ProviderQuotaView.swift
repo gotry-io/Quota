@@ -45,11 +45,16 @@ struct ProviderQuotaView: View {
   }
 
   private var headerAccessibilityLabel: String {
-    if let title = presentation.status?.title {
-      "\(presentation.provider.displayName). \(title)"
-    } else {
-      presentation.provider.displayName
+    var parts = [presentation.provider.displayName]
+    if let serviceStatus = presentation.serviceStatus,
+      ProviderServiceStatusCopy.showsDot(serviceStatus.indicator)
+    {
+      parts.append(serviceStatus.description)
     }
+    if let title = presentation.status?.title {
+      parts.append(title)
+    }
+    return parts.joined(separator: ". ")
   }
 
   private var providerHeader: some View {
@@ -58,6 +63,18 @@ struct ProviderQuotaView: View {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
           .quotaRowTitleStyle()
+        if let serviceStatus = presentation.serviceStatus,
+          ProviderServiceStatusCopy.showsDot(serviceStatus.indicator)
+        {
+          Circle()
+            .fill(statusDotColor(serviceStatus.indicator))
+            .frame(
+              width: QuotaDesign.Layout.statusDotSize,
+              height: QuotaDesign.Layout.statusDotSize
+            )
+            .help(serviceStatus.description)
+            .accessibilityHidden(true)
+        }
       }
       .layoutPriority(1)
 
@@ -74,6 +91,17 @@ struct ProviderQuotaView: View {
       Image(systemName: "chevron.right")
         .quotaChevronStyle()
         .accessibilityHidden(true)
+    }
+  }
+
+  private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
+    switch indicator {
+    case .none:
+      QuotaPalette.mute
+    case .minor:
+      QuotaPalette.warning
+    case .major, .critical:
+      QuotaPalette.critical
     }
   }
 }

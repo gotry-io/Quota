@@ -56,7 +56,8 @@ struct OverviewView: View {
               ProviderQuotaRow(
                 provider: card.provider,
                 snapshot: subscription.snapshot,
-                accountIndex: index
+                accountIndex: index,
+                serviceStatus: model.providerStatus[card.provider]
               )
               .foregroundStyle(.primary)
             }

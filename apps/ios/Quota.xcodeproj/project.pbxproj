@@ -26,7 +26,7 @@
 		36AA8F7A68FF6D773AB89793 /* OverviewWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */; };
 		395D96006A2A6BEEB3ED8811 /* UsageBreakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A3EE34F501C1D08632929D1 /* UsageBreakdown.swift */; };
 		3B3F69BA9D98CCF7A1E2D0CF /* SettingsModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */; };
-		3CA35579C61CEBEA2255B6EE /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = FFC79886986AE5BCDBF34729 /* QuotaPresentation */; };
+		3CA35579C61CEBEA2255B6EE /* QuotaProviderStatus in Frameworks */ = {isa = PBXBuildFile; productRef = 5757332985E7556DB12D798B /* QuotaProviderStatus */; };
 		3E8AB3B8286BBEE5235C6720 /* OverviewWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461882F5E872B7B48B7D4BF3 /* OverviewWidgetViews.swift */; };
 		3F8F9830CD84E331EAFC6FFC /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC5478A05E6828597AB9A50C /* Theme.swift */; };
 		4085D302B3F7FA83C78B6A69 /* OverviewWidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAC8211347AE27EFAF2A4DB /* OverviewWidgetContent.swift */; };
@@ -46,14 +46,16 @@
 		5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4CAD6B32A3936603EB853755 /* QuotaAccount */; };
 		5B2E98397B6D7F825BDB3411 /* QuotaWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B4F64D1FE4D0DD3024D71E /* QuotaWidgetsBundle.swift */; };
 		5D8D1FD4F1902E5A3AA78E66 /* ConfirmAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4619ABF780106F60AE66AE35 /* ConfirmAccountView.swift */; };
+		5F6DF95B79D85A6A6E5374F9 /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = C682F581162B4E54B44C4621 /* QuotaAlerts */; };
 		5F8702B6B81077F94BCD8015 /* SettingsAboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */; };
 		6741F9EB068AECB4CBDAA5C7 /* SubscriptionDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */; };
 		6E9C3E458700AEF0C9CD5A5E /* OverviewWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA569843A5C8221A5E1B37F7 /* OverviewWidget.swift */; };
-		732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = C682F581162B4E54B44C4621 /* QuotaAlerts */; };
+		732B5669062B8C5321270D17 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 338CCAA9EF4ECD7B12AA34A0 /* QuotaPresentation */; };
 		746859C4C56A99A3638CEC9F /* AgentDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2964ADF1879CBCD748A9548 /* AgentDisplayTests.swift */; };
 		7687EF5CA5D021AC879F0682 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = 976CEEA856A994CCBB8A13B8 /* QuotaWire */; };
 		79DD65CDD8EB6687DBFB7A9C /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 51B52720A491D64C8430801D /* QuotaPresentation */; };
 		7B8AA7F5381EBA3D6FCC14B3 /* UsageActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA9C52BB5B706B67AAA8EFD9 /* UsageActivityView.swift */; };
+		7D1997D8CC6178916BE9ECCB /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = B36D882D039B580371F63BA6 /* QuotaAlerts */; };
 		805C1F694D13482561E56977 /* QuotaAccount in Frameworks */ = {isa = PBXBuildFile; productRef = 4D72255DAE0A4ACC101AA4E0 /* QuotaAccount */; };
 		82054C4CA07354E6E4F2CC16 /* AppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3CB5A3738E2091BBC468F4 /* AppModelTests.swift */; };
 		8A416ECAF51DB9D6FD49C114 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F9141D8E147B24CE24D48194 /* AppIntents.framework */; };
@@ -86,7 +88,7 @@
 		D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC67366D6301AC5644D841EB /* OverviewView.swift */; };
 		DAF943A875E436921237F021 /* SubscriptionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */; };
 		DDE6A6D1075A876C9DF0DA11 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = A16F5F6EF52A9473C084077F /* QuotaWire */; };
-		DE1AA85409EB6850B541C363 /* QuotaAlerts in Frameworks */ = {isa = PBXBuildFile; productRef = B36D882D039B580371F63BA6 /* QuotaAlerts */; };
+		DE1AA85409EB6850B541C363 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = FFC79886986AE5BCDBF34729 /* QuotaPresentation */; };
 		E0B018B18AD1D272ED0ABF8B /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F9141D8E147B24CE24D48194 /* AppIntents.framework */; };
 		E0E82363C627689AE14A1F86 /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = B70030D1FC9A48DC801AAC2E /* QuotaWidgetData */; };
 		E52F43CEDF95967D3CFCDC7B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A7979458FAEA044AC1F3AE31 /* PrivacyInfo.xcprivacy */; };
@@ -95,7 +97,7 @@
 		E9CF2CCB8FC6AD1CF83A99EA /* UsageBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97CC275AFB0771C0C27763E /* UsageBreakdownTests.swift */; };
 		F7C0E34B3ACF4FAF4B9CDB31 /* AlertCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE24F23209102B4AEFA59594 /* AlertCoordinatorTests.swift */; };
 		F9EAD472C5490F4C9F6233CB /* QuotaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8243A68073C5E5DD8FA5BD70 /* QuotaUITests.swift */; };
-		FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 338CCAA9EF4ECD7B12AA34A0 /* QuotaPresentation */; };
+		FB4B6E45B0B674AE0EAE2533 /* QuotaProviderStatus in Frameworks */ = {isa = PBXBuildFile; productRef = 8255C524B368538F3D4559BB /* QuotaProviderStatus */; };
 		FB843AB27849EB3C728F1A6E /* DeviceRowContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD4891FD9DE7B855890535B /* DeviceRowContentTests.swift */; };
 		FF7C03EF8073FFB03B424CCD /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = 322D69438463EC6EC0DF823B /* QuotaWidgetData */; };
 /* End PBXBuildFile section */
@@ -228,8 +230,9 @@
 				BCE88EDDB6AFEF29FF1B47C5 /* QuotaRelay in Frameworks */,
 				805C1F694D13482561E56977 /* QuotaAccount in Frameworks */,
 				93ED7CA9E53DBA0831F68102 /* QuotaWidgetData in Frameworks */,
-				FB4B6E45B0B674AE0EAE2533 /* QuotaPresentation in Frameworks */,
-				732B5669062B8C5321270D17 /* QuotaAlerts in Frameworks */,
+				FB4B6E45B0B674AE0EAE2533 /* QuotaProviderStatus in Frameworks */,
+				732B5669062B8C5321270D17 /* QuotaPresentation in Frameworks */,
+				5F6DF95B79D85A6A6E5374F9 /* QuotaAlerts in Frameworks */,
 				20DF4041FFFB602E6630BF92 /* BackgroundTasks.framework in Frameworks */,
 				52A34F2FF649070AC6CC9325 /* UserNotifications.framework in Frameworks */,
 				4F43C059E55874822A81800F /* WidgetKit.framework in Frameworks */,
@@ -257,8 +260,9 @@
 				2B6BF7BCF5EB68FCB2B6D100 /* QuotaRelay in Frameworks */,
 				5A1C4496460301C1E8710151 /* QuotaAccount in Frameworks */,
 				E0E82363C627689AE14A1F86 /* QuotaWidgetData in Frameworks */,
-				3CA35579C61CEBEA2255B6EE /* QuotaPresentation in Frameworks */,
-				DE1AA85409EB6850B541C363 /* QuotaAlerts in Frameworks */,
+				3CA35579C61CEBEA2255B6EE /* QuotaProviderStatus in Frameworks */,
+				DE1AA85409EB6850B541C363 /* QuotaPresentation in Frameworks */,
+				7D1997D8CC6178916BE9ECCB /* QuotaAlerts in Frameworks */,
 				B5BD28504186F90204E99F21 /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -480,6 +484,7 @@
 				6E068EE6F8898C14325FB6C8 /* QuotaRelay */,
 				4D72255DAE0A4ACC101AA4E0 /* QuotaAccount */,
 				23A19765ECCA061436638820 /* QuotaWidgetData */,
+				8255C524B368538F3D4559BB /* QuotaProviderStatus */,
 				338CCAA9EF4ECD7B12AA34A0 /* QuotaPresentation */,
 				C682F581162B4E54B44C4621 /* QuotaAlerts */,
 			);
@@ -526,6 +531,7 @@
 				22D5DB49A51494FAAAFCD9E6 /* QuotaRelay */,
 				4CAD6B32A3936603EB853755 /* QuotaAccount */,
 				B70030D1FC9A48DC801AAC2E /* QuotaWidgetData */,
+				5757332985E7556DB12D798B /* QuotaProviderStatus */,
 				FFC79886986AE5BCDBF34729 /* QuotaPresentation */,
 				B36D882D039B580371F63BA6 /* QuotaAlerts */,
 			);
@@ -763,7 +769,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.1;
+				MARKETING_VERSION = 0.0.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -899,7 +905,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.1;
+				MARKETING_VERSION = 0.0.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1075,9 +1081,17 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = QuotaPresentation;
 		};
+		5757332985E7556DB12D798B /* QuotaProviderStatus */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = QuotaProviderStatus;
+		};
 		6E068EE6F8898C14325FB6C8 /* QuotaRelay */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = QuotaRelay;
+		};
+		8255C524B368538F3D4559BB /* QuotaProviderStatus */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = QuotaProviderStatus;
 		};
 		976CEEA856A994CCBB8A13B8 /* QuotaWire */ = {
 			isa = XCSwiftPackageProductDependency;

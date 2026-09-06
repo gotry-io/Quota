@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 enum LocalServiceComponentStatus: String, Decodable, Sendable {
@@ -180,6 +181,35 @@ extension LocalServiceAccountState {
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
     accountSummary = try container.decodeIfPresent(AccountSummary.self, forKey: .accountSummary)
+  }
+}
+
+struct LocalServiceProviderStatus: Decodable, Equatable, Sendable {
+  let provider: ProviderID
+  let indicator: ProviderServiceStatusIndicator
+  let description: String
+  let checkedAt: Date
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case indicator
+    case description
+    case checkedAt
+  }
+}
+
+extension LocalServiceProviderStatus {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["provider", "indicator", "description", "checkedAt"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    indicator = try container.decode(ProviderServiceStatusIndicator.self, forKey: .indicator)
+    description = try container.decode(String.self, forKey: .description)
+    checkedAt = try container.decode(Date.self, forKey: .checkedAt)
+  }
+
+  var settingsLine: String {
+    ProviderServiceStatusCopy.settingsLine(indicator: indicator, description: description)
   }
 }
 
@@ -481,6 +511,7 @@ struct LocalServiceState: Decodable, Sendable {
   let account: LocalServiceComponent<LocalServiceAccountState>
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
+  var providerStatus: [LocalServiceProviderStatus] = []
   let providerBrowserSessions: [LocalServiceProviderBrowserSession]
   let browserScanEnabled: [ProviderID]
   let overview: [LocalServiceOverviewItem]
@@ -497,6 +528,7 @@ struct LocalServiceState: Decodable, Sendable {
     case account
     case pricing
     case providers
+    case providerStatus
     case providerBrowserSessions
     case browserScanEnabled
     case overview
@@ -516,6 +548,8 @@ struct LocalServiceState: Decodable, Sendable {
         config.provider.isConfigurable
           && (!config.configured || config.maskedAPIKey?.isEmpty == false)
       }),
+      providerStatus.count <= ProviderID.allCases.count,
+      Set(providerStatus.map(\.provider)).count == providerStatus.count,
       providerBrowserSessions.count <= 256,
       providerBrowserSessions.allSatisfy(\.isValid),
       browserScanEnabled.count <= ProviderID.allCases.count,
@@ -558,7 +592,8 @@ extension LocalServiceState {
     try decoder.rejectUnknownWireKeys([
       "ipcVersion", "revision", "usageUploadEnabled", "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "providerBrowserSessions", "browserScanEnabled",
+      "account", "pricing", "providers", "providerStatus", "providerBrowserSessions",
+      "browserScanEnabled",
       "overview", "cache",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -573,6 +608,8 @@ extension LocalServiceState {
       LocalServiceComponent<LocalServiceAccountState>.self, forKey: .account)
     pricing = try container.decode(LocalServiceComponent<PricingCatalog>.self, forKey: .pricing)
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
+    providerStatus = try container.decode(
+      [LocalServiceProviderStatus].self, forKey: .providerStatus)
     providerBrowserSessions = try container.decode(
       [LocalServiceProviderBrowserSession].self, forKey: .providerBrowserSessions)
     browserScanEnabled = try container.decode([ProviderID].self, forKey: .browserScanEnabled)

@@ -43,6 +43,8 @@ enum QuotaDesign {
     static let settingsIconColumnWidth: CGFloat = 16
     static let usageProviderIconSize: CGFloat = 14
     static let progressHeight: CGFloat = 6
+    /// Official status-page incident mark beside a provider name.
+    static let statusDotSize: CGFloat = 6
     /// Primary filled pill (empty-state Retry, etc.).
     static let controlMinHeight: CGFloat = 36
     /// Compact single-line fields.

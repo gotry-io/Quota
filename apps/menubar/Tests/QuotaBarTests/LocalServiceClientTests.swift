@@ -54,8 +54,15 @@ struct LocalServiceClientTests {
         revision = 0
         for line in sys.stdin:
             request = json.loads(line)
-            revision += 1
             operation = request["operation"]
+            if operation == "ping":
+                print(json.dumps({
+                    "type": "response",
+                    "request_id": request["request_id"],
+                    "result": {"ok": True},
+                }), flush=True)
+                continue
+            revision += 1
             if operation == "get_state":
                 result = state(revision)
             elif operation == "refresh":
@@ -600,6 +607,7 @@ private struct TemporaryService {
               }),
               "pricing": component("unavailable"),
               "providers": [],
+              "provider_status": [],
               "provider_browser_sessions": [],
               "browser_scan_enabled": [],
               "overview": [],

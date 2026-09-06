@@ -6,6 +6,7 @@ pub mod model_catalog;
 pub mod observation;
 pub mod pricing;
 pub mod protocol;
+pub mod provider_status;
 pub mod providers;
 pub mod relay;
 pub mod service;
