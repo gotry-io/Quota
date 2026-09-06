@@ -31,6 +31,9 @@ struct VisualFixtureParserTests {
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),
       ("no-devices", VisualFixture.noDevices),
+      ("local-only", VisualFixture.localOnly),
+      ("merged", VisualFixture.merged),
+      ("providers", VisualFixture.providers),
       ("activity-loading", VisualFixture.activityLoading),
       ("activity-failed", VisualFixture.activityFailed),
       ("activity-day-empty", VisualFixture.activityDayEmpty),
@@ -46,7 +49,7 @@ struct VisualFixtureParserTests {
   @MainActor
   struct VisualFixtureStateTests {
     @Test
-    func signedOutSkipsRestoreAndShowsConnect() {
+    func signedOutSkipsRestoreAndHasNothingToShow() {
       let model = AppModel.visualFixture(.signedOut, now: VisualFixture.referenceDate)
       #expect(model.skipsRestore)
       #expect(model.phase == .signedOut)
@@ -54,6 +57,52 @@ struct VisualFixtureParserTests {
       #expect(model.banner == nil)
       #expect(model.expiredMessage == nil)
       #expect(model.activityChart == .idle)
+      // Signed out is not a wall: the tabs are up and the Overview offers both ways in.
+      #expect(model.subscriptions.isEmpty)
+      #expect(model.overviewSources.isEmpty)
+      #expect(model.hasAccountSession == false)
+    }
+
+    /// Overview with no Quota account: everything on screen was read by this iPhone.
+    @Test
+    func localOnlyShowsWhatThisPhoneReadWithoutAnAccount() throws {
+      let model = AppModel.visualFixture(.localOnly, now: VisualFixture.referenceDate)
+      #expect(model.phase == .signedOut)
+      #expect(model.summary == nil)
+      #expect(model.hasAccountSession == false)
+      #expect(model.overviewSources == OverviewSources(hasLocal: true, hasAccount: false))
+      #expect(model.accountLabel == "Quota")
+      #expect(model.providerCards.map(\.provider) == [.codex, .claude])
+      let codex = try #require(model.subscriptions.first { $0.snapshot.provider == .codex })
+      #expect(codex.sources.map(\.deviceID) == [ThisDevice.sourceID])
+      let readings = SubscriptionDetailContent.make(
+        subscription: codex,
+        deviceNames: model.readingDeviceNames,
+        now: VisualFixture.referenceDate
+      )
+      #expect(readings.sources.map(\.displayName) == ["This iPhone"])
+      #expect(readings.sources.map(\.isReporting) == [true])
+    }
+
+    /// The same account read by two Macs and by this phone resolves to one row, and this phone's
+    /// reading is the newest one, so it is the one shown.
+    @Test
+    func mergedPrefersThisPhonesNewerReadingAndKeepsEveryDevice() throws {
+      let model = AppModel.visualFixture(.merged, now: VisualFixture.referenceDate)
+      #expect(model.phase == .signedIn)
+      #expect(model.overviewSources == OverviewSources(hasLocal: true, hasAccount: true))
+      // One row, not two: the phone and the Macs read the same subscription.
+      #expect(model.subscriptions.filter { $0.snapshot.provider == .codex }.count == 1)
+      let codex = try #require(model.subscriptions.first { $0.snapshot.provider == .codex })
+      #expect(codex.key == "codex|visual_codex|global|")
+      #expect(codex.sources.count == 3)
+      let readings = SubscriptionDetailContent.make(
+        subscription: codex,
+        deviceNames: model.readingDeviceNames,
+        now: VisualFixture.referenceDate
+      )
+      #expect(readings.sources.map(\.displayName) == ["This iPhone", "Studio Mac", "Kitchen Mac"])
+      #expect(readings.sources.map(\.isReporting) == [true, false, false])
     }
 
     @Test
@@ -130,7 +179,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
       let readings = SubscriptionDetailContent.make(
         subscription: codex,
-        devices: model.summary?.devices ?? [],
+        deviceNames: model.readingDeviceNames,
         now: VisualFixture.referenceDate
       )
       #expect(readings.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])

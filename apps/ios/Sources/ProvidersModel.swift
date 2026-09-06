@@ -21,6 +21,7 @@ enum ProvidersCopy {
   static let connect = "Connect"
   static let addAccount = "Add Account"
   static let remove = "Remove"
+  static let signInAgain = "Sign in again"
   static let cancel = "Cancel"
   static let consentConfirm = "Continue"
   static let unreadable = "Couldn't read the sign-ins saved on this iPhone."
@@ -46,6 +47,10 @@ enum ProvidersCopy {
   static func checked(at date: Date, now: Date) -> String {
     "Checked \(FreshnessCopy.age(since: date, now: now))"
   }
+
+  /// The provider refused this cookie, so the row says the one thing that fixes it rather than
+  /// how long ago it last worked.
+  static let refused = "Sign in again to keep reading this account."
 
   static func removeTitle(provider: ProviderID) -> String {
     "Remove this \(provider.displayName) sign-in?"
@@ -119,6 +124,9 @@ final class ProvidersModel {
   /// The Keychain refused the read. An empty list would say the opposite of what happened.
   private(set) var isUnreadable = false
   private(set) var consented: Set<String>
+  /// Sessions the provider refused on the last local collection. Only a fresh sign-in fixes one,
+  /// so its row says so instead of aging out quietly.
+  private(set) var needsSignIn: Set<String> = []
 
   init(
     store: any ProviderSessionStoring = KeychainProviderSessionStore(),
@@ -148,6 +156,16 @@ final class ProvidersModel {
     }
   }
 
+  /// What the last local collection found refused. Sessions that answered are cleared, so a row
+  /// stops asking for a sign-in as soon as one works.
+  func markNeedsSignIn(_ keys: [String]) {
+    needsSignIn = Set(keys)
+  }
+
+  func needsSignIn(_ session: StoredProviderSession) -> Bool {
+    needsSignIn.contains(session.key)
+  }
+
   func needsConsent(for provider: ProviderID) -> Bool {
     !consented.contains(provider.rawValue)
   }
@@ -158,6 +176,7 @@ final class ProvidersModel {
   }
 
   func keep(_ session: StoredProviderSession) {
+    needsSignIn.remove(session.key)
     sessions.removeAll { $0.key == session.key }
     sessions.append(session)
     sessions.sort { ($0.key, $0.storedAt) < ($1.key, $1.storedAt) }
@@ -166,6 +185,7 @@ final class ProvidersModel {
   func remove(_ session: StoredProviderSession) {
     try? store.remove(
       provider: session.provider, accountFingerprint: session.accountFingerprint)
+    needsSignIn.remove(session.key)
     load()
   }
 

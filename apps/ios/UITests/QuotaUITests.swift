@@ -182,14 +182,18 @@ final class QuotaUITests: XCTestCase {
 
     openSettingsDestination(app, link: "settings.about", root: "settings.about.root")
     attachScreenshot(app, name: "settings-about")
+    // Longer than the 128 characters a string-identifier query accepts, so it is matched by
+    // predicate rather than trimmed to fit the test.
+    let productSentence =
+      "Quota shows remaining quota this iPhone reads from the providers you connect, and the "
+      + "quota and usage QuotaBar reports from your Macs."
     XCTAssertTrue(
-      app.staticTexts[
-        "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
-      ].exists,
+      app.staticTexts.matching(NSPredicate(format: "label == %@", productSentence))
+        .firstMatch.exists,
       "product sentence"
     )
     XCTAssertTrue(
-      app.staticTexts["This iPhone does not collect or upload local usage."].exists,
+      app.staticTexts["This iPhone does not upload anything it reads."].exists,
       "privacy sentence"
     )
     XCTAssertTrue(app.staticTexts["Version"].exists, "Version")
@@ -246,6 +250,15 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists,
       "Remove"
     )
+    // A session the provider refused says the one thing that fixes it.
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"].exists,
+      "Sign in again"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Sign in again to keep reading this account."].exists,
+      "refused copy"
+    )
     attachScreenshot(app, name: "settings-providers")
     try audit(app)
   }
@@ -258,7 +271,10 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
     XCTAssertTrue(
-      app.staticTexts["Set up QuotaBar on a Mac to start reporting."].exists,
+      app.staticTexts[
+        "Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this "
+          + "iPhone."
+      ].exists,
       "empty quota description"
     )
     XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
@@ -347,6 +363,9 @@ final class QuotaUITests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5), "Studio Mac")
     XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
+    // This phone reads for itself, so it is the last row — and it is not an Account Device.
+    XCTAssertTrue(
+      app.descendants(matching: .any)["devices.this-iphone"].exists, "This iPhone row")
     XCTAssertTrue(
       app.descendants(matching: .any)["Manage Devices on Web"].exists,
       "Manage Devices on Web"
@@ -356,25 +375,71 @@ final class QuotaUITests: XCTestCase {
     try audit(app)
   }
 
-  func testSignedOutFixtureShowsConnectWithGitHub() throws {
+  /// Signed out is not a wall: the tabs are up and the empty Overview offers both ways to get
+  /// quota onto this phone.
+  func testSignedOutFixtureShowsBothInvitations() throws {
     let app = launch(fixture: "signed-out")
     XCTAssertTrue(
-      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
-      "connect.root"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
-    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertFalse(app.descendants(matching: .any)["connect.root"].exists, "no Connect wall")
+    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(app.buttons["Connect a provider"].exists, "Connect a provider")
+    XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
+    assertTab(app, "Overview")
+    assertTab(app, "Settings")
+    attachScreenshot(app, name: "overview-signed-out")
+    try audit(app)
+  }
+
+  /// Overview with no Quota account: everything on it was read by this iPhone.
+  func testLocalOnlyFixtureShowsWhatThisPhoneRead() throws {
+    let app = launch(fixture: "local-only")
     XCTAssertTrue(
-      app.staticTexts["This iPhone only reads data reported by QuotaBar."].exists,
-      "footnote"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
-    XCTAssertFalse(app.buttons["Connect Account"].exists, "legacy Connect Account label")
-    XCTAssertFalse(
-      app.staticTexts[
-        "See remaining quota and Today Usage for the GitHub Account you use with QuotaBar on your Mac."
-      ].exists,
-      "value proposition is not on Connect"
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.subscription"].firstMatch.waitForExistence(
+        timeout: 5),
+      "a locally collected subscription"
     )
-    attachScreenshot(app, name: "connect-signed-out")
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "not the empty state")
+    // Today Usage is the Account's fold; without an account there is no such number.
+    XCTAssertFalse(app.staticTexts["Today"].exists, "no Today section without an account")
+    attachScreenshot(app, name: "overview-local-only")
+    try audit(app)
+
+    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      "subscription.detail"
+    )
+    XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
+    attachScreenshot(app, name: "subscription-detail-local")
+    try audit(app)
+  }
+
+  /// One subscription two Macs and this phone all read stays one row, with every source listed.
+  func testMergedFixtureShowsOneRowWithThisIPhone() throws {
+    let app = launch(fixture: "merged")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    attachScreenshot(app, name: "overview-merged")
+    try audit(app)
+
+    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      "subscription.detail"
+    )
+    XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
+    XCTAssertTrue(app.staticTexts["Studio Mac"].exists, "Studio Mac")
+    XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
+    attachScreenshot(app, name: "subscription-detail-merged")
     try audit(app)
   }
 
@@ -392,24 +457,32 @@ final class QuotaUITests: XCTestCase {
   func testConnectErrorFixtureShowsTheFailureLine() throws {
     let app = launch(fixture: "connect-error")
     XCTAssertTrue(
-      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
-      "connect.root"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
-    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.status"].waitForExistence(timeout: 5),
+      "overview.status"
+    )
     XCTAssertTrue(app.staticTexts["Couldn't connect. Try again."].exists, "connect error")
-    attachScreenshot(app, name: "connect-error")
+    XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
+    attachScreenshot(app, name: "overview-connect-error")
     try audit(app)
   }
 
   func testExpiredFixtureShowsTheReconnectLine() throws {
     let app = launch(fixture: "expired")
     XCTAssertTrue(
-      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
-      "connect.root"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
-    XCTAssertTrue(app.buttons["Connect with GitHub"].exists, "Connect with GitHub")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.status"].waitForExistence(timeout: 5),
+      "overview.status"
+    )
     XCTAssertTrue(app.staticTexts["Session expired. Connect again."].exists, "expired")
-    attachScreenshot(app, name: "connect-expired")
+    XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
+    attachScreenshot(app, name: "overview-expired")
     try audit(app)
   }
 
@@ -569,8 +642,8 @@ final class QuotaUITests: XCTestCase {
     }
 
     var app = launch(fixture: "signed-out")
-    waitRoot(app, "connect.root")
-    attachScreenshot(app, name: "connect-signed-out")
+    waitRoot(app, "overview.root")
+    attachScreenshot(app, name: "overview-signed-out")
 
     app = launch(fixture: "confirm-account")
     waitRoot(app, "confirm.root")
@@ -618,6 +691,31 @@ final class QuotaUITests: XCTestCase {
     settingsShot(
       link: "settings.appearance", root: "settings.appearance.root", name: "settings-appearance")
     settingsShot(link: "settings.about", root: "settings.about.root", name: "settings-about")
+  }
+
+  /// Devices are the Account's. A phone that only reads its own providers has none to list, and
+  /// says what would change that.
+  func testLocalOnlyFixtureAsksForSignInOnDevices() throws {
+    let app = launch(fixture: "local-only")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    app.tabBars.buttons["Devices"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
+      "devices.root"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Sign in to see your Macs"].waitForExistence(timeout: 5),
+      "Sign in to see your Macs"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["devices.this-iphone"].exists,
+      "no device list without an account"
+    )
+    attachScreenshot(app, name: "devices-signed-out")
+    try audit(app)
   }
 
   func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
@@ -838,6 +936,7 @@ final class QuotaUITests: XCTestCase {
     _ app: XCUIApplication,
     types: XCUIAccessibilityAuditType
   ) throws {
+    let screen = currentScreenName(app)
     try app.performAccessibilityAudit(for: types) { issue in
       let description = issue.compactDescription
       let element = issue.element.map { "\($0)" } ?? "no element"
@@ -877,6 +976,16 @@ final class QuotaUITests: XCTestCase {
         if haystack.contains("\"Done\" Button") {
           return true
         }
+        // A row this app merges into one accessibility element still keeps its `Text` views in
+        // the tree, and the auditor reports each of them instead of the row VoiceOver reads.
+        // Every one of those uses a scaling system font and is allowed to wrap, so partial
+        // Dynamic Type on them is the merge, not the layout. Clipping is a different issue type
+        // and is not skipped here.
+        if description.localizedCaseInsensitiveContains("partially unsupported"),
+          mergedRows.contains(where: { parentIdentifier(of: control).contains($0) })
+        {
+          return true
+        }
         // iOS 26 UIListContentConfiguration List/Form Button, Link, and
         // LabeledContent rows do not advertise full Dynamic Type. Contrast is
         // not skipped.
@@ -886,6 +995,7 @@ final class QuotaUITests: XCTestCase {
             "\"Reset Reminders\" StaticText",
             "settings.notifications.enable",
             "settings.notifications.reset-reminders",
+            "\"About\" StaticText",
             "\"License\" StaticText",
             "\"Version\" StaticText",
             "usage.activity.selected-day",
@@ -931,8 +1041,27 @@ final class QuotaUITests: XCTestCase {
         }
       }
 
-      XCTFail("\(description) — \(element)")
+      XCTFail("\(description) — \(element) on \(screen)")
       return true
     }
   }
+}
+
+/// The rows this app collapses into one accessibility element with `children: .ignore`.
+private let mergedRows = [
+  "devices.row",
+  "devices.this-iphone",
+  "subscription.source",
+  "subscription.reporting",
+]
+
+/// The identifier of the row an audit issue actually belongs to. An audit names the text inside a
+/// row, and only the row carries an identifier, so it comes from the path the auditor prints above
+/// the element.
+private func parentIdentifier(of element: XCUIElement) -> String {
+  let lines = element.debugDescription.split(separator: "\n")
+  guard let start = lines.firstIndex(where: { $0.hasPrefix("Path to element:") }) else { return "" }
+  let rest = lines[lines.index(after: start)...]
+  let path = rest.prefix { $0.first == " " || $0.first == "\u{2192}" }
+  return path.suffix(2).joined(separator: " ")
 }

@@ -25,12 +25,16 @@ struct RootView: View {
     switch model.phase {
     case .launching:
       loading
-    case .signedOut, .connecting, .pendingRefreshFailed:
+    // A sign-in in flight owns the screen, because it is a question waiting for an answer.
+    case .connecting, .pendingRefreshFailed:
       ConnectAccountView(model: model)
     case .confirmingAccount(let label):
       ConfirmAccountView(model: model, label: label)
-    case .signedIn:
-      if model.summary == nil && model.isRefreshing {
+    // Signing in to Quota is one of two ways to get quota onto this phone, so it is an invitation
+    // inside the app rather than a wall in front of it
+    // ([ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md)).
+    case .signedOut, .signedIn:
+      if model.summary == nil && model.subscriptions.isEmpty && model.isRefreshing {
         loading
       } else {
         signedInTabs
@@ -54,7 +58,7 @@ struct RootView: View {
               if let subscription = model.subscription(forKey: key) {
                 SubscriptionDetailView(
                   subscription: subscription,
-                  devices: model.summary?.devices ?? []
+                  deviceNames: model.readingDeviceNames
                 )
               }
             }

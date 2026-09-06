@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-03
 - Updated: 2026-08-29
+- Updated: 2026-09-06 — Quota iOS merges two ways as well, so the rule is written in Swift too
 
 ## Decision
 
@@ -10,9 +11,14 @@ QuotaRelay stores the latest quota observation for each `(device_id, provider, f
 does not globally deduplicate them in storage. **Since [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md)
 it resolves them once, on the read**: `GET /api/v6/account/summary` answers `subscriptions[]`, one
 row per subscription key, carrying the chosen reading and every source behind it. The rule below is
-what that resolution follows, and it lives in `packages/quota-model`. No client restates it. Only
-QuotaBar's Rust service still merges, and only two ways: the resolved row against its own local
-reading, because local collection is the only authority for the machine in front of you.
+what that resolution follows. It is written once per runtime that has to resolve quota —
+TypeScript in `packages/quota-model`, Rust in `packages/service`, and Swift in
+`packages/apple-shared`'s `QuotaObservations` — and `quota-observation-conformance.json` holds all
+three to the same answer. No client restates it in its own words. Two clients still merge, and
+only two ways: the resolved row against their own local reading, because local collection is the
+only authority for the machine in front of you. QuotaBar's Rust service is one; since
+[ADR 0034](0034-ios-collects-for-itself.md) Quota iOS is the other, comparing a resolved row
+against what it read from the providers on that phone.
 
 Every account carries an explicit `account.fingerprint_scope`:
 

@@ -18,6 +18,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case cachedError = "cached-error"
   case empty
   case noDevices = "no-devices"
+  case localOnly = "local-only"
+  case merged
   case providers
   case activityLoading = "activity-loading"
   case activityFailed = "activity-failed"
@@ -39,9 +41,25 @@ enum VisualFixture: String, CaseIterable, Sendable {
     /// Runtime `--visual-fixture` launches pass `Date()` instead so ages and resets stay current.
     static let referenceDate = Date(timeIntervalSince1970: 1_786_723_200)
 
+    /// Whether this fixture's phone holds a managed Account session, and how far along it is.
+    /// A fixture states this the way it states `phase`, because the surfaces that ask — Usage,
+    /// Devices, the Settings account group — read the session rather than the phase.
+    var accountActivation: AccountSessionActivation? {
+      switch self {
+      case .signedOut, .connecting, .connectError, .expired, .loading, .localOnly:
+        nil
+      case .confirmAccount, .connectRefreshFailed:
+        .pending
+      case .content, .cachedError, .empty, .noDevices, .merged, .providers, .activityLoading,
+        .activityFailed, .activityDayEmpty, .activityDayFailed:
+        .active
+      }
+    }
+
     @MainActor
     func apply(to model: AppModel, now: Date) {
       model.skipsRestore = true
+      model.sessionActivation = accountActivation
       switch self {
       case .signedOut:
         model.phase = .signedOut
@@ -51,6 +69,18 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+      case .localOnly:
+        model.phase = .signedOut
+        model.summary = nil
+        model.fetchedAt = nil
+        model.fromCache = false
+        model.isRefreshing = false
+        model.banner = nil
+        model.expiredMessage = nil
+        Self.applyLocal(VisualFixtureContent.localCollection(at: now), to: model)
+      case .merged:
+        applySignedInContent(to: model, now: now)
+        Self.applyLocal(VisualFixtureContent.mergedLocalCollection(at: now), to: model)
       case .connecting:
         model.phase = .connecting
         model.summary = nil
@@ -153,6 +183,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.activityChart = .loaded([])
       case .providers:
         applySignedInContent(to: model, now: now)
+        Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
         model.selectedTab = .settings
       case .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed:
         applySignedInContent(to: model, now: now)
@@ -186,6 +217,14 @@ enum VisualFixture: String, CaseIterable, Sendable {
           break
         }
       }
+    }
+
+    /// A fixture stands in for a collection pass that already happened, so it leaves the same two
+    /// marks: the readings, and the sessions the provider refused.
+    @MainActor
+    private static func applyLocal(_ collection: LocalCollection, to model: AppModel) {
+      model.localCollection = collection
+      model.providers.markNeedsSignIn(collection.needsSignIn)
     }
 
     @MainActor
@@ -664,6 +703,114 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    /// What this iPhone read for itself, with no account behind it: one provider account no Mac
+    /// reports, so Overview is entirely local.
+    static func localCollection(at date: Date) -> LocalCollection {
+      LocalCollection(
+        collectedAt: date.addingTimeInterval(-45),
+        snapshots: [
+          snapshot(
+            provider: .codex,
+            fingerprint: "visual_codex_phone",
+            label: "k•••e@example.com",
+            plan: "Plus",
+            windows: [
+              window(
+                id: "five_hour",
+                title: "5 Hours",
+                usedPercent: 58,
+                resetsAt: date.addingTimeInterval(5_400)
+              ),
+              window(
+                id: "weekly",
+                title: "Weekly",
+                usedPercent: 24,
+                resetsAt: date.addingTimeInterval(3 * 86_400)
+              ),
+            ],
+            observedAt: date.addingTimeInterval(-45)
+          ),
+          snapshot(
+            provider: .claude,
+            fingerprint: "visual_claude_phone",
+            label: "o•••t@example.com",
+            plan: "Pro",
+            windows: [
+              window(
+                id: "five_hour",
+                title: "5 Hours",
+                usedPercent: 12,
+                resetsAt: date.addingTimeInterval(9_000)
+              )
+            ],
+            observedAt: date.addingTimeInterval(-60)
+          ),
+        ]
+      )
+    }
+
+    /// The same account two Macs report, read again on this phone and more recently — so the
+    /// merged row is this iPhone's reading and subscription detail lists all three sources.
+    static func mergedLocalCollection(at date: Date) -> LocalCollection {
+      LocalCollection(
+        collectedAt: date.addingTimeInterval(-30),
+        snapshots: [
+          snapshot(
+            provider: .codex,
+            fingerprint: "visual_codex",
+            label: "pe***@example.com",
+            plan: "Plus",
+            windows: [
+              window(
+                id: "five_hour",
+                title: "5 Hours",
+                usedPercent: 36,
+                resetsAt: date.addingTimeInterval(2_700)
+              ),
+              window(
+                id: "weekly",
+                title: "Weekly",
+                usedPercent: 18,
+                resetsAt: date.addingTimeInterval(4 * 86_400)
+              ),
+            ],
+            observedAt: date.addingTimeInterval(-30)
+          )
+        ]
+      )
+    }
+
+    /// One stored session the provider refused, so the Providers group shows the row that only a
+    /// fresh sign-in fixes.
+    static func refusedCollection(at date: Date) -> LocalCollection {
+      LocalCollection(
+        collectedAt: date.addingTimeInterval(-45),
+        needsSignIn: ["\(ProviderID.codex.rawValue):codex_personal"]
+      )
+    }
+
+    private static func snapshot(
+      provider: ProviderID,
+      fingerprint: String,
+      label: String?,
+      plan: String?,
+      windows: [QuotaWindow],
+      observedAt: Date
+    ) -> QuotaSnapshot {
+      QuotaSnapshot(
+        provider: provider,
+        account: QuotaAccount(
+          fingerprint: fingerprint,
+          label: label,
+          plan: plan,
+          fingerprintScope: .global
+        ),
+        windows: windows,
+        status: .available,
+        observedAt: observedAt
+      )
+    }
+
     /// The Providers group in its three states at once: a provider with two accounts, one with
     /// a single account, and one with none.
     static func providerSessions(for fixture: VisualFixture, at now: Date) -> [
@@ -723,8 +870,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
         .activityDayFailed:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
-        .loading, .empty, .noDevices, .providers:
+        .loading, .empty, .noDevices, .localOnly, .providers:
         days = []
+      case .merged:
+        days = VisualFixtureContent.activityDays(ending: now)
       }
       let model = AppModel(
         account: AccountClient(
@@ -742,6 +891,12 @@ enum VisualFixture: String, CaseIterable, Sendable {
         ),
         providerSessions: MemoryProviderSessionStore(
           sessions: VisualFixtureContent.providerSessions(for: fixture, at: now)),
+        localStore: MemoryLocalCollectionStore(),
+        localCollector: LocalCollector(
+          sessions: MemoryProviderSessionStore(),
+          collectors: { _, _ in nil },
+          now: { now }
+        ),
         now: { now }
       )
       fixture.apply(to: model, now: now)

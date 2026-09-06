@@ -1,4 +1,5 @@
 import Foundation
+import QuotaObservations
 import QuotaPresentation
 
 public enum QuotaStatus: String, Codable, Sendable, TolerantWireEnum {
@@ -209,6 +210,15 @@ extension QuotaSnapshot: QuotaObservationFreshness {
       }
     )
   }
+}
+
+/// The three parts of the subscription this reading describes. Naming them is all the shared
+/// merge needs from a snapshot, so `QuotaObservations` states the rule once and neither Apple
+/// product restates it ([ADR 0003](../../../../docs/decisions/0003-observation-preserving-subscription-merge.md)).
+extension QuotaSnapshot: QuotaObservationSnapshot {
+  public var subscriptionProvider: String { provider.rawValue }
+  public var subscriptionFingerprint: String { account.fingerprint }
+  public var subscriptionScope: String { account.fingerprintScope.rawValue }
 }
 
 extension QuotaStatus {

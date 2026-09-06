@@ -20,14 +20,10 @@ struct SubscriptionDetailContent: Equatable {
 
   static func make(
     subscription: QuotaSubscription,
-    devices: [AccountDevice],
+    deviceNames: [String: String],
     now: Date = Date()
   ) -> SubscriptionDetailContent {
     let snapshot = subscription.snapshot
-    var deviceNames: [String: String] = [:]
-    for device in devices {
-      deviceNames[device.id] = device.displayName
-    }
     let sources = subscription.sources
       .enumerated()
       .sorted { lhs, rhs in
@@ -106,12 +102,14 @@ struct SubscriptionDetailContent: Equatable {
 
 struct SubscriptionDetailView: View {
   let subscription: QuotaSubscription
-  let devices: [AccountDevice]
+  /// What to call each source: the Account's Macs, and **This iPhone** for what this device read
+  /// itself. A source with no name is a **Device**.
+  let deviceNames: [String: String]
 
   var body: some View {
     let content = SubscriptionDetailContent.make(
       subscription: subscription,
-      devices: devices
+      deviceNames: deviceNames
     )
     List {
       identitySection(content)
@@ -188,11 +186,12 @@ struct SubscriptionDetailView: View {
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
         if let remaining = row.remaining {
+          // No line cap and no shrink: a reading scaled down stops following the reader's text
+          // size, which is what the accessibility audit refuses.
           Text(remaining)
             .font(.body.monospacedDigit().weight(.medium))
             .foregroundStyle(.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            .fixedSize(horizontal: false, vertical: true)
         }
         Text(row.freshness)
           .font(.footnote.monospacedDigit())

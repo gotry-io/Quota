@@ -4,18 +4,39 @@ import QuotaWidgetData
 import QuotaWire
 
 enum WidgetSnapshotProjection {
-  static func make(summary: AccountSummary, fetchedAt: Date, salt: Data) -> WidgetSnapshot {
-    let items = projectItems(from: summary.subscriptions, salt: salt)
-    let today = WidgetTodayUsage(
-      inputTokens: summary.usage.today.totals.inputTokens,
-      outputTokens: summary.usage.today.totals.outputTokens,
-      cost: mapCost(summary.usage.today.cost)
+  /// The widget draws the merged readings, without distinguishing which device took them: a
+  /// subscription this iPhone read for itself ranks beside one a Mac reported.
+  ///
+  /// Today Usage is the Account's, so a phone with no account has none — the widget then shows
+  /// no usage rather than a zero it did not measure.
+  static func make(
+    subscriptions: [QuotaSubscription],
+    today: UsagePeriod?,
+    fetchedAt: Date,
+    salt: Data
+  ) -> WidgetSnapshot {
+    let items = projectItems(from: subscriptions, salt: salt)
+    let usage = today.map {
+      WidgetTodayUsage(
+        inputTokens: $0.totals.inputTokens,
+        outputTokens: $0.totals.outputTokens,
+        cost: mapCost($0.cost)
+      )
+    }
+    return WidgetSnapshot(
+      fetchedAt: fetchedAt,
+      items: items,
+      today: usage
+        ?? WidgetTodayUsage(
+          inputTokens: 0,
+          outputTokens: 0,
+          cost: WidgetCost(status: .unavailable, amountMicrousd: nil)
+        )
     )
-    return WidgetSnapshot(fetchedAt: fetchedAt, items: items, today: today)
   }
 
-  /// Relay resolves an account's readings into one row per subscription, so the widget ranks
-  /// those rows rather than one card per reporting device.
+  /// Every subscription reaches the widget as one row with its readings already resolved, so the
+  /// widget ranks those rows rather than one card per reporting device.
   static func projectItems(from subscriptions: [QuotaSubscription], salt: Data) -> [WidgetQuotaItem]
   {
     let candidates = subscriptions.flatMap { subscription in

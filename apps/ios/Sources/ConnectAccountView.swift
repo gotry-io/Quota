@@ -123,7 +123,7 @@ struct ConnectAccountView: View {
   }
 
   private var footnote: some View {
-    Text("This iPhone only reads data reported by QuotaBar.")
+    Text("Signing in shows what QuotaBar reports from your Macs, alongside what this iPhone reads.")
       .font(.footnote)
       .foregroundStyle(.primary)
       .multilineTextAlignment(.center)

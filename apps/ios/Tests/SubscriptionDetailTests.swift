@@ -46,7 +46,7 @@ struct SubscriptionDetailContentTests {
   func sourcesSortNewestFirstAndMarkTheSelectedSourceReporting() {
     let content = SubscriptionDetailContent.make(
       subscription: subscription(sources: kitchenThenStudio()),
-      devices: devices(),
+      deviceNames: deviceNames(),
       now: now
     )
     #expect(content.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
@@ -59,15 +59,7 @@ struct SubscriptionDetailContentTests {
   func missingDeviceNameIsDevice() {
     let content = SubscriptionDetailContent.make(
       subscription: subscription(sources: kitchenThenStudio()),
-      devices: [
-        AccountDevice(
-          id: studioID,
-          displayName: "Studio Mac",
-          platform: .macos,
-          lastSeenAt: now,
-          lastObservedAt: now
-        )
-      ],
+      deviceNames: [studioID: "Studio Mac"],
       now: now
     )
     #expect(content.sources.map(\.displayName) == ["Studio Mac", "Device"])
@@ -77,7 +69,7 @@ struct SubscriptionDetailContentTests {
   func displayedStringsOmitDeviceIdFingerprintAndKey() {
     let content = SubscriptionDetailContent.make(
       subscription: subscription(sources: kitchenThenStudio()),
-      devices: devices(),
+      deviceNames: deviceNames(),
       now: now
     )
     let joined = content.displayedStrings.joined(separator: "\n")
@@ -102,7 +94,7 @@ struct SubscriptionDetailContentTests {
         snapshot: snapshot(usedPercent: 32, observedAt: now),
         sources: []
       ),
-      devices: devices(),
+      deviceNames: deviceNames(),
       now: now
     )
     #expect(content.sources.isEmpty)
@@ -127,7 +119,7 @@ struct SubscriptionDetailContentTests {
     let content = SubscriptionDetailContent.make(
       subscription: QuotaSubscription(
         key: key, provider: .codex, snapshot: empty, sources: []),
-      devices: devices(),
+      deviceNames: deviceNames(),
       now: now
     )
     #expect(content.windows.isEmpty)
@@ -146,7 +138,7 @@ struct SubscriptionDetailContentTests {
     let content = SubscriptionDetailContent.make(
       subscription: QuotaSubscription(
         key: key, provider: .codex, snapshot: studio, sources: sources),
-      devices: devices(),
+      deviceNames: deviceNames(),
       now: now
     )
     #expect(content.sources[0].remaining == "68%")
@@ -199,22 +191,7 @@ struct SubscriptionDetailContentTests {
     )
   }
 
-  private func devices() -> [AccountDevice] {
-    [
-      AccountDevice(
-        id: studioID,
-        displayName: "Studio Mac",
-        platform: .macos,
-        lastSeenAt: now,
-        lastObservedAt: now
-      ),
-      AccountDevice(
-        id: kitchenID,
-        displayName: "Kitchen Mac",
-        platform: .macos,
-        lastSeenAt: now.addingTimeInterval(-300),
-        lastObservedAt: now.addingTimeInterval(-360)
-      ),
-    ]
+  private func deviceNames() -> [String: String] {
+    [studioID: "Studio Mac", kitchenID: "Kitchen Mac"]
   }
 }
