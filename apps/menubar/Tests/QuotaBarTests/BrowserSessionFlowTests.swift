@@ -959,7 +959,7 @@ private func flowState(
     usage: empty(),
     account: LocalServiceComponent(
       status: .signedOut,
-      value: LocalServiceAccountState(authStatus: .signedOut, accountID: nil, displayLabel: nil, deviceID: nil, deviceGeneration: nil, accountSummary: nil),
+      value: LocalServiceAccountState(authStatus: .signedOut, accountID: nil, displayLabel: nil, deviceID: nil, deviceGeneration: nil, accountSummary: nil, entitlement: nil, purchaseURL: nil),
       updatedAt: nil, lastError: nil, refreshing: false),
     pricing: empty(),
     providers: [],

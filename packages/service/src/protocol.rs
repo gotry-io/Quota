@@ -81,6 +81,9 @@ pub enum ErrorCode {
     AuthenticationRequired,
     DeviceDeleted,
     StaleGeneration,
+    /// Relay refused a write because the Account has no paid sync entitlement. The session is
+    /// intact and the local data is not affected: what is missing is a subscription.
+    SubscriptionRequired,
     Unavailable,
     ProviderError,
     NetworkError,
@@ -478,6 +481,34 @@ pub struct AccountComponentValue {
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
     pub account_summary: Option<Value>,
+    /// The paid-sync entitlement as the Account read answered it, or `None` before this device
+    /// has read one. Relay decides what it says; this carries it.
+    pub entitlement: Option<EntitlementView>,
+    /// Where a person buys the subscription, as Relay stated it for this Account.
+    pub purchase_url: Option<String>,
+}
+
+/// The paid-sync entitlement, as the Account read states it.
+///
+/// `stale` means Relay could not refresh the row from RevenueCat and answered with what it
+/// still had; `checked_at` is when that row last changed, so a stale answer can say its age.
+/// `status` stays a string: an unknown member is a member this build has not learned yet
+/// ([ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntitlementView {
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub will_renew: bool,
+    pub stale: bool,
+    pub checked_at: Option<String>,
+}
+
+impl EntitlementView {
+    /// Whether this entitlement is one Relay lets write.
+    pub fn allows_sync(&self) -> bool {
+        self.status == "active" || self.status == "grace"
+    }
 }
 
 /// OAuth, Device control, Account metadata, and the catalogs.
@@ -733,6 +764,7 @@ pub enum DiagnosticAttemptCode {
     MalformedData,
     TruncatedActiveSource,
     DeviceDeleted,
+    SubscriptionRequired,
 }
 
 /// One completed or still-running piece of work, as the copied report lists it.

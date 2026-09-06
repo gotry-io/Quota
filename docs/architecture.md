@@ -221,8 +221,17 @@ receipts nor talks to Stripe. The Account id is the RevenueCat `app_user_id`. Re
 `sync` entitlement from the webhook and, when that row is older than 24 hours or an
 `active`/`grace` grant has expired, from `GET /v1/subscribers/{app_user_id}`. Writes of snapshots,
 Usage, the device profile, and device sync answer 402 `subscription_required` unless status is
-`active` or `grace`; Account and summary reads are not gated and carry the entitlement so a
-client can show the paywall. Expired rows are kept. See
+`active` or `grace`; Account and summary reads are not gated and both carry the entitlement —
+`status`, `expires_at`, `will_renew`, `stale`, and `checked_at`, the instant the stored row was
+last written — beside `purchase.web_url`, so a client can show the paywall and say how old a
+stale answer is. Expired rows are kept.
+
+QuotaBar carries what Relay states rather than deriving it: the account read hands the
+entitlement and the purchase link to the `account` IPC component, whose Account page shows a
+**Sync** row and a Subscribe or Manage button and disables Sync Usage while nothing is paid. A
+refused write is not a failed one — the session stands, the refresh writes nothing more, and
+the attempt journal keeps a `subscription_required` row that the diagnostic report reads as
+`Sync is off: no active subscription.` See
 [ADR 0033](decisions/0033-entitlement-is-read-from-revenuecat.md).
 
 The shared Rust service is the collection OAuth public client behind QuotaBar, and Authorization

@@ -187,6 +187,7 @@ describe("RevenueCat entitlements", () => {
         status: "active",
         product_id: "quota_sync_monthly",
         stale: false,
+        checked_at: now.toISOString(),
       },
       purchase: { web_url: `${webPurchaseUrl}/${accountId}` },
     });
@@ -201,21 +202,28 @@ describe("RevenueCat entitlements", () => {
         status: "active",
         product_id: "quota_sync_yearly",
         stale: false,
+        checked_at: later.toISOString(),
       },
     });
     expect(rest.calls).toHaveLength(1);
     expect(rest.calls[0]).toContain(`/v1/subscribers/${accountId}`);
   });
 
-  it("marks stale when REST fails and keeps the stored row", async () => {
+  it("marks stale when REST fails and dates the stored row it kept", async () => {
     await seedAccount();
-    await seedPaidEntitlement(new Date(now.getTime() - 25 * 60 * 60 * 1000));
+    const storedAt = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    await seedPaidEntitlement(storedAt);
     const rest = restMock(null, { status: 500 });
     const { app } = harness({ fetch: rest.fetch });
     const response = await app.request(`${origin}/api/v2/account`, { headers: { Cookie: "web" } });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      entitlement: { status: "active", product_id: "quota_sync_monthly", stale: true },
+      entitlement: {
+        status: "active",
+        product_id: "quota_sync_monthly",
+        stale: true,
+        checked_at: storedAt.toISOString(),
+      },
     });
   });
 
@@ -258,7 +266,7 @@ describe("RevenueCat entitlements", () => {
     const summary = await app.request(`${origin}/api/v6/account/summary`);
     expect(summary.status).toBe(200);
     expect(await summary.json()).toMatchObject({
-      entitlement: { status: "none", stale: false },
+      entitlement: { status: "none", stale: false, checked_at: null },
     });
     const account = await app.request(`${origin}/api/v2/account`);
     expect(account.status).toBe(200);

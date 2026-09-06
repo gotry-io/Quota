@@ -1087,7 +1087,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -1392,7 +1396,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -1717,7 +1725,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -2025,7 +2037,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -2330,7 +2346,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -2635,7 +2655,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -3142,7 +3166,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       },
@@ -3440,7 +3468,11 @@
             "will_renew": true,
             "product_id": "quota_sync_monthly",
             "store": "app_store",
-            "stale": false
+            "stale": false,
+            "checked_at": "2026-09-05T00:00:00Z"
+          },
+          "purchase": {
+            "web_url": "https://pay.rev.cat/testtoken/account_01"
           }
         }
       }
@@ -3687,7 +3719,8 @@
             "will_renew": false,
             "product_id": null,
             "store": null,
-            "stale": false
+            "stale": false,
+            "checked_at": null
           },
           "purchase": {
             "web_url": "https://pay.rev.cat/testtoken/account_1"
@@ -3717,7 +3750,8 @@
             "will_renew": false,
             "product_id": null,
             "store": null,
-            "stale": false
+            "stale": false,
+            "checked_at": null
           },
           "purchase": {
             "web_url": "https://pay.rev.cat/testtoken/account_1"
@@ -3748,7 +3782,8 @@
             "will_renew": false,
             "product_id": null,
             "store": null,
-            "stale": false
+            "stale": false,
+            "checked_at": null
           },
           "purchase": {
             "web_url": "https://pay.rev.cat/testtoken/account_1"
@@ -3780,7 +3815,8 @@
             "will_renew": false,
             "product_id": null,
             "store": null,
-            "stale": false
+            "stale": false,
+            "checked_at": null
           },
           "purchase": {
             "web_url": "https://pay.rev.cat/testtoken/account_1"
@@ -3805,7 +3841,8 @@
             "will_renew": false,
             "product_id": null,
             "store": null,
-            "stale": false
+            "stale": false,
+            "checked_at": null
           },
           "purchase": {
             "web_url": "https://pay.rev.cat/testtoken/account_1"

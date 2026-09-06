@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 2;
+const CURRENT_SCHEMA: i64 = 3;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -35,6 +35,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
         match version {
             1 => migration_v1(&tx, revision_floor)?,
             2 => migration_v2(&tx)?,
+            3 => migration_v3(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -260,6 +261,61 @@ fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// A write Relay refused for want of a subscription is evidence like any other refusal
+/// (ADR 0028, ADR 0033). SQLite cannot widen a CHECK, so the table is rebuilt; the cache is
+/// disposable.
+fn migration_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v2;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'quota_upload', 'account_sync', 'pricing_refresh'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source',
+                'device_deleted', 'subscription_required'
+            ))
+         );
+         INSERT INTO diagnostic_attempts(
+            id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+            duration_ms, outcome, code
+         )
+         SELECT id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+                duration_ms, outcome, code
+         FROM diagnostic_attempts_v2
+         ORDER BY id;
+         DROP TABLE diagnostic_attempts_v2;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +367,28 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("kinds");
         assert_eq!(kinds, ["usage_upload", "quota_upload"]);
+    }
+
+    #[test]
+    fn a_refusal_for_want_of_a_subscription_is_a_code_the_journal_can_hold() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn, 0).expect("schema");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome, code)
+             VALUES ('account_sync', 'scheduled', '2026-09-05T00:00:00Z', 'failed',
+                     'subscription_required')",
+            [],
+        )
+        .expect("refusal row");
+        assert_eq!(
+            conn.query_row(
+                "SELECT code FROM diagnostic_attempts ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .expect("code"),
+            "subscription_required"
+        );
     }
 
     #[test]

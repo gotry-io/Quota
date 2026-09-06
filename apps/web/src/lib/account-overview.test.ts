@@ -144,7 +144,9 @@ it("names latest quota freshness from subscriptions, not device heartbeats", () 
       product_id: null,
       store: null,
       stale: false,
+      checked_at: null,
     },
+    purchase: { web_url: "https://pay.rev.cat/test/a" },
   } as AccountSummaryRead;
 
   expect(accountStatusLine(summary)).toBe("Latest quota updated 8h ago · 2 devices reporting");

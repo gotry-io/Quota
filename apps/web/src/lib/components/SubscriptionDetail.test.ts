@@ -78,7 +78,9 @@ function makeSummary(
       product_id: null,
       store: null,
       stale: false,
+      checked_at: null,
     },
+    purchase: { web_url: "https://pay.rev.cat/test/a" },
     ...overrides,
   };
 }

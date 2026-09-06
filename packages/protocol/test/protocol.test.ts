@@ -334,6 +334,7 @@ describe("quota protocol", () => {
         will_renew: false,
         product_id: null,
         store: null,
+        checked_at: null,
         stale: false,
       },
       purchase: { web_url: "https://pay.rev.cat/token/account_01" },
@@ -734,12 +735,29 @@ describe("quota protocol", () => {
       account: summary.account,
       identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
       entitlement: summary.entitlement,
-      purchase: { web_url: "https://pay.rev.cat/token/account_01" },
+      purchase: summary.purchase,
     };
     expect(AccountResponseSchema.safeParse(account).success).toBe(true);
+    // A stale answer has to say how old it is, so the instant the row was written is part of
+    // the contract rather than something a reader may or may not find.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        entitlement: { ...summary.entitlement, checked_at: undefined },
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        entitlement: { ...summary.entitlement, stale: true, checked_at: null },
+      }).success,
+    ).toBe(true);
     expect(AccountResponseSchema.safeParse({ ...account, purchase: undefined }).success).toBe(
       false,
     );
+    // The summary answers the same pair, so a Mac that reads it needs no second request to
+    // say what sync costs.
+    expect(AccountSummarySchema.safeParse({ ...summary, purchase: undefined }).success).toBe(false);
   });
 
   it("validates subscriptions and Usage as one normalized read summary", () => {
@@ -1096,7 +1114,9 @@ function accountSummary() {
       product_id: "quota_sync_monthly",
       store: "app_store",
       stale: false,
+      checked_at: "2026-09-05T00:00:00Z",
     },
+    purchase: { web_url: "https://pay.rev.cat/token/account_01" },
   };
 }
 
