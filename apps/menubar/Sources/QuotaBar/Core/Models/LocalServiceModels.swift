@@ -61,6 +61,7 @@ enum UsageSource: String, Codable, CaseIterable, Identifiable, Sendable {
   var id: Self { self }
 }
 
+/// The four periods `get_state` carries, keyed the way the private IPC state keys them.
 enum UsagePeriod: String, Codable, CaseIterable, Identifiable, Sendable {
   case today
   case last7Days = "last_7_days"
@@ -68,6 +69,15 @@ enum UsagePeriod: String, Codable, CaseIterable, Identifiable, Sendable {
   case all
 
   var id: Self { self }
+
+  init(summaryKey: UsageSummaryPeriodKey) {
+    switch summaryKey {
+    case .today: self = .today
+    case .last7Days: self = .last7Days
+    case .last30Days: self = .last30Days
+    case .all: self = .all
+    }
+  }
 }
 
 enum LocalServiceErrorCode: String, Decodable, Sendable {
@@ -570,7 +580,7 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   /// The one private IPC version this app speaks. The two ship together, so a helper that
   /// announces anything else is not the one in this bundle.
-  static let supportedIPCVersion = 1
+  static let supportedIPCVersion = 2
 
   let ipcVersion: Int
   let revision: Int

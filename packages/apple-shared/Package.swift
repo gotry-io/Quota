@@ -29,7 +29,7 @@ let package = Package(
     ),
     .testTarget(
       name: "QuotaAlertsTests",
-      dependencies: ["QuotaAlerts"]
+      dependencies: ["QuotaAlerts", "QuotaPresentation"]
     ),
     .testTarget(
       name: "QuotaObservationsTests",

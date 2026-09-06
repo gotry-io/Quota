@@ -5,6 +5,8 @@ import SwiftUI
 struct UsageView: View {
   @Bindable var model: AppModel
   @State private var expandedProviderIDs: Set<String> = []
+  @State private var rangeEditor = false
+  @State private var budgetEditor = false
 
   var body: some View {
     List {
@@ -15,7 +17,11 @@ struct UsageView: View {
       } else {
         Section {
           periodPicker
+          periodStepper
         }
+
+        UsageBudgetSection(model: model, editing: $budgetEditor)
+
         signedInContent
       }
     }
@@ -27,18 +33,29 @@ struct UsageView: View {
     .sheet(item: $model.activityDaySheet) { _ in
       UsageDayDetailSheet(model: model)
     }
+    .sheet(isPresented: $rangeEditor) {
+      UsageRangeEditor(model: model)
+    }
+    .sheet(isPresented: $budgetEditor) {
+      UsageBudgetEditor(model: model)
+    }
     .accessibilityIdentifier("usage.root")
     .navigationTitle("Usage")
     .navigationBarTitleDisplayMode(.large)
   }
 
   /// The days the Daily section draws, which the Activity read has already fetched.
+  ///
+  /// The table covers the period's own days, bounded by the activity days this phone holds.
   private var dailyRows: [UsageDailyFold.Row] {
-    guard case .loaded(let days) = model.activityChart else { return [] }
+    guard case .loaded(let days) = model.activityChart, let range = model.usagePeriodRange else {
+      return []
+    }
+    let available = UsageActivityCalendar.range(endingOn: model.activityToday)
     return UsageDailyFold.rows(
       reported: days,
-      period: model.selectedUsagePeriod,
-      lastDate: model.activityToday
+      from: max(range.from, available.from),
+      to: min(range.to, available.to)
     )
   }
 
@@ -62,11 +79,12 @@ struct UsageView: View {
 
   @ViewBuilder
   private var signedInContent: some View {
-    if let usage = model.summary?.usage {
-      let period = model.selectedUsagePeriod.period(in: usage)
-      let sections = UsageBreakdown.sections(in: period)
+    if let period = model.usagePeriodValue {
+      let sections = model.usagePeriodIsFolded ? [] : UsageBreakdown.sections(in: period)
       UsageTotalsSection(period: period)
-      if sections.isEmpty {
+      if model.usagePeriodIsFolded {
+        foldedPeriod
+      } else if sections.isEmpty {
         emptyPeriod
       }
       if model.selectedTab == .usage {
@@ -95,18 +113,96 @@ struct UsageView: View {
     static let signIn = "Sign in to Quota"
   }
 
+  /// The six periods a segment names. A custom range selects none of them and says so in the
+  /// title row instead.
   private var periodPicker: some View {
-    Picker("Usage period", selection: $model.selectedUsagePeriod) {
-      ForEach(SelectedUsagePeriod.allCases) { period in
-        Text(period.segmentTitle)
-          .tag(period)
-          .accessibilityLabel(period.accessibilityTitle)
+    Picker("Usage period", selection: segmentBinding) {
+      ForEach(UsagePeriodSegment.allCases.filter { $0 != .custom }) { segment in
+        Text(segment.title)
+          .tag(Optional(segment))
+          .accessibilityLabel(segment.accessibilityTitle)
       }
     }
     .pickerStyle(.segmented)
     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     .frame(minHeight: QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("usage.period")
+  }
+
+  private var periodStepper: some View {
+    HStack(spacing: 12) {
+      Button {
+        if let previous = model.usagePeriod.previous { model.selectUsagePeriod(previous) }
+      } label: {
+        Image(systemName: "chevron.left")
+          .frame(
+            minWidth: QuotaTheme.minimumTouchTarget,
+            minHeight: QuotaTheme.minimumTouchTarget
+          )
+          .contentShape(Rectangle())
+      }
+      .disabled(model.usagePeriod.previous == nil)
+      .accessibilityLabel("Previous period")
+      .accessibilityIdentifier("usage.period.previous")
+
+      Text(model.usagePeriodTitle)
+        .font(.subheadline)
+        .foregroundStyle(Color.primary)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("usage.period.title")
+
+      Button {
+        if let next = model.usagePeriod.next { model.selectUsagePeriod(next) }
+      } label: {
+        Image(systemName: "chevron.right")
+          .frame(
+            minWidth: QuotaTheme.minimumTouchTarget,
+            minHeight: QuotaTheme.minimumTouchTarget
+          )
+          .contentShape(Rectangle())
+      }
+      .disabled(model.usagePeriod.next == nil)
+      .accessibilityLabel("Next period")
+      .accessibilityIdentifier("usage.period.next")
+
+      Button {
+        rangeEditor = true
+      } label: {
+        Image(systemName: "calendar")
+          .frame(
+            minWidth: QuotaTheme.minimumTouchTarget,
+            minHeight: QuotaTheme.minimumTouchTarget
+          )
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("Custom range")
+      .accessibilityIdentifier("usage.period.custom")
+    }
+    .buttonStyle(.plain)
+    .tint(.primary)
+    .frame(minHeight: QuotaTheme.minimumTouchTarget)
+  }
+
+  private var segmentBinding: Binding<UsagePeriodSegment?> {
+    Binding(
+      get: { model.usagePeriod.segment == .custom ? nil : model.usagePeriod.segment },
+      set: { segment in
+        guard let segment else { return }
+        model.selectUsagePeriod(.selection(for: segment, custom: nil))
+      }
+    )
+  }
+
+  private var foldedPeriod: some View {
+    Section {
+      Text(
+        "This range was added up on this iPhone, so it carries totals only. The model breakdown is on Today, Last 7 days, Last 30 days, and All."
+      )
+      .font(.body)
+      .foregroundStyle(Color.primary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityIdentifier("usage.folded")
   }
 
   private var emptyPeriod: some View {
@@ -116,7 +212,7 @@ struct UsageView: View {
       } description: {
         Text("No usage was reported for this period.")
       }
-      .foregroundStyle(.primary)
+      .foregroundStyle(Color.primary)
       .frame(maxWidth: .infinity)
     }
     .accessibilityIdentifier("usage.empty")
@@ -170,7 +266,7 @@ struct UsageTotalsSection: View {
       LabeledContent("Tokens") {
         Text(QuotaFormat.compactCount(totals.totalTokens))
           .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
+          .foregroundStyle(Color.primary)
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(
@@ -181,7 +277,7 @@ struct UsageTotalsSection: View {
       LabeledContent("API-equivalent cost") {
         Text(QuotaFormat.cost(cost))
           .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
+          .foregroundStyle(Color.primary)
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(
@@ -369,10 +465,11 @@ struct UsageAgentListSections: View {
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(row.displayName)
         .font(.subheadline)
+        .foregroundStyle(Color.primary)
       Spacer(minLength: 8)
       Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
         .font(.subheadline.monospacedDigit())
-        .foregroundStyle(.primary)
+        .foregroundStyle(Color.primary)
         .multilineTextAlignment(.trailing)
     }
     .accessibilityElement(children: .combine)

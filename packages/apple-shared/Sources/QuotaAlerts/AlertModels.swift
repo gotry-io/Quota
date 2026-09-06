@@ -6,6 +6,7 @@ public enum AlertKind: String, Equatable, Hashable, Sendable, Codable {
   case threshold
   case reset
   case pace
+  case budget
 }
 
 /// One local remaining-quota alert the evaluator decided to fire.
@@ -20,12 +21,15 @@ public enum AlertEvent: Equatable, Sendable {
   case windowReset(selector: String, windowID: String, resetsAt: Date?)
   /// This window's burn rate no longer lasts to its reset.
   case paceRunsOut(selector: String, windowID: String, pace: QuotaPace, resetsAt: Date?)
+  /// A share of this month's budget has been spent. The window is the month it was spent in.
+  case budgetCrossed(month: String, threshold: Int, budgetUSD: Decimal)
 
   public var selector: String {
     switch self {
     case .thresholdCrossed(let selector, _, _, _, _): selector
     case .windowReset(let selector, _, _): selector
     case .paceRunsOut(let selector, _, _, _): selector
+    case .budgetCrossed: BudgetAlertEvaluator.selector
     }
   }
 
@@ -34,6 +38,7 @@ public enum AlertEvent: Equatable, Sendable {
     case .thresholdCrossed(_, let windowID, _, _, _): windowID
     case .windowReset(_, let windowID, _): windowID
     case .paceRunsOut(_, let windowID, _, _): windowID
+    case .budgetCrossed(let month, _, _): month
     }
   }
 
@@ -49,6 +54,13 @@ public enum AlertEvent: Equatable, Sendable {
     case .paceRunsOut(let selector, let windowID, _, let resetsAt):
       AlertDedupKey(
         kind: .pace, selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
+    case .budgetCrossed(let month, let threshold, _):
+      AlertDedupKey(
+        kind: .budget,
+        selector: BudgetAlertEvaluator.selector,
+        windowID: month,
+        resetsAt: nil,
+        threshold: threshold)
     }
   }
 }

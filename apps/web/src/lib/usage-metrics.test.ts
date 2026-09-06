@@ -3,7 +3,6 @@ import {
   cacheHitLabel,
   cacheSavedLabel,
   dailyMaximum,
-  dailySpan,
   shareLabel,
   usageDailyRows,
   usageModelShares,
@@ -46,7 +45,7 @@ it("fills in the days a period covers that reported nothing", () => {
   const days = [
     { date: "2026-09-04", totals: totals(100, 50, 20), cost: cost("7"), partial: true },
   ];
-  const rows = usageDailyRows(days, "7d", "2026-09-05");
+  const rows = usageDailyRows(days, { from: "2026-08-30", to: "2026-09-05" });
 
   expect(rows.map((row) => row.date)).toStrictEqual([
     "2026-08-30",
@@ -68,8 +67,7 @@ it("fills in the days a period covers that reported nothing", () => {
 });
 
 it("has no daily table for the period the activity graph already answers", () => {
-  expect(dailySpan("all")).toBe(null);
-  expect(usageDailyRows([], "all", "2026-09-05")).toStrictEqual([]);
+  expect(usageDailyRows([], null)).toStrictEqual([]);
 });
 
 it("ranks model and provider shares by tokens, largest first", () => {

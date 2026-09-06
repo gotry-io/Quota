@@ -52,6 +52,7 @@ final class AppModel {
   private let localStore: any LocalCollectionStoring
   private let localCollector: LocalCollector
   private let providerStatusClient: any ProviderStatusServing
+  private let budgetStore: UsageBudgetStore
   private let now: @Sendable () -> Date
 
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
@@ -71,7 +72,9 @@ final class AppModel {
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
-  var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
+  var usagePeriod: UsagePeriodSelection = .last30Days
+  /// The monthly budget this device keeps, which is a preference and never leaves it.
+  var budget: UsageBudget
   /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
@@ -113,12 +116,15 @@ final class AppModel {
     localCollector: LocalCollector? = nil,
     purchases: any PurchasesFacade = UnconfiguredPurchases(),
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
+    budgetStore: UsageBudgetStore = UsageBudgetStore(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.providers = ProvidersModel(store: providerSessions)
     self.localStore = localStore
     self.localCollector =
       localCollector ?? LocalCollector(sessions: providerSessions, now: now)
+    self.budgetStore = budgetStore
+    self.budget = budgetStore.load()
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
@@ -137,6 +143,7 @@ final class AppModel {
       self.alertCoordinator = AlertCoordinator(
         rulesStore: alertRulesStore ?? IOSAlertRulesStore(),
         stateStore: alertStateStore ?? InMemoryIOSAlertStateStore(),
+        budgetStore: budgetStore,
         sink: sink,
         now: now
       )
@@ -575,6 +582,83 @@ final class AppModel {
     UsageActivityCalendar.range(endingOn: activityToday)
   }
 
+  /// The dates the selected period covers, or nil for `all`, which names no first day.
+  var usagePeriodRange: (from: String, to: String)? {
+    usagePeriod.range(today: now())
+  }
+
+  /// The title above the totals: the range the selected period covers.
+  var usagePeriodTitle: String {
+    UsagePeriodTitle.text(for: usagePeriod, today: now())
+  }
+
+  /// The days a folded period may reach back over, which is what the activity read answered.
+  var usageEarliestDay: String {
+    activityDateRange.from
+  }
+
+  /// The activity days this device has, which is what a folded period is added up from.
+  var activityDays: [UsageActivityDay] {
+    if case .loaded(let days) = activityChart { return days }
+    return []
+  }
+
+  /// The selected period, read from the summary when it folds it and added up here when not.
+  ///
+  /// The summary answers four periods exactly, in the caller's own calendar. Anything else is
+  /// the activity days the page already holds, which are UTC days: a range is chosen in this
+  /// device's calendar and folded from the UTC days carrying those dates.
+  var usagePeriodValue: UsagePeriod? {
+    if let key = usagePeriod.summaryKey, let usage = summary?.usage {
+      return period(usage, key)
+    }
+    guard let range = usagePeriodRange, case .loaded(let days) = activityChart else { return nil }
+    return UsageDayFold.period(days, from: range.from, to: range.to)
+  }
+
+  /// Whether the shown period was added up here, which is why it has no model breakdown.
+  var usagePeriodIsFolded: Bool {
+    usagePeriod.summaryKey == nil
+  }
+
+  /// How far into this month's budget its spend has gone, or nil when there is no budget yet.
+  var budgetProgress: UsageBudgetProgress? {
+    guard let amount = budget.amountUSD,
+      let range = UsagePeriodSelection.thisMonth.range(today: now()),
+      case .loaded(let days) = activityChart
+    else { return nil }
+    let month = UsageDayFold.period(days, from: range.from, to: range.to)
+    let spent = UsageBudgetProgress.dollars(microusd: month.cost.amountMicrousd) ?? 0
+    return UsageBudgetProgress(
+      spentUSD: spent,
+      budgetUSD: amount,
+      partial: month.cost.status != .complete
+    )
+  }
+
+  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
+    usagePeriod = selection
+  }
+
+  func setBudget(_ next: UsageBudget) {
+    budget = budgetStore.save(next)
+    evaluateBudgetAlerts()
+  }
+
+  /// Says once per month that 80% and then 100% of the budget has been spent.
+  func evaluateBudgetAlerts() {
+    alertCoordinator.evaluateBudget(budget: budget, progress: budgetProgress)
+  }
+
+  private func period(_ usage: AccountUsage, _ key: UsageSummaryPeriodKey) -> UsagePeriod {
+    switch key {
+    case .today: usage.today
+    case .last7Days: usage.last7Days
+    case .last30Days: usage.last30Days
+    case .all: usage.all
+    }
+  }
+
   /// First visit to Usage asks once. Retry is explicit. The answer stays in memory.
   func loadActivity(force: Bool = false) async {
     guard phase == .signedIn else { return }
@@ -641,6 +725,7 @@ final class AppModel {
     switch result {
     case .activity(let response):
       activityChart = .loaded(response.days)
+      evaluateBudgetAlerts()
     case .failure(.sessionExpired):
       applyExpired()
     case .failure(.notSignedIn):
@@ -817,7 +902,7 @@ final class AppModel {
     sessionActivation = nil
     phase = .signedOut
     selectedTab = .overview
-    selectedUsagePeriod = .last30Days
+    usagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     overviewPath = []
     activityChart = .idle

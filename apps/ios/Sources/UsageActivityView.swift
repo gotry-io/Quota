@@ -39,6 +39,9 @@ struct UsageActivitySection: View {
           Text("No activity in the last year.")
             .font(.body)
             .foregroundStyle(Color.primary)
+            // An accessibility text size needs more than one line, and a list row only gives
+            // one unless the text asks for its full height.
+            .fixedSize(horizontal: false, vertical: true)
             .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityIdentifier("usage.activity.empty")
         }

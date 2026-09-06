@@ -2232,6 +2232,164 @@ button.usage-activity-cell[aria-pressed="true"] {
   background: var(--surface-soft);
 }
 
+.period-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.period-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.period-arrow {
+  min-width: 42px;
+  min-height: 42px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.period-arrow:disabled {
+  color: var(--body);
+  opacity: 0.4;
+  cursor: default;
+}
+
+.period-title {
+  min-width: 12ch;
+  color: var(--body);
+  font-size: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-picker {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: var(--space-section);
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.period-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--body);
+  font-size: 12px;
+}
+
+.period-picker input {
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+}
+
+.usage-period-range {
+  margin: 0 0 12px;
+  color: var(--body);
+  font-size: 13px;
+}
+
+.usage-budget {
+  margin-bottom: var(--space-section);
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-budget-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.usage-budget-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.usage-budget-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.usage-budget-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--body);
+  font-size: 12px;
+}
+
+.usage-budget-form input[type="number"] {
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+}
+
+.usage-budget-toggle {
+  flex-direction: row;
+  align-items: center;
+  min-height: 42px;
+}
+
+.usage-budget-meter {
+  height: 8px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.usage-budget-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ink);
+}
+
+.usage-budget-value {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-budget-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

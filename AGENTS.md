@@ -40,6 +40,7 @@ Read the relevant source before changing that area:
 | What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
 | Sessions are a local view of Usage source files | `docs/decisions/0038-sessions-are-a-local-view-of-files.md` |
 | Project attribution stays on This Mac | `docs/decisions/0039-project-attribution-stays-local.md` |
+| Client-folded Usage periods, the `usage_period` IPC operation, and the device-only budget | `docs/decisions/0040-a-period-is-folded-where-its-days-already-are.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |

@@ -88,9 +88,35 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
   answer that file through `QuotaAlerts`. A pace warning reuses the pace line as its body, and fires
   at most once per window per reset cycle.
-- **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
-  days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
-  it **2 Years**; the accessibility name stays **Up to 2 years**.
+- **A Usage page shows one period, and there are seven of them.** Three are anchored to the
+  reader's own calendar and step a unit at a time — **Today**, **This week**, **This month** — and
+  three are fixed windows — **Last 7 days**, **Last 30 days**, **All**. The seventh is **Custom
+  range**, two inclusive dates someone picked. Relay's `all` is the last 730 UTC days, not every
+  day ever stored. A control too narrow for the full name abbreviates it **Day**, **Week**,
+  **Month**, **7D**, **30D**, **All**, **Custom**; the accessibility name is always the full one.
+  `UsagePeriodSegment` in `packages/apple-shared` and `USAGE_PERIOD_SEGMENTS` in
+  `apps/web/src/lib/usage-period.ts` are where those pairs are written.
+- **A period says the range it covers, not the name of its button.** One day is that date
+  (**Sep 6, 2026**); a range inside one year drops the repeated year from its first half
+  (**Aug 31 – Sep 6, 2026**); `all` has no first day, so it reads **Everything kept**. The
+  step controls are **Previous period** and **Next period**, and there is nothing ahead of the
+  current day, week, or month, so **Next period** is disabled there.
+- **Four periods are folded for the reader, and the rest are folded by the client.** Today, Last 7
+  days, Last 30 days, and All arrive folded — from the service on This Mac, from the Account read
+  on Account. Every other period is added up by the client from days it already holds, and days
+  carry no agent tree, so a folded period shows totals and cost with no model breakdown and says
+  so in one line rather than looking empty. On Account, a period the summary does not carry is
+  answered on This Mac only.
+- **The monthly budget is a device preference and never leaves the device.** It is one amount in
+  whole US dollars plus whether it may notify, kept in `UserDefaults` on Apple and `localStorage`
+  on the website — never in the Account, because a budget says what someone wants to be warned
+  about, which is not a fact about their usage. The Usage page shows it as a progress bar above
+  the totals, reading **`$5.39 / $50.00 · 11%`**, with **`≥ `** in front of a spend only partly
+  priced. Crossing 80% and then 100% of the amount notifies once each per calendar month: the
+  title is **`Monthly budget`** and the body is **`80% of $50.00 spent`**, or **`$50.00 budget
+  spent`** once the whole amount is gone. A new month starts a new cycle. When those
+  crossings fire is `packages/protocol/fixtures/alert-transition-conformance.json`
+  (`budget_cases`), which both Apple apps answer through `QuotaAlerts`.
 
 ## Window and layout tokens
 
@@ -531,17 +557,37 @@ simply **Account**, with a single-account symbol, and **This Mac**. Omit the men
 unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
 source preserves the selected period.
 
-A four-item 28pt tab control selects Today, 7 Days, 30 Days, or 2 Years; Today is the default. Its
+A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
-The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
-and changing either selector never starts collection or network work and never shows a loading
-state when a snapshot already exists. If the selected source has no snapshot yet and that
+A custom range selects none of the six, so the tab control shows nothing selected and the row
+beneath it says what the period covers.
+
+Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
+calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
+Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
+and **Next period** is disabled on the current unit. The period names, the range title, and the
+budget copy are in Shared product vocabulary.
+
+Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
+changing either selector starts no collection or network work and shows no loading state when a
+snapshot already exists. Every other period is one `usage_period` request, which folds the hours
+this Mac already stored rather than collecting again; while it is in flight the page says
+**Preparing Usage…**, and a state change discards those folds and asks again because the hours
+behind them moved. The Account read hands this device four folds, not the days behind them, so on
+Account a period outside those four says **This period is folded from this Mac's own hours. Switch
+the source to this Mac to see it.** If the selected source has no snapshot yet and that
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
 Preparing and empty Usage remain section states below the period tabs because those controls are
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
+
+When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
+folded the same way any other custom period is, and it is shown whatever period the page is
+otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
+
 The default page contains:
 
 - Summary: a titled group with separate Tokens, Cost, and Cache hit headline metrics followed by
