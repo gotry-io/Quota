@@ -124,7 +124,9 @@ struct AccountDevicesView: View {
 struct AccountUsageView: View {
   @Bindable var model: MenuBarViewModel
   @Binding var source: UsageSource
-  @Binding var period: UsagePeriod
+  @State private var rangeEditor = false
+  @State private var draftFrom = Date()
+  @State private var draftTo = Date()
 
   var body: some View {
     QuotaNavigationStableContent(state: pageState) { state in
@@ -139,7 +141,11 @@ struct AccountUsageView: View {
       accountWarning: presentedSource == .account ? model.accountErrorMessage : nil,
       statusWarning: usageStatusWarning(source: presentedSource),
       usage: presentedUsage(source: presentedSource),
-      isPreparing: model.isPreparingUsage(source: presentedSource)
+      isPreparing: model.isPreparingUsage(source: presentedSource) || model.customUsageLoading,
+      title: model.usagePeriodTitle(),
+      available: model.usagePeriodIsAvailable(
+        source: presentedSource, selection: model.usagePeriod),
+      budget: model.budgetProgress
     )
   }
 
@@ -157,6 +163,15 @@ struct AccountUsageView: View {
         }
 
         usagePeriodTabs
+        usagePeriodStepper(state)
+
+        if rangeEditor {
+          rangeEditorRow
+        }
+
+        if let progress = state.budget {
+          budgetBar(progress)
+        }
 
         if let warning = state.statusWarning {
           QuotaInlineNotice(message: warning)
@@ -191,7 +206,9 @@ struct AccountUsageView: View {
             QuotaSectionStateView(
               presentation: state.isPreparing
                 ? .loading(title: "Preparing Usage…")
-                : .empty(message: "No Usage is available for this period.")
+                : .empty(message: state.available
+                  ? "No Usage is available for this period."
+                  : "This period is folded from this Mac's own hours. Switch the source to this Mac to see it.")
             )
           }
         }
@@ -206,19 +223,22 @@ struct AccountUsageView: View {
     model.effectiveUsageSource(source)
   }
 
+  /// The six segments a period is named by. A custom range selects none of them and says what it
+  /// covers in the title row instead.
   private var usagePeriodTabs: some View {
     HStack(spacing: 0) {
-      ForEach(UsagePeriod.allCases) { value in
-        Button { period = value } label: {
-          Text(value.label)
+      ForEach(UsagePeriodSegment.allCases.filter { $0 != .custom }) { value in
+        let selected = model.usagePeriod.segment == value
+        Button { model.selectUsagePeriod(.selection(for: value, custom: nil)) } label: {
+          Text(value.title)
             .quotaFont(.listSecondary)
-            .foregroundStyle(value == period ? QuotaPalette.ink : QuotaPalette.body)
+            .foregroundStyle(selected ? QuotaPalette.ink : QuotaPalette.body)
             .frame(
               maxWidth: .infinity,
               minHeight: QuotaDesign.Layout.minimumInteractiveDimension
             )
             .background {
-              if value == period {
+              if selected {
                 RoundedRectangle(
                   cornerRadius: QuotaDesign.Layout.rowCornerRadius,
                   style: .continuous
@@ -230,8 +250,8 @@ struct AccountUsageView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(value.accessibilityLabel)
-        .accessibilityAddTraits(value == period ? .isSelected : [])
+        .accessibilityLabel(value.accessibilityTitle)
+        .accessibilityAddTraits(selected ? .isSelected : [])
       }
     }
     .background {
@@ -245,8 +265,84 @@ struct AccountUsageView: View {
     .accessibilityLabel("Usage period")
   }
 
+  private func usagePeriodStepper(_ state: AccountUsagePageState) -> some View {
+    HStack(spacing: QuotaDesign.Spacing.sm) {
+      stepButton(
+        symbol: "chevron.left", label: "Previous period", target: model.usagePeriod.previous)
+      Text(state.title)
+        .quotaFont(.listSecondary)
+        .foregroundStyle(QuotaPalette.body)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Period \(state.title)")
+      stepButton(symbol: "chevron.right", label: "Next period", target: model.usagePeriod.next)
+      Button {
+        let range = model.usagePeriod.range(today: Date())
+        draftFrom = range.flatMap { UsageDateText.date(from: $0.from) } ?? Date()
+        draftTo = range.flatMap { UsageDateText.date(from: $0.to) } ?? Date()
+        rangeEditor.toggle()
+      } label: {
+        Image(systemName: "calendar")
+          .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Custom range")
+    }
+    .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+  }
+
+  private func stepButton(
+    symbol: String,
+    label: String,
+    target: UsagePeriodSelection?
+  ) -> some View {
+    Button { if let target { model.selectUsagePeriod(target) } } label: {
+      Image(systemName: symbol)
+        .foregroundStyle(target == nil ? QuotaPalette.body.opacity(0.4) : QuotaPalette.ink)
+        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+    }
+    .buttonStyle(.plain)
+    .disabled(target == nil)
+    .accessibilityLabel(label)
+  }
+
+  private var rangeEditorRow: some View {
+    HStack(spacing: QuotaDesign.Spacing.sm) {
+      DatePicker("From", selection: $draftFrom, displayedComponents: .date)
+      DatePicker("To", selection: $draftTo, displayedComponents: .date)
+      Button("Apply") {
+        model.selectUsagePeriod(
+          .custom(
+            from: UsageDateText.date(min(draftFrom, draftTo)),
+            to: UsageDateText.date(max(draftFrom, draftTo))
+          )
+        )
+        rangeEditor = false
+      }
+    }
+    .datePickerStyle(.field)
+    .quotaFont(.listSecondary)
+  }
+
+  /// This month's spend against the budget this Mac keeps, which is never uploaded.
+  private func budgetBar(_ progress: UsageBudgetProgress) -> some View {
+    SettingsSection(title: "Monthly budget") {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        ProgressView(value: progress.fraction)
+        Text(progress.text)
+          .quotaMonoListValueStyle()
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+      .padding(.vertical, QuotaDesign.Layout.groupContentInset)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Monthly budget")
+      .accessibilityValue(progress.accessibilityText)
+    }
+  }
+
   private func usageStatusWarning(source: UsageSource) -> String? {
-    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
+    guard let detail = model.usageDetail(source: source, selection: model.usagePeriod) else {
+      return nil
+    }
     guard detail.incomplete || detail.detailsTruncated else { return nil }
     return source == .local
       ? "Some local Usage may be incomplete."
@@ -254,7 +350,9 @@ struct AccountUsageView: View {
   }
 
   private func presentedUsage(source: UsageSource) -> PresentedUsage? {
-    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
+    guard let detail = model.usageDetail(source: source, selection: model.usagePeriod) else {
+      return nil
+    }
     let usage = detail.usage
     let localModels = usage.agents.flatMap { agent in
       agent.providers.flatMap { provider in
@@ -430,30 +528,17 @@ struct AccountUsageView: View {
   }
 }
 
-extension UsagePeriod {
-  var label: String {
-    switch self {
-    case .today: "Today"
-    case .last7Days: "7 Days"
-    case .last30Days: "30 Days"
-    case .all: "2 Years"
-    }
-  }
-
-  var accessibilityLabel: String {
-    switch self {
-    case .all: "Up to 2 years"
-    default: label
-    }
-  }
-}
-
 private struct AccountUsagePageState: Equatable {
   let refreshWarning: String?
   let accountWarning: String?
   let statusWarning: String?
   let usage: PresentedUsage?
   let isPreparing: Bool
+  /// The range the period covers, which is what the title row reads.
+  let title: String
+  /// Whether this source can answer this period at all.
+  let available: Bool
+  let budget: UsageBudgetProgress?
 }
 
 private struct PresentedUsage: Equatable {

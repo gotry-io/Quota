@@ -48,7 +48,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     isStale: false
   )
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 7,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -194,7 +194,7 @@ func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
 @Test @MainActor
 func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -411,7 +411,7 @@ func justSignedInState(
   overview: [LocalServiceOverviewItem] = []
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 2,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -494,7 +494,7 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
     sources: [QuotaCollectionSource]
   ) -> LocalServiceState {
     LocalServiceState(
-      ipcVersion: 1,
+      ipcVersion: 2,
       revision: 3,
       usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -588,7 +588,7 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
 @Test @MainActor
 func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 2,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -919,7 +919,7 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
 
 func signedOutWithSessionEndedState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -954,7 +954,7 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
 
 func loggingInState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -1032,7 +1032,7 @@ func overviewOnlyState(
   overview: [LocalServiceOverviewItem]
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
     quotaRefreshIntervalSeconds: 300,
@@ -1146,6 +1146,8 @@ struct StubLocalService: LocalServiceServing {
   let loginError: LocalServiceClientError?
   let authorizeURL: String?
   let pinRecord: PinCallRecord?
+  /// What `usage_period` answers, for the tests that ask for a period `get_state` does not carry.
+  let customPeriod: LocalServiceUsageDetail?
 
   init(
     state: LocalServiceState,
@@ -1157,7 +1159,8 @@ struct StubLocalService: LocalServiceServing {
     shutdownAnswerDelayNanoseconds: UInt64 = 0,
     loginError: LocalServiceClientError? = nil,
     authorizeURL: String? = nil,
-    pinRecord: PinCallRecord? = nil
+    pinRecord: PinCallRecord? = nil,
+    customPeriod: LocalServiceUsageDetail? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -1170,9 +1173,15 @@ struct StubLocalService: LocalServiceServing {
     self.loginError = loginError
     self.authorizeURL = authorizeURL
     self.pinRecord = pinRecord
+    self.customPeriod = customPeriod
   }
 
   func state() async throws -> LocalServiceState { stateValue }
+
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    guard let customPeriod else { throw LocalServiceClientError.invalidMessage }
+    return customPeriod
+  }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {
     let date = Date()

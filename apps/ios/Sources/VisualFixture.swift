@@ -1,5 +1,7 @@
 import Foundation
 import QuotaAccount
+import QuotaAlerts
+import QuotaPresentation
 import QuotaRelay
 import QuotaWire
 
@@ -200,6 +202,18 @@ enum VisualFixture: String, CaseIterable, Sendable {
   enum VisualFixtureContent {
     static let studioDeviceID = "device_visual_fixture_01"
     static let kitchenDeviceID = "device_visual_fixture_02"
+    /// A fixture keeps its budget in its own suite, so a screenshot never reads or writes the
+    /// preference a real install has.
+    static let budgetSuiteName = "io.gotry.quota.visual-fixture"
+
+    /// A $50 budget with alerts on, which is what the Usage screenshot shows a bar against.
+    static func budgetStore(amountUSD: Decimal? = 50) -> UsageBudgetStore {
+      let defaults = UserDefaults(suiteName: budgetSuiteName) ?? .standard
+      defaults.removePersistentDomain(forName: budgetSuiteName)
+      let store = UsageBudgetStore(defaults: defaults)
+      store.save(UsageBudget(amountUSD: amountUSD, alerts: true))
+      return store
+    }
 
     static func devices(at date: Date) -> [AccountDevice] {
       [
@@ -682,7 +696,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     static func visualFixture(
       _ fixture: VisualFixture,
       now: Date,
-      selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore()
+      selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore(),
+      budgetStore: UsageBudgetStore = VisualFixtureContent.budgetStore()
     ) -> AppModel {
       let days: [UsageActivityDay]
       switch fixture {
@@ -707,6 +722,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           days: days,
           populatedAgents: VisualFixtureContent.dayAgents()
         ),
+        budgetStore: budgetStore,
         now: { now }
       )
       fixture.apply(to: model, now: now)

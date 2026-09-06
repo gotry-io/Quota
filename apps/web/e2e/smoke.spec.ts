@@ -149,7 +149,7 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   await expect(page.locator(".quota-card")).toContainText("Plus");
-  await expect(page.locator("a.today-strip")).toHaveAttribute("href", "/my/usage?period=today");
+  await expect(page.locator("a.today-strip")).toHaveAttribute("href", "/my/usage?period=day");
   await expect(page.locator("a.devices-strip")).toBeVisible();
   await expect(page.locator("a.devices-strip")).toHaveAttribute("href", "/my/devices");
 
@@ -184,9 +184,9 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
     "aria-expanded",
     "false",
   );
-  await page.getByRole("button", { name: "Today" }).click();
+  await page.getByRole("button", { name: "Today", exact: true }).click();
   await expect(tokens).not.toHaveText(thirtyDayTokens);
-  await expect(page).toHaveURL(/[?&]period=today(?:&|$)/);
+  await expect(page).toHaveURL(/[?&]period=day(?:&|$)/);
 
   await accountNav.getByRole("link", { name: "Devices" }).click();
   await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
@@ -283,7 +283,9 @@ test("activity grid is one tab stop and Enter opens the day tree", async ({ page
   const start = await page
     .locator("button.usage-activity-cell[tabindex='0']")
     .getAttribute("data-date");
-  await page.keyboard.press("ArrowRight");
+  // Left, not right: Home lands on the week's first in-range day, and on a Sunday that day is
+  // today, which is also the last day the range has — there is nothing to its right.
+  await page.keyboard.press("ArrowLeft");
   const moved = page.locator("button.usage-activity-cell[tabindex='0']");
   await expect(moved).not.toHaveAttribute("data-date", start ?? "");
   await page.keyboard.press("Enter");

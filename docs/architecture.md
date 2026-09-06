@@ -41,16 +41,16 @@ official provider sessions       agent JSON/JSONL logs
         providers.json  SQLite     managed HTTPS
                  │        │            │
                  └────────┴──────┬─────┘
-                                 │ stdin/stdout NDJSON v1
+                                 │ stdin/stdout NDJSON v2
                                  ▼
                           QuotaBar Swift UI
 ```
 
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
-Operations are ping, state read, diagnose/recheck, refresh, cache reset, login/cancel, logout,
-provider configuration, provider browser-session validate/commit/remove, Usage upload
-configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
+Operations are ping, state read, diagnose/recheck, refresh, cache reset, one custom Usage period
+fold, login/cancel, logout, provider configuration, provider browser-session
+validate/commit/remove, Usage upload configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
 before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
 answers `ping` on the thread that reads stdin, so an operation that blocks never stops the helper
 from saying it is alive. That is the only liveness signal QuotaBar uses: requests are never on a
@@ -192,7 +192,24 @@ history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are
 instants this device's own calendar puts around them — the rule the managed read follows, so both
 sides of the panel agree. Signed-in Account
 periods arrive in the one Account read and commit only as a complete set; QuotaBar reads them from
-`get_state`, so changing the period performs no collection or network request. Collection and report
+`get_state`, so changing the period performs no collection or network request.
+
+A period outside those four — a week, a month, a range someone picked — is the same stored hours
+added up over a different window, so it is asked for one range at a time rather than folded four
+more times on every refresh. `usage_period { from, to }` takes two inclusive local dates spanning
+at most 366 days and answers with the same local report shape, folded against the catalogs this
+device already holds; it collects nothing and reaches no network. A state change discards the
+folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS have no
+local hours to ask about: they add the same period up from the daily totals the activity read
+already gave them, and the rule all three follow is
+`packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
+period folded from days carries totals and cost with no model breakdown.
+
+The monthly spend budget is a device preference and is never uploaded: it is one amount and one
+alert switch in `UserDefaults` on Apple and `localStorage` on the website, evaluated against the
+current month's fold by the same dedup rule the quota alerts use. A budget says what someone wants
+to be warned about, which is not a fact about their Account, so no managed store and no wire
+contract names one. Collection and report
 generation continue when Usage upload is disabled: the service neither stages nor drains the outbox,
 `get_state` omits cached Account Usage so QuotaBar stays local-only, and quota and account
 synchronization stay independent.

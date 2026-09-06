@@ -24,7 +24,7 @@ let package = Package(
     ),
     .testTarget(
       name: "QuotaAlertsTests",
-      dependencies: ["QuotaAlerts"]
+      dependencies: ["QuotaAlerts", "QuotaPresentation"]
     ),
   ],
   swiftLanguageModes: [.v6]

@@ -10,17 +10,20 @@ import QuotaWire
 final class AlertCoordinator {
   private let rulesStore: IOSAlertRulesStore
   private let stateStore: any IOSAlertStateStore
+  private let budgetStore: UsageBudgetStore
   private let sink: any AlertSink
   private let now: () -> Date
 
   init(
     rulesStore: IOSAlertRulesStore,
     stateStore: any IOSAlertStateStore,
+    budgetStore: UsageBudgetStore = UsageBudgetStore(),
     sink: any AlertSink,
     now: @escaping () -> Date = Date.init
   ) {
     self.rulesStore = rulesStore
     self.stateStore = stateStore
+    self.budgetStore = budgetStore
     self.sink = sink
     self.now = now
   }
@@ -37,6 +40,27 @@ final class AlertCoordinator {
     )
     if result.state != previous {
       try? stateStore.save(result.state)
+    }
+    if !result.events.isEmpty {
+      sink.deliver(result.events)
+    }
+  }
+
+  /// Says once per month that 80%, and then 100%, of the budget has been spent.
+  ///
+  /// The budget is its own cycle and its own store: the alert switch over subscriptions does not
+  /// silence it, and signing out does not clear it, because a budget is not a fact about an
+  /// Account.
+  func evaluateBudget(budget: UsageBudget, progress: UsageBudgetProgress?) {
+    let previous = budgetStore.loadFired()
+    let result = BudgetAlertEvaluator.evaluate(
+      budget: budget,
+      progress: progress,
+      month: BudgetAlertEvaluator.month(containing: now()),
+      previous: previous
+    )
+    if result.state != previous {
+      budgetStore.saveFired(result.state)
     }
     if !result.events.isEmpty {
       sink.deliver(result.events)

@@ -1,5 +1,5 @@
 {
-  "$comment": "When a remaining-quota reading should fire a local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS both answer this file. Evaluation covers only each subscription's primary_cadence window, or the first percent window when none is marked. Non-available statuses neither fire nor change state. Dedup keys are (selector, window_id, resets_at or none, threshold or none): the same key fires once per reset cycle. First seeing a remaining percent already at or below a threshold fires that threshold. A window reset (old resets_at has passed, or resets_at moved later, and remaining rose) fires a reset event, clears that window's crossed keys, and starts a new cycle. Raising a threshold is a new key. Sign-out clears the store.",
+  "$comment": "When a remaining-quota reading should fire a local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS both answer this file. Evaluation covers only each subscription's primary_cadence window, or the first percent window when none is marked. Non-available statuses neither fire nor change state. Dedup keys are (selector, window_id, resets_at or none, threshold or none): the same key fires once per reset cycle. First seeing a remaining percent already at or below a threshold fires that threshold. A window reset (old resets_at has passed, or resets_at moved later, and remaining rose) fires a reset event, clears that window's crossed keys, and starts a new cycle. Raising a threshold is a new key. Sign-out clears the store. The monthly budget uses the same dedup keys: the selector is \"budget\", the window is the local month, and the thresholds are shares of the budget that have been spent. `budget_cases` state when a budget crossing fires; a month is a cycle of its own, so a new month starts with nothing fired.",
   "cases": [
     {
       "name": "first seen already below 20 fires that threshold",
@@ -540,6 +540,222 @@
         "fired": [],
         "readings": []
       }
+    }
+  ],
+  "budget_cases": [
+    {
+      "name": "a month under 80% of its budget says nothing",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 42,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
+    },
+    {
+      "name": "crossing 80% fires once",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 81,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 80,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "the same month past 80% does not fire again",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 92,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ],
+      "expected_events": [],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "reaching the whole budget fires the second threshold only",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 100,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 100,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ]
+    },
+    {
+      "name": "a month already past both thresholds fires both at once",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 140,
+        "partial": true
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 80,
+          "budget_usd": "50"
+        },
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 100,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ]
+    },
+    {
+      "name": "the next month starts a new cycle",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 81,
+        "partial": false
+      },
+      "month": "2026-10",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-10",
+          "threshold": 80,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        },
+        {
+          "month": "2026-10",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "budget alerts switched off fire nothing",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": false
+      },
+      "progress": {
+        "percent": 140,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
+    },
+    {
+      "name": "no budget set fires nothing",
+      "budget": {
+        "amount_usd": null,
+        "alerts": true
+      },
+      "progress": {
+        "percent": 140,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
     }
   ]
 }

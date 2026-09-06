@@ -36,6 +36,13 @@ The v6 data contract is four routes
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
 
+The four periods in a summary are the four every client opens on. Any other period a Usage page
+offers — a week, a month, a range someone picked — is these same days added up by the client, which
+is why this read answers a range rather than one more named period. A day carries no agent tree
+unless it was asked for on its own, so a client-folded period carries totals and cost only. The
+fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
+website and both Apple apps answer that file.
+
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
 days at most, because the three periods end together. A caller keeping UTC opens no hour at all.

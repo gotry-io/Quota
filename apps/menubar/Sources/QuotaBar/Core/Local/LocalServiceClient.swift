@@ -59,6 +59,8 @@ protocol LocalServiceServing: Sendable {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
+  /// One custom local period, folded from the hours this Mac has stored.
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail
   func diagnose() async throws -> LocalServiceDiagnosticReport
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func resetCache() async throws
@@ -172,6 +174,17 @@ actor LocalServiceClient: LocalServiceServing {
       throw LocalServiceClientError.invalidMessage
     }
     return state
+  }
+
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    let detail: LocalServiceUsageDetail = try await request(
+      operation: "usage_period",
+      payload: UsagePeriodPayload(from: from, to: to)
+    )
+    guard detail.isValid else {
+      throw LocalServiceClientError.invalidMessage
+    }
+    return detail
   }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {
@@ -820,6 +833,10 @@ private struct EmptyResult: Decodable {
 }
 private struct ProviderPayload: Encodable { let provider: String }
 private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
+private struct UsagePeriodPayload: Encodable {
+  let from: String
+  let to: String
+}
 private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
 private struct SetOverviewSourcePinPayload: Encodable {
   let provider: String

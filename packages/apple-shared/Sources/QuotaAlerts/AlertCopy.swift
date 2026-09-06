@@ -32,4 +32,14 @@ public enum AlertCopy {
   public static func resetBody(windowTitle: String) -> String {
     "\(windowTitle) quota reset"
   }
+
+  /// `Monthly budget`, which is the one budget there is.
+  public static let budgetTitle = "Monthly budget"
+
+  /// `80% of $50.00 spent` — or `Budget spent` once the whole amount is gone.
+  public static func budgetBody(threshold: Int, budgetUSD: Decimal) -> String {
+    threshold >= UsageBudget.exhaustedPercent
+      ? "\(UsageBudgetProgress.usd(budgetUSD)) budget spent"
+      : "\(threshold)% of \(UsageBudgetProgress.usd(budgetUSD)) spent"
+  }
 }

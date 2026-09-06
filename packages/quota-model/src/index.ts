@@ -18,11 +18,19 @@ import {
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
+  type UsageActivityDayRead,
   type UsageCostOutcome,
+  type UsageCostOutcomeRead,
+  UsageCostOutcomeReadSchema,
   UsageCostOutcomeSchema,
+  MAXIMUM_UNPRICED_ITEMS,
   type UsageRow,
   UsageRowSchema,
+  type UsagePeriodRead,
+  UsagePeriodReadSchema,
+  type UsageSummaryTotalsRead,
   type UsageUnpricedItem,
+  type UsageUnpricedItemRead,
   type UsageUnpricedReason,
 } from "@gotry-io/quota-protocol";
 
@@ -1024,10 +1032,122 @@ function parseDecimal(value: string): { numerator: bigint; scale: number } {
   return { numerator: BigInt(`${integer}${fraction}`), scale: fraction.length };
 }
 
-function compareUnpricedItems(left: UsageUnpricedItem, right: UsageUnpricedItem): number {
+function compareUnpricedItems(
+  left: UsageUnpricedItem | UsageUnpricedItemRead,
+  right: UsageUnpricedItem | UsageUnpricedItemRead,
+): number {
   return `${left.billing_channel}\u0000${left.model}\u0000${left.reason}`.localeCompare(
     `${right.billing_channel}\u0000${right.model}\u0000${right.reason}`,
   );
+}
+
+/**
+ * Folds the activity days a range covers into the one period a Usage page shows.
+ *
+ * An Account summary folds four periods on the server, because those four are what every client
+ * opens on. Any other period — a week, a month, a range someone picked — is the same days added
+ * up, and the days are already here: the activity read answers a year at a time. The rule is
+ * stated in `packages/protocol/fixtures/usage-day-fold-conformance.json`, which this and both
+ * Apple apps answer.
+ *
+ * Only the totals and the cost fold. A day carries its agent tree only when it was asked for on
+ * its own, so a folded period carries no breakdown.
+ */
+export function foldUsageActivityDays(
+  days: readonly UsageActivityDayRead[],
+  range?: { from: string; to: string },
+): UsagePeriodRead {
+  const selected = range
+    ? days.filter((day) => day.date >= range.from && day.date <= range.to)
+    : [...days];
+  return UsagePeriodReadSchema.parse({
+    totals: foldUsageSummaryTotals(selected.map((day) => day.totals)),
+    cost: foldUsageCostOutcomes(selected.map((day) => day.cost)),
+    partial: selected.some((day) => day.partial),
+    agents: [],
+  });
+}
+
+/** Adds token counts, which are counts of the same events over disjoint days. */
+export function foldUsageSummaryTotals(
+  values: readonly UsageSummaryTotalsRead[],
+): UsageSummaryTotalsRead {
+  const sum = (take: (totals: UsageSummaryTotalsRead) => number) =>
+    values.reduce((total, value) => total + take(value), 0);
+  return {
+    total_tokens: sum((totals) => totals.total_tokens),
+    input_tokens: sum((totals) => totals.input_tokens),
+    output_tokens: sum((totals) => totals.output_tokens),
+    cache_read_input_tokens: sum((totals) => totals.cache_read_input_tokens),
+    cache_write_input_tokens: sum((totals) => totals.cache_write_input_tokens),
+    reasoning_tokens: sum((totals) => totals.reasoning_tokens),
+    messages: sum((totals) => totals.messages),
+  };
+}
+
+/**
+ * Adds cost outcomes, then reaches the same verdict one row does.
+ *
+ * The amount and the row counts add. The basis and the status follow from the counts, so a
+ * period is partly priced exactly when one of its days left a row unpriced. Two days priced
+ * against different catalog revisions name no single revision, so the fold names none.
+ */
+export function foldUsageCostOutcomes(
+  outcomes: readonly UsageCostOutcomeRead[],
+): UsageCostOutcomeRead {
+  const assumptions = new Set<string>();
+  const unpricedCounts = new Map<string, UsageUnpricedItemRead>();
+  let amount = 0n;
+  let priced = false;
+  let calculatedRows = 0;
+  let reportedRows = 0;
+  let unpricedRows = 0;
+  let truncated = false;
+  let revision: string | null = outcomes[0]?.catalog_revision ?? null;
+
+  for (const outcome of outcomes) {
+    if (outcome.catalog_revision !== revision) revision = null;
+    if (outcome.amount_microusd !== null) {
+      amount += BigInt(outcome.amount_microusd);
+      priced = true;
+    }
+    calculatedRows += outcome.calculated_rows;
+    reportedRows += outcome.reported_rows;
+    unpricedRows += outcome.unpriced_rows;
+    for (const assumption of outcome.assumptions) assumptions.add(assumption);
+    truncated = truncated || outcome.unpriced_truncated === true;
+    for (const item of outcome.unpriced) {
+      const key = `${item.billing_channel}\u0000${item.model}\u0000${item.reason}`;
+      const existing = unpricedCounts.get(key);
+      if (existing) existing.rows += item.rows;
+      else unpricedCounts.set(key, { ...item });
+    }
+  }
+
+  const pricedRows = calculatedRows + reportedRows;
+  const unpriced = [...unpricedCounts.values()].sort(compareUnpricedItems);
+  return UsageCostOutcomeReadSchema.parse({
+    mode: outcomes[0]?.mode ?? "auto",
+    basis:
+      calculatedRows > 0 && reportedRows > 0
+        ? "mixed"
+        : calculatedRows > 0
+          ? "calculated"
+          : reportedRows > 0
+            ? "reported"
+            : "none",
+    status: unpricedRows === 0 ? "complete" : pricedRows > 0 ? "partial" : "unavailable",
+    amount_microusd: priced && pricedRows > 0 ? amount.toString() : null,
+    catalog_revision: revision,
+    calculated_rows: calculatedRows,
+    reported_rows: reportedRows,
+    unpriced_rows: unpricedRows,
+    assumptions: [...assumptions].sort(),
+    unpriced: unpriced.slice(0, MAXIMUM_UNPRICED_ITEMS),
+    ...(truncated || unpriced.length > MAXIMUM_UNPRICED_ITEMS
+      ? { unpriced_truncated: true as const }
+      : {}),
+  });
 }
 
 export type { DatedUsageRow, PricingCatalog, PricingCatalogEntry, PricingRates, UsageRow };

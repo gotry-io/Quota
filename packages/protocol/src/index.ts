@@ -1199,12 +1199,12 @@ const AccountDeviceReadSchema = z.looseObject({
 });
 export type AccountDeviceRead = z.infer<typeof AccountDeviceReadSchema>;
 
-const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
+export const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
   billing_channel: ReadEnumSchema,
   reason: ReadEnumSchema,
 }).loose();
 
-const UsageCostOutcomeReadSchema = z
+export const UsageCostOutcomeReadSchema = z
   .looseObject({
     ...UsageCostOutcomeSchema.shape,
     assumptions: z.array(ReadEnumSchema).max(16),
@@ -1212,7 +1212,7 @@ const UsageCostOutcomeReadSchema = z
   })
   .superRefine(validateCostOutcome);
 
-const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
+export const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
 
 const UsageModelUsageReadSchema = UsageModelUsageSchema.extend({
   totals: UsageSummaryTotalsReadSchema,
@@ -1229,7 +1229,7 @@ const UsageAgentUsageReadSchema = UsageAgentUsageSchema.extend({
   providers: z.array(UsageProviderUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
 
-const UsagePeriodReadSchema = UsagePeriodSchema.extend({
+export const UsagePeriodReadSchema = UsagePeriodSchema.extend({
   totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
@@ -1263,6 +1263,10 @@ const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
 }).loose();
 export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
+
+export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
+export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
+export type UsageSummaryTotalsRead = z.infer<typeof UsageSummaryTotalsReadSchema>;
 
 export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
   days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),

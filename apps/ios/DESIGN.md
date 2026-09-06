@@ -15,11 +15,11 @@ the QuotaBar menu panel.
 Core rules:
 
 1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect with GitHub and Log Out are the only account actions this device performs. Delete Account
+6. Connect with GitHub and Log Out are the only account actions this device performs. Delete Account
    starts on the website after a fresh GitHub sign-in.
-3. Last-good Account data stays visible across transient failures. A status line states that in
+7. Last-good Account data stays visible across transient failures. A status line states that in
    words, not color alone.
-4. Views render typed `packages/apple-client` results. They never show tokens, opaque session
+8. Views render typed `packages/apple-client` results. They never show tokens, opaque session
    material, raw JSON, or device identifiers.
 5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, Reduce
    Transparency, and light or dark appearance. System controls handle Reduce Transparency; the app
@@ -225,12 +225,13 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Period totals
-come from the same Account summary as Overview: the four precomputed periods `today`,
-`last_7_days`, `last_30_days`, and `all`. Opening Usage requests the last 365 UTC days of activity
-once (`from = today-364`, `to = today`) and keeps that answer in memory; it does not write it to
-disk. A failure stays in the Activity section and does not block the period totals or model
-sections.
+Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Four periods —
+`today`, `last_7_days`, `last_30_days`, `all` — come precomputed from the same Account summary as
+Overview. Every other period is added up on this iPhone from the activity days it already holds,
+which is why it has totals and cost but no model breakdown. Opening Usage requests the last 365 UTC
+days of activity once (`from = today-364`, `to = today`) and keeps that answer in memory; it does
+not write it to disk. A failure stays in the Activity section and does not block the period totals
+or model sections, but it does leave a folded period and the budget bar with nothing to add up.
 
 Header:
 
@@ -238,19 +239,32 @@ Header:
 
 Body, in order:
 
-1. A segmented period control in the first List row: **Today**, **7 Days**, **30 Days**, and
-   **2 Years**. The fourth segment's VoiceOver name is **Up to 2 years**. Default is **30 Days**.
+1. A segmented period control in the first List row: **Day**, **Week**, **Month**, **7D**, **30D**,
+   and **All**, whose VoiceOver names are the full ones in Shared product vocabulary. Default is
+   **Last 30 days**. A custom range selects none of the six, so the control shows nothing selected.
    The selection lives in memory for the signed-in session. It is a system content filter, not a
    floating navigation action, and it scrolls with the List.
-2. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
+2. A stepper row under it: a **Previous period** chevron, the range the period covers, a **Next
+   period** chevron, and a calendar button. Stepping applies to Day, Week, and Month only, and the
+   current unit is the last, so both chevrons are disabled on a fixed window and **Next period** is
+   disabled on the current one. The calendar button opens a **Custom range** sheet of two
+   `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
+3. A **Monthly budget** section: a `ProgressView` and one monospaced-digit line of
+   `spent / budget · percent` for this month, or **No budget is set for this month.**, then a
+   **Set budget** / **Edit budget** row opening a sheet with the amount in USD and a **Tell me at
+   80% and 100%** toggle. Both fields are `UserDefaults` on this iPhone and are never uploaded.
+   The two crossings post one local notification each per calendar month.
+4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced) and
    **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**). Supporting copy in that section
    is `{input} in · {output} out`, the cost-basis line, and **Some hours in this period were scanned
    incompletely.** when `partial` is true. No custom card. Semantic text styles, primary color, so
    contrast and Dynamic Type stay system-owned.
-3. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+5. When the period was added up here rather than read from the summary, one line saying so, in
+   place of the model sections: the breakdown is on Today, Last 7 days, Last 30 days, and All.
+6. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
-4. Activity section, headed **Activity**:
+7. Activity section, headed **Activity**:
    - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
      activity**.
    - Failure: **Couldn't load activity.** plus a native **Retry** row.
@@ -266,7 +280,7 @@ Body, in order:
      increment/decrement changes the same selection. Under the grid, the selected day is visible
      text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
      that day.
-5. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
+8. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
    Cursor). Provider names are subhead rows (`InferenceProvider.displayName`); models are standard
    rows with the model name leading and `{tokens} · {cost}` trailing. The model `other` is
    **Other**. Each provider shows at most five models until **Show N more** reveals the rest;

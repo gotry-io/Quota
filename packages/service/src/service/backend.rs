@@ -1918,6 +1918,66 @@ impl NativeBackend {
         }))
     }
 
+    /// One custom local period, folded from the hours this device has stored.
+    ///
+    /// The four periods a panel opens on are folded by every refresh and read out of state. A
+    /// range someone picked is folded here instead, against the catalogs this device already
+    /// holds: asking for a week is a question about stored hours, not a reason to collect again.
+    fn custom_usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        let timezone = self.timezone();
+        let span = custom_period_window(&timezone, from, to)?;
+        let (rows, partial) = self
+            .state
+            .usage_period_rows(Some((span.start.as_str(), span.end.as_str())))
+            .map_err(|_| BackendError::unavailable())?;
+        let catalog: Option<pricing::PricingCatalog> = self
+            .state
+            .component(crate::protocol::ComponentName::Pricing)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| serde_json::from_value(value).ok());
+        let model_catalog = self
+            .state
+            .model_catalog()
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::model_catalog::validate_model_catalog_value(&value)
+                    .valid
+                    .then(|| serde_json::from_value(value).ok())
+                    .flatten()
+            })
+            .or_else(|| Some(crate::model_catalog::bundled_model_catalog()));
+        let summary =
+            usage::build_local_usage_summary(&rows, catalog.as_ref(), model_catalog.as_ref())
+                .map_err(|_| BackendError::unavailable())?;
+        let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
+        let incomplete = partial || self.stored_usage_is_partial();
+        Ok(json!({
+            "range": {"from": span.dates.0, "to": span.dates.1},
+            "usage": summary,
+            "incomplete": incomplete,
+            "details_truncated": details_truncated
+        }))
+    }
+
+    /// Whether the last scan behind the stored hours covered everything it found.
+    fn stored_usage_is_partial(&self) -> bool {
+        self.state
+            .component(crate::protocol::ComponentName::Usage)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| {
+                value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(|status| status != "complete")
+            })
+            .unwrap_or(false)
+    }
+
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
         let attempt = self.begin_attempt(DiagnosticAttemptKind::PricingRefresh, None);
         let result = self.refresh_pricing_inner();
@@ -2995,6 +3055,10 @@ fn worst_operation(left: DiagnosticOperation, right: DiagnosticOperation) -> Dia
 }
 
 impl LocalBackend for NativeBackend {
+    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        self.custom_usage_period(from, to)
+    }
+
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
     }
@@ -3703,6 +3767,44 @@ pub(crate) fn usage_period_window(
             start: local_day_start(&timezone, first)?,
             end: local_day_start(&timezone, after)?,
         }),
+    ))
+}
+
+/// A custom period as this device's own calendar draws it.
+///
+/// `from` and `to` are inclusive local dates, so the span runs from the start of `from` to the
+/// start of the day after `to` — the same half-open instant range the four fixed periods use.
+/// A range that is inverted, unparseable, or wider than a year and a leap day is not a period
+/// this device answers.
+pub(crate) fn custom_period_window(
+    timezone: &str,
+    from: &str,
+    to: &str,
+) -> Result<LocalPeriodSpan, BackendError> {
+    let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
+    let first = NaiveDate::parse_from_str(from, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
+    let last = NaiveDate::parse_from_str(to, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
+    let days = (last - first).num_days();
+    if days < 0 || days >= crate::protocol::MAXIMUM_USAGE_PERIOD_DAYS {
+        return Err(invalid_usage_period());
+    }
+    let after = last
+        .checked_add_days(Days::new(1))
+        .ok_or_else(invalid_usage_period)?;
+    Ok(LocalPeriodSpan {
+        dates: (
+            first.format("%Y-%m-%d").to_string(),
+            last.format("%Y-%m-%d").to_string(),
+        ),
+        start: local_day_start(&timezone, first)?,
+        end: local_day_start(&timezone, after)?,
+    })
+}
+
+fn invalid_usage_period() -> BackendError {
+    BackendError::new(IpcError::new(
+        ErrorCode::InvalidRequest,
+        RecoveryAction::None,
     ))
 }
 
@@ -5308,6 +5410,39 @@ mod tests {
                 .1
                 .is_none()
         );
+    }
+
+    /// A custom period is drawn on the same calendar the four fixed ones are drawn on.
+    #[test]
+    fn a_custom_period_spans_whole_local_days_and_stops_at_a_year_and_a_leap_day() {
+        let span =
+            custom_period_window("Asia/Singapore", "2026-08-07", "2026-08-13").expect("span");
+        assert_eq!(span.dates, ("2026-08-07".into(), "2026-08-13".into()));
+        assert_eq!(span.start, "2026-08-06T16:00:00Z");
+        assert_eq!(span.end, "2026-08-13T16:00:00Z");
+
+        let single =
+            custom_period_window("Asia/Singapore", "2026-08-07", "2026-08-07").expect("span");
+        assert_eq!(single.start, "2026-08-06T16:00:00Z");
+        assert_eq!(single.end, "2026-08-07T16:00:00Z");
+
+        // 366 inclusive days is the widest period; the day after it is not one this device answers.
+        assert!(custom_period_window("UTC", "2026-01-01", "2027-01-01").is_ok());
+        for (from, to) in [
+            ("2026-01-01", "2027-01-02"),
+            ("2026-08-13", "2026-08-07"),
+            ("2026-08-13", "not-a-date"),
+        ] {
+            assert_eq!(
+                custom_period_window("UTC", from, to)
+                    .err()
+                    .expect("refused range")
+                    .error
+                    .code,
+                ErrorCode::InvalidRequest,
+                "{from}..{to} is not a period"
+            );
+        }
     }
 
     /// A change that skips or repeats midnight still leaves the day one instant to begin at.

@@ -10,11 +10,14 @@ public enum AlertEvent: Equatable, Sendable {
     resetsAt: Date?
   )
   case windowReset(selector: String, windowID: String, resetsAt: Date?)
+  /// A share of this month's budget has been spent. The window is the month it was spent in.
+  case budgetCrossed(month: String, threshold: Int, budgetUSD: Decimal)
 
   public var selector: String {
     switch self {
     case .thresholdCrossed(let selector, _, _, _, _): selector
     case .windowReset(let selector, _, _): selector
+    case .budgetCrossed: BudgetAlertEvaluator.selector
     }
   }
 
@@ -22,6 +25,7 @@ public enum AlertEvent: Equatable, Sendable {
     switch self {
     case .thresholdCrossed(_, let windowID, _, _, _): windowID
     case .windowReset(_, let windowID, _): windowID
+    case .budgetCrossed(let month, _, _): month
     }
   }
 
@@ -33,6 +37,12 @@ public enum AlertEvent: Equatable, Sendable {
     case .windowReset(let selector, let windowID, let resetsAt):
       AlertDedupKey(
         selector: selector, windowID: windowID, resetsAt: resetsAt, threshold: nil)
+    case .budgetCrossed(let month, let threshold, _):
+      AlertDedupKey(
+        selector: BudgetAlertEvaluator.selector,
+        windowID: month,
+        resetsAt: nil,
+        threshold: threshold)
     }
   }
 }

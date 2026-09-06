@@ -154,7 +154,7 @@ struct VisualFixtureParserTests {
         .models ?? []
       #expect(openaiModels.count > 5)
       #expect(openaiModels.contains { $0.model == "other" })
-      #expect(model.selectedUsagePeriod == .last30Days)
+      #expect(model.usagePeriod == .last30Days)
 
       guard case .loaded(let days) = model.activityChart else {
         Issue.record("content fixture should preload activity")
