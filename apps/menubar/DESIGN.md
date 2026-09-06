@@ -452,9 +452,21 @@ The page uses the same Settings list rows as the rest of this panel.
 ### Account
 
 The Account page is reachable only while signed in, and it holds everything that belongs to the
-account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
-**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
-this page because what it uploads is account data, not a general preference.
+account, top to bottom: the account label, **Sync**, the native mini **Sync Usage** switch,
+**Devices**, **Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its
+copy — it is on this page because what it uploads is account data, not a general preference.
+
+**Sync** is the subscription multi-device sync is paid for, exactly as Relay states it. Its
+subtitle is one line: **Active · renews Oct 5**, **Active · ends Oct 5**, **Grace period · update
+payment**, or **Not subscribed**; a stale answer — one Relay could not refresh — spends the
+line on its age instead, as **Active · checked 2h ago**, and a Mac that has not read the account
+yet says **Checking…**. The line never wraps, so the age replaces the renewal date rather than
+following it. The trailing action is a small bordered
+**Subscribe…**, which opens the account's own purchase link, or **Manage…** once there is a
+subscription, which opens `quota.gotry.io/my/settings`; there is no button while there is nothing
+to open. Without a subscription the Sync Usage switch is off-limits and its subtitle says **Needs
+a subscription**. The panel says none of this at its top: an unpaid account is a state, not an
+alarm, so it is stated where the account is managed and nowhere else.
 
 **Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
 popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced

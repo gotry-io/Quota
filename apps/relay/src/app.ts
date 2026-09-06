@@ -764,6 +764,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         pricing_revision: catalog.revision,
         model_catalog_revision: modelCatalog.revision,
         entitlement,
+        purchase: { web_url: purchaseWebUrl(billing.webPurchaseUrl, principal.account_id) },
       }),
     );
   });

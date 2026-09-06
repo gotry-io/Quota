@@ -37,10 +37,18 @@ Account. After a valid Authorization header the webhook answers only 200 or 202.
 `PUT /api/v6/device/usage`, `GET /api/v2/device/sync`, and `PUT /api/v2/device/profile` answer
 402 `subscription_required` when status is not `active` or `grace`, and write a
 `relay_write_refused` log line. `GET /api/v2/account`, `GET /api/v6/account/summary`, and
-`GET /api/v6/account/usage/activity` are not gated. The Account read carries
-`entitlement` and `purchase.web_url` (the Web Purchase Link base with the Account id appended
-as the path). The summary carries the same `entitlement` object, and its ETag includes
-`entitlements.updated_at`.
+`GET /api/v6/account/usage/activity` are not gated. Both Account reads carry the same
+`entitlement` object and the same `purchase.web_url` (the Web Purchase Link base with the
+Account id appended as the path), because the entitlement and the way to change it are one
+answer: a client that reads either can show the paywall without a second request. The
+entitlement states `checked_at`, which is `entitlements.updated_at`, so a `stale: true` answer
+says how old the values beside it are. The summary ETag includes `entitlements.updated_at`.
+
+**A refused write is not a failed one.** QuotaBar reads both fields off the summary it already
+takes, shows them on the Account page, and answers a 402 by recording one
+`subscription_required` attempt in its journal and writing nothing further in that refresh. The
+session is untouched, no upload surface reports a failure, and the diagnostic report's Account
+line reads `Sync is off: no active subscription.`
 
 **REST failure does not invent access.** A failed refresh returns the stored row with
 `stale: true`, or `none` when there is no row.

@@ -58,9 +58,16 @@ export function purchaseWebUrl(base: string, accountId: string): string {
   return `${base.replace(/\/+$/, "")}/${encodeURIComponent(accountId)}`;
 }
 
+/**
+ * The entitlement as a client reads it: the stored row, plus when Relay last wrote it.
+ *
+ * `checked_at` is `entitlements.updated_at`, so a `stale: true` answer can say how old the
+ * values beside it are instead of leaving the reader to guess. An account with no row has
+ * nothing to date.
+ */
 export function publicEntitlement(row: StoredEntitlement | null, stale: boolean): Entitlement {
   if (!row) {
-    return { ...noneEntitlement, stale };
+    return { ...noneEntitlement, stale, checked_at: null };
   }
   return {
     status: row.status,
@@ -69,6 +76,7 @@ export function publicEntitlement(row: StoredEntitlement | null, stale: boolean)
     product_id: row.product_id,
     store: row.store,
     stale,
+    checked_at: row.updated_at,
   };
 }
 

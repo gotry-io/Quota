@@ -63,7 +63,9 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -215,7 +217,9 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: nil,
@@ -408,7 +412,9 @@ func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,
-  overview: [LocalServiceOverviewItem] = []
+  overview: [LocalServiceOverviewItem] = [],
+  entitlement: LocalServiceEntitlement? = nil,
+  purchaseURL: URL? = nil
 ) -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 1,
@@ -426,7 +432,9 @@ func justSignedInState(
         displayLabel: label,
         deviceID: "device_1",
         deviceGeneration: 1,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: entitlement,
+        purchaseURL: purchaseURL
       ),
       updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
       lastError: nil,
@@ -934,7 +942,9 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -969,7 +979,9 @@ func loggingInState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: nil,

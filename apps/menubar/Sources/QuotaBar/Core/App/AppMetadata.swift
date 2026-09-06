@@ -14,5 +14,7 @@ enum AppMetadata {
 
   static let websiteURL = URL(string: "https://quota.gotry.io")!
   static let accountURL = URL(string: "https://quota.gotry.io/my")!
+  /// Where a subscription is changed or cancelled once there is one.
+  static let manageSubscriptionURL = URL(string: "https://quota.gotry.io/my/settings")!
   static let feedbackURL = URL(string: "https://github.com/gotry-io/Quota/issues")!
 }

@@ -347,7 +347,9 @@ export type EntitlementStatus = z.infer<typeof EntitlementStatusSchema>;
  * The paid-sync entitlement Relay last observed for this Account.
  *
  * `stale` is a read-time flag: the row could not be refreshed from RevenueCat and the
- * stored values are what Relay still has. See
+ * stored values are what Relay still has. `checked_at` is when the stored row last changed,
+ * which is what makes a stale answer readable: it says how old the values beside it are, and
+ * is null when there is no stored row at all. See
  * [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
  */
 export const EntitlementSchema = z
@@ -358,12 +360,19 @@ export const EntitlementSchema = z
     product_id: z.string().min(1).max(256).nullable(),
     store: z.string().min(1).max(64).nullable(),
     stale: z.boolean(),
+    checked_at: Rfc3339InstantSchema.nullable(),
   })
   .strict();
 export type Entitlement = z.infer<typeof EntitlementSchema>;
 
 const EntitlementReadSchema = EntitlementSchema.loose();
 
+/**
+ * Where this Account buys paid sync.
+ *
+ * Both Account reads carry it, because the entitlement and the way to change it are one
+ * answer: a client that has read either can say what sync costs it without a second request.
+ */
 export const PurchaseSchema = z
   .object({
     web_url: z.string().url().max(2_048),
@@ -1170,6 +1179,7 @@ export const AccountSummarySchema = z
     pricing_revision: OpaqueIdSchema,
     model_catalog_revision: OpaqueIdSchema,
     entitlement: EntitlementSchema,
+    purchase: PurchaseSchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
@@ -1290,6 +1300,7 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
   usage: AccountUsageReadSchema,
   entitlement: EntitlementReadSchema,
+  purchase: PurchaseSchema.loose(),
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 

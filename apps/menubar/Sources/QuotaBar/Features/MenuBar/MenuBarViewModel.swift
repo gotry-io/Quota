@@ -104,6 +104,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
+  /// What Relay last said this account may sync, and where a subscription is bought. Both are
+  /// stated by the account read; QuotaBar renders them and derives neither.
+  private(set) var syncEntitlement: LocalServiceEntitlement?
+  private(set) var purchaseURL: URL?
   /// The name the sign-in gave, held until an account read carries one of its own.
   private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
@@ -187,6 +191,27 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     PlanDisplay.accountLabel(accountSummary?.account.displayLabel)
       ?? PlanDisplay.accountLabel(signInDisplayLabel)
       ?? "Quota account"
+  }
+
+  /// Whether this account's writes are the ones Relay accepts. An account that has not been
+  /// read yet is not called unsubscribed: the Sync row says it is still checking.
+  var syncIsPaid: Bool { syncEntitlement?.allowsSync == true }
+
+  /// The status line under **Sync** on the Account page.
+  var syncStatusLabel: String { SyncStatusCopy.status(syncEntitlement) }
+
+  /// What the Sync row's trailing button says.
+  var syncActionLabel: String { SyncStatusCopy.action(syncEntitlement) }
+
+  /// Where that button goes: the account's own purchase link while there is nothing to manage,
+  /// and the web account otherwise.
+  var syncActionURL: URL? {
+    syncIsPaid ? AppMetadata.manageSubscriptionURL : purchaseURL
+  }
+
+  /// Why Sync Usage cannot be turned on, or nil when it can.
+  var syncUsageDisabledReason: String? {
+    syncEntitlement == nil || syncIsPaid ? nil : SyncStatusCopy.uploadNeedsSubscription
   }
 
   var accountDeviceSummary: String {
@@ -1205,6 +1230,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     report = state.quota.value
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
+    syncEntitlement = state.account.value?.entitlement
+    purchaseURL = state.account.value?.purchaseURL
     signInDisplayLabel = state.account.value?.displayLabel
     let incomingAuth =
       state.account.value?.authStatus
