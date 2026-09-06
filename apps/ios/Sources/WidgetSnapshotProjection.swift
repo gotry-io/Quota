@@ -15,7 +15,7 @@ enum WidgetSnapshotProjection {
     fetchedAt: Date,
     salt: Data
   ) -> WidgetSnapshot {
-    let items = projectItems(from: subscriptions, salt: salt)
+    let items = projectItems(from: subscriptions, salt: salt, now: fetchedAt)
     let usage = today.map {
       WidgetTodayUsage(
         inputTokens: $0.totals.inputTokens,
@@ -37,8 +37,15 @@ enum WidgetSnapshotProjection {
 
   /// Every subscription reaches the widget as one row with its readings already resolved, so the
   /// widget ranks those rows rather than one card per reporting device.
-  static func projectItems(from subscriptions: [QuotaSubscription], salt: Data) -> [WidgetQuotaItem]
-  {
+  ///
+  /// `now` is the instant the readings were fetched: pace is a rate read against the window
+  /// elapsed at that moment, so the snapshot states the pace of what it carries rather than one
+  /// the widget would have to recompute against its own clock.
+  static func projectItems(
+    from subscriptions: [QuotaSubscription],
+    salt: Data,
+    now: Date
+  ) -> [WidgetQuotaItem] {
     let candidates = subscriptions.flatMap { subscription in
       let selectionID = selectionID(for: subscription, salt: salt)
       return subscription.snapshot.windows.map { window in
@@ -49,7 +56,8 @@ enum WidgetSnapshotProjection {
           fingerprint: subscription.snapshot.account.fingerprint,
           sourceID: subscription.key,
           windowID: window.id,
-          selectionID: selectionID
+          selectionID: selectionID,
+          now: now
         )
       }
     }
@@ -164,6 +172,7 @@ private struct WidgetSnapshotCandidate {
   var sourceID: String
   var windowID: String
   var selectionID: String
+  var now: Date
 
   var isBalanceOnly: Bool {
     RemainingQuotaFormat.isBalanceOnly(
@@ -195,7 +204,8 @@ private struct WidgetSnapshotCandidate {
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
       state: WidgetQuotaState(snapshot.reportedState),
-      validUntil: snapshot.validUntil
+      validUntil: snapshot.validUntil,
+      pace: QuotaPace.evaluate(window.paceReading, now: now)
     )
   }
 

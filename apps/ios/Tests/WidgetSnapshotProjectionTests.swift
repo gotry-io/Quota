@@ -8,6 +8,9 @@ import Testing
 
 struct WidgetSnapshotProjectionTests {
   private let testSalt = Data(repeating: 0x5a, count: 32)
+  /// The instant the fixtures were read — `2026-08-14T16:00:00Z`, what every observation in
+  /// this file is stamped with — so a projected pace is the same on every run.
+  private let testNow = Date(timeIntervalSince1970: 1_786_723_200)
 
   @Test
   func projectsOneItemPerWindowOfEachResolvedSubscription() throws {
@@ -30,7 +33,7 @@ struct WidgetSnapshotProjectionTests {
       usedPercent: 50,
     )
     let summary = try decodeSummary(subscriptions: [subscription, otherFingerprint])
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.count == 2)
     #expect(items.map(\.remainingPercent).sorted() == [50, 90])
     #expect(items.allSatisfy { $0.providerID == "codex" })
@@ -68,7 +71,7 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.count == 4)
     // Percentage first: lowest remainingPercent, then provider sortOrder, then title.
     #expect(items[0].providerID == "codex")
@@ -108,12 +111,12 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.count == 4)
     // Same remaining percent and provider: title, then fingerprint, then window id.
     #expect(items.map(\.windowTitle) == ["Daily", "Daily", "Weekly", "Weekly"])
     // Fingerprint is not published; order is still stable across runs.
-    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items == again)
   }
 
@@ -137,11 +140,11 @@ struct WidgetSnapshotProjectionTests {
     let summary = try decodeSummary(
       subscriptions: [observation("device_b", 40), observation("device_a", 40)])
 
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
 
     #expect(items.count == 2)
     #expect(
-      WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt) == items
+      WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow) == items
     )
   }
 
@@ -157,7 +160,7 @@ struct WidgetSnapshotProjectionTests {
       )
     }
     let summary = try decodeSummary(subscriptions: subscriptions)
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt)
+    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.count == 16)
   }
 
@@ -230,7 +233,7 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow).first)
 
     #expect(item.state == .available)
     #expect(item.validUntil == date("2026-08-14T16:00:00Z"))
@@ -253,7 +256,7 @@ struct WidgetSnapshotProjectionTests {
         )
       ]
     )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt).first)
+    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow).first)
 
     // The wire status, the payload state, and the shared vocabulary have to agree; the
     // reading has not aged out, so only what the source reported can say otherwise.
@@ -337,11 +340,13 @@ struct WidgetSnapshotProjectionTests {
     )
     let first = WidgetSnapshotProjection.projectItems(
       from: summary.subscriptions,
-      salt: testSalt
+      salt: testSalt,
+      now: testNow
     )
     let again = WidgetSnapshotProjection.projectItems(
       from: summary.subscriptions,
-      salt: testSalt
+      salt: testSalt,
+      now: testNow
     )
     #expect(first.map(\.selectionID) == again.map(\.selectionID))
     #expect(first.first?.selectionID.count == 12)
@@ -349,7 +354,8 @@ struct WidgetSnapshotProjectionTests {
     let otherSalt = Data(repeating: 0xa5, count: 32)
     let rotated = WidgetSnapshotProjection.projectItems(
       from: summary.subscriptions,
-      salt: otherSalt
+      salt: otherSalt,
+      now: testNow
     )
     #expect(first.map(\.selectionID) != rotated.map(\.selectionID))
     #expect(rotated.first?.selectionID.count == 12)

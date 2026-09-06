@@ -55,6 +55,11 @@ public enum QuotaPace: Equatable, Sendable {
     }
   }
 
+  public var isRunsOut: Bool {
+    if case .runsOut = self { return true }
+    return false
+  }
+
   /// The pace of one window.
   public static func evaluate(_ reading: QuotaPaceReading, now: Date) -> QuotaPace {
     guard let resetsAt = reading.resetsAt, let seconds = reading.cadenceSeconds,

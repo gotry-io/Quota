@@ -104,6 +104,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   /// The reported state carries why a reading is not current, not merely that it is not.
   public let state: WidgetQuotaState
   public let validUntil: Date?
+  /// Derived burn-rate when a publisher has one. The snapshot never computes it.
+  public let pace: QuotaPace?
 
   public init(
     selectionID: String,
@@ -117,7 +119,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     hasLimit: Bool? = nil,
     resetsAt: Date? = nil,
     state: WidgetQuotaState = .available,
-    validUntil: Date? = nil
+    validUntil: Date? = nil,
+    pace: QuotaPace? = nil
   ) {
     self.selectionID = selectionID
     self.providerID = providerID
@@ -131,12 +134,14 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     self.resetsAt = resetsAt
     self.state = state
     self.validUntil = validUntil
+    self.pace = pace
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
       "selectionId", "providerId", "providerDisplayName", "windowTitle", "remainingPercent",
       "remainingValue", "limitValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
+      "pace",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     selectionID = try container.decode(String.self, forKey: .selectionID)
@@ -151,6 +156,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
     state = try container.decode(WidgetQuotaState.self, forKey: .state)
     validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
+    pace = try container.decodeIfPresent(QuotaPace.self, forKey: .pace)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .selectionID,
@@ -183,6 +189,12 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
     try container.encode(state, forKey: .state)
     try container.encodeIfPresent(validUntil, forKey: .validUntil)
+    try container.encodeIfPresent(pace, forKey: .pace)
+  }
+
+  /// Used percent is the complement of remaining; the snapshot still stores remaining.
+  public var usedPercent: Double {
+    min(max(100 - remainingPercent, 0), 100)
   }
 
   public var isValid: Bool {
@@ -197,6 +209,19 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
       && (limitValue.map { $0.isFinite && $0 >= 0 } ?? true)
       && (resetsAt.map(WidgetValidation.isFiniteDate) ?? true)
       && (validUntil.map(WidgetValidation.isFiniteDate) ?? true)
+      && paceIsValid
+  }
+
+  private var paceIsValid: Bool {
+    guard let pace else { return true }
+    switch pace {
+    case .none:
+      return true
+    case .lasts(let projection):
+      return projection.projectedAtReset.isFinite
+    case .runsOut(let projection, let exhaustsAt):
+      return projection.projectedAtReset.isFinite && WidgetValidation.isFiniteDate(exhaustsAt)
+    }
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -212,6 +237,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     case resetsAt
     case state
     case validUntil
+    case pace
   }
 }
 

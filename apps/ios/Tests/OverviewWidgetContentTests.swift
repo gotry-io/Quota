@@ -46,10 +46,39 @@ struct OverviewWidgetContentTests {
 
     #expect(OverviewWidgetContent.primaryItem(from: snapshot)?.providerID == "codex")
     #expect(
-      OverviewWidgetContent.mediumItems(from: snapshot).map(\.providerID) == ["codex", "claude"]
+      OverviewWidgetContent.mediumItems(from: snapshot).map(\.providerID)
+        == ["codex", "claude", "grok"]
     )
     #expect(OverviewWidgetContent.primaryItem(from: nil) == nil)
     #expect(OverviewWidgetContent.mediumItems(from: nil).isEmpty)
+  }
+
+  @Test
+  func smallItemsAreTwoWindowsOfTheMostConstrainedSubscription() {
+    let items = OverviewWidgetContent.smallItems(from: rankedSnapshot())
+    #expect(items.map(\.windowTitle) == ["5h", "Weekly"])
+    #expect(items.map(\.selectionID) == ["aaaaaaaaaaaa", "aaaaaaaaaaaa"])
+    #expect(OverviewWidgetContent.smallItems(from: nil).isEmpty)
+  }
+
+  @Test
+  func lockScreenPrefersTheWeeklyWindowAndAddsTheSecond() {
+    let weekly = OverviewWidgetContent.lockScreenWeeklyItem(from: rankedSnapshot())
+    #expect(weekly?.windowTitle == "Weekly")
+    #expect(weekly?.selectionID == "aaaaaaaaaaaa")
+    #expect(
+      OverviewWidgetContent.lockScreenSecondItem(from: rankedSnapshot())?.windowTitle == "5h"
+    )
+  }
+
+  @Test
+  func lockScreenURLOpensTheFocusedSubscriptionAndOverviewWithoutOne() {
+    let weekly = OverviewWidgetContent.lockScreenWeeklyItem(from: rankedSnapshot())!
+    #expect(
+      OverviewWidgetContent.lockScreenURL(from: rankedSnapshot())
+        == OverviewWidgetContent.subscriptionURL(for: weekly)
+    )
+    #expect(OverviewWidgetContent.lockScreenURL(from: nil) == OverviewWidgetContent.overviewURL)
   }
 
   @Test
@@ -101,21 +130,24 @@ struct OverviewWidgetContentTests {
       OverviewWidgetContent.mediumItems(
         from: snapshot,
         configuredSelectionID: "ffffffffffff"
-      ).map(\.providerID) == ["codex", "claude"]
+      ).map(\.providerID) == ["codex", "claude", "grok"]
     )
   }
 
   @Test
-  func largeItemsCapAtSixAndFollowConfiguration() {
-    let items = (0..<8).map { index in
-      WidgetQuotaItem(
-        selectionID: String(repeating: String(format: "%x", index), count: 12),
-        providerID: "codex",
-        providerDisplayName: "Codex",
-        windowTitle: "W\(index)",
-        remainingPercent: Double(index * 10),
-        hasLimit: true
-      )
+  func largeGroupsCapAtThreeProvidersAndTwoWindows() {
+    let providers = ["codex", "claude", "grok", "gemini"]
+    let items = providers.enumerated().flatMap { providerIndex, providerID in
+      (0..<3).map { windowIndex in
+        WidgetQuotaItem(
+          selectionID: String(repeating: String(format: "%x", providerIndex), count: 12),
+          providerID: providerID,
+          providerDisplayName: providerID,
+          windowTitle: "W\(windowIndex)",
+          remainingPercent: Double(providerIndex * 10 + windowIndex),
+          hasLimit: true
+        )
+      }
     }
     let snapshot = WidgetSnapshot(
       fetchedAt: date("2026-08-14T16:00:00Z"),
@@ -126,24 +158,24 @@ struct OverviewWidgetContentTests {
         cost: WidgetCost(status: .unavailable)
       )
     )
+    let groups = OverviewWidgetContent.largeProviderGroups(from: snapshot)
+    #expect(groups.map(\.providerID) == ["codex", "claude", "grok"])
+    #expect(groups.allSatisfy { $0.items.count == 2 })
     #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 6)
-    #expect(
-      OverviewWidgetContent.largeItems(from: snapshot).map(\.windowTitle) == [
-        "W0", "W1", "W2", "W3", "W4", "W5",
-      ])
-    let configuredID = items[7].selectionID
-    #expect(
-      OverviewWidgetContent.largeItems(
-        from: snapshot,
-        configuredSelectionID: configuredID
-      ).map(\.windowTitle) == ["W7"]
+    let configuredID = items.last?.selectionID
+    let configured = OverviewWidgetContent.largeItems(
+      from: snapshot,
+      configuredSelectionID: configuredID
     )
+    #expect(configured.map(\.providerID) == ["gemini", "gemini"])
+    #expect(configured.count == 2)
   }
 
   @Test
   func widgetURLUsesSubscriptionForASingleItemAndOverviewForSeveral() {
-    let first = rankedSnapshot().items[0]
-    let second = rankedSnapshot().items[1]
+    let ranked = rankedSnapshot().items
+    let first = ranked[0]
+    let second = ranked.first { $0.selectionID != first.selectionID }!
     #expect(
       OverviewWidgetContent.widgetURL(for: [first])
         == OverviewWidgetContent.subscriptionURL(for: first)
@@ -151,6 +183,11 @@ struct OverviewWidgetContentTests {
     #expect(
       OverviewWidgetContent.widgetURL(for: [first, second]) == OverviewWidgetContent.overviewURL)
     #expect(OverviewWidgetContent.widgetURL(for: []) == OverviewWidgetContent.overviewURL)
+    let sameSubscription = OverviewWidgetContent.smallItems(from: rankedSnapshot())
+    #expect(
+      OverviewWidgetContent.widgetURL(for: sameSubscription)
+        == OverviewWidgetContent.subscriptionURL(for: first)
+    )
   }
 
   @Test
@@ -170,7 +207,8 @@ struct OverviewWidgetContentTests {
       OverviewWidgetContent.remainingAccessibility(for: percentItem)
         == "Weekly, 71% · $3.75 remaining"
     )
-    #expect(OverviewWidgetContent.inlineLabel(for: percentItem) == "Codex 71%")
+    #expect(OverviewWidgetContent.inlineLabel(for: percentItem) == "Weekly 29%")
+    #expect(OverviewWidgetContent.usedPercentLabel(for: percentItem) == "29%")
 
     let balanceItem = WidgetQuotaItem(
       selectionID: "fedcba987654",
@@ -184,7 +222,7 @@ struct OverviewWidgetContentTests {
     )
     #expect(OverviewWidgetContent.remainingLabel(for: balanceItem) == "$12.50")
     #expect(OverviewWidgetContent.isBalanceOnly(balanceItem))
-    #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "OpenRouter 100%")
+    #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "Balance 0%")
 
     let extraUsage = WidgetQuotaItem(
       selectionID: "abcdef012345",
@@ -223,7 +261,7 @@ struct OverviewWidgetContentTests {
     #expect(
       OverviewWidgetContent.updated(fetchedAt: snapshot.fetchedAt, now: now) == "Updated just now"
     )
-    #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 3)
+    #expect(OverviewWidgetContent.largeItems(from: snapshot).count == 4)
   }
 
   @Test
@@ -293,6 +331,38 @@ struct OverviewWidgetContentTests {
     #expect(
       !OverviewWidgetContent.itemAccessibility(item: item, fetchedAt: nil, now: now)
         .contains("Resets")
+    )
+  }
+
+  @Test
+  func paceRunsOutIsReservedOnTheItem() {
+    let item = WidgetQuotaItem(
+      selectionID: "0123456789ab",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "Weekly",
+      remainingPercent: 20,
+      hasLimit: true,
+      pace: .runsOut(
+        QuotaPaceProjection(tempo: .ahead, deltaPercent: 42, projectedAtReset: 142),
+        exhaustsAt: date("2026-08-14T17:00:00Z")
+      )
+    )
+    #expect(OverviewWidgetContent.paceRunsOut(item))
+    #expect(
+      !OverviewWidgetContent.paceRunsOut(
+        WidgetQuotaItem(
+          selectionID: "0123456789ab",
+          providerID: "codex",
+          providerDisplayName: "Codex",
+          windowTitle: "Weekly",
+          remainingPercent: 20,
+          hasLimit: true,
+          pace: .lasts(
+            QuotaPaceProjection(tempo: .onTrack, deltaPercent: 0, projectedAtReset: 90)
+          )
+        )
+      )
     )
   }
 
@@ -375,6 +445,14 @@ struct OverviewWidgetContentTests {
       remainingPercent: 20,
       hasLimit: true
     )
+    let firstWeekly = WidgetQuotaItem(
+      selectionID: "aaaaaaaaaaaa",
+      providerID: "codex",
+      providerDisplayName: "Codex",
+      windowTitle: "Weekly",
+      remainingPercent: 60,
+      hasLimit: true
+    )
     let second = WidgetQuotaItem(
       selectionID: "bbbbbbbbbbbb",
       providerID: "claude",
@@ -393,7 +471,7 @@ struct OverviewWidgetContentTests {
     )
     return WidgetSnapshot(
       fetchedAt: date("2026-08-14T16:00:00Z"),
-      items: [first, second, third],
+      items: [first, firstWeekly, second, third],
       today: WidgetTodayUsage(
         inputTokens: 1_200,
         outputTokens: 340,

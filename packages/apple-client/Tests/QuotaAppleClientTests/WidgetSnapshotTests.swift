@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWidgetData
 import Testing
 
@@ -353,6 +354,54 @@ struct WidgetSnapshotTests {
     #expect(throws: DecodingError.self) {
       _ = try decodeSnapshot(unavailableWithAmount)
     }
+  }
+
+  @Test
+  func missingPaceStillDecodes() throws {
+    let snapshot = try decodeSnapshot(makeJSON(
+      providerID: "codex",
+      displayName: "Codex",
+      windowTitle: "Weekly"
+    ))
+    #expect(snapshot.items.first?.pace == nil)
+  }
+
+  @Test
+  func paceRoundtripsWithoutSecrets() throws {
+    let exhausts = date("2026-08-14T17:00:00Z")
+    let snapshot = WidgetSnapshot(
+      fetchedAt: date("2026-08-14T16:00:00Z"),
+      items: [
+        WidgetQuotaItem(
+          selectionID: "0123456789ab",
+          providerID: "codex",
+          providerDisplayName: "Codex",
+          windowTitle: "Weekly",
+          remainingPercent: 20,
+          hasLimit: true,
+          pace: .runsOut(
+            QuotaPaceProjection(tempo: .ahead, deltaPercent: 42, projectedAtReset: 142),
+            exhaustsAt: exhausts
+          )
+        )
+      ],
+      today: WidgetTodayUsage(
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: WidgetCost(status: .unavailable)
+      )
+    )
+    let encoded = try String(data: encodeSnapshot(snapshot), encoding: .utf8)!
+    #expect(encoded.contains("\"kind\":\"runs_out\""))
+    #expect(encoded.contains("\"tempo\":\"ahead\""))
+    #expect(encoded.contains("delta_percent"))
+    #expect(encoded.contains("projected_at_reset"))
+    #expect(encoded.contains("exhausts_at"))
+    #expect(!encoded.contains("account_id"))
+    #expect(!encoded.contains("fingerprint"))
+    let loaded = try decodeSnapshot(encoded)
+    #expect(loaded.items.first?.pace?.isRunsOut == true)
+    #expect(loaded.items.first?.usedPercent == 80)
   }
 
   @Test

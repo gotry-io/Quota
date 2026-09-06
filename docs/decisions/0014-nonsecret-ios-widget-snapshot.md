@@ -4,6 +4,8 @@
 - Date: 2026-08-14
 - Related: [ADR 0013](./0013-readonly-ios-account-client.md)
 - Updated 2026-09-04: locally salted `selection_id`; unpublished v2 shape changes in place
+- Updated 2026-09-06: the same snapshot is the widget file for every Apple WidgetKit
+  surface; optional per-item `pace` joins version 2 in place
 
 ## Context
 
@@ -17,16 +19,20 @@ last published projection.
 
 Publish a non-secret, versioned `WidgetSnapshot` from the app process into the App Group
 `group.io.gotry.quota`. The WidgetKit extension reads only that protected file and never talks to
-Relay.
+Relay. macOS widgets, when an extension can be embedded in QuotaBar, read the same file format
+from the same App Group identifier on that platform. They do not get a second snapshot type.
 
 - The app is the only process that performs OAuth, holds the Keychain account session, calls Relay,
   and projects Account summary data into `WidgetSnapshot`.
 - The snapshot is written with
   `ProtectedFileWidgetSnapshotStore` (`completeFileProtectionUntilFirstUserAuthentication`, atomic
   replace, excluded from backup). It contains display-oriented remaining quota, Today token/cost
-  fields, and a locally salted `selection_id` per item. It never includes account ids, device ids,
-  fingerprints, tokens, sequences, raw sources, account display labels, or the unsalted
-  subscription selector. Widget Intent configuration is not stored in the snapshot.
+  fields, a locally salted `selection_id` per item, and an optional derived `pace` when a
+  publisher has one. It never includes account ids, device ids, fingerprints, tokens, sequences,
+  raw sources, account display labels, or the unsalted subscription selector. Widget Intent
+  configuration is not stored in the snapshot. The snapshot stores remaining quota; Lock Screen
+  families may show the complement as used percent. Pace is carried, never computed, inside the
+  extension.
 - The extension target `QuotaWidgets` (`io.gotry.quota.widgets`) embeds in Quota, uses the same App
   Group, and depends only on `QuotaWidgetData` and `QuotaPresentation`. It must not import or link
   `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
