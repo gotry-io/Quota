@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import Testing
 
 @testable import QuotaBar
@@ -112,11 +113,15 @@ struct AccountSettingsPageTests {
 
   @Test
   func usagePeriodTabsUseTheSharedPeriodNames() {
-    #expect(UsagePeriod.allCases.map(\.label) == ["Today", "7 Days", "30 Days", "2 Years"])
+    let segments = UsagePeriodSegment.allCases.filter { $0 != .custom }
+    #expect(segments.map(\.title) == ["Day", "Week", "Month", "7D", "30D", "All"])
     #expect(
-      UsagePeriod.allCases.map(\.accessibilityLabel)
-        == ["Today", "7 Days", "30 Days", "Up to 2 years"]
+      segments.map(\.accessibilityTitle)
+        == ["Today", "This week", "This month", "Last 7 days", "Last 30 days", "All"]
     )
+    // Only the four the summary already folds are read out of `get_state`.
+    #expect(UsagePeriodSelection.today.summaryKey == .today)
+    #expect(UsagePeriodSelection.thisMonth.summaryKey == nil)
   }
 
   @Test

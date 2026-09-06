@@ -24,6 +24,37 @@ struct AlertEvaluatorConformanceTests {
       #expect(statesMatch(result.state, testCase.expectedStateAfter), "\(testCase.name)")
     }
   }
+
+  @Test func everyBudgetCaseMatchesTheSharedFixture() throws {
+    let fixture = try AlertTransitionFixture.load()
+    #expect(fixture.budgetCases.count >= 6)
+    for testCase in fixture.budgetCases {
+      let result = BudgetAlertEvaluator.evaluate(
+        budget: testCase.budget,
+        progress: testCase.progress,
+        month: testCase.month,
+        previous: AlertDedupState(fired: testCase.previousFired, readings: [])
+      )
+      #expect(budgetEventsMatch(result.events, testCase.expectedEvents), "\(testCase.name)")
+      #expect(
+        result.state.sorted().fired == AlertDedupState(fired: testCase.expectedFiredAfter, readings: [])
+          .sorted().fired,
+        "\(testCase.name)"
+      )
+    }
+  }
+}
+
+private func budgetEventsMatch(
+  _ actual: [AlertEvent],
+  _ expected: [AlertTransitionFixture.BudgetEvent]
+) -> Bool {
+  guard actual.count == expected.count else { return false }
+  return zip(actual, expected).allSatisfy { lhs, rhs in
+    guard case .budgetCrossed(let month, let threshold, let budgetUSD) = lhs else { return false }
+    return rhs.type == "budget_crossed" && rhs.month == month && rhs.threshold == threshold
+      && Decimal(string: rhs.budgetUSD) == budgetUSD
+  }
 }
 
 private func eventsMatch(
@@ -53,6 +84,8 @@ private func eventsMatch(
         && rhs.windowID == windowID
         && rhs.resetsAt == resetsAt
         && exhaustsAt(pace) == rhs.exhaustsAt
+    case .budgetCrossed:
+      false
     }
   }
 }
@@ -68,6 +101,72 @@ private func statesMatch(_ actual: AlertDedupState, _ expected: AlertDedupState)
 
 private struct AlertTransitionFixture: Decodable {
   var cases: [Case]
+  var budgetCases: [BudgetCase]
+
+  struct BudgetCase {
+    var name: String
+    var budget: UsageBudget
+    var progress: UsageBudgetProgress?
+    var month: String
+    var previousFired: [AlertDedupKey]
+    var expectedEvents: [BudgetEvent]
+    var expectedFiredAfter: [AlertDedupKey]
+  }
+
+  struct BudgetEvent: Decodable {
+    var type: String
+    var month: String
+    var threshold: Int
+    var budgetUSD: String
+
+    enum CodingKeys: String, CodingKey {
+      case type
+      case month
+      case threshold
+      case budgetUSD = "budget_usd"
+    }
+  }
+
+  struct BudgetDTO: Decodable {
+    var amountUSD: String?
+    var alerts: Bool
+
+    enum CodingKeys: String, CodingKey {
+      case amountUSD = "amount_usd"
+      case alerts
+    }
+  }
+
+  /// The fixture states a progress by the percent it reached, which is all a crossing reads.
+  struct ProgressDTO: Decodable {
+    var percent: Int
+    var partial: Bool
+  }
+
+  struct BudgetKeyDTO: Decodable {
+    var month: String
+    var threshold: Int
+  }
+
+  struct BudgetCaseDTO: Decodable {
+    var name: String
+    var budget: BudgetDTO
+    var progress: ProgressDTO?
+    var month: String
+    var previousFired: [BudgetKeyDTO]
+    var expectedEvents: [BudgetEvent]
+    var expectedFiredAfter: [BudgetKeyDTO]
+
+    enum CodingKeys: String, CodingKey {
+      case name
+      case budget
+      case progress
+      case month
+      case previousFired = "previous_fired"
+      case expectedEvents = "expected_events"
+      case expectedFiredAfter = "expected_fired_after"
+    }
+  }
 
   struct Case {
     var name: String
@@ -229,9 +328,43 @@ private struct AlertTransitionFixture: Decodable {
       )
     }
     cases = decoded
+    budgetCases = try root.decode([BudgetCaseDTO].self, forKey: .budgetCases).map { dto in
+      let amount = dto.budget.amountUSD.flatMap { Decimal(string: $0) }
+      let budget = UsageBudget(amountUSD: amount, alerts: dto.budget.alerts)
+      return BudgetCase(
+        name: dto.name,
+        budget: budget,
+        progress: dto.progress.map { progress in
+          // A percent is a spend against the budget, so the fixture's percent is written back
+          // as the spend that reaches it.
+          UsageBudgetProgress(
+            spentUSD: (amount ?? 1) * Decimal(progress.percent) / 100,
+            budgetUSD: amount ?? 1,
+            partial: progress.partial
+          )
+        },
+        month: dto.month,
+        previousFired: dto.previousFired.map(Self.budgetKey),
+        expectedEvents: dto.expectedEvents,
+        expectedFiredAfter: dto.expectedFiredAfter.map(Self.budgetKey)
+      )
+    }
   }
 
-  private enum RootKeys: String, CodingKey { case cases }
+  private enum RootKeys: String, CodingKey {
+    case cases
+    case budgetCases = "budget_cases"
+  }
+
+  private static func budgetKey(_ dto: BudgetKeyDTO) -> AlertDedupKey {
+    AlertDedupKey(
+      kind: .budget,
+      selector: BudgetAlertEvaluator.selector,
+      windowID: dto.month,
+      resetsAt: nil,
+      threshold: dto.threshold
+    )
+  }
 
   private static func state(_ dto: StateDTO) -> AlertDedupState {
     AlertDedupState(

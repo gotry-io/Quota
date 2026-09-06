@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import UserNotifications
 
 /// Where evaluated notification events go.
@@ -63,11 +64,20 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
   }
 
   private func request(for event: AlertEvent) -> UNNotificationRequest? {
-    guard let windowTitle = catalog.windowTitle(selector: event.selector, windowID: event.windowID)
-    else { return nil }
     let content = UNMutableNotificationContent()
     content.threadIdentifier = event.selector
     content.sound = .default
+    if case .budgetCrossed(_, let threshold, let budgetUSD) = event {
+      content.title = AlertCopy.budgetTitle
+      content.body = AlertCopy.budgetBody(threshold: threshold, budgetUSD: budgetUSD)
+      return UNNotificationRequest(
+        identifier: event.dedupKey.requestIdentifier,
+        content: content,
+        trigger: nil
+      )
+    }
+    guard let windowTitle = catalog.windowTitle(selector: event.selector, windowID: event.windowID)
+    else { return nil }
     switch event {
     case .thresholdCrossed(_, _, _, let remainingPercent, let resetsAt):
       guard let provider = catalog.providerDisplayName(selector: event.selector) else { return nil }
@@ -92,6 +102,8 @@ final class UserNotificationSink: NotificationSink, @unchecked Sendable {
       content.title = AlertCopy.title(
         providerDisplayName: provider, windowTitle: windowTitle)
       content.body = body
+    case .budgetCrossed:
+      return nil
     }
     return UNNotificationRequest(
       identifier: event.dedupKey.requestIdentifier,

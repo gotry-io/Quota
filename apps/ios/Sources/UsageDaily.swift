@@ -4,7 +4,8 @@ import QuotaWire
 ///
 /// The activity read answers UTC dates — 400 local days would cut 400 UTC days, which is the
 /// history the rollup exists to keep closed (ADR 0024) — so this table is UTC too, and says so.
-/// `all` has no table: two years of rows is what the Activity chart beside it already answers.
+/// `all` has no first day, so it has no table: two years of rows is what the Activity chart
+/// beside it already answers.
 enum UsageDailyFold {
   struct Row: Identifiable, Equatable, Sendable {
     let date: String
@@ -19,32 +20,23 @@ enum UsageDailyFold {
     var outputTokens: Int { totals.outputTokens }
   }
 
-  /// How many UTC days each period covers, or `nil` for the period that has no table.
-  static func span(_ period: SelectedUsagePeriod) -> Int? {
-    switch period {
-    case .today: 1
-    case .last7Days: 7
-    case .last30Days: 30
-    case .all: nil
-    }
-  }
-
-  static func rows(
-    reported: [UsageActivityDay],
-    period: SelectedUsagePeriod,
-    lastDate: String
-  ) -> [Row] {
-    guard let span = span(period) else { return [] }
+  static func rows(reported: [UsageActivityDay], from: String, to: String) -> [Row] {
+    guard from <= to else { return [] }
     let byDate = Dictionary(reported.map { ($0.date, $0) }, uniquingKeysWith: { first, _ in first })
-    return (0..<span).reversed().map { offset in
-      let date = UsageActivityCalendar.addDays(-offset, to: lastDate)
+    var rows: [Row] = []
+    var date = from
+    while date <= to {
       let day = byDate[date]
-      return Row(
-        date: date,
-        totals: day?.totals ?? emptyTotals,
-        cost: day?.cost ?? UsageActivityChart.emptyCost()
+      rows.append(
+        Row(
+          date: date,
+          totals: day?.totals ?? emptyTotals,
+          cost: day?.cost ?? UsageActivityChart.emptyCost()
+        )
       )
+      date = UsageActivityCalendar.addDays(1, to: date)
     }
+    return rows
   }
 
   static func hasUsage(_ rows: [Row]) -> Bool {

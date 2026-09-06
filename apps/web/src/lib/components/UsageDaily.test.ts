@@ -25,8 +25,7 @@ function day(date: string, input: number, cacheRead: number, output: number, amo
 function rows() {
   return usageDailyRows(
     [day("2026-09-04", 800, 600, 200, "40000"), day("2026-09-05", 400, 100, 100, "20000")],
-    "7d",
-    "2026-09-05",
+    { from: "2026-08-30", to: "2026-09-05" },
   );
 }
 
@@ -64,6 +63,6 @@ it("switches what the bars measure without redrawing the table", async () => {
 });
 
 it("says so when a period reported no Usage at all", () => {
-  render(UsageDaily, { rows: usageDailyRows([], "7d", "2026-09-05") });
+  render(UsageDaily, { rows: usageDailyRows([], { from: "2026-08-30", to: "2026-09-05" }) });
   expect(screen.getByText("No Usage on these days.")).toBeTruthy();
 });

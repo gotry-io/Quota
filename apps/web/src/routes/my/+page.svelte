@@ -126,7 +126,7 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
       <LoadingBlock lines={2} label="Loading today" />
     {/if}
   {:else}
-    <a class="today-strip" href={`${USAGE_PATH}?period=today`} aria-labelledby="today-title">
+    <a class="today-strip" href={`${USAGE_PATH}?period=day`} aria-labelledby="today-title">
       <article>
         <span>Tokens</span>
         <strong>{formatCount(today.totals.total_tokens)}</strong>

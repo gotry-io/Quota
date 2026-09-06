@@ -40,6 +40,13 @@ The v6 data contract is four routes
   `cost` is priced the same way a period's is — so a per-day table needs no second read. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
 
+The four periods in a summary are the four every client opens on. Any other period a Usage page
+offers — a week, a month, a range someone picked — is these same days added up by the client, which
+is why this read answers a range rather than one more named period. A day carries no agent tree
+unless it was asked for on its own, so a client-folded period carries totals and cost only. The
+fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
+website and both Apple apps answer that file.
+
 Each period of `usage` also carries `cache_saved`: what its cache reads saved against paying the
 uncached input price for the same tokens, folded from the rows it already priced and therefore
 costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache

@@ -272,9 +272,25 @@ entitlement is `active` or `grace`. Under Usage, period tabs sit on the same row
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. The Usage page period tabs are **Today**, **7 Days**,
-**30 Days**, and **Up to 2 years** (`all`); **30 Days** is the default. The selected tab is
-`?period=today|7d|30d|all`, so a refresh keeps it. At 1024 px and above the model tree and Activity
+partial cost uses a lower bound marker. The Usage page period tabs are **Day**, **Week**, **Month**,
+**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
+vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
+sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and
+Month only, and **Next period** is disabled on the current unit. **Custom** opens two native date
+inputs bounded by the activity range and an **Apply**. The selection is
+`?period=day|week|month|7d|30d|all|custom`, plus `&offset=` on a stepped period and `&from=&to=` on
+a custom one, so a refresh keeps it. Today, 7D, 30D, and All are read from the Account summary;
+every other period is folded in the browser from the activity days the page already holds, so it
+shows totals and cost and says in one line that the model breakdown is on the four the summary
+carries.
+
+Above the totals is a **Monthly budget** card: an amount in USD, a **Tell me at 80% and 100%**
+switch, and a meter reading `spent / budget · percent` against this month's fold. Both fields live
+in `localStorage` and never reach Relay. Crossing 80% and then 100% shows one `role="status"` line
+each per calendar month with a **Got it** button that records the crossing, because a browser page
+posts no notification. With no budget set the card reads **No budget is set for this month.**
+
+At 1024 px and above the model tree and Activity
 sit side by side; below 1024 px they stack, tree first. User-facing dates, numbers, units, and
 plan names use the English presentation shared with QuotaBar rather than the browser locale.
 Usage activity is a GitHub-style contribution graph that still follows this file: no gradients,
