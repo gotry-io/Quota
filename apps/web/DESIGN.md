@@ -50,7 +50,23 @@ The site has these routes:
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
    [`docs/security.md`](../../docs/security.md).
-5. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
+5. `/u/<handle>` is a published Usage page, and the only route that renders account data with no
+   session. Its header is the brand plus one **Get Quota** action: no viewer name, no sign-in
+   prompt beside someone else's numbers, and no Account nav. The page is a heading (`@handle`,
+   when it was published, and **Coding-agent Usage only**) with a **Share** action, then Last 30
+   days and All time as three-cell stat rows (Tokens, Messages, and API-equivalent cost when the
+   owner published it), each with By provider and By model share bars, then a 365-day activity
+   grid drawn from bands rather than counts and with no day detail to open, then one footnote
+   saying what stays private. `<head>` carries the canonical URL and Open Graph and Twitter tags
+   built from the same summary sentence, so a link preview says what the page says. There is no
+   preview image, and so the Twitter card is `summary`: the share card is drawn in the page and
+   saved by hand, and no URL serves it. **Share**
+   opens a dialog with the 1200×630 card, **Save image**, **Copy link**, and **Close**; the card
+   is drawn on a canvas in the page in one Classic style, and there is no server-rendered image.
+   The page never prints a device, an agent, a provider sign-in, a plan, a remaining figure, or
+   the account label
+   ([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+6. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
    with four routes when the viewer is signed in and the path is under `/my`; the current item
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
    `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
@@ -82,9 +98,13 @@ The site has these routes:
      Below 620 px each row is a labeled two-column card with Status and Last contact. Empty
      state is the Mac setup card.
    - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Account
-     (GitHub login and Delete Account). `?delete=account` scrolls to the delete region and
-     focuses its heading. Legal links Privacy, Terms, and Support. Sign out stays in the
-     header account menu.
+     (GitHub login and Delete Account); Public profile; Legal. `?delete=account` scrolls to the
+     delete region and focuses its heading. Legal links Privacy, Terms, and Support. Sign out
+     stays in the header account menu. Public profile is the handle field (prefixed
+     `quota.gotry.io/u/`), **Publish this page**, **Show which models**, **Show API-equivalent
+     cost**, one **Save**, and — once published — **Open page** and **Copy link**. A handle the
+     contract refuses is named before the request is made; one another Account holds reads **That
+     handle is already taken.** Switching the page off keeps the handle.
    Quota remaining has no "left"/"remaining" suffix; budget windows with an amount use
    `71% · $3.75`, percent-only windows use `71%`, and balance-only windows use **Balance** plus
    `$12.34`. Quota cards follow the same provider / account / remaining / meter / metadata order
@@ -111,8 +131,8 @@ The site has these routes:
    is a single redirect to `/my`. Account data is never published without a session.
 
 The document `<head>` is per-route. `/` publishes the public title, description, canonical URL
-`https://quota.gotry.io/`, and Open Graph tags. `/my` is `noindex, nofollow` and has no canonical
-URL.
+`https://quota.gotry.io/`, and Open Graph tags. `/u/<handle>` publishes its own canonical URL and
+Open Graph tags. `/my` is `noindex, nofollow` and has no canonical URL.
 
 GitHub is the only sign-in action. There is no Relay selection, pairing group, owner capability,
 provider-secret form, server administration, or self-hosted setup in the Web UI.
@@ -311,9 +331,10 @@ couldn't load this. Retry.** — at most one next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/my`, `/my/subscriptions/<sel>`,
-  `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app` redirect) at desktop and
-  narrow mobile widths in both light and dark appearance when browser tooling is available;
+- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/u/<handle>`, `/my`,
+  `/my/subscriptions/<sel>`, `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app`
+  redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
+  tooling is available;
 - navigate all controls with a keyboard;
 - verify loading, signed-out, empty, partial/unpriced cost, recent-auth, and failure states;
 - confirm no credential, raw Usage, prompt, path, or untrusted HTML reaches the DOM.

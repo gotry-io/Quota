@@ -36,6 +36,19 @@ The v6 data contract is four routes
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
 
+One more v6 route answers with no principal at all
+([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)):
+
+- `GET /api/v6/public/<handle>/usage` answers the page an Account publishes at
+  `quota.gotry.io/u/<handle>`: tokens, messages, an optional API-equivalent cost, provider and
+  model shares, and a year of heatmap bands, all on UTC dates. A handle that is malformed,
+  unclaimed, or switched off is one 404 with one body. It is the only route answered
+  `Cache-Control: public, max-age=300`, because its answer is the same for every reader, and its
+  `ETag` is computed from the Usage version stamp before any row is folded, so a held answer costs
+  no rollup read. `GET` and `PUT /api/v2/account/profile` are how the owner reads and writes the
+  handle and its two display switches; the write is browser-only and same-origin, and a handle
+  another Account holds is `409 conflict`.
+
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
 days at most, because the three periods end together. A caller keeping UTC opens no hour at all.

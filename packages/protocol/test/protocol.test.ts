@@ -26,7 +26,12 @@ import {
   PROTOCOL_VERSION,
   PROVIDER_IDS,
   PricingCatalogSchema,
+  PublicProfileHandleSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicUsageResponseSchema,
+  PUBLIC_PROFILE_HANDLE_PATTERN,
   ProviderIdSchema,
+  RESERVED_PUBLIC_PROFILE_HANDLES,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -843,6 +848,83 @@ describe("quota protocol", () => {
         const referencedFile = reference.split("#", 1)[0];
         if (referencedFile) expect(schemaFiles).toContain(referencedFile);
       }
+    }
+  });
+
+  it("takes a public profile handle only in the one shape a URL can carry", () => {
+    for (const handle of ["kyle", "a1b", "a".repeat(30), "kyle-2", "0abc"]) {
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(true);
+    }
+    for (const handle of [
+      "ab",
+      "a".repeat(31),
+      "-lead",
+      "Kyle",
+      "kyle_2",
+      "kyle.2",
+      "kyle 2",
+      "kyle/2",
+      "",
+    ]) {
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(false);
+    }
+    // Every reserved handle is refused, and each one is a handle the pattern would take: a
+    // reserved word the pattern already refuses is a line nobody is relying on.
+    for (const handle of RESERVED_PUBLIC_PROFILE_HANDLES) {
+      expect(PUBLIC_PROFILE_HANDLE_PATTERN.test(handle) || handle.length < 3, handle).toBe(true);
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(false);
+    }
+  });
+
+  it("cannot state a public page with no address, and refuses a key the page does not publish", () => {
+    const profile = { handle: "kyle", enabled: true, show_models: true, show_cost: false };
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({ protocol_version: PROTOCOL_VERSION, profile })
+        .success,
+    ).toBe(true);
+    for (const broken of [
+      { ...profile, handle: null },
+      { ...profile, display_label: "octocat" },
+      { ...profile, enabled: "yes" },
+    ]) {
+      expect(
+        PublicProfileUpdateRequestSchema.safeParse({
+          protocol_version: PROTOCOL_VERSION,
+          profile: broken,
+        }).success,
+        JSON.stringify(broken),
+      ).toBe(false);
+    }
+  });
+
+  it("keeps agent, device, account, and quota out of the shape a public page answers with", () => {
+    const period = {
+      totals: { total_tokens: 12, input_tokens: 10, output_tokens: 2, messages: 1 },
+      providers: [{ provider: "openai", total_tokens: 12, share_permille: 1_000 }],
+    };
+    const page = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      handle: "kyle",
+      published_at: "2026-09-01T00:00:00Z",
+      generated_at: "2026-09-06T12:00:00Z",
+      last_30_days: period,
+      all: period,
+      activity: [{ date: "2026-09-06", level: 4 }],
+    };
+    expect(PublicUsageResponseSchema.safeParse(page).success).toBe(true);
+
+    for (const extra of [
+      { account: { account_id: "account_1" } },
+      { devices: [] },
+      { subscriptions: [] },
+      { last_30_days: { ...period, agents: [] } },
+      { activity: [{ date: "2026-09-06", level: 4, total_tokens: 12 }] },
+      { activity: [{ date: "2026-09-06", level: 5 }] },
+    ]) {
+      expect(
+        PublicUsageResponseSchema.safeParse({ ...page, ...extra }).success,
+        JSON.stringify(extra),
+      ).toBe(false);
     }
   });
 });

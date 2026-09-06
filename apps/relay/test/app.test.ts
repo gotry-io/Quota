@@ -780,6 +780,7 @@ describe("managed Relay on real Workers and D1", () => {
       "accounts",
       "devices",
       "login_grants",
+      "public_profiles",
       "quota_snapshots",
       "rate_limit_counters",
       "sessions",

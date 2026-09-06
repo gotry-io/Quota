@@ -1,11 +1,13 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
+import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { GitHubWebSessions } from "../src/account/web-session.ts";
 import { createRelayApp } from "../src/app.ts";
 import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
+import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 
@@ -603,7 +605,14 @@ function harness(github: GitHubStub, clock: () => Date = () => now) {
       hasher,
       now: clock,
     }),
-    document: createWebDocumentPort({ state, webSessions, now: clock }),
+    document: createWebDocumentPort({
+      state,
+      webSessions,
+      usageState: new D1UsageState(env.DB),
+      catalog: PRICING_CATALOG,
+      modelCatalog: MODEL_CATALOG,
+      now: clock,
+    }),
   };
 }
 

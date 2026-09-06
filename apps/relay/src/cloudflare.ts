@@ -1,8 +1,10 @@
+import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { AccountService } from "./account/service.ts";
 import { createWebDocumentPort } from "./account/web-document-port.ts";
 import { GitHubWebSessions, memoizeWebSessionAuthorization } from "./account/web-session.ts";
 import { accountMaintenanceInput, createRelayApp } from "./app.ts";
 import { CANONICAL_ORIGIN } from "./config.ts";
+import { PRICING_CATALOG } from "./pricing-catalog.ts";
 import { isRelayApiPath } from "./relay-paths.ts";
 import { SecretHasher } from "./security.ts";
 import { D1AccountState } from "./state/d1-account-state.ts";
@@ -48,7 +50,13 @@ export default {
     }
 
     return respondWithWebDocument(request, environment, context, {
-      document: createWebDocumentPort({ webSessions, state }),
+      document: createWebDocumentPort({
+        webSessions,
+        state,
+        usageState,
+        catalog: PRICING_CATALOG,
+        modelCatalog: MODEL_CATALOG,
+      }),
     });
   },
   async scheduled(_controller, environment): Promise<void> {

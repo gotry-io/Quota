@@ -22,6 +22,9 @@ import {
   ModelCatalogSchema,
   OAuthTokenResponseSchema,
   PricingCatalogSchema,
+  PublicProfileResponseSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicUsageResponseSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -54,6 +57,9 @@ const AccountHttpPayloadSchema = z.union([
   LogoutResponseSchema,
   DeleteDeviceResponseSchema,
   QuotaSnapshotUploadResponseSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicProfileResponseSchema,
+  PublicUsageResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

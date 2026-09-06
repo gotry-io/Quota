@@ -9,6 +9,7 @@ declare global {
   namespace App {
     interface Locals {
       viewer: WebDocumentViewer | null;
+      document: WebDocumentPort;
     }
     interface Platform {
       document: WebDocumentPort;
