@@ -3,16 +3,19 @@
 Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io). It keeps coding-agent
 subscription quota and privacy-preserving Usage together across a user's devices.
 
-- **Quota** — native iOS 26+ read-only Account viewer. It signs in with the registered `quota-ios`
-  public client, reads remaining quota and Today Usage, and publishes a non-secret App Group
-  snapshot for Home Screen and Lock Screen widgets.
+- **Quota** — native iOS 26+ Account viewer. It signs in with the registered `quota-ios` public
+  client, reads remaining quota and Today Usage, publishes a non-secret App Group snapshot for
+  Home Screen and Lock Screen widgets, and writes nothing to Relay. Settings › Providers also signs
+  in to a provider's own web session inside the app; those cookies stay in that iPhone's Keychain.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling.
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub sign-in, and account dashboard.
+- **Quota Web** — public site, GitHub sign-in, account dashboard, and the opt-in public Usage page
+  at `quota.gotry.io/u/<handle>`.
 
-Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and
-Cursor; local Usage analytics supports Codex, Claude Code, Grok, OpenCode, Pi, and Cursor logs.
+Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
+Cursor, Gemini CLI, and GitHub Copilot; local Usage analytics supports Codex, Claude Code, Grok,
+OpenCode, Pi, Cursor, Gemini CLI, and GitHub Copilot logs.
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
 never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
 session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
@@ -54,8 +57,8 @@ apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
 apps/relay/               Managed Hono Worker and D1 adapters
 apps/web/                 Public site and authenticated account UI
-packages/apple-client/    Shared Apple wire, Relay, session, last-good cache, and widget-snapshot modules
-packages/apple-shared/    Foundation-only Apple presentation semantics for QuotaBar, Quota iOS, and widgets
+packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, and provider web-session and Keychain modules
+packages/apple-shared/    Foundation-only Apple presentation, alerting, and observation-merge semantics
 packages/provider/        Language-neutral provider catalog and JSON Schema
 packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
@@ -156,15 +159,31 @@ Five providers can fall back to a browser session as their last rung, behind a c
 an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
 background as well as on screen.
 
-Around those: eight Rust quota collectors, six Usage parsers that read an appended log from where
+An Account can publish one read-only page of its Usage totals at `quota.gotry.io/u/<handle>`, with
+a saved share card drawn in the browser. It carries tokens, messages, optional API-equivalent cost,
+provider and model shares, and a year of activity bands — never remaining quota, devices,
+providers, or the account behind it, and there is no leaderboard
+([ADR 0037](docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+
+Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
 the last parse stopped, local hourly facts a scan recomputes only where records moved,
 effective-dated cost calculation with a separately versioned model catalog that regroups reports
 without rewriting facts, a registered read-only `quota-ios` client, Sparkle in-app updates, and the
 Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
 and file failures are isolated.
 
-Production GitHub OAuth and D1 deployment require the secrets documented by the managed Relay
-configuration. The checked-in deployment workflow is the only authorized production path.
+Production sign-in and D1 deployment require the Worker secrets `GITHUB_CLIENT_ID`,
+`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`,
+`APPLE_SIGNIN_PRIVATE_KEY`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
+`QUOTA_SESSION_HASH_KEY`, the HMAC keys each at least 32 random characters and all documented by
+[`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
+Production GitHub OAuth, email sign-in, and D1 deployment require the Worker secrets
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`,
+`QUOTA_SESSION_HASH_KEY`, and `RESEND_API_KEY`, each at least 32 random characters and documented
+by [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
+Production GitHub OAuth, RevenueCat (`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_SECRET_KEY`,
+`REVENUECAT_WEB_PURCHASE_URL`), and D1 deployment require the secrets documented by the managed
+Relay configuration. The checked-in deployment workflow is the only authorized production path.
 
 ## License
 

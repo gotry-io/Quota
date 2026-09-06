@@ -17,15 +17,16 @@ use serde_json::{Value, json};
 
 use crate::catalog::ProviderId;
 use crate::observation::snapshot_is_current;
+use crate::pace::snapshot_with_pace;
 use crate::pricing;
 use crate::protocol::{
     BrowserAccessDenialReason, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAttemptCode,
     DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention,
     DiagnosticClient, DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery,
     DiagnosticReport, DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary,
-    DiagnosticSurface, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES,
-    QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
-    UsageSource,
+    DiagnosticSurface, EntitlementView, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL,
+    MAXIMUM_DIAGNOSTIC_SOURCES, QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource,
+    RecoveryAction, UsagePeriod, UsageSource,
 };
 use crate::providers::claude;
 use crate::providers::codex;
@@ -38,10 +39,12 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, UsageOutboxEntry, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, StoredUsageSession,
+    UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
-    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, UsageAgent, UsageScanOptions,
+    self, CoverageReasonCode, CoverageStatus, DatedUsageRow, MAX_USAGE_SESSIONS_RECENT,
+    USAGE_SESSION_ACTIVE_SECS, UsageAgent, UsageScanOptions,
 };
 
 /// How many recomputed hours one refresh hands to the outbox. Four requests' worth: enough to
@@ -150,6 +153,7 @@ fn backend_attempt_error(error: &IpcError) -> (DiagnosticAttemptOutcome, Diagnos
             DiagnosticAttemptCode::AuthenticationRequired
         }
         ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
+        ErrorCode::SubscriptionRequired => DiagnosticAttemptCode::SubscriptionRequired,
         ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
         ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
         ErrorCode::InvalidState => DiagnosticAttemptCode::InvalidState,
@@ -182,6 +186,7 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::SubscriptionRequired => "subscription_required",
     }
 }
 
@@ -522,6 +527,17 @@ impl NativeBackend {
                 .and_then(Value::as_str)
                 == Some("signed_in")
         });
+        // What Relay last said this Account may sync. Without a paid entitlement the writing
+        // half of a refresh is refused at its boundary, so the upload surfaces have nothing to
+        // report and the Account line is where the reason belongs.
+        let entitlement = account
+            .as_ref()
+            .and_then(|record| record.value.as_ref())
+            .and_then(|value| value.get("entitlement"))
+            .filter(|value| !value.is_null())
+            .and_then(|value| serde_json::from_value::<EntitlementView>(value.clone()).ok());
+        let sync_paused = (account_active || account_signed_in)
+            && entitlement.is_some_and(|value| !value.allows_sync());
 
         let explicit_providers = snapshot
             .providers
@@ -824,6 +840,7 @@ impl NativeBackend {
             .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
             .map_err(|_| BackendError::unavailable())?;
         let account_attempt_failed = account_active
+            && account_facts.unresolved_code != Some(DiagnosticAttemptCode::SubscriptionRequired)
             && matches!(
                 account_facts.last_outcome,
                 Some(DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted)
@@ -847,27 +864,32 @@ impl NativeBackend {
             sources.push(DiagnosticSourceState {
                 subject: "account".into(),
                 source_id: None,
-                status: if account_degraded {
-                    DiagnosticStatus::Degraded
-                } else {
-                    DiagnosticStatus::Ok
+                status: match (account_degraded, sync_paused) {
+                    (true, _) => DiagnosticStatus::Degraded,
+                    (false, true) => DiagnosticStatus::Inactive,
+                    (false, false) => DiagnosticStatus::Ok,
                 },
                 last_attempt_at: account_facts.last_attempt_at.clone(),
                 last_success_at: account_facts.last_success_at.clone(),
-                code: account_degraded
-                    .then(|| {
+                code: if account_degraded {
+                    Some(
                         account_error
                             .map(|value| error_code_wire(value.code))
-                            .unwrap_or_else(|| "account_unavailable".into())
-                    })
-                    .clone(),
-                message: match (account_degraded, account_needs_login) {
-                    (false, _) => "Account data is up to date.",
-                    (true, true) => {
+                            .unwrap_or_else(|| "account_unavailable".into()),
+                    )
+                } else if sync_paused {
+                    Some("subscription_required".into())
+                } else {
+                    None
+                },
+                message: match (account_degraded, account_needs_login, sync_paused) {
+                    (false, _, true) => "Sync is off: no active subscription.",
+                    (false, _, false) => "Account data is up to date.",
+                    (true, true, _) => {
                         "This Mac is no longer signed in to the account. Reconnect Account in \
                          Settings, then recheck."
                     }
-                    (true, false) => {
+                    (true, false, _) => {
                         "Account data could not be refreshed. QuotaBar will try again at the next \
                          refresh."
                     }
@@ -918,7 +940,7 @@ impl NativeBackend {
             _ if upload_waiting => upload_facts.unresolved_code,
             _ => None,
         };
-        let upload_active = account_active && usage_upload_enabled;
+        let upload_active = account_active && usage_upload_enabled && !sync_paused;
         let upload_failed = upload_active && upload_problem.is_some();
         let upload_blocked =
             upload_failed && upload_problem == Some(DiagnosticAttemptCode::InvalidState);
@@ -974,7 +996,7 @@ impl NativeBackend {
                 .or(Some(crate::protocol::DiagnosticAttemptCode::Unavailable)),
             _ => None,
         };
-        let quota_upload_failed = account_active && quota_upload_problem.is_some();
+        let quota_upload_failed = account_active && !sync_paused && quota_upload_problem.is_some();
         let quota_upload_blocked = quota_upload_failed
             && quota_upload_problem == Some(DiagnosticAttemptCode::InvalidState);
         // ADR 0028's consequence check, beside the journal's cause records: the Account's
@@ -982,9 +1004,10 @@ impl NativeBackend {
         // local reading the Account has not held for half an hour means uploads are not
         // landing — however new the way they found to fail.
         let quota_upload_behind = account_active
+            && !sync_paused
             && !quota_upload_failed
             && account_observation_behind(account.as_ref(), quota.as_ref(), Utc::now());
-        if account_active {
+        if account_active && !sync_paused {
             sources.push(DiagnosticSourceState {
                 subject: "quota_upload".into(),
                 source_id: None,
@@ -1878,8 +1901,111 @@ impl NativeBackend {
             "range": {"from": from, "to": to},
             "status": status,
             "model_catalog_revision": model_catalog.map(|value| value.revision.clone()),
-            "coverage": coverage
+            "coverage": coverage,
+            "sessions": self.usage_sessions_report(&usage.timezone, generated_at, catalog)?
         }))
+    }
+
+    fn usage_sessions_report(
+        &self,
+        timezone: &str,
+        generated_at: DateTime<Utc>,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<Value, BackendError> {
+        let sessions = self
+            .state
+            .usage_sessions()
+            .map_err(|_| BackendError::unavailable())?;
+        let active_after = generated_at - Duration::seconds(USAGE_SESSION_ACTIVE_SECS);
+        let today_start = usage_period_window(UsagePeriod::Today, timezone, generated_at)?
+            .1
+            .and_then(|span| usage::parse_instant(&span.start));
+        let mut active = 0u64;
+        let mut today = 0u64;
+        for session in &sessions {
+            let Some(last_activity) = usage::parse_instant(&session.last_activity_at) else {
+                continue;
+            };
+            if last_activity >= active_after {
+                active = active.saturating_add(1);
+            }
+            if today_start.is_some_and(|start| last_activity >= start) {
+                today = today.saturating_add(1);
+            }
+        }
+        let mut recent = Vec::new();
+        for session in sessions.into_iter().take(MAX_USAGE_SESSIONS_RECENT) {
+            recent.push(self.usage_session_json(session, generated_at, catalog)?);
+        }
+        Ok(json!({
+            "active": active,
+            "today": today,
+            "recent": recent
+        }))
+    }
+
+    fn usage_session_json(
+        &self,
+        session: StoredUsageSession,
+        generated_at: DateTime<Utc>,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<Value, BackendError> {
+        let last_activity = usage::parse_instant(&session.last_activity_at).ok_or_else(|| {
+            BackendError::new(IpcError::new(
+                ErrorCode::InvalidState,
+                RecoveryAction::Retry,
+            ))
+        })?;
+        let tokens = session
+            .tokens_in
+            .checked_add(session.tokens_out)
+            .filter(|value| *value <= usage::MAX_SAFE_COUNT)
+            .ok_or_else(|| BackendError::unavailable())?;
+        let cost = self.session_cost(&session, catalog)?;
+        Ok(json!({
+            "agent": session.agent,
+            "project_key": session.project_key,
+            "started_at": session.started_at,
+            "last_activity_at": session.last_activity_at,
+            "messages": session.messages,
+            "tokens": tokens,
+            "cost": cost,
+            "top_model": session.top_model,
+            "is_active": last_activity >= generated_at - Duration::seconds(USAGE_SESSION_ACTIVE_SECS)
+        }))
+    }
+
+    fn session_cost(
+        &self,
+        session: &StoredUsageSession,
+        catalog: Option<&pricing::PricingCatalog>,
+    ) -> Result<pricing::UsageCostOutcome, BackendError> {
+        let events = self
+            .state
+            .usage_session_events(&session.source_file_id)
+            .map_err(|_| BackendError::unavailable())?;
+        if !events.is_empty() {
+            let mut dated = Vec::with_capacity(events.len());
+            for event in &events {
+                let Some(date) = event.occurred_at.get(..10) else {
+                    continue;
+                };
+                dated.push(DatedUsageRow {
+                    date: date.to_owned(),
+                    project_key: String::new(),
+                    row: usage_row_from_event(event),
+                });
+            }
+            if let Ok(outcome) =
+                pricing::calculate_usage_cost(&dated, catalog, pricing::UsageCostMode::Auto)
+            {
+                return Ok(outcome);
+            }
+        }
+        Ok(session_cost_from_stored(
+            session.cost_micros,
+            session.top_model.as_deref(),
+        ))
     }
 
     /// One period, folded from the hours this device has stored.
@@ -1897,25 +2023,154 @@ impl NativeBackend {
         incomplete: bool,
     ) -> Result<Value, BackendError> {
         let (today, span) = usage_period_window(period, timezone, generated_at)?;
+        self.local_period_detail(
+            span.as_ref(),
+            &today,
+            timezone,
+            pricing_catalog,
+            model_catalog,
+            incomplete,
+        )
+    }
+
+    /// One period's rows, projects, and rhythm, folded against the catalogs given.
+    ///
+    /// Every period answers with the same shape, so the panel reads a range someone picked the
+    /// way it reads the one it opened on.
+    fn local_period_detail(
+        &self,
+        span: Option<&LocalPeriodSpan>,
+        today: &str,
+        timezone: &str,
+        pricing_catalog: Option<&pricing::PricingCatalog>,
+        model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+        incomplete: bool,
+    ) -> Result<Value, BackendError> {
+        let range = span.map(|span| (span.start.as_str(), span.end.as_str()));
         let (rows, partial) = self
             .state
-            .usage_period_rows(
-                span.as_ref()
-                    .map(|span| (span.start.as_str(), span.end.as_str())),
+            .usage_period_rows(range)
+            .map_err(|_| BackendError::unavailable())?;
+        let group_by_project = self
+            .state
+            .group_usage_by_project()
+            .map_err(|_| BackendError::unavailable())?;
+        let project_rows = if group_by_project {
+            Some(
+                self.state
+                    .usage_period_project_rows(range)
+                    .map_err(|_| BackendError::unavailable())?,
+            )
+        } else {
+            None
+        };
+        let mut summary = usage::build_local_usage_summary_with_projects(
+            &rows,
+            project_rows.as_deref(),
+            pricing_catalog,
+            model_catalog,
+        )
+        .map_err(|_| BackendError::unavailable())?;
+        if let Some(span) = span {
+            let (days, hours) = usage::build_local_usage_rhythm(
+                &self.local_hour_usage(timezone, span)?,
+                pricing_catalog,
             )
             .map_err(|_| BackendError::unavailable())?;
-        let summary = usage::build_local_usage_summary(&rows, pricing_catalog, model_catalog)
-            .map_err(|_| BackendError::unavailable())?;
+            summary.days = Some(days);
+            summary.hours_of_day = Some(hours);
+        }
         let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
         let (from, to) = span
-            .map(|span| span.dates)
-            .unwrap_or_else(|| usage_date_range(&rows, &today));
+            .map(|span| span.dates.clone())
+            .unwrap_or_else(|| usage_date_range(&rows, today));
         Ok(json!({
             "range": {"from": from, "to": to},
             "usage": summary,
             "incomplete": incomplete || partial,
             "details_truncated": details_truncated
         }))
+    }
+
+    /// This period's facts, each placed on the local clock the period is bounded by.
+    ///
+    /// Only the three trailing periods reach here. `all` is every retained day, and the per-day
+    /// shape of that history is what the activity chart answers, so folding it on every scan
+    /// would cost more than any reader asks for.
+    fn local_hour_usage(
+        &self,
+        timezone: &str,
+        span: &LocalPeriodSpan,
+    ) -> Result<Vec<usage::LocalHourUsage>, BackendError> {
+        let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
+        self.state
+            .usage_period_hour_rows(Some((span.start.as_str(), span.end.as_str())))
+            .map_err(|_| BackendError::unavailable())?
+            .into_iter()
+            .map(|(bucket_start_utc, row)| {
+                let local = DateTime::parse_from_rfc3339(&bucket_start_utc)
+                    .map_err(|_| BackendError::unavailable())?
+                    .with_timezone(&timezone);
+                Ok(usage::LocalHourUsage {
+                    date: local.date_naive().format("%Y-%m-%d").to_string(),
+                    hour: u8::try_from(local.hour()).map_err(|_| BackendError::unavailable())?,
+                    row,
+                })
+            })
+            .collect()
+    }
+
+    /// One custom local period, folded from the hours this device has stored.
+    ///
+    /// The four periods a panel opens on are folded by every refresh and read out of state. A
+    /// range someone picked is folded here instead, against the catalogs this device already
+    /// holds: asking for a week is a question about stored hours, not a reason to collect again.
+    fn custom_usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        let timezone = self.timezone();
+        let span = custom_period_window(&timezone, from, to)?;
+        let catalog: Option<pricing::PricingCatalog> = self
+            .state
+            .component(crate::protocol::ComponentName::Pricing)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| serde_json::from_value(value).ok());
+        let model_catalog = self
+            .state
+            .model_catalog()
+            .ok()
+            .flatten()
+            .and_then(|value| {
+                crate::model_catalog::validate_model_catalog_value(&value)
+                    .valid
+                    .then(|| serde_json::from_value(value).ok())
+                    .flatten()
+            })
+            .or_else(|| Some(crate::model_catalog::bundled_model_catalog()));
+        self.local_period_detail(
+            Some(&span),
+            from,
+            &timezone,
+            catalog.as_ref(),
+            model_catalog.as_ref(),
+            self.stored_usage_is_partial(),
+        )
+    }
+
+    /// Whether the last scan behind the stored hours covered everything it found.
+    fn stored_usage_is_partial(&self) -> bool {
+        self.state
+            .component(crate::protocol::ComponentName::Usage)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value)
+            .and_then(|value| {
+                value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(|status| status != "complete")
+            })
+            .unwrap_or(false)
     }
 
     fn refresh_pricing(&self) -> Result<Value, BackendError> {
@@ -2995,6 +3250,28 @@ fn worst_operation(left: DiagnosticOperation, right: DiagnosticOperation) -> Dia
 }
 
 impl LocalBackend for NativeBackend {
+    fn client_version(&self) -> &str {
+        &self.client_version
+    }
+
+    fn poll_provider_status(
+        &self,
+        user_agent: &str,
+        checked_at: &str,
+    ) -> std::collections::BTreeMap<String, crate::provider_status::ProviderStatusReading> {
+        let Ok(client) = crate::providers::common::HttpClient::with_timeout(
+            crate::provider_status::STATUS_TIMEOUT,
+        ) else {
+            return std::collections::BTreeMap::new();
+        };
+        let pages = crate::provider_status::catalog_endpoints();
+        crate::provider_status::poll(&client, user_agent, &pages, checked_at)
+    }
+
+    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        self.custom_usage_period(from, to)
+    }
+
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
     }
@@ -3258,7 +3535,9 @@ impl LocalBackend for NativeBackend {
                         }
                     }
                     Err(error) => {
-                        if error.sign_out_epoch().is_some() {
+                        if error.error.code == ErrorCode::SubscriptionRequired {
+                            self.record_subscription_refusal();
+                        } else if error.sign_out_epoch().is_some() {
                             self.clear_session_if_rejected(&error);
                             account_value = Some(Err(error));
                         }
@@ -3554,6 +3833,20 @@ impl NativeBackend {
         }
     }
 
+    /// Records the one refusal a device with no subscription earns per refresh.
+    ///
+    /// Relay answers the sync half 402 before any of it runs, so nothing was written and
+    /// nothing is retried: the journal keeps the reason (ADR 0028), the session stands, and
+    /// the next refresh asks again.
+    fn record_subscription_refusal(&self) {
+        let attempt = self.begin_attempt(DiagnosticAttemptKind::AccountSync, None);
+        self.finish_attempt(
+            attempt,
+            DiagnosticAttemptOutcome::Failed,
+            Some(DiagnosticAttemptCode::SubscriptionRequired),
+        );
+    }
+
     /// Uploads this collection's quota and records the `quota_upload` journal row it earns.
     fn upload_quota_recorded(
         &self,
@@ -3706,6 +3999,44 @@ pub(crate) fn usage_period_window(
     ))
 }
 
+/// A custom period as this device's own calendar draws it.
+///
+/// `from` and `to` are inclusive local dates, so the span runs from the start of `from` to the
+/// start of the day after `to` — the same half-open instant range the four fixed periods use.
+/// A range that is inverted, unparseable, or wider than a year and a leap day is not a period
+/// this device answers.
+pub(crate) fn custom_period_window(
+    timezone: &str,
+    from: &str,
+    to: &str,
+) -> Result<LocalPeriodSpan, BackendError> {
+    let timezone = Tz::from_str(timezone).map_err(|_| BackendError::unavailable())?;
+    let first = NaiveDate::parse_from_str(from, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
+    let last = NaiveDate::parse_from_str(to, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
+    let days = (last - first).num_days();
+    if days < 0 || days >= crate::protocol::MAXIMUM_USAGE_PERIOD_DAYS {
+        return Err(invalid_usage_period());
+    }
+    let after = last
+        .checked_add_days(Days::new(1))
+        .ok_or_else(invalid_usage_period)?;
+    Ok(LocalPeriodSpan {
+        dates: (
+            first.format("%Y-%m-%d").to_string(),
+            last.format("%Y-%m-%d").to_string(),
+        ),
+        start: local_day_start(&timezone, first)?,
+        end: local_day_start(&timezone, after)?,
+    })
+}
+
+fn invalid_usage_period() -> BackendError {
+    BackendError::new(IpcError::new(
+        ErrorCode::InvalidRequest,
+        RecoveryAction::None,
+    ))
+}
+
 /// The instant a local date begins, as the hour comparison in `usage_period_rows` reads it.
 ///
 /// A date whose midnight a daylight change repeated begins at the earlier of the two; one whose
@@ -3743,6 +4074,10 @@ fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value
         .get("cost")
         .cloned()
         .ok_or_else(invalid_usage_detail)?;
+    let cache_saved = object
+        .get("cache_saved")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
     let incomplete = object.get("partial").and_then(Value::as_bool) == Some(true);
     let unpriced_truncated = cost.get("unpriced_truncated").and_then(Value::as_bool) == Some(true);
     let agents = object
@@ -3757,6 +4092,7 @@ fn account_usage_detail(value: &Value, range: &(String, String)) -> Result<Value
         "usage": {
             "totals": totals,
             "cost": cost,
+            "cache_saved": cache_saved,
             "agents": agents
         },
         "incomplete": incomplete,
@@ -3874,6 +4210,70 @@ fn usage_scan_diagnostic(scan: &usage::UsageScanResult) -> Value {
         },
         "reason_counts": reason_counts,
     })
+}
+
+fn usage_row_from_event(event: &usage::NormalizedUsageEvent) -> usage::UsageRow {
+    usage::UsageRow {
+        agent: event.agent,
+        billing_channel: event.billing_channel,
+        channel_source: event.channel_source,
+        model: event.model.clone(),
+        context_bucket: event.context_bucket,
+        service_tier: event.service_tier.clone(),
+        speed: event.speed.clone(),
+        inference_geo: event.inference_geo.clone(),
+        input_tokens: event.input_tokens,
+        cache_read_tokens: event.cache_read_tokens,
+        cache_write_5m_tokens: event.cache_write_5m_tokens,
+        cache_write_1h_tokens: event.cache_write_1h_tokens,
+        cache_write_inferred_tokens: event.cache_write_inferred_tokens,
+        output_tokens: event.output_tokens,
+        reasoning_tokens: event.reasoning_tokens,
+        requests: event.requests,
+        web_search_requests: event.billable_tools.web_search,
+        web_fetch_requests: event.billable_tools.web_fetch,
+        source_cost_microusd: event.source_cost_microusd.clone(),
+        source_cost_covered_requests: event.source_cost_covered_requests,
+    }
+}
+
+fn session_cost_from_stored(
+    cost_micros: Option<i64>,
+    top_model: Option<&str>,
+) -> pricing::UsageCostOutcome {
+    match cost_micros {
+        Some(amount) => pricing::UsageCostOutcome {
+            mode: pricing::UsageCostMode::Auto,
+            basis: pricing::UsageCostBasis::Reported,
+            status: pricing::UsageCostStatus::Complete,
+            amount_microusd: Some(amount.to_string()),
+            catalog_revision: None,
+            calculated_rows: 0,
+            reported_rows: 1,
+            unpriced_rows: 0,
+            assumptions: vec![pricing::UsageCostAssumption::SourceReported],
+            unpriced: Vec::new(),
+            unpriced_truncated: false,
+        },
+        None => pricing::UsageCostOutcome {
+            mode: pricing::UsageCostMode::Auto,
+            basis: pricing::UsageCostBasis::None,
+            status: pricing::UsageCostStatus::Unavailable,
+            amount_microusd: None,
+            catalog_revision: None,
+            calculated_rows: 0,
+            reported_rows: 0,
+            unpriced_rows: 1,
+            assumptions: Vec::new(),
+            unpriced: vec![pricing::UsageUnpricedItem {
+                billing_channel: usage::BillingChannel::Unknown,
+                model: top_model.unwrap_or(usage::USAGE_OTHER_MODEL).to_owned(),
+                reason: pricing::UsageUnpricedReason::IncompleteSourceCost,
+                rows: 1,
+            }],
+            unpriced_truncated: false,
+        },
+    }
 }
 
 /// The instant before which this device uploads nothing.
@@ -4022,6 +4422,9 @@ fn overview_item(
     let scope = account.get("fingerprint_scope")?.as_str()?.to_owned();
     let observed_at = snapshot.get("observed_at")?.as_str()?.to_owned();
     let stale = !snapshot_is_current(snapshot, now);
+    // Pace is derived from the reading, and this service is the one runtime that derives it
+    // for QuotaBar: the app prints the answer it is handed rather than keeping a second rule.
+    let paced = snapshot_with_pace(snapshot, now);
     Some(QuotaOverviewItem {
         identity: QuotaOverviewIdentity {
             provider,
@@ -4029,7 +4432,7 @@ fn overview_item(
             scope: scope.clone(),
             source_id: (scope == "source").then(|| source_id.to_owned()),
         },
-        snapshot: snapshot.clone(),
+        snapshot: paced.clone(),
         sources: vec![QuotaOverviewSource {
             source_id: source_id.to_owned(),
             kind: if device_id.is_some() {
@@ -4042,7 +4445,7 @@ fn overview_item(
             display_name: display_name.to_owned(),
             observed_at,
             is_stale: stale,
-            snapshot: Some(snapshot.clone()),
+            snapshot: Some(paced),
         }],
         selected_source_id: source_id.to_owned(),
         selected_source_display_name: display_name.to_owned(),
@@ -4369,6 +4772,11 @@ mod tests {
                 "assumptions": [],
                 "unpriced": []
             },
+            "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+            },
             "partial": false,
             "agents": []
         });
@@ -4388,7 +4796,17 @@ mod tests {
                 "all": period
             },
             "pricing_revision": "2026-08-01",
-            "model_catalog_revision": "2026-08-01"
+            "model_catalog_revision": "2026-08-01",
+            "entitlement": {
+                "status": "active",
+                "expires_at": "2026-10-05T00:00:00Z",
+                "will_renew": true,
+                "product_id": "quota_sync_monthly",
+                "store": "app_store",
+                "stale": false,
+                "checked_at": "2026-09-05T00:00:00Z"
+            },
+            "purchase": { "web_url": "https://pay.rev.cat/testtoken/account_1" }
         })
     }
 
@@ -5310,6 +5728,39 @@ mod tests {
         );
     }
 
+    /// A custom period is drawn on the same calendar the four fixed ones are drawn on.
+    #[test]
+    fn a_custom_period_spans_whole_local_days_and_stops_at_a_year_and_a_leap_day() {
+        let span =
+            custom_period_window("Asia/Singapore", "2026-08-07", "2026-08-13").expect("span");
+        assert_eq!(span.dates, ("2026-08-07".into(), "2026-08-13".into()));
+        assert_eq!(span.start, "2026-08-06T16:00:00Z");
+        assert_eq!(span.end, "2026-08-13T16:00:00Z");
+
+        let single =
+            custom_period_window("Asia/Singapore", "2026-08-07", "2026-08-07").expect("span");
+        assert_eq!(single.start, "2026-08-06T16:00:00Z");
+        assert_eq!(single.end, "2026-08-07T16:00:00Z");
+
+        // 366 inclusive days is the widest period; the day after it is not one this device answers.
+        assert!(custom_period_window("UTC", "2026-01-01", "2027-01-01").is_ok());
+        for (from, to) in [
+            ("2026-01-01", "2027-01-02"),
+            ("2026-08-13", "2026-08-07"),
+            ("2026-08-13", "not-a-date"),
+        ] {
+            assert_eq!(
+                custom_period_window("UTC", from, to)
+                    .err()
+                    .expect("refused range")
+                    .error
+                    .code,
+                ErrorCode::InvalidRequest,
+                "{from}..{to} is not a period"
+            );
+        }
+    }
+
     /// A change that skips or repeats midnight still leaves the day one instant to begin at.
     #[test]
     fn a_local_day_begins_once_across_a_daylight_change() {
@@ -5362,6 +5813,11 @@ mod tests {
         let period = json!({
             "totals": totals(30, 6, 3),
             "cost": cost("300", 3),
+            "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+            },
             "partial": true,
             "agents": [{
                 "agent": "codex",
@@ -5426,6 +5882,11 @@ mod tests {
                     "unpriced_rows": 0,
                     "assumptions": [],
                     "unpriced": []
+                },
+                "cache_saved": {
+                    "amount_microusd": "0",
+                    "status": "complete",
+                    "unpriced_rows": 0
                 },
                 "partial": false,
                 "agents": []
@@ -6203,6 +6664,82 @@ mod tests {
             .expect("account source");
         assert_eq!(source.code.as_deref(), Some("unavailable"));
         drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// An account with no subscription is not a broken account. Relay refuses the writes at
+    /// their boundary (ADR 0028), the journal keeps the reason, and the report says the one
+    /// thing a person can act on rather than reporting every silent upload as a failure.
+    #[test]
+    fn an_account_without_a_subscription_reports_sync_as_off_rather_than_failing() {
+        let root = std::env::temp_dir().join(format!("quota-unpaid-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                crate::protocol::ComponentName::Account,
+                crate::protocol::ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "auth_status": "signed_in",
+                    "account_id": "account_1",
+                    "display_label": "octocat",
+                    "device_id": "device_1",
+                    "device_generation": 1,
+                    "account_summary": null,
+                    "entitlement": {
+                        "status": "expired",
+                        "expires_at": "2026-08-01T00:00:00Z",
+                        "will_renew": false,
+                        "stale": false,
+                        "checked_at": "2026-09-05T00:00:00Z"
+                    },
+                    "purchase_url": "https://pay.rev.cat/testtoken/account_1"
+                })),
+                Some(now_rfc3339()),
+                None,
+                false,
+            )
+            .expect("account component");
+        let mut backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        backend.home = root.join("home");
+        backend.environment.clear();
+
+        backend.record_subscription_refusal();
+
+        let facts = state
+            .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
+            .expect("journal");
+        assert_eq!(
+            facts.unresolved_code,
+            Some(DiagnosticAttemptCode::SubscriptionRequired)
+        );
+
+        let report = backend.diagnostic_report().expect("diagnostics");
+        let source = report
+            .sources
+            .iter()
+            .find(|source| source.subject == "account")
+            .expect("account source");
+        assert_eq!(source.status, DiagnosticStatus::Inactive);
+        assert_eq!(source.code.as_deref(), Some("subscription_required"));
+        assert_eq!(source.message, "Sync is off: no active subscription.");
+        assert_eq!(source.recovery, DiagnosticRecovery::None);
+        // Nothing is uploading, so no upload surface claims it failed to.
+        assert!(
+            !report
+                .sources
+                .iter()
+                .any(|source| source.subject == "usage_upload" || source.subject == "quota_upload"),
+            "{:?}",
+            report.sources
+        );
+        drop(backend);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -8295,6 +8832,10 @@ mod tests {
         );
         assert!(report.get("usage").is_none());
         assert!(report.get("today").is_none());
+        assert_eq!(
+            report["sessions"],
+            json!({"active": 0, "today": 0, "recent": []})
+        );
         assert!(
             report
                 .get("coverage")
@@ -8335,6 +8876,56 @@ mod tests {
         );
         assert!(cached.usage_periods.local.last_30_days.is_some());
         assert!(cached.usage_periods.local.all.is_some());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn local_sessions_stay_on_this_mac_and_out_of_uploads() {
+        let root = std::env::temp_dir().join(format!("quota-sessions-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        let sessions = home.join(".codex").join("sessions");
+        fs::create_dir_all(&sessions).expect("sessions");
+        fs::write(
+            sessions.join("rollout-quota.jsonl"),
+            include_str!("../../fixtures/usage/codex.jsonl"),
+        )
+        .expect("fixture");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment.clear();
+        let collection = backend
+            .collect_usage(Arc::new(AtomicBool::new(false)))
+            .expect("scan");
+        let report = backend
+            .usage_report(&collection, None, None)
+            .expect("report");
+        let recent = report["sessions"]["recent"].as_array().expect("recent");
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0]["agent"], json!("codex"));
+        assert_eq!(recent[0]["project_key"], json!("rollout-quota"));
+        assert!(recent[0].get("source_file_id").is_none());
+        assert_eq!(report["sessions"]["active"], json!(1));
+        assert_eq!(report["sessions"]["today"], json!(1));
+        assert_eq!(recent[0]["is_active"], json!(true));
+        assert!(
+            serde_json::to_string(&report)
+                .expect("report json")
+                .contains("\"sessions\"")
+        );
+
+        let dirty = state
+            .dirty_usage_hour_batch("1970-01-01T00:00:00Z", "2100-01-01T00:00:00Z", 256)
+            .expect("dirty");
+        assert!(!dirty.is_empty());
+        let upload = usage_upload(UsageAgent::Codex, 1, &dirty).expect("upload");
+        let serialized = serde_json::to_string(&upload).expect("upload json");
+        assert!(!serialized.contains("sessions"));
+        assert!(!serialized.contains("project_key"));
+        assert!(!serialized.contains("source_file_id"));
+        assert!(!serialized.contains("rollout-quota"));
+        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
         fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -7,8 +7,9 @@ enum QuotaFormat {
     RemainingQuotaFormat.remaining(
       remainingPercent: window.remainingPercent,
       remainingValue: window.remainingValue,
+      limitValue: window.limitValue,
       hasLimit: window.limitValue != nil,
-      unit: window.valueUnit.flatMap(\.remainingUnit)
+      unit: window.remainingUnit
     )
   }
 
@@ -44,6 +45,18 @@ enum QuotaFormat {
       status: UsageCostCoverage(outcome.status),
       amountMicrousd: outcome.amountMicrousd
     )
+  }
+
+  /// The saving beside a cache hit rate, or `nil` when nothing behind it could be priced.
+  static func cacheSaved(_ saved: UsageCacheSaved) -> String? {
+    guard saved.amountMicrousd != nil else { return nil }
+    return "saved \(UsageCostFormat.compact(status: UsageCostCoverage(saved.status), amountMicrousd: saved.amountMicrousd))"
+  }
+
+  /// One part of a whole as whole percent. A whole of nothing has no share to state.
+  static func share(_ part: Int, of whole: Int) -> String? {
+    guard whole > 0 else { return nil }
+    return "\((part * 200 + whole) / (whole * 2))%"
   }
 
   /// How the cost was arrived at, matching the website's basis line.
@@ -87,7 +100,13 @@ enum QuotaFormat {
     timeZone: TimeZone = .current,
     calendar: Calendar = .current
   ) -> String? {
-    FreshnessCopy.resetCopy(resetsAt: date, now: now, timeZone: timeZone, calendar: calendar)
+    FreshnessCopy.resetCopy(
+      resetsAt: date,
+      now: now,
+      timeZone: timeZone,
+      calendar: calendar,
+      style: .relative
+    )
   }
 
   /// Live countdown under a day; shared reset copy at a day or more; `nil` once the instant has passed.

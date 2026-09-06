@@ -110,6 +110,7 @@
         "anthropic_direct",
         "aws_bedrock",
         "google_vertex",
+        "google_direct",
         "openrouter",
         "xai_direct",
         "moonshot_direct",

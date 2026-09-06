@@ -356,7 +356,7 @@ mod tests {
 
         let lines = output.lines();
         assert_eq!(
-            lines[0], r#"{"type":"event","event":"ready","ipc_version":1}"#,
+            lines[0], r#"{"type":"event","event":"ready","ipc_version":2}"#,
             "ready must be the first line on the stream"
         );
         assert!(
@@ -392,7 +392,7 @@ mod tests {
         let lines = output.lines();
         assert_eq!(
             lines[0],
-            r#"{"type":"event","event":"ready","ipc_version":1}"#
+            r#"{"type":"event","event":"ready","ipc_version":2}"#
         );
         assert!(lines[1].contains(r#""request_id":"r1""#));
         assert!(lines[1].contains(r#""code":"client_upgrade_required""#));

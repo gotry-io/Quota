@@ -2,23 +2,27 @@ import { AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   type AccountActivityResult,
+  type AccountResult,
   type AccountSummaryResult,
   accountActivityPath,
   accountActivityRange,
+  accountPath,
   accountSummaryPath,
   ACTIVITY_DAYS,
   browserTimezone,
   parseAccountActivityResponse,
+  parseAccountResponse,
   storedSummary,
   storedSummaryETag,
   storeSummary,
 } from "./account-reads.ts";
 import { DASHBOARD_PATH, signInHref } from "./routes.ts";
 
-export type { AccountActivityResult, AccountError, AccountSummaryResult };
+export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
 export {
   accountActivityPath,
   accountActivityRange,
+  accountPath,
   accountSummaryPath,
   ACTIVITY_DAYS,
   browserTimezone,
@@ -30,18 +34,53 @@ const jsonRequest = {
   headers: { Accept: "application/json" },
 } satisfies RequestInit;
 
-/** Sign-in is a navigation, not a fetch: Relay answers it with a redirect to GitHub. */
+/** Sign-in is a navigation, not a fetch: it starts on the page that asks which Account this is. */
 export function beginWebLogin(returnTo: string): void {
   window.location.assign(signInHref(returnTo));
 }
 
-export async function signOut(): Promise<void> {
+/**
+ * End this browser's session, then go where the caller says.
+ *
+ * Signing out from the sign-in page is how someone reaches it as nobody, so where it lands is
+ * the caller's to decide rather than always the landing page.
+ */
+export async function signOut(destination = "/"): Promise<void> {
   const response = await fetch("/api/auth/logout", {
     method: "POST",
     ...jsonRequest,
   });
   if (!response.ok) throw new Error("logout_failed");
-  window.location.assign("/");
+  window.location.assign(destination);
+}
+
+/**
+ * Ask Relay to mail a one-time sign-in link. The answer does not say whether the address is an
+ * identity; 202 is the only success, including when a per-address limit skipped the send.
+ */
+export async function requestEmailSignInLink(input: {
+  email: string;
+  returnTo: string;
+  intent?: "sign_in" | "link";
+}): Promise<"accepted" | "invalid" | "rate_limited" | "failed"> {
+  try {
+    const response = await fetch("/api/auth/email/start", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: input.email,
+        return_to: input.returnTo,
+        ...(input.intent === undefined ? {} : { intent: input.intent }),
+      }),
+    });
+    if (response.status === 202) return "accepted";
+    if (response.status === 400) return "invalid";
+    if (response.status === 429) return "rate_limited";
+    return "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 export async function fetchAccountActivity(
@@ -55,6 +94,16 @@ export async function fetchAccountActivity(
     const response = await fetch(accountActivityPath(range, detail), jsonRequest);
     if (!response.ok) return classifyAccountError(response);
     return parseAccountActivityResponse(response.status, await response.json());
+  } catch {
+    return classifyAccountError(null);
+  }
+}
+
+export async function fetchAccount(): Promise<AccountResult> {
+  try {
+    const response = await fetch(accountPath(), jsonRequest);
+    if (!response.ok) return classifyAccountError(response);
+    return parseAccountResponse(response.status, await response.json());
   } catch {
     return classifyAccountError(null);
   }

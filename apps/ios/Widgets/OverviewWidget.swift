@@ -2,20 +2,6 @@ import QuotaWidgetData
 import SwiftUI
 import WidgetKit
 
-struct OverviewEntry: TimelineEntry {
-  let date: Date
-  let snapshot: WidgetSnapshot?
-  let isPlaceholder: Bool
-  let configuredSelectionID: String?
-
-  var selectedItems: [WidgetQuotaItem] {
-    OverviewWidgetContent.select(
-      items: snapshot?.items ?? [],
-      configuredSelectionID: configuredSelectionID
-    )
-  }
-}
-
 struct OverviewTimelineProvider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> OverviewEntry {
     OverviewEntry(date: Date(), snapshot: nil, isPlaceholder: true, configuredSelectionID: nil)
@@ -60,7 +46,7 @@ struct OverviewWidget: Widget {
       OverviewWidgetEntryView(entry: entry)
     }
     .configurationDisplayName("Overview")
-    .description("Remaining quota and Today Usage at a glance.")
+    .description("Remaining quota, reset, and Today Usage at a glance.")
     .supportedFamilies([
       .systemSmall,
       .systemMedium,
@@ -95,10 +81,41 @@ struct OverviewWidgetEntryView: View {
         OverviewSmallView(entry: entry)
       }
     }
-    .widgetURL(OverviewWidgetContent.widgetURL(for: entry.selectedItems))
+    .widgetURL(widgetURL)
     .containerBackground(for: .widget) {
       // iOS 26 system owns Liquid Glass / accented / vibrant rendering for this container.
       Color.clear
+    }
+  }
+
+  private var widgetURL: URL {
+    switch family {
+    case .systemSmall:
+      OverviewWidgetContent.widgetURL(
+        for: OverviewWidgetContent.smallItems(
+          from: entry.snapshot,
+          configuredSelectionID: entry.configuredSelectionID
+        )
+      )
+    case .systemMedium:
+      OverviewWidgetContent.widgetURL(
+        for: OverviewWidgetContent.mediumItems(
+          from: entry.snapshot,
+          configuredSelectionID: entry.configuredSelectionID
+        )
+      )
+    case .systemLarge:
+      OverviewWidgetContent.widgetURL(
+        for: OverviewWidgetContent.largeItems(
+          from: entry.snapshot,
+          configuredSelectionID: entry.configuredSelectionID
+        )
+      )
+    default:
+      OverviewWidgetContent.lockScreenURL(
+        from: entry.snapshot,
+        configuredSelectionID: entry.configuredSelectionID
+      )
     }
   }
 }

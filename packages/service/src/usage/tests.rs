@@ -1,10 +1,11 @@
 use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
-    DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, MAX_JSONL_LINE_BYTES,
-    MAX_USAGE_MODELS, MAX_USAGE_ROWS_PER_HOUR, NormalizedUsageEvent, UsageAgent, UsageFileIndex,
-    UsageRow, UsageScanOptions, aggregate_hour_rows, build_local_usage_summary,
-    fold_rows_into_other, fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage,
-    scan_grok_usage, scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, LocalHourUsage,
+    MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_PROJECTS, MAX_USAGE_ROWS_PER_HOUR,
+    NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions,
+    aggregate_hour_rows, build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other,
+    fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage,
+    scan_local_usage, scan_opencode_usage, scan_pi_usage, session_project_key,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -34,6 +35,8 @@ fn fixture(name: &str) -> &'static str {
         }
         "pi" => include_str!("../../fixtures/usage/pi.jsonl"),
         "cursor" => include_str!("../../fixtures/usage/cursor.jsonl"),
+        "gemini" => include_str!("../../fixtures/usage/gemini.json"),
+        "copilot" => include_str!("../../fixtures/usage/copilot.jsonl"),
         "opencode" => include_str!("../../fixtures/usage/opencode-message.jsonl"),
         "pricing" => {
             include_str!("../../fixtures/usage/pricing.json")
@@ -71,6 +74,8 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
         (UsageAgent::Grok, "grok", 1usize),
         (UsageAgent::Pi, "pi", 1usize),
         (UsageAgent::Cursor, "cursor", 2usize),
+        (UsageAgent::Gemini, "gemini", 2usize),
+        (UsageAgent::Copilot, "copilot", 2usize),
     ];
     for (agent, name, expected_records) in cases {
         let path = root(name);
@@ -78,6 +83,10 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
             format!("rollout-{name}.jsonl")
         } else if agent == UsageAgent::Grok {
             "updates.jsonl".into()
+        } else if agent == UsageAgent::Gemini {
+            format!("session-{name}.json")
+        } else if agent == UsageAgent::Copilot {
+            "events.jsonl".into()
         } else {
             format!("{name}.jsonl")
         };
@@ -175,10 +184,141 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
                 assert_eq!(api.cache_write_inferred_tokens, 5);
                 assert_eq!(api.output_tokens, 20);
             }
+            UsageAgent::Gemini => {
+                let pro = &result.records[0].event;
+                assert_eq!(pro.model, "gemini-2.5-pro");
+                assert_eq!(pro.billing_channel, BillingChannel::Unknown);
+                assert_eq!(pro.input_tokens, 1_000);
+                assert_eq!(pro.cache_read_tokens, 150);
+                assert_eq!(pro.output_tokens, 200);
+                assert_eq!(pro.reasoning_tokens, 40);
+                assert_eq!(pro.occurred_at, "2026-08-02T10:00:01.000Z");
+                let flash = &result.records[1].event;
+                assert_eq!(flash.model, "gemini-2.5-flash");
+                assert_eq!(flash.input_tokens, 130_000);
+                assert_eq!(flash.context_bucket, ContextBucket::Gt128kLe200k);
+            }
+            UsageAgent::Copilot => {
+                let gpt = &result.records[0].event;
+                assert_eq!(gpt.model, "gpt-5.5");
+                assert_eq!(gpt.billing_channel, BillingChannel::Unknown);
+                assert_eq!(gpt.input_tokens, 1_000);
+                assert_eq!(gpt.cache_read_tokens, 100);
+                assert_eq!(gpt.cache_write_inferred_tokens, 50);
+                assert_eq!(gpt.output_tokens, 200);
+                assert_eq!(gpt.reasoning_tokens, 20);
+                let claude = &result.records[1].event;
+                assert_eq!(claude.model, "claude-opus-4.7");
+                assert_eq!(claude.input_tokens, 95);
+                assert_eq!(claude.output_tokens, 30);
+            }
             UsageAgent::OpenCode => unreachable!(),
         }
         let _ = fs::remove_dir_all(path);
     }
+}
+
+#[test]
+fn parsers_fill_project_key_from_cwd_and_encoded_directories() {
+    let path = root("project-key-codex");
+    fs::write(
+        path.join("rollout-quota.jsonl"),
+        r#"{"timestamp":"2026-08-02T10:00:00.000Z","type":"session_meta","payload":{"cwd":"/Users/someone/Code/Quota"}}
+{"timestamp":"2026-08-02T10:01:00.000Z","type":"turn_context","payload":{"model":"gpt-5.2-codex"}}
+{"timestamp":"2026-08-02T10:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2},"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}
+"#,
+    )
+    .expect("codex log");
+    let result = scan_codex_usage(&options(&path)).expect("codex");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-claude");
+    let project_dir = path.join("projects").join("-Users-someone-Code-Quota");
+    fs::create_dir_all(&project_dir).expect("claude project dir");
+    fs::write(
+        project_dir.join("session.jsonl"),
+        r#"{"timestamp":"2026-08-02T12:00:00.000Z","cwd":"/Users/someone/Code/Quota","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input_tokens":10,"output_tokens":4}}}
+"#,
+    )
+    .expect("claude log");
+    let result = scan_claude_usage(&options(&path)).expect("claude");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-cursor");
+    let project_dir = path.join("projects").join("Users-someone-Code-Quota");
+    fs::create_dir_all(&project_dir).expect("cursor project dir");
+    fs::write(
+        project_dir.join("chat.jsonl"),
+        r#"{"role":"assistant","createdAt":"2026-08-02T10:00:00Z","model":"gpt-5","tokenCount":{"inputTokens":10,"outputTokens":2}}
+"#,
+    )
+    .expect("cursor log");
+    let result = scan_cursor_usage(&options(&path)).expect("cursor");
+    assert_eq!(
+        result.records[0].event.project_key.as_deref(),
+        Some("Quota")
+    );
+    let _ = fs::remove_dir_all(path);
+
+    let path = root("project-key-grok");
+    fs::write(path.join("updates.jsonl"), fixture("grok")).expect("grok log");
+    let result = scan_grok_usage(&options(&path)).expect("grok");
+    assert_eq!(result.records[0].event.project_key, None);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn local_projects_fold_past_the_bound_into_other() {
+    let mut rows = Vec::new();
+    for index in 0..MAX_USAGE_PROJECTS + 2 {
+        let mut row = test_fact("2026-08-02T12:00:00Z", "gpt-5");
+        row.project_key = format!("project-{index:02}");
+        row.input_tokens = (MAX_USAGE_PROJECTS + 2 - index) as u64 * 10;
+        rows.push(row);
+    }
+    let summary = super::build_local_usage_summary_with_projects(&rows, Some(&rows), None, None)
+        .expect("projects");
+    assert_eq!(summary.projects.len(), MAX_USAGE_PROJECTS);
+    assert!(
+        summary
+            .projects
+            .iter()
+            .any(|project| project.project_key == "other")
+    );
+    let named: u64 = summary
+        .projects
+        .iter()
+        .filter(|project| project.project_key != "other")
+        .map(|project| project.total_tokens)
+        .sum();
+    let other = summary
+        .projects
+        .iter()
+        .find(|project| project.project_key == "other")
+        .expect("other")
+        .total_tokens;
+    assert_eq!(named + other, summary.totals.total_tokens);
+}
+
+#[test]
+fn aggregate_hour_rows_for_upload_collapse_the_project_dimension() {
+    let mut alpha = test_event("2026-08-02T12:00:00.000Z", "gpt-5", 10);
+    alpha.project_key = Some("Quota".into());
+    let mut beta = test_event("2026-08-02T12:10:00.000Z", "gpt-5", 7);
+    beta.project_key = Some("OtherApp".into());
+    let rows = aggregate_hour_rows(&[alpha, beta]).expect("hour");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].input_tokens, 17);
+    let encoded = serde_json::to_value(&rows[0]).expect("row json");
+    assert!(encoded.get("project_key").is_none());
 }
 
 #[test]
@@ -200,6 +340,7 @@ fn codex_preserves_opaque_provider_model_names() {
             .collect::<Vec<_>>(),
         ["GPT-5.5[1m]", "openrouter-3o[1m]"]
     );
+    let _ = fs::remove_dir_all(path);
 }
 
 #[test]
@@ -1216,6 +1357,7 @@ fn pricing_never_crosses_billing_channels() {
         BillingChannel::AnthropicDirect,
         BillingChannel::AwsBedrock,
         BillingChannel::GoogleVertex,
+        BillingChannel::GoogleDirect,
         BillingChannel::Openrouter,
         BillingChannel::XaiDirect,
     ];
@@ -1402,6 +1544,66 @@ fn pricing_caps_unpriced_detail_without_losing_rows_or_status() {
     assert_eq!(outcome.unpriced.len(), 100);
     assert!(outcome.unpriced_truncated);
     assert_eq!(outcome.status, UsageCostStatus::Unavailable);
+}
+
+#[test]
+fn a_rhythm_names_every_hour_and_groups_days_by_the_local_clock() {
+    let catalog = pricing_catalog(vec![pricing_entry("openai_gpt_5")]);
+    let entries = [
+        ("2026-08-02", 23u8, 10u64),
+        ("2026-08-03", 0, 30),
+        ("2026-08-03", 23, 5),
+    ]
+    .into_iter()
+    .map(|(date, hour, input)| LocalHourUsage {
+        date: date.to_owned(),
+        hour,
+        row: test_fact_with_input("2026-08-02T00:00:00Z", "gpt-5", input),
+    })
+    .collect::<Vec<_>>();
+
+    let (days, hours) = build_local_usage_rhythm(&entries, Some(&catalog)).expect("rhythm");
+
+    assert_eq!(
+        days.iter().map(|day| day.date.as_str()).collect::<Vec<_>>(),
+        ["2026-08-02", "2026-08-03"]
+    );
+    assert_eq!(days[0].totals.input_tokens, 10);
+    assert_eq!(days[1].totals.input_tokens, 35);
+    assert_eq!(hours.len(), 24);
+    assert!(
+        hours
+            .iter()
+            .enumerate()
+            .all(|(index, hour)| hour.hour as usize == index)
+    );
+    assert_eq!(hours[0].total_tokens, 30);
+    assert_eq!(hours[23].total_tokens, 15);
+    // An hour nothing reached is still named, at no tokens and no amount: there is no priced
+    // row behind it to state one.
+    assert_eq!(hours[12].total_tokens, 0);
+    assert_eq!(hours[12].cost_microusd, None);
+}
+
+#[test]
+fn a_period_that_read_a_cache_says_what_that_saved() {
+    let catalog = pricing_catalog(vec![pricing_entry("openai_gpt_5")]);
+    let mut fact = test_fact_with_input("2026-08-02T12:00:00Z", "gpt-5", 2_000_000);
+    fact.row.cache_read_tokens = 1_000_000;
+
+    let summary = build_local_usage_summary(&[fact], Some(&catalog), None).expect("summary");
+
+    // A million cache reads at $1 per million against $0.10 per million saved $0.90.
+    assert_eq!(
+        summary.cache_saved.amount_microusd.as_deref(),
+        Some("900000")
+    );
+    assert_eq!(summary.cache_saved.status, UsageCostStatus::Complete);
+    assert_eq!(summary.cache_saved.unpriced_rows, 0);
+    assert_eq!(
+        crate::pricing::usage_cache_hit_basis_points(&summary.totals),
+        Some(5_000)
+    );
 }
 
 #[test]
@@ -1996,6 +2198,7 @@ fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUs
         billable_tools: super::BillableTools::default(),
         source_cost_microusd: None,
         source_cost_covered_requests: 0,
+        project_key: None,
     }
 }
 
@@ -2003,6 +2206,7 @@ fn test_event(occurred_at: &str, model: &str, input_tokens: u64) -> NormalizedUs
 fn test_fact(bucket_start_utc: &str, model: &str) -> DatedUsageRow {
     DatedUsageRow {
         date: bucket_start_utc[..10].into(),
+        project_key: String::new(),
         row: test_row(model),
     }
 }
@@ -2012,6 +2216,7 @@ fn dated(rows: &[UsageRow], date: &str) -> Vec<DatedUsageRow> {
     rows.iter()
         .map(|row| DatedUsageRow {
             date: date.to_owned(),
+            project_key: String::new(),
             row: row.clone(),
         })
         .collect()
@@ -2059,6 +2264,33 @@ fn pricing_rates() -> PricingRates {
         web_search_per_request: None,
         web_fetch_per_request: None,
     }
+}
+
+#[test]
+fn session_project_key_is_a_basename_never_a_path() {
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.claude/projects/-Users-kyle-Code-Quota/abc.jsonl"
+        )),
+        "Quota"
+    );
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.grok/sessions/sess_123/updates.jsonl"
+        )),
+        "sess_123"
+    );
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.codex/sessions/2026/08/02/rollout-abc.jsonl"
+        )),
+        "rollout-abc"
+    );
+    assert_eq!(
+        session_project_key(Path::new("/Users/kyle/.local/share/opencode/opencode.db")),
+        "opencode"
+    );
+    assert!(!session_project_key(Path::new("a/b/c.jsonl")).contains('/'));
 }
 
 fn pricing_entry(entry_id: &str) -> PricingCatalogEntry {

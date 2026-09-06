@@ -55,6 +55,8 @@ const OPENAI_56_PRICE_CHANGE_SOURCE =
 const XAI_GROK_45_SOURCE = "https://docs.x.ai/developers/models/grok-4.5";
 const XAI_GROK_46_SOURCE = "https://docs.x.ai/developers/models/grok-4.6";
 const MOONSHOT_PRICING_SOURCE = "https://platform.moonshot.ai/docs/pricing/chat";
+const GOOGLE_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing";
+const VERIFIED_AT_2026_09_06 = "2026-09-06T00:00:00.000Z";
 const ANTHROPIC_PRICING_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing";
 const ANTHROPIC_OPUS_46_SOURCE = "https://www.anthropic.com/news/claude-opus-4-6";
 const ANTHROPIC_RELEASE_NOTES_SOURCE = "https://platform.claude.com/docs/en/release-notes/overview";
@@ -649,6 +651,108 @@ function xaiEntries(): PricingCatalogEntry[] {
   ];
 }
 
+function googleEntries(): PricingCatalogEntry[] {
+  const flash = (
+    model: string,
+    entryPrefix: string,
+    effectiveFrom: string,
+    input: string,
+    cache: string,
+    output: string,
+  ) =>
+    expandEntries({
+      entryPrefix,
+      model,
+      billingChannel: "google_direct",
+      effectiveFrom,
+      effectiveTo: null,
+      serviceTiers: STANDARD_SERVICE_TIERS,
+      speeds: STANDARD_SPEEDS,
+      inferenceGeos: ["*"],
+      contexts: ["*"],
+      rates: tokenRates(input, cache, null, null, output),
+      sourceUrl: GOOGLE_PRICING_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_09_06,
+    });
+  const longContexts = ["*", "gt_200k_le_256k", "gt_256k_le_272k", "gt_272k"] as const;
+  const pro = (
+    model: string,
+    entryPrefix: string,
+    effectiveFrom: string,
+    shortInput: string,
+    shortCache: string,
+    shortOutput: string,
+    longInput: string,
+    longCache: string,
+    longOutput: string,
+  ) =>
+    expandEntries({
+      entryPrefix,
+      model,
+      billingChannel: "google_direct",
+      effectiveFrom,
+      effectiveTo: null,
+      serviceTiers: STANDARD_SERVICE_TIERS,
+      speeds: STANDARD_SPEEDS,
+      inferenceGeos: ["*"],
+      contexts: longContexts,
+      rates: (context) =>
+        context === "*"
+          ? tokenRates(shortInput, shortCache, null, null, shortOutput)
+          : tokenRates(longInput, longCache, null, null, longOutput),
+      sourceUrl: GOOGLE_PRICING_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_09_06,
+    });
+  return [
+    ...flash("gemini-2.5-flash", "google-gemini-2.5-flash", "2025-05-20", "0.3", "0.03", "2.5"),
+    ...flash(
+      "gemini-2.5-flash-lite",
+      "google-gemini-2.5-flash-lite",
+      "2025-07-22",
+      "0.1",
+      "0.01",
+      "0.4",
+    ),
+    ...flash("gemini-3.5-flash", "google-gemini-3.5-flash", "2026-01-01", "1.5", "0.15", "9"),
+    ...expandEntries({
+      entryPrefix: "google-gemini-3.8-flash-intro",
+      model: "gemini-3.8-flash",
+      billingChannel: "google_direct",
+      effectiveFrom: "2026-09-02",
+      effectiveTo: "2027-01-01",
+      serviceTiers: STANDARD_SERVICE_TIERS,
+      speeds: STANDARD_SPEEDS,
+      inferenceGeos: ["*"],
+      contexts: ["*"],
+      rates: tokenRates("0.75", "0.075", null, null, "3.75"),
+      sourceUrl: GOOGLE_PRICING_SOURCE,
+      verifiedAt: VERIFIED_AT_2026_09_06,
+    }),
+    ...pro(
+      "gemini-2.5-pro",
+      "google-gemini-2.5-pro",
+      "2025-05-06",
+      "1.25",
+      "0.125",
+      "10",
+      "2.5",
+      "0.25",
+      "15",
+    ),
+    ...pro(
+      "gemini-3.1-pro-preview",
+      "google-gemini-3.1-pro-preview",
+      "2026-01-01",
+      "2",
+      "0.2",
+      "12",
+      "4",
+      "0.4",
+      "18",
+    ),
+  ];
+}
+
 function moonshotEntries(): PricingCatalogEntry[] {
   // kimi-for-coding is a subscription endpoint with no official per-token price; it stays unpriced.
   // models.dev states Kimi K2.5's release_date only as the month "2026-01", so
@@ -673,9 +777,15 @@ function moonshotEntries(): PricingCatalogEntry[] {
 
 export const PRICING_CATALOG: PricingCatalog = PricingCatalogSchema.parse({
   protocol_version: 2,
-  revision: "official-2026-09-01-1",
-  published_at: PUBLISHED_AT_2026_09_01,
-  entries: [...openAIEntries(), ...anthropicEntries(), ...xaiEntries(), ...moonshotEntries()],
+  revision: "official-2026-09-06-1",
+  published_at: VERIFIED_AT_2026_09_06,
+  entries: [
+    ...openAIEntries(),
+    ...anthropicEntries(),
+    ...xaiEntries(),
+    ...moonshotEntries(),
+    ...googleEntries(),
+  ],
 });
 
 export const PRICING_CATALOG_ETAG = `"${PRICING_CATALOG.revision}"`;

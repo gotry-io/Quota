@@ -9,6 +9,8 @@ enum AgentDisplay {
     case .opencode: "OpenCode"
     case .pi: "Pi"
     case .cursor: "Cursor"
+    case .gemini: "Gemini CLI"
+    case .copilot: "GitHub Copilot"
     case .unknown: "Unknown"
     }
   }

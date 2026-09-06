@@ -37,13 +37,32 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
   so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
 - **A future reset is a countdown or a local date, never an age.** All of it is relative to the
-  reader’s time zone, and the English is fixed: it does not follow the device locale. Under an
-  hour: **Resets in 42m** (minutes round up; anything under a minute is still **Resets in 1m**).
-  From one hour to a day: **Resets in 3h 12m**, or **Resets in 3h** when the minutes are zero. From
-  a day to a week: **Resets Tue 14:00** (weekday abbreviation and 24-hour `HH:mm`). A week or more:
-  **Resets Sep 12** (month abbreviation and day). A reset that has already passed prints no Resets
-  line; the reading is **Not current**, or the status word the source reported. The `reset` array in
-  the same fixture is the shared statement of these thresholds.
+  reader’s time zone, and the English is fixed: it does not follow the device locale. Relative
+  (the default): under an hour **Resets in 42m** (minutes round up; anything under a minute is
+  still **Resets in 1m**); from one hour to a day **Resets in 3h 12m**, or **Resets in 3h** when
+  the minutes are zero; from a day to a week **Resets Tue 14:00** (weekday abbreviation and
+  24-hour `HH:mm`); a week or more **Resets Sep 12** (month abbreviation and day). Absolute always
+  uses that local date, even under a day. A reset that has already passed prints no Resets line;
+  the reading is **Not current**, or the status word the source reported.
+  `packages/protocol/fixtures/reset-copy-conformance.json` is the shared statement; QuotaBar
+  Settings → Menu Bar → **Reset time** switches relative and absolute. iOS and the website stay
+  on relative.
+- **usd and credits remaining of a cap print `$12.50 of $40.00` (or `80.00 of 100.00 credits`)
+  and drop the percent bar**, when remaining/limit describes the same quantity as `used_percent`.
+  Included dollars that are a different quantity keep `36.9% · $14.55` and the meter.
+  `packages/protocol/fixtures/remaining-copy-conformance.json` is the shared statement.
+- **A pace line says whether the current rate lasts to the reset.** One line under the window, in
+  two halves: the tempo, then the outcome — **On track · lasts to reset**, **Ahead +42% · runs out
+  ~2h before reset**, **Behind −30% · lasts to reset**. *On track* carries no number; *Ahead* and
+  *Behind* carry the signed difference from an even burn rate. The duration in *runs out* is the
+  shared compact format (`2h`, `27m`, `1d`) and always reads `~`, because it is a projection. A
+  window the rule cannot answer for — no cadence, a balance with no limit, or too little of the
+  window elapsed or used — shows no line and takes no space. *runs out* is the warning color;
+  everything else is secondary text. The rule and these phrases are
+  `packages/protocol/fixtures/quota-pace-conformance.json`, answered by `packages/quota-model`,
+  `packages/service`, `packages/apple-shared` (`QuotaPace`, `QuotaPaceCopy`), and
+  `apps/web/src/lib/format.ts`; see
+  [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
   window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
@@ -67,10 +86,37 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
   When a remaining-quota reading should fire a local threshold or reset notification is
   `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
-  answer that file through `QuotaAlerts`.
-- **Period names are Today, 7 Days, 30 Days, and Up to 2 years.** Relay's `all` is the last 730 UTC
-  days, not every day ever stored. A segmented control that cannot fit the last name may abbreviate
-  it **2 Years**; the accessibility name stays **Up to 2 years**.
+  answer that file through `QuotaAlerts`. A pace warning reuses the pace line as its body, and fires
+  at most once per window per reset cycle.
+- **A Usage page shows one period, and there are seven of them.** Three are anchored to the
+  reader's own calendar and step a unit at a time — **Today**, **This week**, **This month** — and
+  three are fixed windows — **Last 7 days**, **Last 30 days**, **All**. The seventh is **Custom
+  range**, two inclusive dates someone picked. Relay's `all` is the last 730 UTC days, not every
+  day ever stored. A control too narrow for the full name abbreviates it **Day**, **Week**,
+  **Month**, **7D**, **30D**, **All**, **Custom**; the accessibility name is always the full one.
+  `UsagePeriodSegment` in `packages/apple-shared` and `USAGE_PERIOD_SEGMENTS` in
+  `apps/web/src/lib/usage-period.ts` are where those pairs are written.
+- **A period says the range it covers, not the name of its button.** One day is that date
+  (**Sep 6, 2026**); a range inside one year drops the repeated year from its first half
+  (**Aug 31 – Sep 6, 2026**); `all` has no first day, so it reads **Everything kept**. The
+  step controls are **Previous period** and **Next period**, and there is nothing ahead of the
+  current day, week, or month, so **Next period** is disabled there.
+- **Four periods are folded for the reader, and the rest are folded by the client.** Today, Last 7
+  days, Last 30 days, and All arrive folded — from the service on This Mac, from the Account read
+  on Account. Every other period is added up by the client from days it already holds, and days
+  carry no agent tree, so a folded period shows totals and cost with no model breakdown and says
+  so in one line rather than looking empty. On Account, a period the summary does not carry is
+  answered on This Mac only.
+- **The monthly budget is a device preference and never leaves the device.** It is one amount in
+  whole US dollars plus whether it may notify, kept in `UserDefaults` on Apple and `localStorage`
+  on the website — never in the Account, because a budget says what someone wants to be warned
+  about, which is not a fact about their usage. The Usage page shows it as a progress bar above
+  the totals, reading **`$5.39 / $50.00 · 11%`**, with **`≥ `** in front of a spend only partly
+  priced. Crossing 80% and then 100% of the amount notifies once each per calendar month: the
+  title is **`Monthly budget`** and the body is **`80% of $50.00 spent`**, or **`$50.00 budget
+  spent`** once the whole amount is gone. A new month starts a new cycle. When those
+  crossings fire is `packages/protocol/fixtures/alert-transition-conformance.json`
+  (`budget_cases`), which both Apple apps answer through `QuotaAlerts`.
 
 ## Window and layout tokens
 
@@ -209,21 +255,33 @@ image and measures the drawn pixels: the mark's ink and the digits' ink share a 
 quarter point, every mark lands at the same size, and a stacked pair stays the standard item
 height.
 
-Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, or **Icon and percent** (the default).
+Settings → Menu Bar → **Style** chooses **Icon**, **Percent**, **Icon and percent** (the default),
+**Icon and today cost**, or **Icon and today tokens**.
 → **Provider** chooses **Automatic** — the tightest current subscription — or any set of providers
 Overview is showing. Two or three named providers can be **Combined** into one item or **Separate**
 as one item each; Combined is the default arrangement for that size, and a fourth named provider
-makes the bar Separate. More than one named provider always draws as Icon and percent, because
-Icon-only and Percent-only cannot say whose number it is. The stored Style is left alone and
+makes the bar Separate. More than one named provider cannot be Icon-only or Percent-only and still
+say whose number it is, so those two fall back to Icon and percent; Icon and today cost/tokens
+keep their style because each cell still wears a mark. The stored Style is left alone and
 applies again when the bar is back to one reading. Style choosing takes effect and returns;
 Provider is a set of toggles and stays until Back. Both the named set and the arrangement persist
 in UserDefaults. A chosen provider with no current reading shows the mark alone and never borrows
-another provider's number, and **Percent** likewise falls back to the mark alone when there is no
-percent to show, because an item with no content cannot be clicked. VoiceOver announces
-**QuotaBar**, the provider each number belongs to, and the remaining percent — or, for a stacked
-pair, the full window titles: **QuotaBar, Claude Code, 5 Hours 68% remaining, Weekly 27% remaining**.
-Clicking a Separate item opens the shared panel on that provider; Combined and Automatic open the
-same panel without changing page.
+another provider's number, and **Percent**, **Icon and today cost**, and **Icon and today tokens**
+likewise fall back to the mark alone when there is no number to show, because an item with no
+content cannot be clicked.
+
+**Icon and today cost** and **Icon and today tokens** use the same 14.5pt mark, 4pt gap, and
+menu-bar font with monospaced digits as a single remaining percent. They are one line, never a
+stack: cost is the compact Usage format (`$1.49`, or `≥ $1.49` when the day is partial), tokens
+are the compact count (`1.23M`). Automatic answers with Quota's own mark and the same today total
+the footer would show; a named cell answers with that provider's mark and that agent's today.
+Packed cells sit 8pt apart, the same as percents. VoiceOver announces **QuotaBar, today $1.49**
+or **QuotaBar, Claude Code today 1,234,567 tokens**.
+
+VoiceOver for remaining-percent styles announces **QuotaBar**, the provider each number belongs
+to, and the remaining percent — or, for a stacked pair, the full window titles: **QuotaBar, Claude
+Code, 5 Hours 68% remaining, Weekly 27% remaining**. Clicking a Separate item opens the shared
+panel on that provider; Combined and Automatic open the same panel without changing page.
 
 ## Shell
 
@@ -266,6 +324,7 @@ Overview
     ├── Notifications
     ├── Menu Bar Style
     ├── Menu Bar Provider
+    ├── Reset time
     ├── Support
     │   └── Diagnostics
     └── Agents
@@ -293,12 +352,17 @@ reachable. Back follows the stack.
 
 Each quota observation shows:
 
-- provider brand and name;
+- provider brand and name, with a 6pt incident dot after the name when the official status page
+  reports `minor` or worse; the tooltip is the status-page `description`. `none` shows no mark.
+  The menu-bar extra never overlays this mark;
 - optional masked account label and normalized plan badge;
 - remaining value as the strongest number, with no "left" or "remaining" suffix;
-- budget windows that also have an absolute remaining amount as `71% · $3.75`;
+- usd/credits windows whose remaining and limit are that same quantity as `$12.50 of $40.00`,
+  with no meter;
+- other budget windows that also have an absolute remaining amount as `71% · $3.75`;
 - percent-only windows as `71%`;
-- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title;
+- balance-only windows as `$12.34` (or the unit amount) under a **Balance** title when the
+  collector titled them Balance; **Reset Credits** keeps its title;
 - one meter per quota window when a percent is meaningful;
 - reset time as quiet metadata, in the shared reset copy; it does not imply the window period.
 
@@ -369,16 +433,17 @@ service operations; there are no embedded web views.
 
 Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
 totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
-**Style** and **Provider**: two rows that state the choice in force on the right and open a page to
-change it, never a menu that drops over the panel. General contains the native mini **Launch at
-Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes, default 5),
-then the **Support** destination. Choosing an interval takes effect and returns, like Menu Bar
-Style. It is how often this Mac collects provider quota; Account summary still polls every
+**Style**, **Provider**, and **Reset time**: rows that state the choice in force on the right and
+open a page to change it, never a menu that drops over the panel. General contains the native mini
+**Launch at Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes,
+default 5), then the **Support** destination. Choosing an interval takes effect and returns, like
+Menu Bar Style. It is how often this Mac collects provider quota; Account summary still polls every
 minute, and a window reset can collect quota once before the next interval.
 
 **Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
 ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
-returns, because there is nothing else on the page to confirm. **Menu Bar Provider** lists
+returns, because there is nothing else on the page to confirm. **Reset time** is the same kind of
+list: **Relative** (`Resets in 3h 12m`) or **Absolute** (`Resets Mon 17:12`). **Menu Bar Provider** lists
 **Automatic** first, without a mark because it is not a provider, then the providers Overview is
 showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
 named set; named rows toggle and the page stays. When two or more are named, **Combined** and
@@ -452,9 +517,21 @@ The page uses the same Settings list rows as the rest of this panel.
 ### Account
 
 The Account page is reachable only while signed in, and it holds everything that belongs to the
-account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
-**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
-this page because what it uploads is account data, not a general preference.
+account, top to bottom: the account label, **Sync**, the native mini **Sync Usage** switch,
+**Devices**, **Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its
+copy — it is on this page because what it uploads is account data, not a general preference.
+
+**Sync** is the subscription multi-device sync is paid for, exactly as Relay states it. Its
+subtitle is one line: **Active · renews Oct 5**, **Active · ends Oct 5**, **Grace period · update
+payment**, or **Not subscribed**; a stale answer — one Relay could not refresh — spends the
+line on its age instead, as **Active · checked 2h ago**, and a Mac that has not read the account
+yet says **Checking…**. The line never wraps, so the age replaces the renewal date rather than
+following it. The trailing action is a small bordered
+**Subscribe…**, which opens the account's own purchase link, or **Manage…** once there is a
+subscription, which opens `quota.gotry.io/my/settings`; there is no button while there is nothing
+to open. Without a subscription the Sync Usage switch is off-limits and its subtitle says **Needs
+a subscription**. The panel says none of this at its top: an unpaid account is a state, not an
+alarm, so it is stated where the account is managed and nowhere else.
 
 **Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
 popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced
@@ -480,25 +557,68 @@ simply **Account**, with a single-account symbol, and **This Mac**. Omit the men
 unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
 source preserves the selected period.
 
-A four-item 28pt tab control selects Today, 7 Days, 30 Days, or 2 Years; Today is the default. Its
+A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
-The selection is one inclusive date window from the service's precomputed snapshot. Opening Usage
-and changing either selector never starts collection or network work and never shows a loading
-state when a snapshot already exists. If the selected source has no snapshot yet and that
+A custom range selects none of the six, so the tab control shows nothing selected and the row
+beneath it says what the period covers.
+
+Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
+calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
+Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
+and **Next period** is disabled on the current unit. The period names, the range title, and the
+budget copy are in Shared product vocabulary.
+
+Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
+changing either selector starts no collection or network work and shows no loading state when a
+snapshot already exists. Every other period is one `usage_period` request, which folds the hours
+this Mac already stored rather than collecting again; while it is in flight the page says
+**Preparing Usage…**, and a state change discards those folds and asks again because the hours
+behind them moved. The Account read hands this device four folds, not the days behind them, so on
+Account a period outside those four says **This period is folded from this Mac's own hours. Switch
+the source to this Mac to see it.** If the selected source has no snapshot yet and that
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
 Preparing and empty Usage remain section states below the period tabs because those controls are
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
+
+When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
+folded the same way any other custom period is, and it is shown whatever period the page is
+otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
+
 The default page contains:
 
-- Summary: a titled group with separate Tokens and Cost headline metrics followed by the six token
-  and message metrics in a two-column grid. Headline values use the primary text tone; grid labels
-  stay muted while their values use the secondary tone.
+- Summary: a titled group with separate Tokens, Cost, and Cache hit headline metrics followed by
+  the six token and message metrics in a two-column grid. Cache hit is whole percent, with
+  `saved $X.XX` under it when the period's cache reads could be priced and nothing under it when
+  they could not ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values
+  use the primary text tone; grid labels stay muted while their values use the secondary tone.
+- Daily, for This Mac and for any period but 2 Years: one bar per local day at 44pt tall, then the
+  last seven of those days as `date` / `tokens · cost` rows. The bars are a plain neutral fill at
+  55% ink, and a day with nothing in it is drawn at 12% rather than left out, so the shape of a
+  week is the shape of the week. Omit the section when the period reported nothing. The 2 Years
+  period has no Daily section: its per-day shape is the Account's activity chart.
 - Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. Every model remains a
-  static single row ending in `tokens · cost` when priced, or only `tokens` when unpriced.
+  — independent of the collecting client and of who billed the request. A **Top models** list of
+  the three largest leads the section when there is more than one, each as `share · tokens`. Each
+  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
+  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
+  share` when unpriced.
+- Rhythm, for This Mac and for any period but 2 Years: 24 bars at 36pt, one per hour of the local
+  clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as a whole-percent
+  share. Omit the section when every hour is empty. The Account source has no Rhythm — Relay stores
+  hours on UTC keys and does not fold a local clock.
+- Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
+  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
+  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
+  Account Usage has no such section.
+- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
+  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
+  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
+  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
+  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
@@ -531,9 +651,15 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ### Agents
 
-Agents has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
+Agents opens with a **Usage** group that holds one native mini switch, **Group Usage by project**,
+default on. It only changes This Mac: the Usage page Projects section and the local hour dimension
+behind it. Upload rows never carry a project key.
+
+Agents then has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
 reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
-name — `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
+name. When this Mac has a last-good official status-page reading, that line is
+**All systems operational**, or **Degraded ·** the status-page description for `minor` and above.
+Otherwise it is `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
 one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
 configured**, or **Not signed in** — so the list says which agent needs attention before it is
 opened. The Settings home **Agents** row trails **3 shown** and, when any shown agent has no
@@ -647,6 +773,22 @@ name, or the underlying error's text. The scan continues with the other browsers
 QuotaBar never reads provider credential files. New values travel only over private child stdin and
 Swift clears the field after Save; the service owns validation, owner-only persistence, and masking.
 
+## Desktop widgets
+
+QuotaBar does not embed a WidgetKit extension in this build: SwiftPM plus
+`scripts/package-menubar.sh` cannot produce an `.appex`. When packaging can embed one, the
+widgets read the same non-secret `WidgetSnapshot` as iOS (`group.io.gotry.quota`,
+[ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)). They never talk to Relay
+or the private service.
+
+| Kind | Families | Content |
+| --- | --- | --- |
+| Overview | systemSmall, systemMedium | Remaining quota across the most constrained subscriptions, reset, **Updated** age |
+| Today | systemSmall | Today's tokens and API-equivalent cost |
+
+Home Screen remaining figures follow the same information order as iOS widgets. A carried
+`pace` of `runs_out` uses the existing warning color; no pace means no extra color.
+
 ## Shared components
 
 | Component | Contract |
@@ -706,7 +848,7 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
 setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
-Style, Menu Bar Provider, Support, and Diagnostics. Inspect
+Style, Menu Bar Provider, Reset time, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

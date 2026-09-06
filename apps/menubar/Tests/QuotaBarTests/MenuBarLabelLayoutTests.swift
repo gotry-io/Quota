@@ -53,7 +53,7 @@ struct MenuBarLabelLayoutTests {
 
   @Test
   func theItemIsTheStandardStatusItemHeightInEveryStyle() throws {
-    for label in [iconAndPercent, percentOnly, iconOnly] {
+    for label in [iconAndPercent, percentOnly, iconOnly, todayCost, todayTokens] {
       let image = MenuBarItemImage.make(label)
       #expect(image.size.height == MenuBarItemImage.height)
       #expect(image.isTemplate)
@@ -223,11 +223,38 @@ struct MenuBarLabelLayoutTests {
     #expect(scales == [1, 2])
   }
 
+  @Test
+  func todayCostAndTokensShareACenterWithTheMarkOnOneLine() throws {
+    for label in [todayCost, todayTokens] {
+      let ink = try #require(itemInk(of: label))
+      let mark = try #require(ink.mark)
+      let text = try #require(ink.text)
+      #expect(abs(text.midY - mark.midY) <= tolerance)
+      #expect(abs(mark.midY - ink.height / 2) <= tolerance)
+    }
+  }
+
   private var iconAndPercent: MenuBarLabelModel {
     MenuBarLabelModel(
       icon: .provider(.codex),
       text: "27%",
       accessibilityLabel: "QuotaBar, Codex 27% remaining"
+    )
+  }
+
+  private var todayCost: MenuBarLabelModel {
+    MenuBarLabelModel(
+      icon: .quota,
+      text: "$1.49",
+      accessibilityLabel: "QuotaBar, today $1.49"
+    )
+  }
+
+  private var todayTokens: MenuBarLabelModel {
+    MenuBarLabelModel(
+      icon: .quota,
+      text: "1.23M",
+      accessibilityLabel: "QuotaBar, today 1,234,567 tokens"
     )
   }
 

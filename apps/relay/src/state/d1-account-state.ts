@@ -4,33 +4,48 @@ import {
   QuotaSnapshotSchema,
 } from "@gotry-io/quota-protocol";
 import type {
+  AccountIdentityRecord,
   AccountLoginGrantConsumeResult,
   AccountMaintenanceInput,
   AccountRecord,
   AccountState,
   AccountUsageVersionStamp,
   AccountVersionStamp,
+  ApplyRevenueCatWebhookInput,
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
   ConsumeAccountLoginGrantInput,
+  ConsumeEmailChallengeResult,
   ConsumeLoginGrantInput,
+  CreateIosSessionInput,
+  CreateEmailChallengeInput,
   CreateLoginGrantInput,
   CreateWebSessionInput,
+  EmailChallengeRecord,
   DeleteDeviceResult,
   DeviceRecord,
   DeviceSyncControl,
   DeviceWriterPrincipal,
+  IdentityProviderId,
+  LinkIdentityInput,
+  LinkIdentityOutcome,
   LoginGrantConsumeResult,
   LoginGrantRecord,
+  PublicProfileRecord,
+  PublicProfileWriteInput,
+  PublicProfileWriteResult,
   QuotaSnapshotSubmission,
   RateLimitInput,
   RateLimitResult,
   RefreshSessionInput,
+  ResolveSignInIdentityInput,
   RevokeRefreshSessionInput,
   SessionClientKind,
   SessionPrincipal,
   SnapshotWriteResult,
+  StoredEntitlement,
   StoredQuotaSnapshot,
+  UnlinkIdentityOutcome,
 } from "@gotry-io/relay-core";
 import {
   decodeSessionScopes,
@@ -101,6 +116,14 @@ export class D1AccountState implements AccountState {
         .prepare(
           `DELETE FROM login_grants WHERE id IN (
              SELECT id FROM login_grants WHERE expires_at <= ?1
+             ORDER BY expires_at ASC, id ASC LIMIT ?2
+           )`,
+        )
+        .bind(input.grant_expired_before, input.limit),
+      this.database
+        .prepare(
+          `DELETE FROM email_challenges WHERE id IN (
+             SELECT id FROM email_challenges WHERE expires_at <= ?1
              ORDER BY expires_at ASC, id ASC LIMIT ?2
            )`,
         )
@@ -208,64 +231,41 @@ export class D1AccountState implements AccountState {
   async completeIdentityLogin(
     input: CompleteIdentityLoginInput,
   ): Promise<CompleteIdentityLoginResult> {
-    const results = await this.database.batch([
-      this.database
-        .prepare(
-          `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-           SELECT ?4, ?4, ?5, ?6, ?6
-           WHERE EXISTS (
-             SELECT 1 FROM login_grants
-             WHERE id = ?1 AND login_token_hash = ?2 AND expires_at > ?6
-               AND completed_at IS NULL AND consumed_at IS NULL
-           )
-           ON CONFLICT(id) DO UPDATE SET
-             display_label = excluded.display_label,
-             updated_at = excluded.updated_at
-           RETURNING id, identity_subject, display_label, created_at, updated_at`,
-        )
-        .bind(
-          input.grant_id,
-          input.login_token_hash,
-          input.completion_nonce_hash,
-          input.account_id,
-          input.display_label,
-          input.completed_at,
-        ),
-      this.database
-        .prepare(
-          `UPDATE login_grants
-           SET account_id = ?4,
-               code_hash = ?5,
-               completion_nonce_hash = ?3,
-               completed_at = ?6
-           WHERE id = ?1 AND login_token_hash = ?2 AND expires_at > ?6
-             AND completed_at IS NULL AND consumed_at IS NULL
-           RETURNING id, client_id, account_id, pkce_challenge, redirect_uri, client_state,
-                     expires_at, completed_at, consumed_at`,
-        )
-        .bind(
-          input.grant_id,
-          input.login_token_hash,
-          input.completion_nonce_hash,
-          input.account_id,
-          input.authorization_code_hash,
-          input.completed_at,
-        ),
-    ]);
-    const account = resultRow<AccountRecord>(results[0]);
-    const grant = resultRow<LoginGrantRecord>(results[1]);
-    if (account && grant) {
-      return { outcome: "completed", account, grant };
+    // The Account already exists: the browser session that reached the completion route is the
+    // proof of it, and an identity opened it long before this grant was created.
+    const completed = await this.database
+      .prepare(
+        `UPDATE login_grants
+         SET account_id = ?4,
+             code_hash = ?5,
+             completion_nonce_hash = ?3,
+             completed_at = ?6
+         WHERE id = ?1 AND login_token_hash = ?2 AND expires_at > ?6
+           AND completed_at IS NULL AND consumed_at IS NULL
+         RETURNING id, client_id, account_id, pkce_challenge, redirect_uri, client_state,
+                   expires_at, completed_at, consumed_at`,
+      )
+      .bind(
+        input.grant_id,
+        input.login_token_hash,
+        input.completion_nonce_hash,
+        input.account_id,
+        input.authorization_code_hash,
+        input.completed_at,
+      )
+      .first<LoginGrantRecord>();
+    if (completed) {
+      return { outcome: "completed", grant: completed };
     }
 
     const existing = await this.getLoginGrantById(input.grant_id);
     if (!existing) {
-      return { outcome: "not_found", account: null, grant: null };
+      return { outcome: "not_found", grant: null };
     }
     if (Date.parse(existing.expires_at) <= Date.parse(input.completed_at)) {
-      return { outcome: "expired", account: null, grant: existing };
+      return { outcome: "expired", grant: existing };
     }
-    return { outcome: "already_completed", account: null, grant: existing };
+    return { outcome: "already_completed", grant: existing };
   }
 
   async getLoginGrantByAuthorizationCodeHash(
@@ -535,46 +535,256 @@ export class D1AccountState implements AccountState {
   }
 
   /**
-   * Sign one browser in: find or create the Account behind this GitHub subject, then open its
-   * session.
+   * Open a browser session for an Account a proved identity has already resolved.
    *
    * The session is its own family. Nothing rotates into or out of a browser session — the cookie is
    * the whole credential — so revoking the family revokes exactly this cookie and no other client.
    */
-  async createWebSession(input: CreateWebSessionInput): Promise<AccountRecord> {
-    const results = await this.database.batch([
+  /**
+   * The iOS viewer's one session, written straight from a proved native identity.
+   *
+   * The row is the one `consumeAccountLoginGrant` writes; only what proved the Account differs,
+   * so a session opened through Apple is revoked, refreshed, and swept exactly like the others.
+   */
+  async createIosSession(input: CreateIosSessionInput): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO sessions (
+           id, family_id, account_id, device_id, device_generation, client_kind,
+           access_token_hash, refresh_token_hash, scopes_json,
+           authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+         ) VALUES (?1, ?2, ?3, NULL, NULL, 'ios', ?4, ?5, ?6, ?7, ?8, ?9, ?7, ?7)`,
+      )
+      .bind(
+        input.session.session_id,
+        input.family_id,
+        input.account_id,
+        input.session.access_token_hash,
+        input.session.refresh_token_hash,
+        encodeScopes(IOS_SESSION_SCOPES),
+        input.authenticated_at,
+        input.session.access_expires_at,
+        input.session.refresh_expires_at,
+      )
+      .run();
+  }
+
+  async createWebSession(input: CreateWebSessionInput): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO sessions (
+           id, family_id, account_id, device_id, device_generation, client_kind,
+           access_token_hash, refresh_token_hash, scopes_json,
+           authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
+         ) VALUES (?1, ?1, ?2, NULL, NULL, 'web', ?3, NULL, ?4, ?5, ?6, ?6, ?5, ?5)`,
+      )
+      .bind(
+        input.session_id,
+        input.account_id,
+        input.access_token_hash,
+        encodeScopes(WEB_SESSION_SCOPES),
+        input.authenticated_at,
+        input.expires_at,
+      )
+      .run();
+  }
+
+  async createEmailChallenge(input: CreateEmailChallengeInput): Promise<void> {
+    await this.database
+      .prepare(
+        `INSERT INTO email_challenges (
+           id, email_hash, token_hash, intent_json, return_to, created_at, expires_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      )
+      .bind(
+        input.id,
+        input.email_hash,
+        input.token_hash,
+        input.intent_json,
+        input.return_to,
+        input.created_at,
+        input.expires_at,
+      )
+      .run();
+  }
+
+  async consumeEmailChallenge(
+    tokenHash: string,
+    now: string,
+  ): Promise<ConsumeEmailChallengeResult> {
+    const consumed = await this.database
+      .prepare(
+        `UPDATE email_challenges
+         SET consumed_at = ?2
+         WHERE token_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2
+         RETURNING id, email_hash, intent_json, return_to, created_at, expires_at, consumed_at`,
+      )
+      .bind(tokenHash, now)
+      .first<EmailChallengeRecord>();
+    if (consumed) {
+      return { outcome: "consumed", challenge: consumed };
+    }
+    const existing = await this.database
+      .prepare("SELECT expires_at FROM email_challenges WHERE token_hash = ?1")
+      .bind(tokenHash)
+      .first<{ expires_at: string }>();
+    if (existing && existing.expires_at <= now) {
+      return { outcome: "expired" };
+    }
+    return { outcome: "invalid" };
+  }
+
+  /**
+   * The Account this identity reaches, opened when nothing has reached it before.
+   *
+   * The insert is conditional on the identity being unknown, so a sign-in that is already known
+   * writes no Account at all; the identity's label is then refreshed — unless what arrived is the
+   * provider's stand-in, which never replaces a name the channel once stated — and the Account's
+   * own label follows whichever identity was bound first. `(provider, subject)` is the primary key, so two
+   * simultaneous first sign-ins cannot both open an Account.
+   */
+  async resolveSignInIdentity(input: ResolveSignInIdentityInput): Promise<AccountRecord> {
+    await this.database.batch([
       this.database
         .prepare(
-          `INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at)
-           VALUES (?1, ?1, ?2, ?3, ?3)
-           ON CONFLICT(id) DO UPDATE SET
-             display_label = excluded.display_label,
-             updated_at = excluded.updated_at
-           RETURNING id, identity_subject, display_label, created_at, updated_at`,
+          `INSERT INTO accounts (id, display_label, created_at, updated_at)
+           SELECT ?1, ?2, ?3, ?3
+           WHERE NOT EXISTS (
+             SELECT 1 FROM account_identities WHERE provider = ?4 AND subject = ?5
+           )`,
         )
-        .bind(input.account_id, input.display_label, input.authenticated_at),
+        .bind(input.new_account_id, input.label, input.now, input.provider, input.subject),
       this.database
         .prepare(
-          `INSERT INTO sessions (
-             id, family_id, account_id, device_id, device_generation, client_kind,
-             access_token_hash, refresh_token_hash, scopes_json,
-             authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
-           ) VALUES (?1, ?1, ?2, NULL, NULL, 'web', ?3, NULL, ?4, ?5, ?6, ?6, ?5, ?5)`,
+          // A stand-in label fills an empty one and never replaces a stored name: `COALESCE`
+          // keeps whatever is there, which for an already stand-in label is the same value.
+          `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(provider, subject) DO UPDATE SET label =
+             CASE WHEN ?6 = 1 THEN COALESCE(account_identities.label, excluded.label)
+                  ELSE excluded.label END`,
         )
         .bind(
-          input.session_id,
-          input.account_id,
-          input.access_token_hash,
-          encodeScopes(WEB_SESSION_SCOPES),
-          input.authenticated_at,
-          input.expires_at,
+          input.new_account_id,
+          input.provider,
+          input.subject,
+          input.label,
+          input.now,
+          input.label_is_placeholder ? 1 : 0,
         ),
+      this.database.prepare(accountLabelFollowsFirstIdentity).bind(
+        // The Account this identity belongs to, which is the new one only on a first sign-in.
+        input.provider,
+        input.subject,
+        input.now,
+      ),
     ]);
-    const account = resultRow<AccountRecord>(results[0]);
+    const account = await this.database
+      .prepare(
+        `SELECT accounts.id, accounts.display_label, accounts.created_at, accounts.updated_at
+         FROM accounts
+         INNER JOIN account_identities ON account_identities.account_id = accounts.id
+         WHERE account_identities.provider = ?1 AND account_identities.subject = ?2`,
+      )
+      .bind(input.provider, input.subject)
+      .first<AccountRecord>();
     if (!account) {
-      throw new Error("Web sign-in did not resolve an account");
+      throw new Error("A proved identity did not resolve an account");
     }
     return account;
+  }
+
+  /**
+   * Bind another channel to an Account, or refuse because it already belongs to someone.
+   *
+   * The insert names the Account it is for, so an identity another Account holds violates the
+   * `(provider, subject)` key and changes nothing; the row is then read back to tell a refusal
+   * apart from a link that was already there.
+   */
+  async linkIdentity(input: LinkIdentityInput): Promise<LinkIdentityOutcome> {
+    const linked = await this.database
+      .prepare(
+        `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT DO NOTHING
+         RETURNING account_id`,
+      )
+      .bind(input.account_id, input.provider, input.subject, input.label, input.now)
+      .first<{ account_id: string }>();
+    if (linked) {
+      await this.database
+        .prepare(accountLabelFollowsFirstIdentity)
+        .bind(input.provider, input.subject, input.now)
+        .run();
+      return "linked";
+    }
+    const existing = await this.database
+      .prepare("SELECT account_id FROM account_identities WHERE provider = ?1 AND subject = ?2")
+      .bind(input.provider, input.subject)
+      .first<{ account_id: string }>();
+    // A conflict on `(account_id, provider)` is this Account already holding another subject from
+    // the same provider, which is the same refusal as the identity belonging to someone else.
+    return existing?.account_id === input.account_id ? "already_linked" : "identity_taken";
+  }
+
+  async listAccountIdentities(accountId: string): Promise<AccountIdentityRecord[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT account_id, provider, label, created_at
+         FROM account_identities WHERE account_id = ?1
+         ORDER BY created_at ASC, provider ASC`,
+      )
+      .bind(accountId)
+      .all<AccountIdentityRecord>();
+    return rows.results;
+  }
+
+  /**
+   * Unbind a channel, unless it is the only way left into this Account.
+   *
+   * The delete carries the count as a predicate rather than reading it first, so two unlinks
+   * racing each other cannot both see two identities and both delete one.
+   */
+  async unlinkIdentity(
+    accountId: string,
+    provider: IdentityProviderId,
+    now: string,
+  ): Promise<UnlinkIdentityOutcome> {
+    const deleted = await this.database
+      .prepare(
+        `DELETE FROM account_identities
+         WHERE account_id = ?1 AND provider = ?2
+           AND (SELECT COUNT(*) FROM account_identities WHERE account_id = ?1) > 1
+         RETURNING provider`,
+      )
+      .bind(accountId, provider)
+      .first<{ provider: string }>();
+    if (!deleted) {
+      const remaining = await this.database
+        .prepare("SELECT COUNT(*) AS count FROM account_identities WHERE account_id = ?1")
+        .bind(accountId)
+        .first<{ count: number }>();
+      const held = await this.database
+        .prepare("SELECT provider FROM account_identities WHERE account_id = ?1 AND provider = ?2")
+        .bind(accountId, provider)
+        .first<{ provider: string }>();
+      if (!held) return "not_found";
+      return (remaining?.count ?? 0) > 1 ? "not_found" : "last_identity";
+    }
+    await this.database
+      .prepare(
+        `UPDATE accounts
+         SET display_label = (
+               SELECT label FROM account_identities
+               WHERE account_id = accounts.id
+               ORDER BY created_at ASC, provider ASC LIMIT 1
+             ),
+             updated_at = ?2
+         WHERE id = ?1`,
+      )
+      .bind(accountId, now)
+      .run();
+    return "unlinked";
   }
 
   /**
@@ -735,10 +945,7 @@ export class D1AccountState implements AccountState {
 
   async getAccount(accountId: string): Promise<AccountRecord | null> {
     return this.database
-      .prepare(
-        `SELECT id, identity_subject, display_label, created_at, updated_at
-         FROM accounts WHERE id = ?1`,
-      )
+      .prepare("SELECT id, display_label, created_at, updated_at FROM accounts WHERE id = ?1")
       .bind(accountId)
       .first<AccountRecord>();
   }
@@ -797,10 +1004,70 @@ export class D1AccountState implements AccountState {
    * deletion and retention, the newest instant catches replacement, and the summed per-device
    * usage revision catches an upload from any device rather than only the leading one. The
    * Account's own `updated_at` is here because the response carries its display label, which a
-   * later GitHub sign-in rewrites without touching a device or an observation.
+   * later sign-in rewrites when the channel it came through states a new label, without
+   * touching a device or an observation.
    */
+  async getPublicProfile(accountId: string): Promise<PublicProfileRecord | null> {
+    const row = await this.database
+      .prepare(`${publicProfileSelect} WHERE account_id = ?1`)
+      .bind(accountId)
+      .first<PublicProfileRow>();
+    return row ? publicProfile(row) : null;
+  }
+
+  /**
+   * Claim or restate one Account's handle.
+   *
+   * The unique index over `handle COLLATE NOCASE` is what decides a contest between two
+   * Accounts, so the write attempts it and reads the outcome rather than checking first: a
+   * check followed by an insert is two requests that can both see the handle free.
+   * `created_at` survives a restatement, because the page's age is when it was first
+   * published, not when its switches were last touched.
+   */
+  async writePublicProfile(input: PublicProfileWriteInput): Promise<PublicProfileWriteResult> {
+    try {
+      const row = await this.database
+        .prepare(
+          `INSERT INTO public_profiles (
+             account_id, handle, enabled, show_models, show_cost, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+           ON CONFLICT(account_id) DO UPDATE SET
+             handle = excluded.handle,
+             enabled = excluded.enabled,
+             show_models = excluded.show_models,
+             show_cost = excluded.show_cost,
+             updated_at = excluded.updated_at
+           RETURNING account_id, handle, enabled, show_models, show_cost, created_at, updated_at`,
+        )
+        .bind(
+          input.account_id,
+          input.handle,
+          input.enabled ? 1 : 0,
+          input.show_models ? 1 : 0,
+          input.show_cost ? 1 : 0,
+          input.written_at,
+        )
+        .first<PublicProfileRow>();
+      if (!row) throw new Error("Public profile write returned no row");
+      return { outcome: "written", profile: publicProfile(row) };
+    } catch (error) {
+      if (isUniqueHandleViolation(error)) return { outcome: "handle_taken" };
+      throw error;
+    }
+  }
+
+  async findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null> {
+    const row = await this.database
+      .prepare(`${publicProfileSelect} WHERE handle = ?1 COLLATE NOCASE AND enabled = 1`)
+      .bind(handle)
+      .first<PublicProfileRow>();
+    return row ? publicProfile(row) : null;
+  }
+
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
-    const [devices, snapshots, account] = await this.database.batch<Record<string, unknown>>([
+    const [devices, snapshots, account, entitlement] = await this.database.batch<
+      Record<string, unknown>
+    >([
       this.database
         .prepare(
           `SELECT COUNT(*) AS devices,
@@ -827,11 +1094,17 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
         .bind(accountId),
+      this.database
+        .prepare(
+          "SELECT updated_at AS entitlement_updated_at FROM entitlements WHERE account_id = ?1",
+        )
+        .bind(accountId),
     ]);
     const merged = {
       ...(devices?.results[0] ?? {}),
       ...(snapshots?.results[0] ?? {}),
       ...(account?.results[0] ?? {}),
+      ...(entitlement?.results[0] ?? {}),
     };
     return {
       account_updated_at: stampInstant(merged.account_updated_at),
@@ -844,6 +1117,7 @@ export class D1AccountState implements AccountState {
       device_signed_out_at: stampInstant(merged.device_signed_out_at),
       snapshots: stampCount(merged.snapshots),
       snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
+      entitlement_updated_at: stampInstant(merged.entitlement_updated_at),
     };
   }
 
@@ -878,6 +1152,79 @@ export class D1AccountState implements AccountState {
       usage_revision: stampCount(merged.usage_revision),
       device_generation: stampCount(merged.device_generation),
     };
+  }
+
+  async getEntitlement(accountId: string): Promise<StoredEntitlement | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT account_id, status, product_id, store, expires_at, will_renew, source,
+                last_event_id, updated_at
+         FROM entitlements WHERE account_id = ?1`,
+      )
+      .bind(accountId)
+      .first<EntitlementRow>();
+    return row ? storedEntitlement(row) : null;
+  }
+
+  async putEntitlement(row: StoredEntitlement): Promise<void> {
+    await this.database
+      .prepare(upsertEntitlementSql)
+      .bind(
+        row.account_id,
+        row.status,
+        row.product_id,
+        row.store,
+        row.expires_at,
+        row.will_renew ? 1 : 0,
+        row.source,
+        row.last_event_id,
+        row.updated_at,
+      )
+      .run();
+  }
+
+  async applyRevenueCatWebhook(
+    input: ApplyRevenueCatWebhookInput,
+  ): Promise<"applied" | "duplicate"> {
+    const statements: D1PreparedStatement[] = [
+      this.database
+        .prepare(
+          `INSERT INTO entitlement_events (id, account_id, type, received_at, payload_json)
+           VALUES (?1, ?2, ?3, ?4, ?5)`,
+        )
+        .bind(input.event_id, input.account_id, input.type, input.received_at, input.payload_json),
+    ];
+    if (input.entitlement) {
+      statements.push(this.bindEntitlement(input.entitlement));
+    }
+    for (const source of input.transfer_sources) {
+      statements.push(this.bindEntitlement(source));
+    }
+    try {
+      await this.database.batch(statements);
+      return "applied";
+    } catch (error) {
+      if (String(error).includes("UNIQUE constraint failed")) {
+        return "duplicate";
+      }
+      throw error;
+    }
+  }
+
+  private bindEntitlement(row: StoredEntitlement): D1PreparedStatement {
+    return this.database
+      .prepare(upsertEntitlementSql)
+      .bind(
+        row.account_id,
+        row.status,
+        row.product_id,
+        row.store,
+        row.expires_at,
+        row.will_renew ? 1 : 0,
+        row.source,
+        row.last_event_id,
+        row.updated_at,
+      );
   }
 
   async deleteDeviceData(
@@ -942,8 +1289,8 @@ export class D1AccountState implements AccountState {
    *
    * Children go first so the batch holds whether or not this connection enforces foreign keys, and
    * the Account row is deleted last and reports whether there was one to delete. Nothing survives
-   * as a tombstone: a deleted Account's next sign-in is a new Account, because the GitHub subject
-   * behind it only ever named a row that is gone.
+   * as a tombstone: the identities that reached it go with it, so the same channel signing in
+   * again opens a new Account rather than reviving this one.
    */
   async deleteAccountData(accountId: string): Promise<boolean> {
     const ownedDevices = "SELECT id FROM devices WHERE account_id = ?1";
@@ -965,6 +1312,10 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
         .bind(accountId),
+      this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM entitlements WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM entitlement_events WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
     ]);
@@ -1169,6 +1520,67 @@ export class D1AccountState implements AccountState {
   }
 }
 
+/**
+ * The Account's own label is the label of the identity it was opened with.
+ *
+ * Bound as `(provider, subject, now)`: the identity that was just written names the Account, and
+ * the earliest-bound identity names the label. The row is left alone when the label already says
+ * this, so a return sign-in that changes nothing does not move the Account read's validator.
+ */
+const accountLabelFollowsFirstIdentity = `UPDATE accounts
+  SET display_label = (
+        SELECT label FROM account_identities
+        WHERE account_id = accounts.id
+        ORDER BY created_at ASC, provider ASC LIMIT 1
+      ),
+      updated_at = ?3
+  WHERE id = (SELECT account_id FROM account_identities WHERE provider = ?1 AND subject = ?2)
+    AND display_label IS NOT (
+      SELECT label FROM account_identities
+      WHERE account_id = accounts.id
+      ORDER BY created_at ASC, provider ASC LIMIT 1
+    )`;
+interface PublicProfileRow {
+  account_id: string;
+  handle: string;
+  enabled: number;
+  show_models: number;
+  show_cost: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const publicProfileSelect = `SELECT account_id, handle, enabled, show_models, show_cost,
+  created_at, updated_at FROM public_profiles`;
+
+function publicProfile(row: PublicProfileRow): PublicProfileRecord {
+  return {
+    account_id: row.account_id,
+    handle: row.handle,
+    enabled: row.enabled === 1,
+    show_models: row.show_models === 1,
+    show_cost: row.show_cost === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Whether this failure is another Account already holding the handle.
+ *
+ * D1 reports a constraint failure as a message rather than a code. The only uniqueness this
+ * statement can violate is the handle — the primary key is what the upsert resolves — and
+ * SQLite names either the index or the column depending on the collation it applied, so the
+ * test is the table plus the constraint rather than one of those two spellings.
+ */
+function isUniqueHandleViolation(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("UNIQUE constraint failed") &&
+    error.message.includes("public_profiles")
+  );
+}
+
 const loginGrantSelect = `SELECT id, client_id, account_id, pkce_challenge, redirect_uri,
   client_state, expires_at, completed_at, consumed_at FROM login_grants`;
 
@@ -1225,6 +1637,45 @@ function displayLabelRow(result: D1Result<unknown> | undefined): string | null {
 
 function stampCount(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
+}
+
+interface EntitlementRow {
+  account_id: string;
+  status: string;
+  product_id: string | null;
+  store: string | null;
+  expires_at: string | null;
+  will_renew: number;
+  source: string;
+  last_event_id: string | null;
+  updated_at: string;
+}
+
+const upsertEntitlementSql = `INSERT INTO entitlements (
+     account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
+   ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+   ON CONFLICT(account_id) DO UPDATE SET
+     status = excluded.status,
+     product_id = excluded.product_id,
+     store = excluded.store,
+     expires_at = excluded.expires_at,
+     will_renew = excluded.will_renew,
+     source = excluded.source,
+     last_event_id = excluded.last_event_id,
+     updated_at = excluded.updated_at`;
+
+function storedEntitlement(row: EntitlementRow): StoredEntitlement {
+  return {
+    account_id: row.account_id,
+    status: row.status as StoredEntitlement["status"],
+    product_id: row.product_id,
+    store: row.store,
+    expires_at: row.expires_at,
+    will_renew: row.will_renew === 1,
+    source: row.source as StoredEntitlement["source"],
+    last_event_id: row.last_event_id,
+    updated_at: row.updated_at,
+  };
 }
 
 function stampInstant(value: unknown): string | null {

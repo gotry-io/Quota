@@ -3,32 +3,36 @@ import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 
-/// Evaluates local remaining-quota alert rules against an Account summary.
+/// Evaluates local remaining-quota alert rules against the subscriptions this app shows —
+/// whether a Mac reported them or this iPhone read them itself.
 ///
 /// Delivery is `AlertSink`. Sign-out clears the state store and leaves rules in place.
 @MainActor
 final class AlertCoordinator {
   private let rulesStore: IOSAlertRulesStore
   private let stateStore: any IOSAlertStateStore
+  private let budgetStore: UsageBudgetStore
   private let sink: any AlertSink
   private let now: () -> Date
 
   init(
     rulesStore: IOSAlertRulesStore,
     stateStore: any IOSAlertStateStore,
+    budgetStore: UsageBudgetStore = UsageBudgetStore(),
     sink: any AlertSink,
     now: @escaping () -> Date = Date.init
   ) {
     self.rulesStore = rulesStore
     self.stateStore = stateStore
+    self.budgetStore = budgetStore
     self.sink = sink
     self.now = now
   }
 
-  func evaluate(summary: AccountSummary) {
+  func evaluate(subscriptions: [QuotaSubscription]) {
     let rules = rulesStore.load()
     let previous = (try? stateStore.load()) ?? .empty
-    let current = Self.readings(from: summary.subscriptions)
+    let current = Self.readings(from: subscriptions)
     let result = AlertEvaluator.evaluate(
       rules: rules,
       previous: previous,
@@ -37,6 +41,27 @@ final class AlertCoordinator {
     )
     if result.state != previous {
       try? stateStore.save(result.state)
+    }
+    if !result.events.isEmpty {
+      sink.deliver(result.events)
+    }
+  }
+
+  /// Says once per month that 80%, and then 100%, of the budget has been spent.
+  ///
+  /// The budget is its own cycle and its own store: the alert switch over subscriptions does not
+  /// silence it, and signing out does not clear it, because a budget is not a fact about an
+  /// Account.
+  func evaluateBudget(budget: UsageBudget, progress: UsageBudgetProgress?) {
+    let previous = budgetStore.loadFired()
+    let result = BudgetAlertEvaluator.evaluate(
+      budget: budget,
+      progress: progress,
+      month: BudgetAlertEvaluator.month(containing: now()),
+      previous: previous
+    )
+    if result.state != previous {
+      budgetStore.saveFired(result.state)
     }
     if !result.events.isEmpty {
       sink.deliver(result.events)
@@ -88,6 +113,7 @@ final class AlertCoordinator {
             title: window.title,
             remainingPercent: RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent),
             resetsAt: window.resetsAt,
+            durationSeconds: window.durationSeconds,
             primaryCadence: window.primaryCadenceKind?.rawValue
           )
         }

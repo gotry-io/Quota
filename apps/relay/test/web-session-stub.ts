@@ -1,14 +1,14 @@
 import type { SessionPrincipal } from "@gotry-io/relay-core";
 import type { WebSessionPort } from "../src/account/web-session.ts";
 
-/**
- * A browser already signed in as one Account, for the routes that only need a Web principal.
- *
- * `beginSignIn` records where the sign-in was told to return to, which is how the browser grant
- * hands its login token back to `/oauth/v2/complete`.
- */
+const github = {
+  id: "github",
+  callbackParameterKeys: ["code", "state", "iss"],
+  callbackDelivery: "redirect",
+} as const;
+
+/** A browser already signed in as one Account, for the routes that only need a Web principal. */
 export class SignedInWebSessionStub implements WebSessionPort {
-  returnTo = "";
   authenticatedAt: Date;
 
   constructor(
@@ -18,8 +18,11 @@ export class SignedInWebSessionStub implements WebSessionPort {
     this.authenticatedAt = authenticatedAt;
   }
 
-  async beginSignIn(returnTo: string): Promise<{ location: string; handoff: string }> {
-    this.returnTo = returnTo;
+  identityProvider(id: string) {
+    return id === github.id ? { ...github } : null;
+  }
+
+  async beginSignIn(): Promise<{ location: string; handoff: string }> {
     return {
       location: "https://github.com/login/oauth/authorize",
       handoff: "__Host-quota_oauth=stub; Path=/; HttpOnly; Secure; SameSite=Lax",
@@ -27,6 +30,10 @@ export class SignedInWebSessionStub implements WebSessionPort {
   }
 
   async completeSignIn(): Promise<{ outcome: "rejected"; reason: "handoff" }> {
+    return { outcome: "rejected", reason: "handoff" };
+  }
+
+  async completeProvedIdentity(): Promise<{ outcome: "rejected"; reason: "handoff" }> {
     return { outcome: "rejected", reason: "handoff" };
   }
 
@@ -46,6 +53,9 @@ export class SignedInWebSessionStub implements WebSessionPort {
 
 /** A browser with no session at all. */
 export const signedOutWebSessions: WebSessionPort = {
+  identityProvider(id) {
+    return id === github.id ? { ...github } : null;
+  },
   async beginSignIn() {
     return {
       location: "https://github.com/login/oauth/authorize",
@@ -53,6 +63,9 @@ export const signedOutWebSessions: WebSessionPort = {
     };
   },
   async completeSignIn() {
+    return { outcome: "rejected", reason: "handoff" };
+  },
+  async completeProvedIdentity() {
     return { outcome: "rejected", reason: "handoff" };
   },
   async authorize() {

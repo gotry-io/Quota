@@ -31,7 +31,7 @@ describe("composed Worker documents", () => {
   it("supplies Worker secrets without a local .env file", () => {
     const bindings = env as CloudflareBindings;
     expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(bindings.GITHUB_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
+    expect(bindings.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
   });
 
   it("renders the signed-out landing header and keeps the response uncacheable", async () => {
@@ -40,8 +40,9 @@ describe("composed Worker documents", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(html).toContain("See what's left across your coding-agent plans");
-    expect(html).toContain("Sign in with GitHub");
+    expect(html).toContain(">Sign in<");
     expect(html).toContain('id="header-login"');
+    expect(html).toContain('href="/sign-in"');
   });
 
   it("locks every document down and still lets the inline theme script run", async () => {

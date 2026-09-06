@@ -34,6 +34,62 @@ struct DecodingTests {
     #expect(tolerated.subscriptions.first?.snapshot.provider == .codex)
   }
 
+  /// The entitlement is part of the Account read, and its status is tolerant: a member added to
+  /// the contract after this build shipped reads as `unknown`, which is not sync.
+  @Test
+  func decodesTheEntitlementAndReadsAnUnknownStatusAsNotSynced() throws {
+    let summary = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON()
+    )
+    #expect(summary.entitlement.status == .active)
+    #expect(summary.entitlement.expiresAt == Fixtures.date("2026-09-14T12:00:00Z"))
+    #expect(summary.entitlement.willRenew)
+    #expect(summary.entitlement.productID == "quota_sync_monthly")
+    #expect(summary.entitlement.store == "app_store")
+    #expect(summary.entitlement.stale == false)
+    #expect(summary.entitlement.status.allowsSync)
+
+    let unbought = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON(
+        entitlement: Fixtures.entitlement(
+          status: "none",
+          expiresAt: nil,
+          willRenew: false,
+          productID: nil,
+          store: nil
+        )
+      )
+    )
+    #expect(unbought.entitlement.status == .none)
+    #expect(unbought.entitlement.status.allowsSync == false)
+
+    let newer = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON(
+        entitlement: Fixtures.entitlement(status: "paused")
+      )
+    )
+    #expect(newer.entitlement.status == .unknown)
+    #expect(newer.entitlement.status.allowsSync == false)
+  }
+
+  @Test
+  func aSummaryWithoutAnEntitlementIsRefused() throws {
+    var root =
+      try JSONSerialization.jsonObject(with: try Fixtures.accountSummaryJSON()) as! [String: Any]
+    root.removeValue(forKey: "entitlement")
+    #expect(
+      throws: (any Error).self,
+      performing: {
+        try WireCodec.decode(
+          AccountSummary.self,
+          from: try JSONSerialization.data(withJSONObject: root)
+        )
+      })
+  }
+
   @Test
   func decodesAccountSummary() throws {
     let data = try Fixtures.accountSummaryJSON(subscriptions: [Fixtures.quotaSubscription()])

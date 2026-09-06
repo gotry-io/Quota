@@ -28,6 +28,7 @@ enum NotificationOverview {
             title: window.title,
             remainingPercent: window.remainingPercent,
             resetsAt: window.resetsAt,
+            durationSeconds: window.durationSeconds,
             primaryCadence: window.primaryCadenceKind?.rawValue
           )
         }
@@ -64,6 +65,9 @@ struct NotificationSettingsSubscription: Equatable, Identifiable, Sendable {
 
 enum NotificationsSettingsCopy {
   static let footer = "Quota reminds you when a refresh brings new data."
+  static let budgetFooter =
+    "Quota says once each month when 80% and then all of the budget has been spent. "
+      + "The budget stays on this Mac."
   static let permissionDenied =
     "Allow notifications for QuotaBar in System Settings."
   static let openSystemSettings = "Open System Settings"

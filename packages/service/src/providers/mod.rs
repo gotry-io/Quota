@@ -6,8 +6,10 @@
 pub mod claude;
 pub mod codex;
 pub mod common;
+pub mod copilot;
 pub mod cursor;
 pub mod deepseek;
+pub mod gemini;
 pub mod grok;
 pub mod kimi;
 pub mod litellm;
@@ -30,6 +32,8 @@ pub fn discover(provider: ProviderId, context: &CollectionContext) -> Vec<Provid
         ProviderId::Kimi => kimi::discover(context),
         ProviderId::LiteLlm => litellm::discover(context),
         ProviderId::Cursor => cursor::discover(context),
+        ProviderId::Gemini => gemini::discover(context),
+        ProviderId::Copilot => copilot::discover(context),
     }
 }
 
@@ -47,6 +51,8 @@ pub fn collect(
         ProviderId::Kimi => kimi::collect(session, context),
         ProviderId::LiteLlm => litellm::collect(session, context),
         ProviderId::Cursor => cursor::collect(session, context),
+        ProviderId::Gemini => gemini::collect(session, context),
+        ProviderId::Copilot => copilot::collect(session, context),
     }
 }
 
@@ -74,6 +80,8 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
         ProviderId::Kimi => kimi::SOURCE,
         ProviderId::LiteLlm => litellm::SOURCE,
         ProviderId::Cursor => cursor::APP_SOURCE,
+        ProviderId::Gemini => gemini::SOURCE,
+        ProviderId::Copilot => copilot::SOURCE,
     }
 }
 

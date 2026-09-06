@@ -27,6 +27,7 @@ struct QuotaBarApp: App {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
+          initialUsageSource: visualTestConfiguration.route == .usage ? .local : .account,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
           performsDiagnosticsCheckOnEntry: visualTestConfiguration.dataSource == .live,
           diagnosticsModel: visualTestConfiguration.makeDiagnosticsModel(),

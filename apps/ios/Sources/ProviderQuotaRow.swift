@@ -1,4 +1,5 @@
 import QuotaPresentation
+import QuotaProviderStatus
 import QuotaWire
 import SwiftUI
 
@@ -6,15 +7,26 @@ struct ProviderQuotaRow: View {
   let provider: ProviderID
   let snapshot: QuotaSnapshot
   var accountIndex: Int = 0
+  var serviceStatus: ProviderStatusReading? = nil
 
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
     let stateLabel = snapshot.stateLabel()
     return VStack(alignment: .leading, spacing: 12) {
-      Text(provider.displayName)
-        .font(.headline)
-        .foregroundStyle(.primary)
-        .accessibilityAddTraits(.isHeader)
+      HStack(alignment: .center, spacing: 8) {
+        Text(provider.displayName)
+          .font(.headline)
+          .foregroundStyle(.primary)
+        if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
+          Circle()
+            .fill(statusDotColor(serviceStatus.indicator))
+            .frame(width: QuotaTheme.statusDotSize, height: QuotaTheme.statusDotSize)
+            .accessibilityHidden(true)
+        }
+      }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(.isHeader)
+      .accessibilityLabel(headerAccessibilityLabel)
 
       let plan = QuotaFormat.planBadge(snapshot.account.plan)
       // Label and plan share a line while they fit; at accessibility text sizes they stack so
@@ -43,6 +55,25 @@ struct ProviderQuotaRow: View {
           QuotaWindowBlock(window: window, stateLabel: stateLabel)
         }
       }
+    }
+  }
+
+  private var headerAccessibilityLabel: String {
+    if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
+      "\(provider.displayName). \(serviceStatus.description)"
+    } else {
+      provider.displayName
+    }
+  }
+
+  private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
+    switch indicator {
+    case .none:
+      Color.secondary
+    case .minor:
+      Color.orange
+    case .major, .critical:
+      Color.red
     }
   }
 
@@ -77,6 +108,8 @@ struct QuotaWindowBlock: View {
   /// Detail uses a live timer under a day; Overview keeps the shared static reset copy.
   var usesLiveCountdown: Bool = false
   var emphasizedRemaining: Bool = false
+  /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
+  var now: Date = Date()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -94,7 +127,7 @@ struct QuotaWindowBlock: View {
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
 
-      if !window.isBalanceOnly {
+      if window.showsPercentMeter {
         ProgressView(value: window.remainingPercent, total: 100)
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)
@@ -110,6 +143,13 @@ struct QuotaWindowBlock: View {
         Text(support)
           .font(.footnote)
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let paceLine {
+        Text(paceLine.text)
+          .font(.footnote)
+          .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -146,10 +186,21 @@ struct QuotaWindowBlock: View {
     return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
 
+  /// Whether this window's rate lasts to its reset, and whether that warns.
+  private var paceLine: (text: String, warns: Bool)? {
+    let pace = QuotaPace.evaluate(window.paceReading, now: now)
+    guard let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt) else { return nil }
+    if case .runsOut = pace { return (text, true) }
+    return (text, false)
+  }
+
   private var accessibilityText: String {
     var parts = [QuotaFormat.remainingAccessibility(window)]
     if let reset = window.resetsAt.flatMap({ QuotaFormat.resetTime($0) }) {
       parts.append(reset)
+    }
+    if let paceLine {
+      parts.append(paceLine.text)
     }
     if let stateLabel {
       parts.append(stateLabel)

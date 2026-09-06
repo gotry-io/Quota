@@ -37,7 +37,11 @@
         "exclusive": false
       },
       "default_base_url": null,
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "statuspage_v2",
+        "url": "https://status.openai.com/api/v2/status.json"
+      }
     },
     {
       "id": "claude",
@@ -66,7 +70,11 @@
         "exclusive": false
       },
       "default_base_url": null,
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "statuspage_v2",
+        "url": "https://status.claude.com/api/v2/status.json"
+      }
     },
     {
       "id": "grok",
@@ -95,7 +103,11 @@
         "exclusive": false
       },
       "default_base_url": null,
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "none",
+        "url": "https://status.x.ai/"
+      }
     },
     {
       "id": "openrouter",
@@ -115,7 +127,11 @@
       },
       "browser_session": null,
       "default_base_url": "https://openrouter.ai/api/v1",
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "none",
+        "url": "https://status.openrouter.ai/"
+      }
     },
     {
       "id": "deepseek",
@@ -135,7 +151,11 @@
       },
       "browser_session": null,
       "default_base_url": "https://api.deepseek.com",
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "none",
+        "url": "https://status.deepseek.com/"
+      }
     },
     {
       "id": "kimi",
@@ -170,7 +190,11 @@
         "exclusive": false
       },
       "default_base_url": "https://api.kimi.com",
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "statuspage_v2",
+        "url": "https://status.moonshot.cn/api/v2/status.json"
+      }
     },
     {
       "id": "litellm",
@@ -190,7 +214,11 @@
       },
       "browser_session": null,
       "default_base_url": null,
-      "base_url_environment_key": "LITELLM_BASE_URL"
+      "base_url_environment_key": "LITELLM_BASE_URL",
+      "status_page": {
+        "kind": "none",
+        "url": null
+      }
     },
     {
       "id": "cursor",
@@ -218,6 +246,38 @@
         ],
         "exclusive": true
       },
+      "default_base_url": null,
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "statuspage_v2",
+        "url": "https://status.cursor.com/api/v2/status.json"
+      }
+    },
+    {
+      "id": "gemini",
+      "display_name": "Gemini CLI",
+      "order": 8,
+      "default_visible": false,
+      "setup_action": "gemini",
+      "brand_icon_asset": "gemini",
+      "account_sync": true,
+      "environment_keys": ["GOOGLE_CLOUD_PROJECT"],
+      "credential_config": null,
+      "browser_session": null,
+      "default_base_url": null,
+      "base_url_environment_key": null
+    },
+    {
+      "id": "copilot",
+      "display_name": "GitHub Copilot",
+      "order": 9,
+      "default_visible": false,
+      "setup_action": "copilot login",
+      "brand_icon_asset": "copilot",
+      "account_sync": true,
+      "environment_keys": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+      "credential_config": null,
+      "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null
     }

@@ -4,20 +4,48 @@ import QuotaWidgetData
 import QuotaWire
 
 enum WidgetSnapshotProjection {
-  static func make(summary: AccountSummary, fetchedAt: Date, salt: Data) -> WidgetSnapshot {
-    let items = projectItems(from: summary.subscriptions, salt: salt)
-    let today = WidgetTodayUsage(
-      inputTokens: summary.usage.today.totals.inputTokens,
-      outputTokens: summary.usage.today.totals.outputTokens,
-      cost: mapCost(summary.usage.today.cost)
+  /// The widget draws the merged readings, without distinguishing which device took them: a
+  /// subscription this iPhone read for itself ranks beside one a Mac reported.
+  ///
+  /// Today Usage is the Account's, so a phone with no account has none — the widget then shows
+  /// no usage rather than a zero it did not measure.
+  static func make(
+    subscriptions: [QuotaSubscription],
+    today: UsagePeriod?,
+    fetchedAt: Date,
+    salt: Data
+  ) -> WidgetSnapshot {
+    let items = projectItems(from: subscriptions, salt: salt, now: fetchedAt)
+    let usage = today.map {
+      WidgetTodayUsage(
+        inputTokens: $0.totals.inputTokens,
+        outputTokens: $0.totals.outputTokens,
+        cost: mapCost($0.cost)
+      )
+    }
+    return WidgetSnapshot(
+      fetchedAt: fetchedAt,
+      items: items,
+      today: usage
+        ?? WidgetTodayUsage(
+          inputTokens: 0,
+          outputTokens: 0,
+          cost: WidgetCost(status: .unavailable, amountMicrousd: nil)
+        )
     )
-    return WidgetSnapshot(fetchedAt: fetchedAt, items: items, today: today)
   }
 
-  /// Relay resolves an account's readings into one row per subscription, so the widget ranks
-  /// those rows rather than one card per reporting device.
-  static func projectItems(from subscriptions: [QuotaSubscription], salt: Data) -> [WidgetQuotaItem]
-  {
+  /// Every subscription reaches the widget as one row with its readings already resolved, so the
+  /// widget ranks those rows rather than one card per reporting device.
+  ///
+  /// `now` is the instant the readings were fetched: pace is a rate read against the window
+  /// elapsed at that moment, so the snapshot states the pace of what it carries rather than one
+  /// the widget would have to recompute against its own clock.
+  static func projectItems(
+    from subscriptions: [QuotaSubscription],
+    salt: Data,
+    now: Date
+  ) -> [WidgetQuotaItem] {
     let candidates = subscriptions.flatMap { subscription in
       let selectionID = selectionID(for: subscription, salt: salt)
       return subscription.snapshot.windows.map { window in
@@ -28,7 +56,8 @@ enum WidgetSnapshotProjection {
           fingerprint: subscription.snapshot.account.fingerprint,
           sourceID: subscription.key,
           windowID: window.id,
-          selectionID: selectionID
+          selectionID: selectionID,
+          now: now
         )
       }
     }
@@ -143,6 +172,7 @@ private struct WidgetSnapshotCandidate {
   var sourceID: String
   var windowID: String
   var selectionID: String
+  var now: Date
 
   var isBalanceOnly: Bool {
     RemainingQuotaFormat.isBalanceOnly(
@@ -169,11 +199,13 @@ private struct WidgetSnapshotCandidate {
       windowTitle: windowTitle,
       remainingPercent: remainingPercent,
       remainingValue: window.remainingValue,
+      limitValue: window.limitValue,
       unit: window.valueUnit.flatMap(mapUnit),
       hasLimit: hasLimit,
       resetsAt: window.resetsAt,
       state: WidgetQuotaState(snapshot.reportedState),
-      validUntil: snapshot.validUntil
+      validUntil: snapshot.validUntil,
+      pace: QuotaPace.evaluate(window.paceReading, now: now)
     )
   }
 

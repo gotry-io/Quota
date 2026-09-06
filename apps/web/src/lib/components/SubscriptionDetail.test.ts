@@ -32,6 +32,7 @@ const emptyPeriod: AccountSummaryRead["usage"]["today"] = {
     assumptions: [],
     unpriced: [],
   },
+  cache_saved: { amount_microusd: "0", status: "complete", unpriced_rows: 0 },
   partial: false,
   agents: [],
 };
@@ -71,6 +72,16 @@ function makeSummary(
     },
     pricing_revision: "price_1",
     model_catalog_revision: "model_1",
+    entitlement: {
+      status: "none",
+      expires_at: null,
+      will_renew: false,
+      product_id: null,
+      store: null,
+      stale: false,
+      checked_at: null,
+    },
+    purchase: { web_url: "https://pay.rev.cat/test/a" },
     ...overrides,
   };
 }

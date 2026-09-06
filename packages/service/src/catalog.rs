@@ -21,6 +21,10 @@ pub enum ProviderId {
     LiteLlm,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "gemini")]
+    Gemini,
+    #[serde(rename = "copilot")]
+    Copilot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +45,18 @@ pub struct BrowserSessionConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatusPageKind {
+    StatuspageV2,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatusPageConfig {
+    pub kind: StatusPageKind,
+    pub url: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogEntry {
     pub id: ProviderId,
     pub display_name: &'static str,
@@ -54,6 +70,7 @@ pub struct ProviderCatalogEntry {
     pub browser_session: Option<BrowserSessionConfig>,
     pub default_base_url: Option<&'static str>,
     pub base_url_environment_key: Option<&'static str>,
+    pub status_page: Option<StatusPageConfig>,
 }
 
 pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
@@ -87,6 +104,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.openai.com/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Claude,
@@ -109,6 +130,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.claude.com/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Grok,
@@ -131,6 +156,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.x.ai/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::OpenRouter,
@@ -150,6 +179,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: Some("https://openrouter.ai/api/v1"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.openrouter.ai/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::DeepSeek,
@@ -169,6 +202,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: Some("https://api.deepseek.com"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://status.deepseek.com/"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Kimi,
@@ -196,6 +233,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: Some("https://api.kimi.com"),
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.moonshot.cn/api/v2/status.json"),
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::LiteLlm,
@@ -215,6 +256,10 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         browser_session: None,
         default_base_url: None,
         base_url_environment_key: Some("LITELLM_BASE_URL"),
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: None,
+        }),
     },
     ProviderCatalogEntry {
         id: ProviderId::Cursor,
@@ -246,6 +291,40 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         }),
         default_base_url: None,
         base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::StatuspageV2,
+            url: Some("https://status.cursor.com/api/v2/status.json"),
+        }),
+    },
+    ProviderCatalogEntry {
+        id: ProviderId::Gemini,
+        display_name: "Gemini CLI",
+        order: 8,
+        default_visible: false,
+        setup_action: "gemini",
+        brand_icon_asset: "gemini",
+        account_sync: true,
+        environment_keys: &["GOOGLE_CLOUD_PROJECT"],
+        credential_config: None,
+        browser_session: None,
+        default_base_url: None,
+        base_url_environment_key: None,
+        status_page: None,
+    },
+    ProviderCatalogEntry {
+        id: ProviderId::Copilot,
+        display_name: "GitHub Copilot",
+        order: 9,
+        default_visible: false,
+        setup_action: "copilot login",
+        brand_icon_asset: "copilot",
+        account_sync: true,
+        environment_keys: &["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+        credential_config: None,
+        browser_session: None,
+        default_base_url: None,
+        base_url_environment_key: None,
+        status_page: None,
     },
 ];
 
@@ -260,6 +339,8 @@ impl ProviderId {
         Self::Kimi,
         Self::LiteLlm,
         Self::Cursor,
+        Self::Gemini,
+        Self::Copilot,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -272,6 +353,8 @@ impl ProviderId {
             Self::Kimi => "kimi",
             Self::LiteLlm => "litellm",
             Self::Cursor => "cursor",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
         }
     }
 
@@ -285,6 +368,8 @@ impl ProviderId {
             "kimi" => Some(Self::Kimi),
             "litellm" => Some(Self::LiteLlm),
             "cursor" => Some(Self::Cursor),
+            "gemini" => Some(Self::Gemini),
+            "copilot" => Some(Self::Copilot),
             _ => None,
         }
     }
@@ -299,6 +384,8 @@ impl ProviderId {
             Self::Kimi => &PROVIDER_CATALOG[5],
             Self::LiteLlm => &PROVIDER_CATALOG[6],
             Self::Cursor => &PROVIDER_CATALOG[7],
+            Self::Gemini => &PROVIDER_CATALOG[8],
+            Self::Copilot => &PROVIDER_CATALOG[9],
         }
     }
 

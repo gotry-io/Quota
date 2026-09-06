@@ -5,8 +5,11 @@
 type CostView = { amount_microusd: string | null; status: string; basis: string };
 import { USAGE_OTHER_MODEL } from "@gotry-io/quota-protocol";
 import {
-  isBalanceOnly,
+  type QuotaPace,
+  formatRemaining as formatWindowRemaining,
   remainingPercent,
+  resetCopy as sharedResetCopy,
+  type ResetCopyStyle,
   showsPercentMeter as windowShowsPercentMeter,
 } from "@gotry-io/quota-model";
 
@@ -31,7 +34,7 @@ export function formatCount(value: number): string {
   }).format(value);
 }
 
-export function formatCost(cost: CostView): string {
+export function formatCost(cost: Pick<CostView, "amount_microusd" | "status">): string {
   if (cost.amount_microusd === null) return "—";
   const cents = (BigInt(cost.amount_microusd) + 5_000n) / 10_000n;
   const amount = `${new Intl.NumberFormat(WEB_LOCALE).format(cents / 100n)}.${(cents % 100n).toString().padStart(2, "0")}`;
@@ -57,9 +60,10 @@ export function costBasisLabel(cost: CostView): string {
  * rather than as a calendar date, because an absolute instant makes the reader do the
  * subtraction before they learn the only thing they wanted to know. A future refill is the
  * exception: it is a countdown or a local date, never an age.
- * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
- * thresholds, phrases, when the no-reset phrase prints, and how a future refill is named; this
- * file and `packages/apple-shared` both answer it.
+ * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of age
+ * thresholds, phrases, and when the no-reset phrase prints. How a future refill is named is
+ * `reset-copy-conformance.json`. Remaining copy is `remaining-copy-conformance.json`. This file,
+ * `packages/quota-model`, and `packages/apple-shared` all answer those files.
  */
 export const NO_RESET_TIME_COPY = "No reset time reported";
 export const NOT_CHECKED_COPY = "Not checked";
@@ -69,6 +73,7 @@ type RemainingWindow = {
   used_percent: number;
   remaining_value?: number | undefined;
   limit_value?: number | undefined;
+  value_unit?: string | undefined;
 };
 
 /** Whether to print {@link NO_RESET_TIME_COPY} under a percent window. */
@@ -135,64 +140,40 @@ export function lastReadingCopy(instant: string | null, now?: Date): string {
  * The line under a window that still has a future refill, or `null` once that instant has passed.
  *
  * English is fixed; `timeZone` is the IANA zone the reader is in. Minutes round up, and a
- * duration under a minute still reads as `Resets in 1m`.
+ * duration under a minute still reads as `Resets in 1m`. Absolute always uses the local date
+ * the relative rule would fall back to after a day.
  */
 export function resetCopy(
   resetsAt: string | number | Date,
   now: Date = new Date(),
   timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  style: ResetCopyStyle = "relative",
 ): string | null {
-  const resetDate = new Date(resetsAt);
-  const seconds = (resetDate.getTime() - now.getTime()) / 1000;
-  if (!(seconds > 0)) return null;
-  const wholeMinutes = Math.max(1, Math.ceil(seconds / 60));
-  if (wholeMinutes < 60) {
-    return `Resets in ${wholeMinutes}m`;
-  }
-  if (seconds < 86_400) {
-    let hours = Math.floor(seconds / 3_600);
-    let minutes = Math.ceil((seconds - hours * 3_600) / 60);
-    if (minutes === 60) {
-      hours += 1;
-      minutes = 0;
-    }
-    if (minutes === 0) return `Resets in ${hours}h`;
-    return `Resets in ${hours}h ${minutes}m`;
-  }
-  const parts = zonedDateParts(resetDate, timeZone);
-  if (seconds < 604_800) {
-    return `Resets ${parts.weekday} ${parts.hour}:${parts.minute}`;
-  }
-  return `Resets ${parts.month} ${parts.day}`;
+  return sharedResetCopy(resetsAt, now, timeZone, style);
 }
 
-function zonedDateParts(
-  date: Date,
-  timeZone: string,
-): { weekday: string; month: string; day: string; hour: string; minute: string } {
-  const values = new Map<string, string>();
-  for (const part of new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date)) {
-    if (part.type !== "literal") values.set(part.type, part.value);
+/**
+ * The one line every Quota surface prints for a window's pace, or `null` when there is none.
+ *
+ * `packages/protocol/fixtures/quota-pace-conformance.json` is the shared statement of these
+ * phrases; `QuotaPaceCopy` in `packages/apple-shared` answers the same file. See ADR 0035.
+ */
+export function paceCopy(pace: QuotaPace, resetsAt: string | undefined): string | null {
+  if (pace.kind === "none") return null;
+  let outcome: string;
+  if (pace.kind === "lasts") {
+    outcome = "lasts to reset";
+  } else {
+    if (pace.exhausts_at === undefined || resetsAt === undefined) return null;
+    outcome = `runs out ~${compactAge(pace.exhausts_at, new Date(resetsAt))} before reset`;
   }
-  return {
-    weekday: values.get("weekday") ?? "",
-    month: values.get("month") ?? "",
-    day: values.get("day") ?? "",
-    hour: (values.get("hour") ?? "00").padStart(2, "0"),
-    minute: (values.get("minute") ?? "00").padStart(2, "0"),
-  };
-}
-
-function formatPercent(value: number): string {
-  return `${new Intl.NumberFormat(WEB_LOCALE, { maximumFractionDigits: 0 }).format(value)}%`;
+  const tempo =
+    pace.tempo === "on_track"
+      ? "On track"
+      : pace.tempo === "ahead"
+        ? `Ahead +${pace.delta_percent}%`
+        : `Behind −${Math.abs(pace.delta_percent)}%`;
+  return `${tempo} · ${outcome}`;
 }
 
 export function formatQuotaRemaining(
@@ -205,29 +186,13 @@ export function formatQuotaRemaining(
   },
   provider?: string,
 ): string {
-  const percent = formatPercent(remainingPercent(window.used_percent));
-  if (provider === "cursor" && window.id === "other_models") return percent;
-  const absolute = formatAbsoluteRemaining(window);
-  const balanceOnly = isBalanceOnly(window);
-  if (absolute === undefined) return percent;
-  if (balanceOnly) return absolute;
-  return `${percent} · ${absolute}`;
+  if (provider === "cursor" && window.id === "other_models") {
+    return formatWindowRemaining({ used_percent: window.used_percent });
+  }
+  return formatWindowRemaining(window);
 }
 
-function formatAbsoluteRemaining(window: {
-  remaining_value?: number | undefined;
-  value_unit?: string | undefined;
-}): string | undefined {
-  if (window.remaining_value === undefined) return undefined;
-  if (window.value_unit === "usd") {
-    return new Intl.NumberFormat(WEB_LOCALE, {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 2,
-    }).format(window.remaining_value);
-  }
-  return `${formatCount(window.remaining_value)}${window.value_unit === "credits" ? " credits" : ""}`;
-}
+export type { ResetCopyStyle };
 
 export function activityLevel(value: number, maximum: number): number {
   if (value <= 0 || maximum <= 0) return 0;

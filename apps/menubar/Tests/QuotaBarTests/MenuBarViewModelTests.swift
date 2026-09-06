@@ -48,9 +48,10 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     isStale: false
   )
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 7,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: component(value: report, updatedAt: now),
@@ -63,7 +64,9 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -194,9 +197,10 @@ func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
 @Test @MainActor
 func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -215,7 +219,9 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: nil,
@@ -246,6 +252,7 @@ func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
     ipcVersion: base.ipcVersion,
     revision: base.revision,
     usageUploadEnabled: base.usageUploadEnabled,
+    groupUsageByProject: base.groupUsageByProject,
     quotaRefreshIntervalSeconds: base.quotaRefreshIntervalSeconds,
     usagePeriods: base.usagePeriods,
     quota: base.quota,
@@ -408,12 +415,15 @@ func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,
-  overview: [LocalServiceOverviewItem] = []
+  overview: [LocalServiceOverviewItem] = [],
+  entitlement: LocalServiceEntitlement? = nil,
+  purchaseURL: URL? = nil
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 2,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -426,7 +436,9 @@ func justSignedInState(
         displayLabel: label,
         deviceID: "device_1",
         deviceGeneration: 1,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: entitlement,
+        purchaseURL: purchaseURL
       ),
       updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
       lastError: nil,
@@ -494,10 +506,11 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
     sources: [QuotaCollectionSource]
   ) -> LocalServiceState {
     LocalServiceState(
-      ipcVersion: 1,
+      ipcVersion: 2,
       revision: 3,
       usageUploadEnabled: true,
-    quotaRefreshIntervalSeconds: 300,
+      groupUsageByProject: true,
+      quotaRefreshIntervalSeconds: 300,
       usagePeriods: emptyUsagePeriods(),
       quota: component(
         value: QuotaCollectionReport(
@@ -588,9 +601,10 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
 @Test @MainActor
 func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
   let state = LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 2,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: LocalServiceUsagePeriodCache(
       local: todayOnly(tokens: 1_234_567),
@@ -696,6 +710,7 @@ func signingOutClearsNotificationDedupState() throws {
     state: AlertDedupState(
       fired: [
         AlertDedupKey(
+          kind: .threshold,
           selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
       ],
       readings: [
@@ -740,6 +755,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(
     firstID
       == AlertDedupKey(
+        kind: .reset,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: firstReset, threshold: nil
       ).requestIdentifier
   )
@@ -753,6 +769,7 @@ func newReadingsRescheduleResetReminders() throws {
   #expect(
     center.pending.first?.identifier
       == AlertDedupKey(
+        kind: .reset,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: secondReset, threshold: nil
       ).requestIdentifier
   )
@@ -906,6 +923,7 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
           assumptions: [],
           unpriced: []
         ),
+        cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
         agents: []
       ),
       incomplete: false,
@@ -919,9 +937,10 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
 
 func signedOutWithSessionEndedState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -934,7 +953,9 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -954,9 +975,10 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
 
 func loggingInState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -969,7 +991,9 @@ func loggingInState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil
+        accountSummary: nil,
+        entitlement: nil,
+        purchaseURL: nil
       ),
       updatedAt: nil,
       lastError: nil,
@@ -1032,9 +1056,10 @@ func overviewOnlyState(
   overview: [LocalServiceOverviewItem]
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: 1,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: emptyUsagePeriods(),
     quota: emptyComponent(),
@@ -1146,6 +1171,8 @@ struct StubLocalService: LocalServiceServing {
   let loginError: LocalServiceClientError?
   let authorizeURL: String?
   let pinRecord: PinCallRecord?
+  /// What `usage_period` answers, for the tests that ask for a period `get_state` does not carry.
+  let customPeriod: LocalServiceUsageDetail?
 
   init(
     state: LocalServiceState,
@@ -1157,7 +1184,8 @@ struct StubLocalService: LocalServiceServing {
     shutdownAnswerDelayNanoseconds: UInt64 = 0,
     loginError: LocalServiceClientError? = nil,
     authorizeURL: String? = nil,
-    pinRecord: PinCallRecord? = nil
+    pinRecord: PinCallRecord? = nil,
+    customPeriod: LocalServiceUsageDetail? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -1170,9 +1198,15 @@ struct StubLocalService: LocalServiceServing {
     self.loginError = loginError
     self.authorizeURL = authorizeURL
     self.pinRecord = pinRecord
+    self.customPeriod = customPeriod
   }
 
   func state() async throws -> LocalServiceState { stateValue }
+
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    guard let customPeriod else { throw LocalServiceClientError.invalidMessage }
+    return customPeriod
+  }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {
     let date = Date()
@@ -1229,6 +1263,10 @@ struct StubLocalService: LocalServiceServing {
   }
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
     LocalServiceUsageUploadSetting(enabled: enabled)
+  }
+
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting {
+    LocalServiceGroupUsageByProjectSetting(enabled: enabled)
   }
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
     LocalServiceQuotaRefreshIntervalSetting(intervalSeconds: seconds)

@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { describe, expect, inject, it } from "vitest";
+import { ladderThroughCutover } from "./migration-ladder.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -119,7 +120,7 @@ describe("0021 one session per client", () => {
 
     await applyD1Migrations(env.DB, migrations.slice(0, index));
     await seedRetainedSessions();
-    await applyD1Migrations(env.DB, migrations.slice(index));
+    await applyD1Migrations(env.DB, ladderThroughCutover(migrations, index));
 
     const sessions = await env.DB.prepare(
       `SELECT id, family_id, account_id, device_id, device_generation, client_kind,

@@ -1,3 +1,4 @@
+import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
@@ -5,6 +6,8 @@ import SwiftUI
 struct NotificationsSettingsView: View {
   @Bindable var model: MenuBarViewModel
   @State private var expandedMenu: String?
+  /// The amount as it is being typed, which is only a budget once it parses.
+  @State private var budgetDraft = ""
 
   var body: some View {
     ScrollView {
@@ -31,11 +34,23 @@ struct NotificationsSettingsView: View {
               accessibilityLabel: "Reset reminders",
               accessibilityHint: "Notify when a quota window refills"
             )
+            settingsToggleRow(
+              title: "Pace warnings",
+              systemImage: "gauge.with.dots.needle.67percent",
+              isOn: Binding(
+                get: { model.notificationRules.paceAlerts },
+                set: { model.setPaceAlerts($0) }
+              ),
+              accessibilityLabel: "Pace warnings",
+              accessibilityHint: "Notify when a window stops lasting to its reset"
+            )
             if model.notificationAuthorizationDenied {
               permissionDeniedRows
             }
           }
         }
+
+        budgetSection
 
         ForEach(model.notificationSubscriptions()) { subscription in
           subscriptionGroup(subscription)
@@ -51,6 +66,50 @@ struct NotificationsSettingsView: View {
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
     .task { await model.refreshNotificationAuthorization() }
+    .onAppear { budgetDraft = model.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
+  }
+
+  /// The monthly spend budget this Mac keeps for itself. It is never uploaded.
+  private var budgetSection: some View {
+    SettingsSection(title: "Monthly budget") {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+        HStack(spacing: QuotaDesign.Spacing.sm) {
+          Text("Amount (USD)")
+            .quotaFont(.settingsLabel)
+          TextField("No budget", text: $budgetDraft)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(applyBudgetAmount)
+            .accessibilityLabel("Monthly budget amount in US dollars")
+          Button("Save", action: applyBudgetAmount)
+            .buttonStyle(QuotaSecondaryButtonStyle())
+        }
+        settingsToggleRow(
+          title: "Budget alerts",
+          systemImage: "chart.pie",
+          isOn: Binding(
+            get: { model.budget.alerts },
+            set: { model.setBudget(UsageBudget(amountUSD: model.budget.amountUSD, alerts: $0)) }
+          ),
+          accessibilityLabel: "Budget alerts",
+          accessibilityHint: "Notify at 80% and 100% of the monthly budget"
+        )
+        Text(NotificationsSettingsCopy.budgetFooter)
+          .quotaSecondaryStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.vertical, QuotaDesign.Spacing.sm)
+    }
+  }
+
+  /// An amount that is not a positive number under the maximum clears the budget rather than
+  /// setting one of zero, and the field is rewritten to say so.
+  private func applyBudgetAmount() {
+    let amount = UsageBudget.normalized(
+      Decimal(string: budgetDraft.trimmingCharacters(in: .whitespaces), locale: .current)
+    )
+    model.setBudget(UsageBudget(amountUSD: amount, alerts: model.budget.alerts))
+    budgetDraft = amount.map(UsageBudgetProgress.plain) ?? ""
   }
 
   private var permissionDeniedRows: some View {

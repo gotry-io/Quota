@@ -73,6 +73,7 @@
     case notifications
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
+    case resetCopy = "reset-time"
     case support
     case diagnostics
 
@@ -102,6 +103,7 @@
       case .notifications: [.settings, .notifications]
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
+      case .resetCopy: [.settings, .resetCopy]
       case .support: [.settings, .support]
       case .diagnostics: [.settings, .support, .diagnostics]
       }
@@ -258,7 +260,15 @@
       localUsage: localUsageReport(at: date, partial: accountSummary.usage.today.partial),
       accountSummary: accountSummary,
       authStatus: .signedIn,
-      overview: overviewItems(summary: accountSummary, report: report, now: date)
+      overview: overviewItems(summary: accountSummary, report: report, now: date),
+      providerStatus: [
+        LocalServiceProviderStatus(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: date
+        )
+      ]
     )
   }
 
@@ -438,7 +448,61 @@
           endAt: "2026-08-03T00:00:00Z",
           status: partial ? .partial : .complete
         )
-      ]
+      ],
+      sessions: LocalUsageSessions(
+        active: 2,
+        today: 14,
+        recent: [
+          LocalUsageSession(
+            agent: .codex,
+            projectKey: "Quota",
+            startedAt: date.addingTimeInterval(-3_600),
+            lastActivityAt: date.addingTimeInterval(-45),
+            messages: 18,
+            tokens: 128_400,
+            cost: visualSessionCost("1840000"),
+            topModel: "gpt-5",
+            isActive: true
+          ),
+          LocalUsageSession(
+            agent: .claudeCode,
+            projectKey: "Quota",
+            startedAt: date.addingTimeInterval(-8_400),
+            lastActivityAt: date.addingTimeInterval(-120),
+            messages: 11,
+            tokens: 64_200,
+            cost: visualSessionCost("960000"),
+            topModel: "claude-sonnet-4",
+            isActive: true
+          ),
+          LocalUsageSession(
+            agent: .cursor,
+            projectKey: "menubar",
+            startedAt: date.addingTimeInterval(-86_400),
+            lastActivityAt: date.addingTimeInterval(-3_600),
+            messages: 6,
+            tokens: 21_000,
+            cost: visualSessionCost("410000"),
+            topModel: "gpt-5",
+            isActive: false
+          ),
+        ]
+      )
+    )
+  }
+
+  private func visualSessionCost(_ amountMicrousd: String) -> UsageCostOutcome {
+    UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .complete,
+      amountMicrousd: amountMicrousd,
+      catalogRevision: "pricing_2026_08_01",
+      calculatedRows: 1,
+      reportedRows: 0,
+      unpricedRows: 0,
+      assumptions: [],
+      unpriced: []
     )
   }
 
@@ -470,13 +534,31 @@
                   id: "five_hour",
                   title: "5 Hours",
                   usedPercent: 32,
-                  resetsAt: date.addingTimeInterval(2_700)
+                  resetsAt: date.addingTimeInterval(2_700),
+                  durationSeconds: 18_000,
+                  now: date
                 ),
                 window(
                   id: "weekly",
                   title: "Weekly",
-                  usedPercent: 16,
-                  resetsAt: date.addingTimeInterval(4 * 86_400)
+                  usedPercent: 60,
+                  resetsAt: date.addingTimeInterval(4 * 86_400),
+                  durationSeconds: 604_800,
+                  now: date
+                ),
+                QuotaWindow(
+                  id: "credits",
+                  title: "Balance (USD)",
+                  usedPercent: 0,
+                  remainingValue: 45.25,
+                  valueUnit: .usd
+                ),
+                QuotaWindow(
+                  id: "reset_credits",
+                  title: "Reset Credits",
+                  usedPercent: 0,
+                  remainingValue: 2,
+                  valueUnit: .count
                 ),
               ],
               observedAt: date.addingTimeInterval(-90)
@@ -496,7 +578,17 @@
                   id: "five_hour",
                   title: "5 Hours",
                   usedPercent: 47,
-                  resetsAt: date.addingTimeInterval(7_200)
+                  resetsAt: date.addingTimeInterval(9_000),
+                  durationSeconds: 18_000,
+                  now: date
+                ),
+                QuotaWindow(
+                  id: "extra_usage",
+                  title: "Extra Usage",
+                  usedPercent: 12.5,
+                  remainingValue: 87.5,
+                  limitValue: 100,
+                  valueUnit: .usd
                 )
               ],
               observedAt: date.addingTimeInterval(-120)
@@ -516,7 +608,8 @@
                   id: "monthly",
                   title: "Monthly",
                   usedPercent: 73,
-                  resetsAt: date.addingTimeInterval(12 * 86_400)
+                  resetsAt: date.addingTimeInterval(12 * 86_400),
+                  now: date
                 )
               ],
               observedAt: date.addingTimeInterval(-180)
@@ -587,7 +680,15 @@
       subscriptions: subscriptions,
       usage: visualAccountUsage(),
       pricingRevision: "pricing_2026_08_01",
-      modelCatalogRevision: "visual-model-catalog"
+      modelCatalogRevision: "visual-model-catalog",
+      entitlement: AccountEntitlement(
+        status: .active,
+        expiresAt: date.addingTimeInterval(14 * 86_400),
+        willRenew: true,
+        productID: "quota_sync_monthly",
+        store: "app_store",
+        stale: false
+      )
     )
   }
 
@@ -651,6 +752,11 @@
     let period = QuotaWire.UsagePeriod(
       totals: totals,
       cost: cost,
+      cacheSaved: UsageCacheSaved(
+        amountMicrousd: "412500",
+        status: .complete,
+        unpricedRows: 0
+      ),
       partial: true,
       agents: [
         UsageAgentUsage(
@@ -747,18 +853,31 @@
     )
   }
 
+  /// A fixture window carrying the pace its service would have stated for it, derived by the
+  /// one shared rule rather than a second copy of it.
   private func window(
     id: String,
     title: String,
     usedPercent: Double,
-    resetsAt: Date?
+    resetsAt: Date?,
+    durationSeconds: Int? = nil,
+    now: Date
   ) -> QuotaWindow {
     QuotaWindow(
       id: id,
       title: title,
       usedPercent: usedPercent,
       resetsAt: resetsAt,
-      durationSeconds: nil
+      durationSeconds: durationSeconds,
+      pace: QuotaPace.evaluate(
+        QuotaPaceReading(
+          usedPercent: usedPercent,
+          resetsAt: resetsAt,
+          cadenceSeconds: durationSeconds,
+          isBalanceOnly: false
+        ),
+        now: now
+      )
     )
   }
 #endif

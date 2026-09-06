@@ -7,6 +7,9 @@ public enum RemainingQuotaUnit: Sendable, Equatable {
 }
 
 public enum RemainingQuotaFormat: Sendable {
+  /// How far remaining/limit may drift from used_percent and still be the same quantity.
+  public static let amountOfLimitPercentTolerance: Double = 1
+
   public static func remainingPercent(usedPercent: Double) -> Double {
     min(max(100 - usedPercent, 0), 100)
   }
@@ -15,8 +18,48 @@ public enum RemainingQuotaFormat: Sendable {
     remainingValue != nil && !hasLimit
   }
 
+  /// A usd or credits window whose remaining and limit describe the same quantity as the
+  /// remaining percent. Those print remaining of limit and drop the meter.
+  public static func isAmountOfLimit(
+    remainingPercent: Double,
+    remainingValue: Double?,
+    limitValue: Double?,
+    unit: RemainingQuotaUnit?
+  ) -> Bool {
+    guard let remainingValue, let limitValue, limitValue > 0, let unit, isAmountUnit(unit)
+    else {
+      return false
+    }
+    let fromAmount = min(max((remainingValue / limitValue) * 100, 0), 100)
+    return abs(fromAmount - remainingPercent) < amountOfLimitPercentTolerance
+  }
+
+  public static func showsPercentMeter(
+    remainingPercent: Double,
+    remainingValue: Double?,
+    limitValue: Double?,
+    hasLimit: Bool,
+    unit: RemainingQuotaUnit?
+  ) -> Bool {
+    if isAmountOfLimit(
+      remainingPercent: remainingPercent,
+      remainingValue: remainingValue,
+      limitValue: limitValue,
+      unit: unit
+    ) {
+      return false
+    }
+    return !isBalanceOnly(remainingValue: remainingValue, hasLimit: hasLimit)
+  }
+
   public static func showsPercentMeter(remainingValue: Double?, hasLimit: Bool) -> Bool {
-    !isBalanceOnly(remainingValue: remainingValue, hasLimit: hasLimit)
+    showsPercentMeter(
+      remainingPercent: 0,
+      remainingValue: remainingValue,
+      limitValue: hasLimit ? 0 : nil,
+      hasLimit: hasLimit,
+      unit: nil
+    )
   }
 
   public static func percent(_ value: Double) -> String {
@@ -36,9 +79,9 @@ public enum RemainingQuotaFormat: Sendable {
     if let unit {
       switch unit {
       case .usd:
-        return String(format: "$%.2f", remainingValue)
+        return usd(remainingValue)
       case .credits:
-        return String(format: "%.2f credits", remainingValue)
+        return "\(credits(remainingValue)) credits"
       case .count:
         return String(format: "%.0f", remainingValue)
       }
@@ -49,12 +92,37 @@ public enum RemainingQuotaFormat: Sendable {
     return nil
   }
 
+  public static func amountOfLimit(
+    remaining: Double,
+    limit: Double,
+    unit: RemainingQuotaUnit
+  ) -> String {
+    switch unit {
+    case .usd:
+      return "\(usd(remaining)) of \(usd(limit))"
+    case .credits:
+      return "\(credits(remaining)) of \(credits(limit)) credits"
+    case .count:
+      return "\(String(format: "%.0f", remaining)) of \(String(format: "%.0f", limit))"
+    }
+  }
+
   public static func remaining(
     remainingPercent: Double,
     remainingValue: Double?,
+    limitValue: Double? = nil,
     hasLimit: Bool,
     unit: RemainingQuotaUnit?
   ) -> String {
+    if isAmountOfLimit(
+      remainingPercent: remainingPercent,
+      remainingValue: remainingValue,
+      limitValue: limitValue,
+      unit: unit
+    ), let remainingValue, let limitValue, let unit
+    {
+      return amountOfLimit(remaining: remainingValue, limit: limitValue, unit: unit)
+    }
     let percentLabel = percent(remainingPercent)
     guard
       let absoluteLabel = absolute(
@@ -72,7 +140,10 @@ public enum RemainingQuotaFormat: Sendable {
   }
 
   public static func windowTitle(_ title: String, isBalanceOnly: Bool) -> String {
-    isBalanceOnly ? "Balance" : title
+    if isBalanceOnly, title.lowercased().hasPrefix("balance") {
+      return "Balance"
+    }
+    return title
   }
 
   public static func remainingAccessibility(
@@ -84,5 +155,20 @@ public enum RemainingQuotaFormat: Sendable {
       return "\(windowTitle), \(remainingLabel)"
     }
     return "\(windowTitle), \(remainingLabel) remaining"
+  }
+
+  private static func isAmountUnit(_ unit: RemainingQuotaUnit) -> Bool {
+    switch unit {
+    case .usd, .credits: true
+    case .count: false
+    }
+  }
+
+  private static func usd(_ value: Double) -> String {
+    String(format: "$%.2f", value)
+  }
+
+  private static func credits(_ value: Double) -> String {
+    String(format: "%.2f", value)
   }
 }

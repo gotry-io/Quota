@@ -32,9 +32,16 @@ type UsageCost = {
   unpriced: unknown[];
 };
 
+type UsageCacheSaved = {
+  amount_microusd: string;
+  status: string;
+  unpriced_rows: number;
+};
+
 type UsagePeriod = {
   totals: UsageTotals;
   cost: UsageCost;
+  cache_saved: UsageCacheSaved;
   partial: boolean;
   agents: Array<{
     agent: string;
@@ -104,6 +111,23 @@ function retoken(
 }
 
 export const accountSummary = structuredClone(accepted.payload) as AccountSummary;
+
+export function accountReadFromSummary(summary: unknown = accountSummary): {
+  protocol_version: 2;
+  account: unknown;
+  identities: { provider: string; label: string | null; linked_at: string }[];
+  entitlement: unknown;
+  purchase: { web_url: string };
+} {
+  const body = summary as { account: { account_id: string }; entitlement: unknown };
+  return {
+    protocol_version: 2,
+    account: body.account,
+    identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
+    entitlement: body.entitlement,
+    purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
+  };
+}
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
 
@@ -243,6 +267,12 @@ function periodFromModels(
   return {
     totals: merged,
     cost: cost(microusd, messages),
+    // A dollar fifty per million cache reads is the gap this fixture's catalog would price.
+    cache_saved: {
+      amount_microusd: String(Math.round(merged.cache_read_input_tokens * 1.5)),
+      status: "complete",
+      unpriced_rows: 0,
+    },
     partial: false,
     agents: [
       {
@@ -443,6 +473,14 @@ export function screenshotAccountSummary(): unknown {
     },
     pricing_revision: PRICING_REVISION,
     model_catalog_revision: "models_visual_fixture",
+    entitlement: {
+      status: "active",
+      expires_at: isoFrom(now, 30 * 86_400_000),
+      will_renew: true,
+      product_id: "quota_sync_monthly",
+      store: "app_store",
+      stale: false,
+    },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);

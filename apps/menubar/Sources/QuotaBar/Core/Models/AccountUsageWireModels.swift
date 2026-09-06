@@ -239,47 +239,222 @@ enum LocalUsageReportStatus: String, Codable, Sendable {
   case unavailable
 }
 
+/// One local calendar day of a bounded period, on the same midnights the period itself keeps.
+struct LocalUsageDay: Codable, Equatable, Sendable {
+  let date: String
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case totals
+    case cost
+  }
+
+  var isValid: Bool { WireValidation.isCalendarDate(date) && totals.isValid && cost.isValid }
+
+  init(date: String, totals: UsageSummaryTotals, cost: UsageCostOutcome) {
+    self.date = date
+    self.totals = totals
+    self.cost = cost
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["date", "totals", "cost"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(String.self, forKey: .date)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .date, in: container, debugDescription: "Invalid local Usage day.")
+    }
+  }
+}
+
+/// One hour of the local clock, summed over every day of the period that reached it.
+///
+/// An hour nothing reached is still named, at no tokens and no amount: there is no priced row
+/// behind it to state one.
+struct LocalUsageHourOfDay: Codable, Equatable, Sendable {
+  let hour: Int
+  let totalTokens: Int
+  let costMicrousd: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case hour
+    case totalTokens
+    case costMicrousd
+  }
+
+  var isValid: Bool { (0..<24).contains(hour) && totalTokens >= 0 }
+
+  init(hour: Int, totalTokens: Int, costMicrousd: String?) {
+    self.hour = hour
+    self.totalTokens = totalTokens
+    self.costMicrousd = costMicrousd
+  }
+
+  /// An hour with no amount still names the key, which is how the service writes it.
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(hour, forKey: .hour)
+    try container.encode(totalTokens, forKey: .totalTokens)
+    try container.encode(costMicrousd, forKey: .costMicrousd)
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["hour", "totalTokens", "costMicrousd"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    hour = try container.decode(Int.self, forKey: .hour)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    costMicrousd = try container.decode(String?.self, forKey: .costMicrousd)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .hour, in: container, debugDescription: "Invalid local Usage hour of the day.")
+    }
+  }
+}
+
+/// One period of this Mac's own Usage.
+///
+/// `days` and `hoursOfDay` describe a period bounded by two local midnights, so the three
+/// trailing periods carry them and `all` — every retained day — does not.
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
+  let cacheSaved: UsageCacheSaved
   let agents: [LocalUsageAgentSummary]
+  let projects: [LocalUsageProjectSummary]
+  let days: [LocalUsageDay]?
+  let hoursOfDay: [LocalUsageHourOfDay]?
   let modelsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
     case totals
     case cost
+    case cacheSaved
     case agents
+    case projects
+    case days
+    case hoursOfDay
     case modelsTruncated
   }
 
   var isValid: Bool {
-    totals.isValid && cost.isValid && agents.count <= BillingAgent.allCases.count
+    totals.isValid && cost.isValid && cacheSaved.isValid
+      && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
+      && projects.count <= 50
+      && projects.allSatisfy(\.isValid)
+      && (days?.count ?? 0) <= 31
+      && (days?.allSatisfy(\.isValid) ?? true)
+      && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
+      && (hoursOfDay.map { $0.count == 24 && $0.enumerated().allSatisfy { $1.hour == $0 } } ?? true)
+      && (days == nil) == (hoursOfDay == nil)
       && modelsTruncated != false
+  }
+
+  /// How much of this period's input came back from a cache, in basis points.
+  var cacheHitBasisPoints: Int? {
+    UsageMetrics.cacheHitBasisPoints(
+      cacheReadInputTokens: totals.cacheReadInputTokens,
+      inputTokens: totals.inputTokens
+    )
   }
 
   init(
     totals: UsageSummaryTotals,
     cost: UsageCostOutcome,
+    cacheSaved: UsageCacheSaved,
     agents: [LocalUsageAgentSummary],
+    projects: [LocalUsageProjectSummary] = [],
+    days: [LocalUsageDay]? = nil,
+    hoursOfDay: [LocalUsageHourOfDay]? = nil,
     modelsTruncated: Bool? = nil
   ) {
     self.totals = totals
     self.cost = cost
+    self.cacheSaved = cacheSaved
     self.agents = agents
+    self.projects = projects
+    self.days = days
+    self.hoursOfDay = hoursOfDay
     self.modelsTruncated = modelsTruncated
   }
 
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["totals", "cost", "agents", "modelsTruncated"])
+    try decoder.rejectUnknownWireKeys([
+      "totals", "cost", "cacheSaved", "agents", "projects", "days", "hoursOfDay",
+      "modelsTruncated",
+    ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
     agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
+    projects = try container.decode([LocalUsageProjectSummary].self, forKey: .projects)
+    days = try container.decodeIfPresent([LocalUsageDay].self, forKey: .days)
+    hoursOfDay = try container.decodeIfPresent([LocalUsageHourOfDay].self, forKey: .hoursOfDay)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .agents, in: container, debugDescription: "Invalid local Usage period summary.")
+    }
+  }
+}
+
+struct LocalUsageProjectSummary: Codable, Equatable, Sendable {
+  let projectKey: String
+  let totalTokens: Int
+  let cost: UsageCostOutcome
+  let messages: Int
+  let topModel: String
+
+  private enum CodingKeys: String, CodingKey {
+    case projectKey
+    case totalTokens
+    case cost
+    case messages
+    case topModel
+  }
+
+  var isValid: Bool {
+    !projectKey.isEmpty && projectKey.count <= 128 && totalTokens >= 0 && messages >= 0
+      && !topModel.isEmpty && cost.isValid
+  }
+
+  var displayName: String {
+    projectKey == "other" ? "Other" : projectKey
+  }
+
+  init(
+    projectKey: String,
+    totalTokens: Int,
+    cost: UsageCostOutcome,
+    messages: Int,
+    topModel: String
+  ) {
+    self.projectKey = projectKey
+    self.totalTokens = totalTokens
+    self.cost = cost
+    self.messages = messages
+    self.topModel = topModel
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "projectKey", "totalTokens", "cost", "messages", "topModel",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    projectKey = try container.decode(String.self, forKey: .projectKey)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    messages = try container.decode(Int.self, forKey: .messages)
+    topModel = try container.decode(String.self, forKey: .topModel)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .projectKey, in: container, debugDescription: "Invalid local Usage project summary.")
     }
   }
 }
@@ -330,6 +505,136 @@ struct LocalUsageCoverage: Codable, Equatable, Sendable {
   }
 }
 
+struct LocalUsageSession: Codable, Equatable, Sendable, Identifiable {
+  let agent: BillingAgent
+  let projectKey: String
+  let startedAt: Date
+  let lastActivityAt: Date
+  let messages: Int
+  let tokens: Int
+  let cost: UsageCostOutcome
+  let topModel: String?
+  let isActive: Bool
+
+  var id: String {
+    "\(agent.rawValue)|\(projectKey)|\(startedAt.timeIntervalSince1970)|\(lastActivityAt.timeIntervalSince1970)|\(messages)|\(tokens)"
+  }
+
+  var isValid: Bool {
+    Self.isProjectKey(projectKey)
+      && lastActivityAt >= startedAt
+      && messages >= 0
+      && tokens >= 0
+      && cost.isValid
+      && topModel.map { !$0.isEmpty && $0.count <= 128 } != false
+      && agent != .unknown
+  }
+
+  static func isProjectKey(_ value: String) -> Bool {
+    (1...128).contains(value.count)
+      && !value.contains("/")
+      && !value.contains("\\")
+      && value.unicodeScalars.allSatisfy { $0.value >= 32 }
+  }
+
+  init(
+    agent: BillingAgent,
+    projectKey: String,
+    startedAt: Date,
+    lastActivityAt: Date,
+    messages: Int,
+    tokens: Int,
+    cost: UsageCostOutcome,
+    topModel: String?,
+    isActive: Bool
+  ) {
+    self.agent = agent
+    self.projectKey = projectKey
+    self.startedAt = startedAt
+    self.lastActivityAt = lastActivityAt
+    self.messages = messages
+    self.tokens = tokens
+    self.cost = cost
+    self.topModel = topModel
+    self.isActive = isActive
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "agent", "projectKey", "startedAt", "lastActivityAt", "messages", "tokens", "cost",
+      "topModel", "isActive",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    agent = try container.decode(BillingAgent.self, forKey: .agent)
+    projectKey = try container.decode(String.self, forKey: .projectKey)
+    startedAt = try container.decode(Date.self, forKey: .startedAt)
+    lastActivityAt = try container.decode(Date.self, forKey: .lastActivityAt)
+    messages = try container.decode(Int.self, forKey: .messages)
+    tokens = try container.decode(Int.self, forKey: .tokens)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    topModel = try container.decode(String?.self, forKey: .topModel)
+    isActive = try container.decode(Bool.self, forKey: .isActive)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .projectKey, in: container, debugDescription: "Invalid local Usage session.")
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case agent
+    case projectKey
+    case startedAt
+    case lastActivityAt
+    case messages
+    case tokens
+    case cost
+    case topModel
+    case isActive
+  }
+}
+
+struct LocalUsageSessions: Codable, Equatable, Sendable {
+  let active: Int
+  let today: Int
+  let recent: [LocalUsageSession]
+
+  static let empty = LocalUsageSessions(active: 0, today: 0, recent: [])
+
+  var isEmpty: Bool { active == 0 && today == 0 && recent.isEmpty }
+
+  var isValid: Bool {
+    active >= 0
+      && today >= 0
+      && recent.count <= 20
+      && recent.allSatisfy(\.isValid)
+      && zip(recent, recent.dropFirst()).allSatisfy { $0.lastActivityAt >= $1.lastActivityAt }
+  }
+
+  init(active: Int, today: Int, recent: [LocalUsageSession]) {
+    self.active = active
+    self.today = today
+    self.recent = recent
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["active", "today", "recent"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    active = try container.decode(Int.self, forKey: .active)
+    today = try container.decode(Int.self, forKey: .today)
+    recent = try container.decode([LocalUsageSession].self, forKey: .recent)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .recent, in: container, debugDescription: "Invalid local Usage sessions.")
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case active
+    case today
+    case recent
+  }
+}
+
 struct LocalUsageReport: Codable, Equatable, Sendable {
   let generatedAt: Date
   let aggregationTimezone: String?
@@ -337,6 +642,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
   let status: LocalUsageReportStatus
   let modelCatalogRevision: String?
   let coverage: [LocalUsageCoverage]
+  let sessions: LocalUsageSessions
 
   init(
     generatedAt: Date,
@@ -344,7 +650,8 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     range: UsageDateRange,
     status: LocalUsageReportStatus,
     modelCatalogRevision: String? = nil,
-    coverage: [LocalUsageCoverage]
+    coverage: [LocalUsageCoverage],
+    sessions: LocalUsageSessions = .empty
   ) {
     self.generatedAt = generatedAt
     self.aggregationTimezone = aggregationTimezone
@@ -352,11 +659,13 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     self.status = status
     self.modelCatalogRevision = modelCatalogRevision
     self.coverage = coverage
+    self.sessions = sessions
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "generatedAt", "aggregationTimezone", "range", "status", "modelCatalogRevision", "coverage",
+      "sessions",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     generatedAt = try container.decode(Date.self, forKey: .generatedAt)
@@ -365,6 +674,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     status = try container.decode(LocalUsageReportStatus.self, forKey: .status)
     modelCatalogRevision = try container.decode(String?.self, forKey: .modelCatalogRevision)
     coverage = try container.decode([LocalUsageCoverage].self, forKey: .coverage)
+    sessions = try container.decode(LocalUsageSessions.self, forKey: .sessions)
 
     let unavailable = status == .unavailable
     let expectedStatus: LocalUsageReportStatus =
@@ -379,9 +689,11 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
       && aggregationTimezone == nil
       && modelCatalogRevision == nil
       && coverage.isEmpty
+      && sessions.isEmpty
     guard range.isValid,
       coverage.count <= 2_048,
       coverage.allSatisfy(\.isOrdered),
+      sessions.isValid,
       validAvailable || validUnavailable
     else {
       throw DecodingError.dataCorruptedError(
@@ -400,6 +712,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     try container.encode(status, forKey: .status)
     try container.encode(modelCatalogRevision, forKey: .modelCatalogRevision)
     try container.encode(coverage, forKey: .coverage)
+    try container.encode(sessions, forKey: .sessions)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -409,6 +722,7 @@ struct LocalUsageReport: Codable, Equatable, Sendable {
     case status
     case modelCatalogRevision
     case coverage
+    case sessions
   }
 }
 

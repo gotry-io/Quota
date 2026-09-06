@@ -31,7 +31,34 @@ Cookie hosts/names, and browser-priority prefix; capabilities may coexist. Every
 signed-in web session declares one — Codex, Claude Code, Grok, Kimi Code, and Cursor — and it is
 always the last rung, described once under [Browser session](#browser-session).
 
-Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor.
+Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor,
+Gemini CLI, GitHub Copilot.
+
+## Service status
+
+Catalog `status_page` declares whether this build polls an official status page. `kind` is
+`statuspage_v2` or `none`. `statuspage_v2` is Atlassian Statuspage `GET {url}` of
+`/api/v2/status.json`; this build reads only `status.indicator` (`none` / `minor` / `major` /
+`critical`) and `status.description`. `none` means there is no machine-readable Statuspage v2
+feed: the helper does not scrape HTML and does not invent a second parser.
+
+Verified 2026-09-06 (no redirects; this client's HTTP stack follows none):
+
+| Provider | Kind | URL |
+| --- | --- | --- |
+| Codex | `statuspage_v2` | `https://status.openai.com/api/v2/status.json` (incident.io page; still answers Statuspage v2 `status.indicator` / `status.description`) |
+| Claude Code | `statuspage_v2` | `https://status.claude.com/api/v2/status.json` (`status.anthropic.com` 301s here) |
+| Grok | `none` | `https://status.x.ai/` (custom page, Cloudflare 403 on `/api/v2/status.json`) |
+| OpenRouter | `none` | `https://status.openrouter.ai/` (OnlineOrNot HTML, no Statuspage v2) |
+| DeepSeek | `none` | `https://status.deepseek.com/` (Flashcat HTML; `/api/v2/status.json` is 404) |
+| Kimi Code | `statuspage_v2` | `https://status.moonshot.cn/api/v2/status.json` |
+| LiteLLM | `none` | no official page |
+| Cursor | `statuspage_v2` | `https://status.cursor.com/api/v2/status.json` |
+
+The local helper polls every ten minutes (and once at scheduler start) with
+`User-Agent: Quota/<version>`, a ten-second timeout, and a 64 KiB body cap. A failed poll keeps
+the last reading. Quota iOS uses the same URL list through `QuotaProviderStatus` on the device;
+Relay does not forward status pages. The menu-bar icon does not overlay an incident mark.
 
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.
@@ -122,6 +149,14 @@ A stored browser session is the rung after every official credential a provider 
 providers whose web app has a session to read. It exists because a reader signed in at
 chatgpt.com, claude.ai, grok.com, kimi.com, or cursor.com already has an account this Mac can be
 shown, and the alternative is telling them to sign in somewhere they already are.
+
+Quota iOS reads the same rung with `QuotaProviderWeb` in `packages/apple-client`, on the device the
+reader signed in on rather than from a Mac's cookie jars. It has no other rung and no cookie jar to
+import: the session comes from a sign-in the reader completes inside the app, in a web view whose
+store is discarded with the sheet, and is kept in that device's Keychain
+([ADR 0034](decisions/0034-ios-collects-for-itself.md)). Both runtimes answer
+`packages/protocol/fixtures/provider-web-conformance.json`, so the request sequence, the
+classifications, and the account fingerprint below are one rule and not two.
 
 It is the **last** rung and only the last rung. A provider's own credential is read first; the
 stored session is reached only when that credential is missing entirely or every rung that read it
@@ -235,7 +270,12 @@ Acquisition happens in QuotaBar, never during a refresh:
    not, even when they share a duration. Additional `limit_name` values are Title Case
    (`gpt-reserve` → **GPT Reserve**). Spark is **Codex Spark 5 Hours** / **Codex Spark Weekly**;
    Code Review is **Code Review 5 Hours** / **Code Review Weekly**. A null code-review object is
-   absent, not malformed.
+   absent, not malformed. When WHAM includes `credits` with `has_credits` and a finite
+   `balance` (string or number), emit a balance-only **Balance (USD)** window
+   (`remaining_value` / `value_unit: usd`). Unlimited or `has_credits: false` is omitted.
+   `rate_limit_reset_credits.available_count` is a count of earned rate-limit resets, mapped as
+   **Reset Credits** (`remaining_value` / `value_unit: count`); it is not a dollar wallet and is
+   not redeemed here.
 6. Do not fall back after a successful but malformed response; report the parser failure instead.
 7. If neither credential exists or both answer `auth_required`, and a stored ChatGPT
    [browser session](#browser-session) exists, read `GET https://chatgpt.com/api/auth/session`
@@ -317,7 +357,11 @@ reset-credit redemption are not used.
    windows are the headline meters (`primary_cadence` `five_hour` and `weekly`); model-scoped
    weeklies, Daily Routines, and Extra Usage are not. Every weekly limit meters one
    seven-day cycle, so a weekly window that reports no reset of its own — model-scoped or not —
-   takes the seven-day window's reset.
+   takes the seven-day window's reset. Extra Usage is a monthly USD spend cap: when
+   `is_enabled` is not false and `used_credits` / `monthly_limit` are present, they are cents,
+   mapped to `remaining_value` / `limit_value` / `value_unit: usd`. Utilization may be null when
+   the cap is on; used/limit then supplies `used_percent`. A utilization-only extra_usage object
+   still maps as a percent window. Extra usage that is off is omitted.
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
@@ -367,8 +411,8 @@ claims is the `unknown` provider within its originating client.
 A provider id resolves a channel only when it is a registered id that authenticates against that
 vendor's own endpoints. Gateway spellings that merely proxy a vendor, such as an `-oauth` suffix on a
 registered id, are not registered and stay unknown. `kimi-for-coding` and `moonshotai` resolve
-`moonshot_direct`, and `deepseek` resolves `deepseek_direct`, for every collector that reads an
-explicit provider id: OpenCode, Pi, and Cursor. Relay reports every channel it stores as stored;
+`moonshot_direct`, `deepseek` resolves `deepseek_direct`, and `google` / `gemini` resolve
+`google_direct`, for every collector that reads an explicit provider id: OpenCode, Pi, and Cursor. Relay reports every channel it stores as stored;
 [ADR 0018](decisions/0018-single-managed-data-contract.md) retired the narrowing that once rewrote
 channels newer than a released client to `unknown`.
 
@@ -479,7 +523,33 @@ make an otherwise unpriced fact priced.
    not a malformed source. Binary or protobuf blobs are skipped. An unreadable database, invalid
    timestamp/model/usage field, or truncated source makes only that file partial.
 
-Cursor is part of the single BillingAgent set every managed contract carries.
+### Gemini CLI Usage
+
+1. Discover `session-*.json` and `session-*.jsonl` below `$GEMINI_HOME/tmp` or `~/.gemini/tmp`,
+   which is `~/.gemini/tmp/<projectHash>/chats/` as the CLI's `Storage.getProjectTempDir()` writes.
+2. A JSON conversation record is a `messages[]` array; JSONL is one object per line. Emit a fact
+   from each `type: "gemini"` message that carries `tokens` (`input` / `output` / `cached` /
+   `thoughts`). `input` already includes cached tokens. `thoughts` is added to output when it is
+   not already a subset, so protocol output remains inclusive and reasoning stays a subset.
+   Preserve the reported `model`. The session does not name a billing channel; store `unknown`.
+3. Empty token objects emit no fact. Malformed timestamps or usage make only that file partial.
+
+### GitHub Copilot Usage
+
+1. Discover `events.jsonl` below `$COPILOT_HOME/session-state` or `~/.copilot/session-state`, one
+   file per session id. This is the Copilot CLI session log; it does contain token counts.
+2. Prefer `assistant.usage` events (`data.model`, `inputTokens`, `outputTokens`,
+   `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`) as one fact per call. When a file has
+   none, `session.shutdown` `data.modelMetrics.<model>.usage` is a cumulative rollup: emit the
+   delta from the previous shutdown in that file so a resumed session is not counted twice.
+   `inputTokens` that already include cache are kept; an exclusive input has cache added so
+   protocol input remains the billable total. The log does not name a billing channel; store
+   `unknown`. Shutdown `requests.cost` is a premium-request weight, not USD, and is not stored as
+   source cost.
+3. OpenTelemetry JSONL under `~/.copilot/otel` and `~/.copilot/session-store.db` are not read.
+
+Cursor, Gemini CLI, and GitHub Copilot are part of the single BillingAgent set every managed
+contract carries.
 
 All scanners preserve non-empty bounded model identifiers as opaque provider text, ignore zero-
 token/tool/cost internal records, and use canonical `[start_at, end_at)` UTC-hour boundaries,
@@ -519,7 +589,9 @@ upload partitions are summarized by the QuotaBar diagnostics report.
    token. HTTP 401/403 is `auth_required`. A valid cached token works without the `grok` executable.
 5. Prefer `config.creditUsagePercent` and `config.currentPeriod`. For non-unified accounts, retain the
    deprecated `config.used.val / config.monthlyLimit.val * 100` fields documented by Grok Build. A
-   new period that omits those usage fields is 0% used, not malformed.
+   new period that omits those usage fields is 0% used, not malformed. When those money fields are
+   present, also emit `remaining_value` / `limit_value` / `value_unit: credits` — Grok credits are
+   not dollars. Unified accounts that only report `creditUsagePercent` stay percent-only.
 6. When the proxy is unreachable (not rejected, not malformed), `POST
    https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` as gRPC-web with the same
    OAuth token as `Authorization: Bearer`. This is CodexBar's last Automatic step; Quota runs it
@@ -719,12 +791,77 @@ managed Account.
 7. Catalog `account_sync` is true, so Cursor snapshots enter managed envelopes and Account
    summaries. Browser cookies and the Cursor.app access token still never leave the local service.
 
+## Gemini CLI
+
+1. Discover `~/.gemini/oauth_creds.json`. There is no browser-session rung: Google's Code Assist
+   grant is the OAuth file the Gemini CLI writes, not a cookie.
+2. Read `access_token`, `refresh_token`, and `expiry_date` (milliseconds, as the CLI writes it). A
+   token more than 60 seconds from expiry is spent as-is. An expired or missing access token is
+   refreshed in memory against `POST https://oauth2.googleapis.com/token` with the Gemini CLI's
+   installed-application client id and secret, **read at refresh time from the CLI package
+   installed on this device** (`gemini` resolved like every CLI here, then
+   `@google/gemini-cli-core/dist/src/code_assist/oauth2.js` beside it; Google's own source
+   comments that this secret is not treated as a secret, but this repository still carries no
+   copy of it). Without an installed CLI an expired token answers `auth_required`, and signing in
+   through the CLI restores it. This build does **not** write `oauth_creds.json`; the CLI
+   remains the file owner. Google refresh tokens for this client are reusable, unlike Codex's
+   single-use rotation, so spending one here does not strand the CLI. There is no Gemini CLI
+   command that renews without making a billed request, so this is not a [`renewal.rs`](../packages/service/src/providers/common/renewal.rs)
+   spawn.
+3. `POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` with
+   `{ metadata: { ideType: "GEMINI_CLI", pluginType: "GEMINI" } }` and, when set,
+   `GOOGLE_CLOUD_PROJECT` as `cloudaicompanionProject`. The response's
+   `cloudaicompanionProject` (else the env project) is required. `currentTier.id` becomes the plan
+   slug (`standard-tier` → `standard_tier`).
+4. `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` with
+   `{ project: <cloudaicompanionProject> }`. Map `buckets[]` whose `tokenType` is `REQUESTS` (or
+   omitted). `remainingAmount / remainingFraction` is the limit; a fraction alone is treated as
+   remaining percent of 100, matching the CLI. Pool buckets that share a reset horizon:
+   - reset within five minutes → **Per Minute** (`duration_seconds: 60`)
+   - otherwise within two days, or no reset → **Daily** (`duration_seconds: 86400`)
+   - within eight days → **Weekly**
+   - else → **Monthly**
+   Official daily request limits are aggregated across models, so per-model buckets that share a
+   horizon become one window (`value_unit: "count"`). Daily is not a protocol `primary_cadence`
+   member.
+5. Absent file or unusable grant → `auth_required` with "Run `gemini` and sign in with Google".
+   HTTP 401/403 → `auth_required`. Identity is the access token JWT `email` (else `sub`); a token
+   that names no one is source-scoped. Newer Gemini CLI builds may migrate this file into the
+   macOS Keychain; this collector reads the file the CLI still writes and documents as
+   `oauth_creds.json`.
+
+The Code Assist `retrieveUserQuotaSummary` weekly/five-hour meter used by Antigravity is not
+called: that method answers `403` for this OAuth client.
+
+## GitHub Copilot
+
+1. Resolve a GitHub token in order:
+   1. `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`, when the value has a Copilot-
+      accepted prefix (`gho_`, `ghu_`, `github_pat_`).
+   2. Else `$XDG_CONFIG_HOME/github-copilot/apps.json` or `~/.config/github-copilot/apps.json`.
+   3. Else `hosts.json` beside it.
+   Prefer a `github.com` entry's `oauth_token`. Modern VS Code stores the GitHub login in encrypted
+   secret storage rather than these files; Copilot CLI stores OAuth in the macOS Keychain service
+   `copilot-cli` or, when that is unavailable, `~/.copilot/config.json`. Those two stores are not
+   read here.
+2. `GET https://api.github.com/copilot_internal/user` with `Authorization: Bearer` and
+   `Accept: application/vnd.github+json`. A 401/403 token is skipped for the next candidate; if
+   every candidate is refused, `auth_required`.
+3. Map `quota_snapshots.premium_interactions` as the headline **Premium Requests** window
+   (`primary_cadence: monthly`, `value_unit: "count"`). `percent_remaining` is inverted to
+   `used_percent`. `entitlement: -1` or `unlimited: true` is remaining-only. `chat` and
+   `completions` snapshots, when limited, are additional windows. `quota_reset_date` (a calendar
+   day) is the reset. When `quota_snapshots` is absent, `limited_user_quotas` remaining counts are
+   the fallback. `copilot_plan` is the plan slug. `login` is the global fingerprint.
+4. Absent token → `auth_required` with "Run `copilot login`". No browser-session rung.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
   stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
   team ID when present and otherwise user ID; Cursor uses its stable user `sub` and falls back to a
-  normalized email; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
+  normalized email; Gemini CLI uses the OAuth access-token JWT email (else `sub`); GitHub Copilot
+  uses the `login` from `copilot_internal/user`; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
   SHA-256 of the API key under the `api_key` namespace (never the raw key).
 - Cursor explicitly uses normalized email as a fingerprint fallback only when `/api/auth/me` omits
   `sub`. For every other provider, email is display enrichment only and never a global identity; a
@@ -736,7 +873,8 @@ managed Account.
 - A collection attempt records its stable source identifier and an explicit outcome.
 - One provider failure does not discard successful results from other requested providers.
 - Requested providers collect concurrently while the report preserves catalog order
-  (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, then Cursor.
+  (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor,
+  Gemini CLI, then GitHub Copilot.
   Multiple sessions within one provider remain sequential so provider-owned credential refreshes do
   not race. A provider result with both successful and failed sessions remains explicitly partial in
   component state.

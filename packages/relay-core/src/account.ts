@@ -1,4 +1,9 @@
-import type { ProviderId, QuotaSnapshot, QuotaSnapshotEnvelope } from "@gotry-io/quota-protocol";
+import type {
+  IdentityProvider,
+  ProviderId,
+  QuotaSnapshot,
+  QuotaSnapshotEnvelope,
+} from "@gotry-io/quota-protocol";
 
 /**
  * Everything a session can be allowed to do.
@@ -16,11 +21,74 @@ export type SessionClientKind = "web" | "quotabar" | "ios";
 
 export interface AccountRecord {
   id: string;
-  identity_subject: string;
+  /**
+   * What this Account is called: the label of the identity it was opened with, kept current by
+   * whichever identity was bound first ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
   display_label: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * Every channel that can prove an identity, named the way the wire names it.
+ *
+ * The vocabulary is `packages/protocol`'s: what is stored and what is answered are the same set,
+ * so a provider cannot exist in one and not the other.
+ */
+export type IdentityProviderId = IdentityProvider;
+
+/**
+ * One channel through which an Account can be reached.
+ *
+ * `subject` is the HMAC of what the provider proved — a GitHub numeric id, an Apple `sub`, a
+ * normalized address — under `IDENTITY_SUBJECT_KEY`, so nothing here names a person. `label` is
+ * what that channel calls them, and the earliest-bound identity's label is the Account's own.
+ */
+export interface AccountIdentityRecord {
+  account_id: string;
+  provider: IdentityProviderId;
+  label: string | null;
+  created_at: string;
+}
+
+/** A sign-in that has proved an identity, on its way to the Account behind it. */
+export interface ResolveSignInIdentityInput {
+  provider: IdentityProviderId;
+  subject: string;
+  label: string;
+  /**
+   * Whether `label` is the provider's stand-in rather than something it stated.
+   *
+   * Apple hands over an address only while the person is sharing one, so a later sign-in can
+   * arrive with nothing but "Apple ID". A stand-in must not overwrite a name a channel once
+   * really stated ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
+  label_is_placeholder: boolean;
+  /** The id the Account takes when this identity has never been seen before. */
+  new_account_id: string;
+  now: string;
+}
+
+export interface LinkIdentityInput {
+  account_id: string;
+  provider: IdentityProviderId;
+  subject: string;
+  label: string;
+  now: string;
+}
+
+/**
+ * What binding an identity to an Account did.
+ *
+ * `identity_taken` is a refusal, not a merge: the identity already belongs to another Account and
+ * nothing is changed. `already_linked` is the same identity on the same Account, which is what a
+ * repeated link is and is answered as success.
+ */
+export type LinkIdentityOutcome = "linked" | "already_linked" | "identity_taken";
+
+/** Unbinding refuses to leave an Account no one can reach. */
+export type UnlinkIdentityOutcome = "unlinked" | "not_found" | "last_identity";
 
 export interface DeviceRecord {
   id: string;
@@ -66,7 +134,7 @@ export interface DeviceWriterPrincipal extends SessionPrincipal {
  * One browser sign-in in flight, on its way to an authorization code.
  *
  * Authorization Code with PKCE over a loopback callback is the only grant Relay issues, so a
- * grant is one shape: the login token that identifies it while the browser is at GitHub, the
+ * grant is one shape: the login token that identifies it while the browser is signing in, the
  * challenge the exchange must answer, and where the code goes.
  */
 export interface CreateLoginGrantInput {
@@ -104,7 +172,6 @@ export interface CompleteIdentityLoginInput {
   grant_id: string;
   login_token_hash: string;
   completion_nonce_hash: string;
-  display_label: string | null;
   account_id: string;
   completed_at: string;
   authorization_code_hash: string | null;
@@ -113,7 +180,6 @@ export interface CompleteIdentityLoginInput {
 export interface CompleteIdentityLoginResult {
   outcome: "completed" | "not_found" | "expired" | "already_completed";
   grant: LoginGrantRecord | null;
-  account: AccountRecord | null;
 }
 
 export interface ConsumeLoginGrantInput {
@@ -141,17 +207,62 @@ export type LoginGrantConsumeResult =
 /**
  * One browser sign-in, as Relay stores it.
  *
- * The Account is found or created in the same batch: a first GitHub sign-in and a return visit
- * differ only in whether the row was already there.
+ * The Account is already resolved when this is written: the identity the sign-in proved decided
+ * which Account it belongs to, or opened one.
  */
 export interface CreateWebSessionInput {
   session_id: string;
   account_id: string;
-  display_label: string;
   access_token_hash: string;
   authenticated_at: string;
   expires_at: string;
 }
+
+/**
+ * The iOS viewer's one session, opened for an Account a native sign-in has already proved.
+ *
+ * Sign in with Apple proves who this is inside the app, so there is no browser round trip and no
+ * grant to consume; what is written is the same `sessions` row `/oauth/v2/token` writes, with the
+ * same scopes and the same credential domains ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)).
+ */
+export interface CreateIosSessionInput {
+  account_id: string;
+  family_id: string;
+  session: SessionCredentialHashes;
+  authenticated_at: string;
+}
+
+/**
+ * One mailed sign-in in flight.
+ *
+ * The address and the token are stored only as hashes. `intent_json` is the sealed decision
+ * this challenge will complete — a sign-in, or a link on a named Account — and `return_to` is
+ * the same-origin path the browser that opens the link is sent to.
+ */
+export interface CreateEmailChallengeInput {
+  id: string;
+  email_hash: string;
+  token_hash: string;
+  intent_json: string;
+  return_to: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface EmailChallengeRecord {
+  id: string;
+  email_hash: string;
+  intent_json: string;
+  return_to: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+export type ConsumeEmailChallengeResult =
+  | { outcome: "consumed"; challenge: EmailChallengeRecord }
+  | { outcome: "expired" }
+  | { outcome: "invalid" };
 
 export interface ConsumeAccountLoginGrantInput {
   grant_id: string;
@@ -217,6 +328,35 @@ export interface AccountVersionStamp {
   device_signed_out_at: string | null;
   snapshots: number;
   snapshot_updated_at: string | null;
+  /** When the paid-sync entitlement row last changed, or null when none is stored. */
+  entitlement_updated_at: string | null;
+}
+
+export type EntitlementStatus = "active" | "grace" | "expired" | "none";
+export type EntitlementSource = "webhook" | "rest";
+
+export interface StoredEntitlement {
+  account_id: string;
+  status: EntitlementStatus;
+  product_id: string | null;
+  store: string | null;
+  expires_at: string | null;
+  will_renew: boolean;
+  source: EntitlementSource;
+  last_event_id: string | null;
+  updated_at: string;
+}
+
+export interface ApplyRevenueCatWebhookInput {
+  event_id: string;
+  account_id: string;
+  type: string;
+  received_at: string;
+  payload_json: string;
+  /** Folded entitlement for this account, or null when the account is unknown. */
+  entitlement: StoredEntitlement | null;
+  /** Accounts that lost the subscription in a TRANSFER. */
+  transfer_sources: StoredEntitlement[];
 }
 
 /**
@@ -224,8 +364,8 @@ export interface AccountVersionStamp {
  *
  * Activity answers daily Usage totals, not devices or observations, so a quota snapshot must
  * not move this stamp. Device count, summed usage revision, and generation still catch
- * deletion and a Usage upload; the Account's `updated_at` is here because a later GitHub
- * sign-in rewrites the row without touching Usage.
+ * deletion and a Usage upload; the Account's `updated_at` is here because a later sign-in can
+ * rewrite the row without touching Usage.
  */
 export interface AccountUsageVersionStamp {
   account_updated_at: string | null;
@@ -233,6 +373,37 @@ export interface AccountUsageVersionStamp {
   usage_revision: number;
   device_generation: number;
 }
+
+/**
+ * One Account's public page, as Relay stores it.
+ *
+ * The row exists as soon as a handle is chosen, whether or not the page is on: turning a page
+ * off must not release the handle, or a reader following an old link would land on someone
+ * else's Usage.
+ */
+export interface PublicProfileRecord {
+  account_id: string;
+  handle: string;
+  enabled: boolean;
+  show_models: boolean;
+  show_cost: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicProfileWriteInput {
+  account_id: string;
+  handle: string;
+  enabled: boolean;
+  show_models: boolean;
+  show_cost: boolean;
+  written_at: string;
+}
+
+/** A handle another Account already holds is the one refusal this write has to state. */
+export type PublicProfileWriteResult =
+  | { outcome: "written"; profile: PublicProfileRecord }
+  | { outcome: "handle_taken" };
 
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
@@ -311,7 +482,30 @@ export interface AccountState {
   consumeAccountLoginGrant(
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult>;
-  createWebSession(input: CreateWebSessionInput): Promise<AccountRecord>;
+  createWebSession(input: CreateWebSessionInput): Promise<void>;
+  createIosSession(input: CreateIosSessionInput): Promise<void>;
+  createEmailChallenge(input: CreateEmailChallengeInput): Promise<void>;
+  /**
+   * Spend a mailed token once. An unknown, already-spent, or unreadable hash is `invalid`; a
+   * hash whose row has passed `expires_at` is `expired`, even if it was never opened.
+   */
+  consumeEmailChallenge(tokenHash: string, now: string): Promise<ConsumeEmailChallengeResult>;
+  /**
+   * The Account this identity reaches, opened when nothing has reached it before.
+   *
+   * The label the provider states now replaces the one stored for that identity, and the Account's
+   * own label follows the identity it was opened with, so a renamed GitHub login or a changed
+   * Apple address is not left frozen at whatever it was on the first sign-in. A stand-in label is
+   * the exception: it fills an empty one and never replaces a name the channel once stated.
+   */
+  resolveSignInIdentity(input: ResolveSignInIdentityInput): Promise<AccountRecord>;
+  linkIdentity(input: LinkIdentityInput): Promise<LinkIdentityOutcome>;
+  listAccountIdentities(accountId: string): Promise<AccountIdentityRecord[]>;
+  unlinkIdentity(
+    accountId: string,
+    provider: IdentityProviderId,
+    now: string,
+  ): Promise<UnlinkIdentityOutcome>;
   /**
    * Resolve a Bearer token to its session.
    *
@@ -351,8 +545,22 @@ export interface AccountState {
     platform: string,
     updatedAt: string,
   ): Promise<boolean>;
+  /** This Account's public page, or null when it has never chosen a handle. */
+  getPublicProfile(accountId: string): Promise<PublicProfileRecord | null>;
+  /** Claim or restate this Account's handle and switches, refusing a handle already claimed. */
+  writePublicProfile(input: PublicProfileWriteInput): Promise<PublicProfileWriteResult>;
+  /**
+   * The Account behind a published handle, matched without regard to case.
+   *
+   * A disabled page answers null here rather than being filtered by the caller: the anonymous
+   * read must not be able to tell a handle that was turned off from one that never existed.
+   */
+  findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
+  getEntitlement(accountId: string): Promise<StoredEntitlement | null>;
+  putEntitlement(row: StoredEntitlement): Promise<void>;
+  applyRevenueCatWebhook(input: ApplyRevenueCatWebhookInput): Promise<"applied" | "duplicate">;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

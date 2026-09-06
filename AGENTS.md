@@ -13,7 +13,7 @@ Read the relevant source before changing that area:
 | System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
-| Collection strategy for all eight providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
+| Collection strategy for all ten providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
 | Observation merge that preserves what each device saw | `docs/decisions/0003-observation-preserving-subscription-merge.md` |
@@ -22,6 +22,7 @@ Read the relevant source before changing that area:
 | Browser-session acquisition, its consent gate, and its bounds | `docs/decisions/0010-provider-browser-session-auth.md` |
 | SvelteKit documents served through the Relay Worker | `docs/decisions/0011-sveltekit-document-worker.md` |
 | Freshness derived from the observation, not stamped on it | `docs/decisions/0017-derived-observation-freshness.md` |
+| Quota pace derived from the reading, and the one phrase every surface prints | `docs/decisions/0035-quota-pace-is-derived-from-the-reading.md` |
 | One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
@@ -33,9 +34,17 @@ Read the relevant source before changing that area:
 | Official price for an unnamed billing channel | `docs/decisions/0029-official-price-for-an-unnamed-channel.md` |
 | A rotation whose successor was never presented did not happen | `docs/decisions/0030-a-rotation-never-received-did-not-happen.md` |
 | The Usage fold of an Account summary is stored, keyed by what it depends on | `docs/decisions/0031-the-usage-fold-is-stored.md` |
+| An Account owns its identities, and every sign-in confirms which Account it is | `docs/decisions/0032-an-account-owns-its-identities.md` |
+| Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
+| Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
+| What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
+| Sessions are a local view of Usage source files | `docs/decisions/0038-sessions-are-a-local-view-of-files.md` |
+| Project attribution stays on This Mac | `docs/decisions/0039-project-attribution-stays-local.md` |
+| Client-folded Usage periods, the `usage_period` IPC operation, and the device-only budget | `docs/decisions/0040-a-period-is-folded-where-its-days-already-are.md` |
 | Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
+| In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |

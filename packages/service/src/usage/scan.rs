@@ -22,9 +22,8 @@ use std::sync::{
 /// Bump it when a parser starts emitting different facts for input it already indexed; a rescan
 /// then re-derives every source and marks only the hours whose facts actually differ.
 ///
-/// v6 resolves the Moonshot and DeepSeek billing channels from registered provider ids, which
-/// previously produced the unknown channel.
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v6";
+/// v7 attributes each fact to a local project basename derived from cwd or the source path.
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v7";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {
@@ -83,6 +82,8 @@ pub(crate) struct ScanParts {
     pub unchanged_source_file_ids: Vec<String>,
     pub deleted_source_file_ids: Vec<String>,
     pub sources: Vec<UsageSourceScan>,
+    /// Basename labels for every discovered file this pass saw, including unchanged ones.
+    pub project_keys: HashMap<String, String>,
 }
 
 pub(crate) trait UsageParser {
@@ -97,6 +98,7 @@ pub(crate) trait UsageParser {
         &mut self,
         value: &serde_json::Map<String, serde_json::Value>,
         source_file_id: &str,
+        source_path: &Path,
     ) -> ParsedLine;
     fn finish(&mut self) -> ParsedLine {
         ParsedLine::empty()
@@ -114,6 +116,8 @@ pub fn scan_local_usage(
         UsageAgent::OpenCode => super::opencode::scan_opencode_usage(options),
         UsageAgent::Pi => super::pi::scan_pi_usage(options),
         UsageAgent::Cursor => super::cursor::scan_cursor_usage(options),
+        UsageAgent::Gemini => super::gemini::scan_gemini_usage(options),
+        UsageAgent::Copilot => super::copilot::scan_copilot_usage(options),
     }
 }
 
@@ -183,6 +187,13 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
                 home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
                 xdg.join("Cursor/User/globalStorage/state.vscdb"),
             ]
+        }
+        UsageAgent::Gemini => {
+            vec![home.join(".gemini").join("tmp")]
+        }
+        UsageAgent::Copilot => {
+            let root = env("COPILOT_HOME").unwrap_or_else(|| home.join(".copilot"));
+            vec![root.join("session-state")]
         }
     }
 }
@@ -311,7 +322,7 @@ pub(crate) fn scan_jsonl_files<P, F>(
 ) -> Result<UsageScanResult, UsageError>
 where
     P: UsageParser,
-    F: Fn() -> P,
+    F: Fn(&LocalUsageFile) -> P,
 {
     let range = parse_range(&options.start_at, &options.end_at)?;
     let discovery_files = discovery.files;
@@ -334,6 +345,7 @@ where
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut records_seen = 0usize;
     let mut stopped = false;
 
@@ -345,6 +357,7 @@ where
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -410,7 +423,7 @@ where
             Some((offset, hasher)) => (offset, Some(hasher)),
             None => (0, None),
         };
-        let mut parser = parser_factory();
+        let mut parser = parser_factory(&file);
         let mut source_records = Vec::new();
         let source_reasons = RefCell::new(Vec::new());
         let mut parsed_offset = resume_at;
@@ -472,7 +485,7 @@ where
                                 return true;
                             }
                         };
-                        let parsed = parser.parse(&object, &current.source_file_id);
+                        let parsed = parser.parse(&object, &current.source_file_id, &file.path);
                         let mut reasons = source_reasons.borrow_mut();
                         ignored_empty_records =
                             ignored_empty_records.saturating_add(collect_parsed(
@@ -571,6 +584,7 @@ where
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     ))
 }
@@ -643,6 +657,7 @@ pub(crate) fn finish_scan(
         unchanged_source_file_ids: parts.unchanged_source_file_ids,
         deleted_source_file_ids: parts.deleted_source_file_ids,
         sources: parts.sources,
+        project_keys: parts.project_keys,
     }
 }
 
@@ -662,6 +677,59 @@ pub(crate) fn source_coverage(
         },
         reasons: reasons.into_iter().take(MAX_COVERAGE_REASONS).collect(),
     }
+}
+
+/// The Usage page's project column is a basename, never a path.
+///
+/// A path under a `projects/` folder — Claude Code, and Cursor's project transcripts — encodes
+/// the workspace, so it resolves through the same rule the Projects fold uses
+/// ([`super::project_key_from_source_path`]) and the two sections name a repository the same way.
+/// Failing that, a generic log (`updates.jsonl`, `opencode.db`, `state.vscdb`, `store.db`) takes
+/// its parent directory and everything else its file stem, which is all an opaque session file
+/// offers.
+pub fn session_project_key(path: &Path) -> String {
+    if let Some(key) = super::project_key_from_source_path(path) {
+        return key;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    let raw = if matches!(
+        file_name,
+        "updates.jsonl" | "opencode.db" | "state.vscdb" | "store.db"
+    ) {
+        path.parent()
+            .and_then(|value| value.file_name())
+            .and_then(|value| value.to_str())
+            .unwrap_or(stem)
+    } else {
+        stem
+    };
+    bound_project_key(raw)
+}
+
+pub(crate) fn remember_project_key(keys: &mut HashMap<String, String>, file: &LocalUsageFile) {
+    keys.insert(file.source_file_id.clone(), session_project_key(&file.path));
+}
+
+fn bound_project_key(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|character| *character != '/' && *character != '\\' && !character.is_control())
+        .collect();
+    if cleaned.is_empty() {
+        return "session".to_owned();
+    }
+    if cleaned.chars().count() <= 128 {
+        return cleaned;
+    }
+    let tail: String = cleaned.chars().rev().take(128).collect();
+    tail.chars().rev().collect()
 }
 
 pub(crate) fn file_index(file: &LocalUsageFile, parser_revision: &str) -> UsageFileIndex {
@@ -932,6 +1000,10 @@ pub(crate) fn accepts_file(agent: UsageAgent, path: &Path) -> bool {
         UsageAgent::Cursor => {
             name.ends_with(".jsonl") || name == "state.vscdb" || name == "store.db"
         }
+        UsageAgent::Gemini => {
+            name.starts_with("session-") && (name.ends_with(".json") || name.ends_with(".jsonl"))
+        }
+        UsageAgent::Copilot => name == "events.jsonl",
     }
 }
 

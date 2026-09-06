@@ -78,4 +78,15 @@ struct PKCETests {
       _ = try OAuthCallback.parse(withToken, expected: attempt)
     }
   }
+
+  @Test
+  func appleNonceKeepsItsValueAndHandsAppleTheDigest() throws {
+    let nonce = try AppleSignIn.generateNonce()
+    #expect(WireValidation.isPKCEVerifier(nonce.value))
+    // Lowercase hexadecimal SHA-256, which is what Relay recomputes from the value.
+    #expect(nonce.digest.count == 64)
+    #expect(nonce.digest.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+    #expect(nonce.digest != nonce.value)
+    #expect(try AppleSignIn.generateNonce().value != nonce.value)
+  }
 }

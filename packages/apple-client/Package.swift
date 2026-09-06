@@ -10,9 +10,13 @@ let package = Package(
   ],
   products: [
     .library(name: "QuotaWire", targets: ["QuotaWire"]),
+    .library(name: "QuotaKeychain", targets: ["QuotaKeychain"]),
     .library(name: "QuotaRelay", targets: ["QuotaRelay"]),
     .library(name: "QuotaAccount", targets: ["QuotaAccount"]),
     .library(name: "QuotaWidgetData", targets: ["QuotaWidgetData"]),
+    .library(name: "QuotaProviderWeb", targets: ["QuotaProviderWeb"]),
+    .library(name: "QuotaProviderSessions", targets: ["QuotaProviderSessions"]),
+    .library(name: "QuotaProviderStatus", targets: ["QuotaProviderStatus"]),
   ],
   dependencies: [
     .package(name: "QuotaAppleShared", path: "../apple-shared")
@@ -20,7 +24,13 @@ let package = Package(
   targets: [
     .target(
       name: "QuotaWire",
-      dependencies: [.product(name: "QuotaPresentation", package: "QuotaAppleShared")]
+      dependencies: [
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+        .product(name: "QuotaObservations", package: "QuotaAppleShared"),
+      ]
+    ),
+    .target(
+      name: "QuotaKeychain"
     ),
     .target(
       name: "QuotaRelay",
@@ -28,15 +38,48 @@ let package = Package(
     ),
     .target(
       name: "QuotaAccount",
-      dependencies: ["QuotaWire", "QuotaRelay"]
+      dependencies: ["QuotaWire", "QuotaRelay", "QuotaKeychain"]
+    ),
+    .target(
+      name: "QuotaProviderWeb",
+      dependencies: ["QuotaWire"]
+    ),
+    .target(
+      name: "QuotaProviderSessions",
+      dependencies: ["QuotaWire", "QuotaKeychain"]
     ),
     .target(
       name: "QuotaWidgetData",
       dependencies: [.product(name: "QuotaPresentation", package: "QuotaAppleShared")]
     ),
+    .target(
+      name: "QuotaProviderStatus",
+      dependencies: [
+        "QuotaWire",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
+    ),
     .testTarget(
       name: "QuotaAppleClientTests",
-      dependencies: ["QuotaWire", "QuotaRelay", "QuotaAccount", "QuotaWidgetData"]
+      dependencies: [
+        "QuotaWire", "QuotaRelay", "QuotaAccount", "QuotaWidgetData", "QuotaKeychain",
+      ]
+    ),
+    .testTarget(
+      name: "QuotaProviderWebTests",
+      dependencies: ["QuotaProviderWeb"]
+    ),
+    .testTarget(
+      name: "QuotaProviderSessionsTests",
+      dependencies: ["QuotaProviderSessions", "QuotaKeychain"]
+    ),
+    .testTarget(
+      name: "QuotaProviderStatusTests",
+      dependencies: [
+        "QuotaProviderStatus",
+        "QuotaWire",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
     ),
   ],
   swiftLanguageModes: [.v6]

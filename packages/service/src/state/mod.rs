@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Duration, SecondsFormat, Timelike};
+use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
 use rusqlite::{
     Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension, Transaction, params,
 };
@@ -37,7 +37,8 @@ use crate::protocol::{
     StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
-    DatedUsageRow, NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanResult,
+    DatedUsageRow, LocalHourlyFact, NormalizedUsageEvent, USAGE_SESSION_RETENTION_DAYS, UsageAgent,
+    UsageFileIndex, UsageRow, UsageScanResult, session_project_key,
 };
 
 mod legacy_import;
@@ -548,6 +549,7 @@ impl StateStore {
         tolerate_invalid_provider_config: bool,
     ) -> Result<StateSnapshot, StateError> {
         let usage_upload_enabled = self.usage_upload_enabled()?;
+        let group_usage_by_project = self.group_usage_by_project()?;
         let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
         let browser_scan_enabled = self.browser_scan_enabled_providers()?;
@@ -572,6 +574,14 @@ impl StateStore {
                 usage_periods.account = Default::default();
             }
             let pricing = read_component(conn, ComponentName::Pricing)?;
+            let providers_component = read_component(conn, ComponentName::Providers)?;
+            let provider_status = crate::provider_status::views_in_catalog_order(
+                &crate::provider_status::readings_from_component(
+                    providers_component
+                        .as_ref()
+                        .and_then(|record| record.value.as_ref()),
+                ),
+            );
             let providers = match read_provider_views(&self.root) {
                 Ok(providers) => providers,
                 Err(_) if tolerate_invalid_provider_config => Vec::new(),
@@ -582,6 +592,7 @@ impl StateStore {
                 ipc_version: IPC_VERSION,
                 revision,
                 usage_upload_enabled,
+                group_usage_by_project,
                 quota_refresh_interval_seconds,
                 usage_periods,
                 quota: quota
@@ -595,6 +606,7 @@ impl StateStore {
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                     .to_wire(),
                 providers,
+                provider_status,
                 provider_browser_sessions,
                 browser_scan_enabled,
                 overview,
@@ -1259,6 +1271,73 @@ impl StateStore {
             )
         })?;
         self.bump_revision()
+    }
+
+    pub fn group_usage_by_project(&self) -> Result<bool, StateError> {
+        self.with_identity(
+            |conn| match preference(conn, "group_usage_by_project")?.as_deref() {
+                Some("1") => Ok(true),
+                Some("0") => Ok(false),
+                _ => Err(StateError::InvalidState),
+            },
+        )
+    }
+
+    pub fn set_group_usage_by_project(&self, enabled: bool) -> Result<u64, StateError> {
+        if self.group_usage_by_project()? == enabled {
+            return self.current_revision();
+        }
+        self.with_identity_mut(|conn| {
+            write_preference(
+                conn,
+                "group_usage_by_project",
+                if enabled { "1" } else { "0" },
+            )
+        })?;
+        self.recompute_all_hourly_facts()?;
+        self.bump_revision()
+    }
+
+    fn recompute_all_hourly_facts(&self) -> Result<(), StateError> {
+        let group_by_project = self.group_usage_by_project()?;
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            let hours = {
+                let mut statement = tx.prepare(
+                    "SELECT agent, bucket, MAX(scan_version) FROM (
+                        SELECT agent, bucket_start_utc AS bucket, MAX(scan_version) AS scan_version
+                        FROM usage_hourly_facts
+                        GROUP BY agent, bucket_start_utc
+                        UNION ALL
+                        SELECT agent, substr(occurred_at, 1, 13) || ':00:00Z', 0
+                        FROM usage_file_records
+                        GROUP BY agent, substr(occurred_at, 1, 13)
+                     )
+                     GROUP BY agent, bucket",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    let agent: String = row.get(0)?;
+                    let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                        rusqlite::Error::InvalidColumnType(
+                            0,
+                            "agent".to_owned(),
+                            rusqlite::types::Type::Text,
+                        )
+                    })?;
+                    Ok((
+                        agent,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? as u64,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (agent, bucket, scan_version) in hours {
+                let _ = recompute_hour(&tx, agent, &bucket, scan_version, group_by_project)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     pub fn quota_refresh_interval_seconds(&self) -> Result<u64, StateError> {
@@ -2182,9 +2261,111 @@ impl StateStore {
             for entry in mapped {
                 let (date, row, row_partial) = entry?;
                 partial = partial || row_partial;
-                rows.push(DatedUsageRow { date, row });
+                rows.push(DatedUsageRow {
+                    date,
+                    project_key: String::new(),
+                    row,
+                });
             }
             Ok((rows, partial))
+        })
+    }
+
+    /// The same period, kept apart by the UTC hour each fact was collected in.
+    ///
+    /// A local day and a local hour are properties of an instant, not of a UTC date, so the
+    /// caller that knows the zone places each hour on the local clock. The `date` a row carries
+    /// stays the UTC date behind it, because that is what prices the row and resolves its model
+    /// alias — the same rule [`Self::usage_period_rows`] follows.
+    pub fn usage_period_hour_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<Vec<(String, DatedUsageRow)>, StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT bucket_start_utc, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests)
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY bucket_start_utc, agent, billing_channel, channel_source, model,
+                          context_bucket, service_tier, speed, inference_geo
+                 ORDER BY bucket_start_utc, agent, billing_channel, model"
+            ))?;
+            let mut rows = Vec::new();
+            let mapped = statement.query_map(params![from, to], |row| {
+                let bucket_start_utc: String = row.get(0)?;
+                Ok((bucket_start_utc, read_grouped_row(row)?))
+            })?;
+            for entry in mapped {
+                let (bucket_start_utc, row) = entry?;
+                let date = bucket_start_utc.get(..10).unwrap_or_default().to_owned();
+                rows.push((
+                    bucket_start_utc,
+                    DatedUsageRow {
+                        date,
+                        project_key: String::new(),
+                        row,
+                    },
+                ));
+            }
+            Ok(rows)
+        })
+    }
+
+    /// Period rows grouped with the local project dimension, for the Projects fold.
+    pub fn usage_period_project_rows(
+        &self,
+        range: Option<(&str, &str)>,
+    ) -> Result<Vec<DatedUsageRow>, StateError> {
+        self.with_cache(|conn| {
+            let (clause, from, to) = match range {
+                Some((start, end)) => (
+                    "WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2",
+                    start.to_owned(),
+                    end.to_owned(),
+                ),
+                None => ("WHERE ?1 = ?1 AND ?2 = ?2", String::new(), String::new()),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT substr(bucket_start_utc, 1, 10) AS date, agent, billing_channel,
+                        channel_source, model, context_bucket, service_tier, speed, inference_geo,
+                        SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens),
+                        SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+                        SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
+                        SUM(web_search_requests), SUM(web_fetch_requests),
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests),
+                        project_key
+                 FROM usage_hourly_facts {clause}
+                 GROUP BY date, agent, billing_channel, channel_source, model, context_bucket,
+                          service_tier, speed, inference_geo, project_key
+                 ORDER BY date, project_key, agent, billing_channel, model"
+            ))?;
+            let mapped = statement.query_map(params![from, to], |row| {
+                let date: String = row.get(0)?;
+                let project_key: String = row.get(21)?;
+                Ok(DatedUsageRow {
+                    date,
+                    project_key,
+                    row: read_grouped_row(row)?,
+                })
+            })?;
+            let mut rows = Vec::new();
+            for entry in mapped {
+                rows.push(entry?);
+            }
+            Ok(rows)
         })
     }
 
@@ -2307,6 +2488,62 @@ impl StateStore {
         })
     }
 
+    /// Local session rows, newest write first. The file-index hash stays here and never
+    /// crosses into a report or an upload.
+    pub fn usage_sessions(&self) -> Result<Vec<StoredUsageSession>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT source_file_id, agent, project_key, started_at, last_activity_at,
+                        messages, tokens_in, tokens_out, cost_micros, top_model
+                 FROM usage_sessions
+                 ORDER BY last_activity_at DESC, source_file_id ASC",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let agent: String = row.get(1)?;
+                let agent = parse_usage_agent(&agent).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        1,
+                        "agent".to_owned(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?;
+                Ok(StoredUsageSession {
+                    source_file_id: row.get(0)?,
+                    agent,
+                    project_key: row.get(2)?,
+                    started_at: row.get(3)?,
+                    last_activity_at: row.get(4)?,
+                    messages: row.get::<_, i64>(5)? as u64,
+                    tokens_in: row.get::<_, i64>(6)? as u64,
+                    tokens_out: row.get::<_, i64>(7)? as u64,
+                    cost_micros: row.get(8)?,
+                    top_model: row.get(9)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StateError::from)
+        })
+    }
+
+    pub fn usage_session_events(
+        &self,
+        source_file_id: &str,
+    ) -> Result<Vec<NormalizedUsageEvent>, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT event_json FROM usage_file_records WHERE source_file_id = ?1
+                 ORDER BY occurred_at ASC, record_key ASC",
+            )?;
+            let rows =
+                statement.query_map(params![source_file_id], |row| row.get::<_, String>(0))?;
+            let mut events = Vec::new();
+            for row in rows {
+                events.push(serde_json::from_str::<NormalizedUsageEvent>(&row?)?);
+            }
+            Ok(events)
+        })
+    }
+
     /// Applies one agent's scan and recomputes only the hours it changed.
     ///
     /// A source is replaced whole, or appended to when the bytes already parsed are still
@@ -2318,11 +2555,18 @@ impl StateStore {
         scan: &UsageScanResult,
         scan_version: u64,
     ) -> Result<u64, StateError> {
+        let group_by_project = self.group_usage_by_project()?;
         self.with_cache_mut(|conn| {
             let tx = conn.transaction()?;
             let mut changed = 0usize;
+            let mut session_changed = 0usize;
             let mut dirty_hours: BTreeSet<String> = BTreeSet::new();
             for source in &scan.sources {
+                let project_key = scan
+                    .project_keys
+                    .get(&source.source.source_file_id)
+                    .cloned()
+                    .unwrap_or_else(|| session_project_key(&source.source.path));
                 if source.coverage.status != crate::usage::CoverageStatus::Complete {
                     // Preserve the last successful rows and merge newly valid records. This keeps
                     // data useful without allowing an incomplete scan to delete facts. The old file
@@ -2356,6 +2600,15 @@ impl StateStore {
                     remember_partial_progress(&tx, agent, source)?;
                     dirty_hours.extend(hours);
                     changed += 1;
+                    if fold_usage_session(
+                        &tx,
+                        agent,
+                        &source.source.source_file_id,
+                        &project_key,
+                        source.source.modified_ns,
+                    )? {
+                        session_changed += 1;
+                    }
                     continue;
                 }
                 // A complete rescan also restores replace semantics for every hour that was
@@ -2409,6 +2662,15 @@ impl StateStore {
                         source.index.prefix_hash,
                     ],
                 )?;
+                if fold_usage_session(
+                    &tx,
+                    agent,
+                    &source.source.source_file_id,
+                    &project_key,
+                    source.source.modified_ns,
+                )? {
+                    session_changed += 1;
+                }
             }
             for source_file_id in &scan.deleted_source_file_ids {
                 dirty_hours.extend(record_hours(&tx, agent, source_file_id)?);
@@ -2424,10 +2686,41 @@ impl StateStore {
                     "DELETE FROM usage_file_index WHERE agent = ?1 AND source_file_id = ?2",
                     params![agent.as_str(), source_file_id],
                 )?;
+                session_changed += tx.execute(
+                    "DELETE FROM usage_sessions WHERE source_file_id = ?1",
+                    params![source_file_id],
+                )?;
             }
+            for source_file_id in &scan.unchanged_source_file_ids {
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM usage_sessions WHERE source_file_id = ?1",
+                    params![source_file_id],
+                    |row| row.get(0),
+                )?;
+                if exists > 0 {
+                    continue;
+                }
+                let Some(project_key) = scan.project_keys.get(source_file_id) else {
+                    continue;
+                };
+                let modified_ns: String = tx
+                    .query_row(
+                        "SELECT modified_ns FROM usage_file_index
+                         WHERE agent = ?1 AND source_file_id = ?2",
+                        params![agent.as_str(), source_file_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or_else(|| "0".to_owned());
+                let modified_ns = modified_ns.parse::<u128>().unwrap_or(0);
+                if fold_usage_session(&tx, agent, source_file_id, project_key, modified_ns)? {
+                    session_changed += 1;
+                }
+            }
+            session_changed += prune_usage_sessions(&tx)?;
             let mut recomputed = 0usize;
             for hour in &dirty_hours {
-                if recompute_hour(&tx, agent, hour, scan_version)? {
+                if recompute_hour(&tx, agent, hour, scan_version, group_by_project)? {
                     recomputed += 1;
                 }
             }
@@ -2436,7 +2729,7 @@ impl StateStore {
             if scan.coverage.status == crate::usage::CoverageStatus::Complete {
                 write_metadata_flag(&tx, REBUILDING_KEY, false)?;
             }
-            if changed == 0 && recomputed == 0 {
+            if changed == 0 && recomputed == 0 && session_changed == 0 {
                 let revision = metadata_u64(&tx, "revision")?;
                 tx.commit()?;
                 return Ok(revision);
@@ -2446,6 +2739,131 @@ impl StateStore {
             Ok(revision)
         })
     }
+}
+
+/// Rebuilds one session from the records that file currently holds.
+///
+/// An appended tail is already in `usage_file_records` by the time this runs, so the fold is
+/// the whole file rather than a running merge, and an empty file drops the row.
+fn fold_usage_session(
+    tx: &rusqlite::Transaction<'_>,
+    agent: UsageAgent,
+    source_file_id: &str,
+    project_key: &str,
+    modified_ns: u128,
+) -> Result<bool, StateError> {
+    let totals: (Option<String>, Option<String>, i64, i64, i64, Option<i64>, i64, i64) = tx
+        .query_row(
+            "SELECT MIN(occurred_at), MAX(occurred_at),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.requests') AS INTEGER)), 0),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER)), 0),
+                    COALESCE(SUM(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER)), 0),
+                    SUM(CAST(json_extract(event_json, '$.source_cost_microusd') AS INTEGER)),
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN json_extract(event_json, '$.source_cost_microusd') IS NULL
+                                      THEN 0 ELSE 1 END), 0)
+             FROM usage_file_records WHERE agent = ?1 AND source_file_id = ?2",
+            params![agent.as_str(), source_file_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )?;
+    let (
+        Some(started_at),
+        Some(last_event_at),
+        messages,
+        tokens_in,
+        tokens_out,
+        source_cost,
+        count,
+        costed,
+    ) = totals
+    else {
+        let removed = tx.execute(
+            "DELETE FROM usage_sessions WHERE source_file_id = ?1",
+            params![source_file_id],
+        )?;
+        return Ok(removed > 0);
+    };
+    let last_activity_at = match rfc3339_from_nanos(modified_ns) {
+        Some(mtime) if mtime.as_str() > last_event_at.as_str() => mtime,
+        _ => last_event_at,
+    };
+    let cost_micros = if count == costed { source_cost } else { None };
+    let top_model: Option<String> = tx
+        .query_row(
+            "SELECT json_extract(event_json, '$.model') AS model
+             FROM usage_file_records
+             WHERE agent = ?1 AND source_file_id = ?2
+             GROUP BY model
+             ORDER BY SUM(
+                 CAST(json_extract(event_json, '$.input_tokens') AS INTEGER) +
+                 CAST(json_extract(event_json, '$.output_tokens') AS INTEGER)
+             ) DESC, model ASC
+             LIMIT 1",
+            params![agent.as_str(), source_file_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten()
+        .filter(|value: &String| !value.is_empty());
+    let written = tx.execute(
+        "INSERT INTO usage_sessions(
+            source_file_id, agent, project_key, started_at, last_activity_at,
+            messages, tokens_in, tokens_out, cost_micros, top_model
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(source_file_id) DO UPDATE SET
+            agent = excluded.agent,
+            project_key = excluded.project_key,
+            started_at = excluded.started_at,
+            last_activity_at = excluded.last_activity_at,
+            messages = excluded.messages,
+            tokens_in = excluded.tokens_in,
+            tokens_out = excluded.tokens_out,
+            cost_micros = excluded.cost_micros,
+            top_model = excluded.top_model",
+        params![
+            source_file_id,
+            agent.as_str(),
+            project_key,
+            started_at,
+            last_activity_at,
+            messages,
+            tokens_in,
+            tokens_out,
+            cost_micros,
+            top_model,
+        ],
+    )?;
+    Ok(written > 0)
+}
+
+fn prune_usage_sessions(tx: &rusqlite::Transaction<'_>) -> Result<usize, StateError> {
+    let cutoff = (Utc::now() - Duration::days(USAGE_SESSION_RETENTION_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    Ok(tx.execute(
+        "DELETE FROM usage_sessions WHERE last_activity_at < ?1",
+        params![cutoff],
+    )?)
+}
+
+fn rfc3339_from_nanos(ns: u128) -> Option<String> {
+    if ns == 0 {
+        return None;
+    }
+    let secs = i64::try_from(ns / 1_000_000_000).ok()?;
+    let nsecs = u32::try_from(ns % 1_000_000_000).ok()?;
+    DateTime::<Utc>::from_timestamp(secs, nsecs)
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
 /// Remembers how far a source this scan could not finish was read.
@@ -2537,6 +2955,21 @@ fn browser_sessions_equivalent(
     left_keys == right_keys
 }
 
+/// One local session file, folded from the records that file already indexed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredUsageSession {
+    pub source_file_id: String,
+    pub agent: UsageAgent,
+    pub project_key: String,
+    pub started_at: String,
+    pub last_activity_at: String,
+    pub messages: u64,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cost_micros: Option<i64>,
+    pub top_model: Option<String>,
+}
+
 /// One staged upload: an hour, the version of the scan behind it, and its rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageOutboxEntry {
@@ -2548,12 +2981,24 @@ pub struct UsageOutboxEntry {
 }
 
 const FACT_ROW_QUERY: &str = "SELECT agent, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, SUM(input_tokens), SUM(cache_read_tokens),
+            SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
+            SUM(output_tokens), SUM(reasoning_tokens), SUM(requests), SUM(web_search_requests),
+            SUM(web_fetch_requests), SUM(source_cost_microusd), SUM(source_cost_covered_requests)
+     FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
+     GROUP BY agent, billing_channel, channel_source, model, context_bucket, service_tier, speed,
+              inference_geo
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+
+const LOCAL_FACT_QUERY: &str =
+    "SELECT agent, billing_channel, channel_source, model, context_bucket,
             service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
             cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
             output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-            source_cost_microusd, source_cost_covered_requests
+            source_cost_microusd, source_cost_covered_requests, project_key
      FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2
-     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo";
+     ORDER BY billing_channel, model, context_bucket, service_tier, speed, inference_geo,
+              project_key";
 
 fn read_outbox(
     conn: &Connection,
@@ -2606,6 +3051,13 @@ fn read_outbox(
 
 fn read_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageRow> {
     read_row_at(row, 0)
+}
+
+fn read_local_fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalHourlyFact> {
+    Ok(LocalHourlyFact {
+        row: read_row_at(row, 0)?,
+        project_key: row.get(20)?,
+    })
 }
 
 /// The grouped period projection names the date first, so its row columns start one later.
@@ -2679,6 +3131,8 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
         "opencode" => UsageAgent::OpenCode,
         "pi" => UsageAgent::Pi,
         "cursor" => UsageAgent::Cursor,
+        "gemini" => UsageAgent::Gemini,
+        "copilot" => UsageAgent::Copilot,
         _ => return None,
     })
 }
@@ -2744,6 +3198,7 @@ fn recompute_hour(
     agent: UsageAgent,
     bucket_start_utc: &str,
     scan_version: u64,
+    group_by_project: bool,
 ) -> Result<bool, StateError> {
     let start =
         DateTime::parse_from_rfc3339(bucket_start_utc).map_err(|_| StateError::InvalidState)?;
@@ -2761,9 +3216,15 @@ fn recompute_hour(
     drop(statement);
     let mut events = Vec::with_capacity(stored.len());
     for value in &stored {
-        events.push(serde_json::from_str::<NormalizedUsageEvent>(value)?);
+        let mut event = serde_json::from_str::<NormalizedUsageEvent>(value)?;
+        if !group_by_project {
+            event.project_key = None;
+        }
+        events.push(event);
     }
-    let rows = crate::usage::aggregate_hour_rows(&events)
+    let facts =
+        crate::usage::aggregate_hourly_facts(&events).map_err(|_| StateError::InvalidState)?;
+    let rows = crate::usage::fold_project_dimension(facts.clone())
         .and_then(|rows| {
             crate::usage::fold_rows_into_other(rows, crate::usage::MAX_USAGE_ROWS_PER_HOUR)
         })
@@ -2774,10 +3235,16 @@ fn recompute_hour(
         |row| row.get(0),
     )?;
     let partial = partial > 0;
-    // An hour whose facts came out the same is the same hour. Restamping it would spend a
-    // scan version and send an upload that says nothing.
+    let mut stored = tx.prepare(LOCAL_FACT_QUERY)?;
+    let previous_facts = stored
+        .query_map(
+            params![agent.as_str(), bucket_start_utc],
+            read_local_fact_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stored);
     let mut stored = tx.prepare(FACT_ROW_QUERY)?;
-    let previous = stored
+    let previous_upload = stored
         .query_map(params![agent.as_str(), bucket_start_utc], read_fact_row)?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stored);
@@ -2789,56 +3256,61 @@ fn recompute_hour(
         )
         .optional()?
         .flatten();
-    if previous == rows && previous_partial.map(|value| value != 0).unwrap_or(false) == partial {
+    let partial_changed = previous_partial.map(|value| value != 0).unwrap_or(false) != partial;
+    if previous_facts == facts && !partial_changed {
         return Ok(false);
     }
     tx.execute(
         "DELETE FROM usage_hourly_facts WHERE agent = ?1 AND bucket_start_utc = ?2",
         params![agent.as_str(), bucket_start_utc],
     )?;
-    for row in &rows {
-        let source_cost = match &row.source_cost_microusd {
+    for fact in &facts {
+        let source_cost = match &fact.row.source_cost_microusd {
             Some(value) => Some(value.parse::<i64>().map_err(|_| StateError::InvalidState)?),
             None => None,
         };
         tx.execute(
             "INSERT INTO usage_hourly_facts(
                 agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
-                service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+                service_tier, speed, inference_geo, project_key, input_tokens, cache_read_tokens,
                 cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
                 output_tokens, reasoning_tokens, requests, web_search_requests,
                 web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
                 partial, scan_version
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                       ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 agent.as_str(),
                 bucket_start_utc,
-                row.billing_channel.as_str(),
-                serde_json::to_value(row.channel_source)?
+                fact.row.billing_channel.as_str(),
+                serde_json::to_value(fact.row.channel_source)?
                     .as_str()
                     .unwrap_or_default(),
-                row.model,
-                row.context_bucket.as_str(),
-                row.service_tier,
-                row.speed,
-                row.inference_geo,
-                row.input_tokens as i64,
-                row.cache_read_tokens as i64,
-                row.cache_write_5m_tokens as i64,
-                row.cache_write_1h_tokens as i64,
-                row.cache_write_inferred_tokens as i64,
-                row.output_tokens as i64,
-                row.reasoning_tokens as i64,
-                row.requests as i64,
-                row.web_search_requests as i64,
-                row.web_fetch_requests as i64,
+                fact.row.model,
+                fact.row.context_bucket.as_str(),
+                fact.row.service_tier,
+                fact.row.speed,
+                fact.row.inference_geo,
+                fact.project_key,
+                fact.row.input_tokens as i64,
+                fact.row.cache_read_tokens as i64,
+                fact.row.cache_write_5m_tokens as i64,
+                fact.row.cache_write_1h_tokens as i64,
+                fact.row.cache_write_inferred_tokens as i64,
+                fact.row.output_tokens as i64,
+                fact.row.reasoning_tokens as i64,
+                fact.row.requests as i64,
+                fact.row.web_search_requests as i64,
+                fact.row.web_fetch_requests as i64,
                 source_cost,
-                row.source_cost_covered_requests as i64,
+                fact.row.source_cost_covered_requests as i64,
                 i64::from(partial),
                 scan_version as i64,
             ],
         )?;
+    }
+    if previous_upload == rows && !partial_changed {
+        return Ok(false);
     }
     tx.execute(
         "INSERT INTO usage_dirty_hours(agent, bucket_start_utc, scan_version, partial)
@@ -3409,6 +3881,7 @@ fn error_code_key(value: ErrorCode) -> &'static str {
         ErrorCode::AuthenticationRequired => "authentication_required",
         ErrorCode::DeviceDeleted => "device_deleted",
         ErrorCode::StaleGeneration => "stale_generation",
+        ErrorCode::SubscriptionRequired => "subscription_required",
         ErrorCode::Unavailable => "unavailable",
         ErrorCode::ProviderError => "provider_error",
         ErrorCode::NetworkError => "network_error",
@@ -3428,6 +3901,7 @@ fn parse_error_code(value: &str) -> Option<ErrorCode> {
         "authentication_required" => ErrorCode::AuthenticationRequired,
         "device_deleted" => ErrorCode::DeviceDeleted,
         "stale_generation" => ErrorCode::StaleGeneration,
+        "subscription_required" => ErrorCode::SubscriptionRequired,
         "unavailable" => ErrorCode::Unavailable,
         "provider_error" => ErrorCode::ProviderError,
         "network_error" => ErrorCode::NetworkError,
@@ -4020,6 +4494,7 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::SubscriptionRequired => "subscription_required",
     }
 }
 
@@ -4040,6 +4515,7 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
+        "subscription_required" => Ok(DiagnosticAttemptCode::SubscriptionRequired),
         _ => Err(invalid_diagnostic_column(9, value)),
     }
 }
@@ -4585,6 +5061,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_status_is_a_field_of_the_providers_component() {
+        let root = std::env::temp_dir().join(format!("quota-provider-status-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let mut readings = std::collections::BTreeMap::new();
+        readings.insert(
+            "codex".to_owned(),
+            crate::provider_status::ProviderStatusReading {
+                provider: "codex".to_owned(),
+                indicator: "minor".to_owned(),
+                description: "Partial System Outage".to_owned(),
+                checked_at: "2026-09-06T00:00:00Z".to_owned(),
+            },
+        );
+        store
+            .set_component(
+                ComponentName::Providers,
+                ComponentStatus::Ready,
+                Some(crate::provider_status::component_value(&readings)),
+                Some("2026-09-06T00:00:00Z".to_owned()),
+                None,
+                false,
+            )
+            .expect("write");
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.provider_status.len(), 1);
+        assert_eq!(snapshot.provider_status[0].provider, "codex");
+        assert_eq!(snapshot.provider_status[0].indicator, "minor");
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn account_usage_period_cache_keeps_available_windows_without_all_four() {
         let root = std::env::temp_dir().join(format!("quota-account-usage-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -4669,6 +5178,73 @@ mod tests {
         ));
         assert_eq!(store.model_catalog().expect("lkg"), Some(value));
         assert_eq!(store.model_catalog_etag().expect("lkg etag"), None);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn local_hour_facts_keep_project_key_and_upload_rows_do_not() {
+        let root = std::env::temp_dir().join(format!("quota-project-upload-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        assert!(store.snapshot().expect("snapshot").group_usage_by_project);
+
+        let mut quota = usage_event("2026-08-10T12:15:00Z", 10);
+        quota.project_key = Some("Quota".into());
+        let mut other = usage_event("2026-08-10T12:20:00Z", 7);
+        other.project_key = Some("OtherApp".into());
+        store
+            .apply_usage_scan(UsageAgent::Codex, &usage_scan(vec![quota, other], 1), 1)
+            .expect("scan");
+
+        let upload_rows = store
+            .usage_hour_rows(UsageAgent::Codex, "2026-08-10T12:00:00Z")
+            .expect("upload rows");
+        assert_eq!(upload_rows.len(), 1);
+        assert_eq!(upload_rows[0].input_tokens, 17);
+        let encoded = serde_json::to_value(&upload_rows[0]).expect("row json");
+        assert!(
+            encoded.get("project_key").is_none(),
+            "upload rows must not name project_key: {encoded}"
+        );
+
+        let project_rows = store.usage_period_project_rows(None).expect("project rows");
+        let mut keys: Vec<_> = project_rows
+            .iter()
+            .map(|row| row.project_key.as_str())
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["OtherApp", "Quota"]);
+
+        let dirty = dirty_hours(&store);
+        assert_eq!(dirty.len(), 1);
+        let payload = serde_json::to_string(&dirty[0].rows).expect("upload rows");
+        assert!(
+            !payload.contains("project_key"),
+            "upload payload must not name project_key: {payload}"
+        );
+        assert!(
+            !payload.contains("Quota") && !payload.contains("OtherApp"),
+            "upload payload must not carry project basenames: {payload}"
+        );
+
+        store
+            .set_group_usage_by_project(false)
+            .expect("disable grouping");
+        assert!(!store.snapshot().expect("snapshot").group_usage_by_project);
+        let collapsed = store.usage_period_project_rows(None).expect("collapsed");
+        assert!(collapsed.iter().all(|row| row.project_key.is_empty()));
+
+        store
+            .set_group_usage_by_project(true)
+            .expect("enable grouping");
+        let restored = store.usage_period_project_rows(None).expect("restored");
+        let mut restored_keys: Vec<_> = restored
+            .iter()
+            .map(|row| row.project_key.as_str())
+            .collect();
+        restored_keys.sort();
+        assert_eq!(restored_keys, ["OtherApp", "Quota"]);
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -5040,6 +5616,90 @@ mod tests {
             3,
             "{rows:?}"
         );
+        let sessions = store.usage_sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].messages, 2);
+        assert_eq!(sessions[0].tokens_in, 3);
+        assert_eq!(sessions[0].project_key, "usage");
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_scan_folds_sessions_from_files_and_drops_them_after_ninety_days() {
+        let root = std::env::temp_dir().join(format!("quota-usage-sessions-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let store = StateStore::open(&root).expect("state");
+        let started_at = crate::usage::canonical_instant(
+            &(Utc::now() - Duration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        )
+        .expect("started");
+        let continued_at = crate::usage::canonical_instant(
+            &(Utc::now() - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        )
+        .expect("continued");
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event(&started_at, 4)], 1),
+                1,
+            )
+            .expect("initial scan");
+        let sessions = store.usage_sessions().expect("sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent, UsageAgent::Codex);
+        assert_eq!(sessions[0].tokens_in, 4);
+        assert_eq!(sessions[0].tokens_out, 1);
+        assert_eq!(sessions[0].messages, 1);
+        assert_eq!(sessions[0].top_model.as_deref(), Some("gpt-5"));
+        assert_eq!(sessions[0].started_at, started_at);
+        assert!(sessions[0].source_file_id == "source-1");
+
+        let mut appended = usage_scan(vec![usage_event(&continued_at, 6)], 2);
+        appended.sources[0].append = true;
+        appended.sources[0].record_keys = vec!["line:64:0".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &appended, 2)
+            .expect("append scan");
+        let sessions = store.usage_sessions().expect("appended");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].messages, 2);
+        assert_eq!(sessions[0].tokens_in, 10);
+        assert_eq!(sessions[0].started_at, started_at);
+        assert_eq!(sessions[0].last_activity_at, continued_at);
+
+        {
+            let conn = store.cache.lock().expect("cache");
+            conn.execute(
+                "INSERT INTO usage_sessions(
+                    source_file_id, agent, project_key, started_at, last_activity_at,
+                    messages, tokens_in, tokens_out, cost_micros, top_model
+                 ) VALUES (
+                    'old-file', 'codex', 'stale', '2020-01-01T00:00:00.000Z',
+                    '2020-01-02T00:00:00.000Z', 1, 1, 1, NULL, 'gpt-5'
+                 )",
+                [],
+            )
+            .expect("old session");
+        }
+        store
+            .apply_usage_scan(
+                UsageAgent::Codex,
+                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 4)], 3),
+                3,
+            )
+            .expect("prune scan");
+        let sessions = store.usage_sessions().expect("pruned");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source_file_id, "source-1");
+
+        let mut deleted = usage_scan(Vec::new(), 4);
+        deleted.sources.clear();
+        deleted.deleted_source_file_ids = vec!["source-1".into()];
+        store
+            .apply_usage_scan(UsageAgent::Codex, &deleted, 4)
+            .expect("delete scan");
+        assert!(store.usage_sessions().expect("gone").is_empty());
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -5240,6 +5900,30 @@ mod tests {
         let (all, partial) = store.usage_period_rows(None).expect("all");
         assert!(!partial);
         assert_eq!(all.iter().map(|row| row.input_tokens).sum::<u64>(), 7);
+
+        // The same span, kept apart by hour: the totals are the period's, and every fact still
+        // carries the UTC date that prices it.
+        let span = crate::service::backend::usage_period_window(
+            crate::protocol::UsagePeriod::Today,
+            "Asia/Singapore",
+            now,
+        )
+        .expect("window")
+        .1
+        .expect("span");
+        let hours = store
+            .usage_period_hour_rows(Some((&span.start, &span.end)))
+            .expect("hours");
+        assert_eq!(
+            hours.iter().map(|(_, row)| row.input_tokens).sum::<u64>(),
+            6
+        );
+        assert!(hours.len() >= local.len());
+        assert!(
+            hours
+                .iter()
+                .all(|(bucket, row)| bucket.starts_with(&row.date))
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -5720,6 +6404,7 @@ mod tests {
             billable_tools: BillableTools::default(),
             source_cost_microusd: None,
             source_cost_covered_requests: 0,
+            project_key: None,
         }
     }
 
@@ -5731,6 +6416,10 @@ mod tests {
             modified_ns,
             identity: "identity-1".into(),
         };
+        let project_keys = HashMap::from([(
+            source.source_file_id.clone(),
+            crate::usage::session_project_key(&source.path),
+        )]);
         UsageScanResult {
             records: Vec::new(),
             coverage: ScanCoverage {
@@ -5768,6 +6457,7 @@ mod tests {
                     reasons: Vec::new(),
                 },
             }],
+            project_keys,
         }
     }
 }

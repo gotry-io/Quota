@@ -1,5 +1,9 @@
+import AuthenticationServices
 import Foundation
 import QuotaAccount
+import QuotaProviderSessions
+import QuotaPresentation
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -31,6 +35,56 @@ struct AppModelTests {
         lastObservedAt: now.addingTimeInterval(-120)
       ).activity(now: now).status == .active)
     #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
+  }
+
+  /// Apple is handed the nonce's digest and this device keeps the value, so a token minted for
+  /// some earlier request proves nothing about this one.
+  @Test
+  func appleRequestAsksForTheAddressAndCarriesADigestedNonce() {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    let request = ASAuthorizationAppleIDProvider().createRequest()
+
+    model.prepareAppleRequest(request)
+    #expect(request.requestedScopes == [.fullName, .email])
+    let nonce = request.nonce ?? ""
+    #expect(nonce.count == 64)
+    #expect(nonce.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+
+    let second = ASAuthorizationAppleIDProvider().createRequest()
+    model.prepareAppleRequest(second)
+    #expect(second.nonce != request.nonce)
+  }
+
+  /// Cancelling at Apple is where the person started, not a failure with a sentence under it.
+  @Test
+  func cancellingAtAppleIsSignedOutWithNothingSaid() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.canceled)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner == nil)
+    #expect(model.expiredMessage == nil)
+  }
+
+  @Test
+  func aFailedAppleSheetSaysTheOneConnectFailureSentence() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+    model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.failed)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
+  }
+
+  /// A result arriving with no request behind it is not this device's round trip.
+  @Test
+  func anAppleResultWithoutARequestProvesNothing() async {
+    let model = makeModel(session: nil, cache: nil, exchanges: [])
+
+    await model.connectWithApple(.failure(ASAuthorizationError(.canceled)))
+    #expect(model.phase == .signedOut)
+    #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
   }
 
   @Test
@@ -74,6 +128,29 @@ struct AppModelTests {
     #expect(model.banner == nil)
     #expect(scheduler.scheduleCount == 0)
     #expect(scheduler.cancelCount == 1)
+  }
+
+  @Test
+  func refreshStoresLastGoodProviderStatusFromThisDevice() async {
+    let client = ScriptedProviderStatusClient(
+      readings: [
+        ProviderStatusReading(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: Date(timeIntervalSince1970: 0)
+        )
+      ]
+    )
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      providerStatusClient: client
+    )
+    #expect(await model.refresh() == false)
+    #expect(model.providerStatus[.claude]?.indicator == .minor)
+    #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
   }
 
   @Test
@@ -401,7 +478,7 @@ struct AppModelTests {
     #expect(authenticator.lastPresentPrefersEphemeral == false)
     #expect(
       authenticator.lastPresentURL?.absoluteString
-        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
   }
 
@@ -839,6 +916,10 @@ func makeModel(
   alertCoordinator: AlertCoordinator? = nil,
   alertRulesStore: IOSAlertRulesStore? = nil,
   notificationCenter: (any NotificationCentering)? = nil,
+  providerSessions: any ProviderSessionStoring = MemoryProviderSessionStore(),
+  localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
+  localCollector: LocalCollector? = nil,
+  providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
   now: @escaping @Sendable () -> Date = { Date() }
 ) -> AppModel {
   AppModel(
@@ -856,8 +937,21 @@ func makeModel(
     alertCoordinator: alertCoordinator,
     alertRulesStore: alertRulesStore,
     notificationCenter: notificationCenter,
+    providerSessions: providerSessions,
+    localStore: localStore,
+    localCollector: localCollector
+      ?? LocalCollector(sessions: providerSessions, collectors: { _, _ in nil }, now: now),
+    providerStatusClient: providerStatusClient,
     now: now
   )
+}
+
+private struct ScriptedProviderStatusClient: ProviderStatusServing {
+  let readings: [ProviderStatusReading]
+
+  func refresh() async -> [ProviderStatusReading] {
+    readings
+  }
 }
 
 private func decodeSummary() throws -> AccountSummary {
@@ -961,7 +1055,28 @@ enum Fixtures {
     return formatter.date(from: value)!
   }
 
-  static func accountSummaryJSON(accountID: String = "account_01") throws -> Data {
+  /// The paid-sync entitlement a summary carries. Defaults to active so the tests that are not
+  /// about sync keep reading a signed-in Account with sync on.
+  static func entitlement(
+    status: String = "active",
+    expiresAt: String? = "2026-09-14T12:00:00Z",
+    willRenew: Bool = true
+  ) -> [String: Any] {
+    [
+      "status": status,
+      "expires_at": expiresAt as Any? ?? NSNull(),
+      "will_renew": willRenew,
+      "product_id": "quota_sync_monthly",
+      "store": "app_store",
+      "stale": false,
+    ]
+  }
+
+  static func accountSummaryJSON(
+    accountID: String = "account_01",
+    entitlement: [String: Any]? = nil
+  ) throws -> Data {
+    let entitlement = entitlement ?? Self.entitlement()
     let period: [String: Any] = [
       "totals": [
         "total_tokens": 1200,
@@ -984,6 +1099,11 @@ enum Fixtures {
         "assumptions": ["agent_default_channel"],
         "unpriced": [],
       ] as [String: Any],
+      "cache_saved": [
+        "amount_microusd": "0",
+        "status": "complete",
+        "unpriced_rows": 0,
+      ] as [String: Any],
       "partial": false,
       "agents": [],
     ]
@@ -1005,6 +1125,7 @@ enum Fixtures {
         ],
         "pricing_revision": "pricing_1",
         "model_catalog_revision": "models_1",
+        "entitlement": entitlement,
       ] as [String: Any]
     )
   }

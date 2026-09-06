@@ -1,10 +1,13 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
+import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { memoizeWebSessionAuthorization } from "../src/account/web-session.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
+import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
+import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import {
   documentSsrFailureResponse,
   memoizeWebDocumentPort,
@@ -73,30 +76,34 @@ describe("web document port", () => {
   it("returns a viewer only when the session and domain account both exist", async () => {
     const state = new D1AccountState(env.DB);
     await env.DB.prepare(
-      "INSERT INTO accounts (id, identity_subject, display_label, created_at, updated_at) VALUES (?1, ?1, ?2, ?3, ?3)",
+      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
     )
       .bind("account_1", "octocat", now.toISOString())
       .run();
     expect(
-      await createWebDocumentPort({ state, webSessions: signedOutWebSessions }).getViewer(
-        new Headers(),
-      ),
+      await createWebDocumentPort(
+        documentPortInput({ state, webSessions: signedOutWebSessions }),
+      ).getViewer(new Headers()),
     ).toBeNull();
 
-    const port = createWebDocumentPort({
-      state,
-      webSessions: new SignedInWebSessionStub("account_1", now),
-      now: () => now,
-    });
+    const port = createWebDocumentPort(
+      documentPortInput({
+        state,
+        webSessions: new SignedInWebSessionStub("account_1", now),
+        now: () => now,
+      }),
+    );
     expect(await port.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" }))).toEqual({
       displayLabel: "octocat",
     });
 
-    const orphaned = createWebDocumentPort({
-      state,
-      webSessions: new SignedInWebSessionStub("account_gone", now),
-      now: () => now,
-    });
+    const orphaned = createWebDocumentPort(
+      documentPortInput({
+        state,
+        webSessions: new SignedInWebSessionStub("account_gone", now),
+        now: () => now,
+      }),
+    );
     expect(
       await orphaned.getViewer(new Headers({ Cookie: "__Host-quota_session=secret" })),
     ).toBeNull();
@@ -129,6 +136,9 @@ describe("document SSR observability", () => {
         calls += 1;
         return { displayLabel: "octocat" };
       },
+      async readPublicProfile() {
+        return null;
+      },
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
@@ -147,6 +157,9 @@ describe("document SSR observability", () => {
       async getViewer() {
         calls += 1;
         throw new Error("session store unavailable");
+      },
+      async readPublicProfile() {
+        return null;
       },
     });
     await expect(memoized.port.getViewer(new Headers())).rejects.toThrow(
@@ -171,6 +184,9 @@ describe("document SSR observability", () => {
           async getViewer() {
             calls += 1;
             throw new Error("session store unavailable");
+          },
+          async readPublicProfile() {
+            return null;
           },
         },
         async (document) => {
@@ -210,6 +226,9 @@ describe("document SSR observability", () => {
           async getViewer() {
             return { displayLabel: "octocat" };
           },
+          async readPublicProfile() {
+            return null;
+          },
         },
         async (document) => {
           await document.getViewer(new Headers());
@@ -244,3 +263,13 @@ describe("document SSR observability", () => {
     expect(response.headers.get("ETag")).toBeNull();
   });
 });
+
+/** The document port's account inputs, with the two catalogs a public page is folded against. */
+function documentPortInput<Input extends object>(input: Input) {
+  return {
+    ...input,
+    usageState: new D1UsageState(env.DB),
+    catalog: PRICING_CATALOG,
+    modelCatalog: MODEL_CATALOG,
+  };
+}

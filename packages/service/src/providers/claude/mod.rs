@@ -619,22 +619,64 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     ) {
         windows.push(window);
     }
-    let extra = obj_get(value, "extra_usage").or_else(|| obj_get(value, "extraUsage"));
-    if let Some(utilization) = extra.and_then(|v| number(obj_get(v, "utilization"))) {
-        windows.push(QuotaWindow {
-            id: "extra_usage".to_owned(),
-            title: "Extra Usage".to_owned(),
-            used_percent: clamp_percent(utilization),
-            resets_at: None,
-            duration_seconds: None,
-            primary_cadence: None,
-            remaining_value: None,
-            limit_value: None,
-            value_unit: None,
-        });
+    if let Some(window) =
+        map_extra_usage(obj_get(value, "extra_usage").or_else(|| obj_get(value, "extraUsage")))
+    {
+        windows.push(window);
     }
     inherit_weekly_reset(&mut windows, &weekly_group);
     windows
+}
+
+/// Extra usage is a monthly USD spend cap. Anthropic reports `used_credits` and
+/// `monthly_limit` in cents; utilization may be null when the cap is enabled.
+fn map_extra_usage(value: Option<&Value>) -> Option<QuotaWindow> {
+    let extra = value?;
+    if obj_get_any(extra, &["is_enabled", "isEnabled"]).and_then(|v| v.as_bool()) == Some(false) {
+        return None;
+    }
+    let used_credits = number(obj_get_any(extra, &["used_credits", "usedCredits"]));
+    let monthly_limit = number(obj_get_any(extra, &["monthly_limit", "monthlyLimit"]));
+    let utilization = number(obj_get(extra, "utilization"));
+    if let (Some(used), Some(limit)) = (used_credits, monthly_limit) {
+        if !(used.is_finite() && limit.is_finite()) {
+            return None;
+        }
+        if limit <= 0.0 && used <= 0.0 {
+            return None;
+        }
+        let used_usd = used / 100.0;
+        let limit_usd = (limit / 100.0).max(0.0);
+        let used_percent = utilization.unwrap_or_else(|| {
+            if limit > 0.0 {
+                clamp_percent(used / limit * 100.0)
+            } else {
+                0.0
+            }
+        });
+        return Some(QuotaWindow {
+            id: "extra_usage".to_owned(),
+            title: "Extra Usage".to_owned(),
+            used_percent: clamp_percent(used_percent),
+            resets_at: None,
+            duration_seconds: None,
+            primary_cadence: None,
+            remaining_value: Some((limit_usd - used_usd).max(0.0)),
+            limit_value: Some(limit_usd),
+            value_unit: Some("usd"),
+        });
+    }
+    Some(QuotaWindow {
+        id: "extra_usage".to_owned(),
+        title: "Extra Usage".to_owned(),
+        used_percent: clamp_percent(utilization?),
+        resets_at: None,
+        duration_seconds: None,
+        primary_cadence: None,
+        remaining_value: None,
+        limit_value: None,
+        value_unit: None,
+    })
 }
 
 fn usage_window(
@@ -987,10 +1029,36 @@ mod tests {
             "extra_usage": {"utilization": 12.5}
         }));
         assert!(windows.iter().any(|window| window.id == "seven_day"));
+        let extra = windows
+            .iter()
+            .find(|window| window.id == "extra_usage")
+            .expect("extra usage");
+        assert_eq!(extra.title, "Extra Usage");
+        assert_eq!(extra.used_percent, 12.5);
+        assert_eq!(extra.remaining_value, None);
+
+        let dollars = map_usage(&serde_json::json!({
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": 10000,
+                "used_credits": 1250,
+                "utilization": null
+            }
+        }));
+        let extra = dollars
+            .iter()
+            .find(|window| window.id == "extra_usage")
+            .expect("extra usage dollars");
+        assert_eq!(extra.used_percent, 12.5);
+        assert_eq!(extra.remaining_value, Some(87.5));
+        assert_eq!(extra.limit_value, Some(100.0));
+        assert_eq!(extra.value_unit, Some("usd"));
         assert!(
-            windows
-                .iter()
-                .any(|window| window.id == "extra_usage" && window.title == "Extra Usage")
+            map_usage(&serde_json::json!({
+                "extra_usage": {"is_enabled": false, "monthly_limit": 10000, "used_credits": 0}
+            }))
+            .iter()
+            .all(|window| window.id != "extra_usage")
         );
         let aliased = map_usage(&serde_json::json!({
             "five_hour": {"utilization_pct": 10, "reset_at": "2026-08-09T12:00:00Z"}

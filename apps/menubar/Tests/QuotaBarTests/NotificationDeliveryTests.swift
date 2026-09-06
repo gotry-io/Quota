@@ -10,11 +10,13 @@ struct UserNotificationSinkTests {
     let resetsAt = Date(timeIntervalSince1970: 1_786_300_000)
     #expect(
       AlertDedupKey(
+        kind: .threshold,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: resetsAt, threshold: 20
       ).requestIdentifier == "threshold:ccfc96629357:weekly:1786300000:20"
     )
     #expect(
       AlertDedupKey(
+        kind: .reset,
         selector: "ccfc96629357", windowID: "weekly", resetsAt: resetsAt, threshold: nil
       ).requestIdentifier == "reset:ccfc96629357:weekly:1786300000"
     )
@@ -46,6 +48,7 @@ struct UserNotificationSinkTests {
     #expect(
       request.identifier
         == AlertDedupKey(
+          kind: .threshold,
           selector: "ccfc96629357",
           windowID: "weekly",
           resetsAt: now.addingTimeInterval(42 * 60),
@@ -132,6 +135,7 @@ struct ResetReminderSchedulerTests {
     #expect(
       request.identifier
         == AlertDedupKey(
+          kind: .reset,
           selector: selector, windowID: "weekly", resetsAt: resetsAt, threshold: nil
         ).requestIdentifier
     )
@@ -189,6 +193,7 @@ struct ResetReminderSchedulerTests {
     #expect(
       center.pending.first?.identifier
         == AlertDedupKey(
+          kind: .reset,
           selector: selector, windowID: "weekly", resetsAt: second, threshold: nil
         ).requestIdentifier
     )

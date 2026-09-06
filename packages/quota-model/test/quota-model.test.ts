@@ -226,6 +226,7 @@ describe("pricing catalog", () => {
       "anthropic_direct",
       "aws_bedrock",
       "google_vertex",
+      "google_direct",
       "openrouter",
     ];
     const entries = channels.map((billingChannel, index) =>
@@ -245,7 +246,7 @@ describe("pricing catalog", () => {
             priceCatalog,
           ).amount_microusd,
       ),
-    ).toEqual(["1", "2", "3", "4", "5", "6"]);
+    ).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
   });
 });
 

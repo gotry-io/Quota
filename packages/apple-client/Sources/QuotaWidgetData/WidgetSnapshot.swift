@@ -95,6 +95,7 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   public let windowTitle: String
   public let remainingPercent: Double
   public let remainingValue: Double?
+  public let limitValue: Double?
   public let unit: WidgetQuotaUnit?
   public let hasLimit: Bool?
   public let resetsAt: Date?
@@ -103,6 +104,8 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
   /// The reported state carries why a reading is not current, not merely that it is not.
   public let state: WidgetQuotaState
   public let validUntil: Date?
+  /// Derived burn-rate when a publisher has one. The snapshot never computes it.
+  public let pace: QuotaPace?
 
   public init(
     selectionID: String,
@@ -111,11 +114,13 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     windowTitle: String,
     remainingPercent: Double,
     remainingValue: Double? = nil,
+    limitValue: Double? = nil,
     unit: WidgetQuotaUnit? = nil,
     hasLimit: Bool? = nil,
     resetsAt: Date? = nil,
     state: WidgetQuotaState = .available,
-    validUntil: Date? = nil
+    validUntil: Date? = nil,
+    pace: QuotaPace? = nil
   ) {
     self.selectionID = selectionID
     self.providerID = providerID
@@ -123,17 +128,20 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     self.windowTitle = windowTitle
     self.remainingPercent = remainingPercent
     self.remainingValue = remainingValue
+    self.limitValue = limitValue
     self.unit = unit
     self.hasLimit = hasLimit
     self.resetsAt = resetsAt
     self.state = state
     self.validUntil = validUntil
+    self.pace = pace
   }
 
   public init(from decoder: Decoder) throws {
     try decoder.rejectUnknownKeys([
       "selectionId", "providerId", "providerDisplayName", "windowTitle", "remainingPercent",
-      "remainingValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
+      "remainingValue", "limitValue", "unit", "hasLimit", "resetsAt", "state", "validUntil",
+      "pace",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     selectionID = try container.decode(String.self, forKey: .selectionID)
@@ -142,11 +150,13 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     windowTitle = try container.decode(String.self, forKey: .windowTitle)
     remainingPercent = try container.decode(Double.self, forKey: .remainingPercent)
     remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
+    limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     unit = try container.decodeIfPresent(WidgetQuotaUnit.self, forKey: .unit)
     hasLimit = try container.decodeIfPresent(Bool.self, forKey: .hasLimit)
     resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
     state = try container.decode(WidgetQuotaState.self, forKey: .state)
     validUntil = try container.decodeIfPresent(Date.self, forKey: .validUntil)
+    pace = try container.decodeIfPresent(QuotaPace.self, forKey: .pace)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .selectionID,
@@ -173,11 +183,18 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     try container.encode(windowTitle, forKey: .windowTitle)
     try container.encode(remainingPercent, forKey: .remainingPercent)
     try container.encodeIfPresent(remainingValue, forKey: .remainingValue)
+    try container.encodeIfPresent(limitValue, forKey: .limitValue)
     try container.encodeIfPresent(unit, forKey: .unit)
     try container.encodeIfPresent(hasLimit, forKey: .hasLimit)
     try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
     try container.encode(state, forKey: .state)
     try container.encodeIfPresent(validUntil, forKey: .validUntil)
+    try container.encodeIfPresent(pace, forKey: .pace)
+  }
+
+  /// Used percent is the complement of remaining; the snapshot still stores remaining.
+  public var usedPercent: Double {
+    min(max(100 - remainingPercent, 0), 100)
   }
 
   public var isValid: Bool {
@@ -189,8 +206,22 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
       && remainingPercent.isFinite
       && (0...100).contains(remainingPercent)
       && (remainingValue?.isFinite ?? true)
+      && (limitValue.map { $0.isFinite && $0 >= 0 } ?? true)
       && (resetsAt.map(WidgetValidation.isFiniteDate) ?? true)
       && (validUntil.map(WidgetValidation.isFiniteDate) ?? true)
+      && paceIsValid
+  }
+
+  private var paceIsValid: Bool {
+    guard let pace else { return true }
+    switch pace {
+    case .none:
+      return true
+    case .lasts(let projection):
+      return projection.projectedAtReset.isFinite
+    case .runsOut(let projection, let exhaustsAt):
+      return projection.projectedAtReset.isFinite && WidgetValidation.isFiniteDate(exhaustsAt)
+    }
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -200,11 +231,13 @@ public struct WidgetQuotaItem: Codable, Equatable, Sendable {
     case windowTitle
     case remainingPercent
     case remainingValue
+    case limitValue
     case unit
     case hasLimit
     case resetsAt
     case state
     case validUntil
+    case pace
   }
 }
 

@@ -8,11 +8,13 @@ import {
   AccountResponseSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IdentityLinkResponseSchema,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
@@ -22,6 +24,9 @@ import {
   ModelCatalogSchema,
   OAuthTokenResponseSchema,
   PricingCatalogSchema,
+  PublicProfileResponseSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicUsageResponseSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -38,6 +43,8 @@ const directory = join(dirname(fileURLToPath(import.meta.url)), "../schema");
 
 const AccountHttpPayloadSchema = z.union([
   AccountResponseSchema,
+  AppleNativeSignInRequestSchema,
+  IdentityLinkResponseSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
   BrowserLoginExchangeRequestSchema,
@@ -54,6 +61,9 @@ const AccountHttpPayloadSchema = z.union([
   LogoutResponseSchema,
   DeleteDeviceResponseSchema,
   QuotaSnapshotUploadResponseSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicProfileResponseSchema,
+  PublicUsageResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

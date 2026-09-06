@@ -16,6 +16,7 @@ struct NotificationStateStoreTests {
     let state = AlertDedupState(
       fired: [
         AlertDedupKey(
+          kind: .threshold,
           selector: "codex_acct",
           windowID: "weekly",
           resetsAt: resetsAt,
@@ -50,6 +51,7 @@ struct NotificationStateStoreTests {
     let state = AlertDedupState(
       fired: [
         AlertDedupKey(
+          kind: .threshold,
           selector: "codex_acct", windowID: "weekly", resetsAt: nil, threshold: 10)
       ],
       readings: []

@@ -40,6 +40,54 @@ Quota on iPhone is a **companion** to QuotaBar for Mac.
 - Home Screen and Lock Screen widgets render a non-secret App Group snapshot the app
   publishes. The widget extension has no network, Keychain, or account session.
 
+## Signing in to a provider inside the app
+
+Settings › Providers lets a user sign in to their **own** Codex, Claude Code, or Grok account so
+this app can show that account's remaining quota. This is not a login for Quota — GitHub remains
+the only Quota identity (above).
+
+- Tapping Connect first shows a confirmation naming the exact cookies and hosts involved, that
+  they stay in the iPhone's Keychain, that Quota never uploads them, and that Remove deletes them.
+- Continue opens a full-screen sheet showing **the provider's own sign-in page** in a `WKWebView`
+  whose data store is non-persistent and created for that sheet. Quota injects no JavaScript, reads
+  no page content, and intercepts no form or navigation. It reads only that store's cookies, and
+  only to ask the provider whether they identify a signed-in account.
+- An accepted session is stored in the Keychain
+  (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synchronized to iCloud) and is sent only
+  to that provider's own API. Remove deletes it.
+- Nothing acquired here is uploaded to Quota's servers, and no provider credential appears in the
+  App Privacy declaration because none is collected off the device.
+
+Reviewers can exercise this with any provider account, or skip it: the demo Account below shows
+Overview without it.
+## Subscription: Quota Sync (Guidelines 3.1.2, 2.1)
+
+The app has one auto-renewable subscription group, **Quota Sync**, with two durations that sell
+the same thing:
+
+- `quota_sync_monthly` — 1 month
+- `quota_sync_yearly` — 1 year
+
+Both offer a **7-day free trial** to new subscribers. What is sold is multi-device sync: carrying
+what QuotaBar collects on a Mac to this iPhone, the website, and the Home Screen widgets. Without
+it the app still signs in and shows the Account; the Macs' readings do not reach it.
+
+- The paywall is **Settings › Sync › Sync across devices**, and is also reachable from the row at
+  the top of Overview when sync is off. It states the duration, the localized price the App Store
+  returned, and the trial before it, and links to Terms
+  (`https://quota.gotry.io/terms`) and Privacy (`https://quota.gotry.io/privacy`).
+- **Restore Purchases** is on that same screen.
+- Managing or cancelling is the system's own screen; the **Manage** row opens
+  `https://apps.apple.com/account/subscriptions`. The app never asks for payment details itself
+  and offers no external purchase path on iOS.
+- Entitlement is checked on Quota's server, which reads it from RevenueCat. A purchase can take a
+  few seconds to be reflected; the app says **Purchase complete. Turning sync on…** while it
+  waits, then turns sync on by itself.
+
+Owner: confirm the two products are **Ready to Submit** in App Store Connect and attached to this
+version before submitting, and that the subscription group display name and the localized
+descriptions match the copy above.
+
 ## Demo Account
 
 The demo GitHub Account is signed into QuotaBar on a Mac that has uploaded synthetic quota
@@ -51,7 +99,9 @@ user.
 
 Owner: create this GitHub user, disable 2FA (or provide a Reviewer-usable path), sign it
 into QuotaBar on one Mac, and confirm Overview shows remaining quota plus Today Usage
-before submitting.
+before submitting. The demo Account must have an active Quota Sync subscription (a sandbox
+purchase, a promotional offer, or an entitlement granted in RevenueCat) so the reviewer sees
+synced content rather than the paywall.
 
 ## Demo video
 

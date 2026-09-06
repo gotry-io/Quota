@@ -36,12 +36,27 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   the accepted headers plus irreversible fingerprints and masked labels. Turning Browser Sign-in
   off deletes those rows transactionally.
 - Quota Web and Quota iOS receive normalized account data only, never local credentials or logs.
+- Quota iOS holds one credential of its own beyond the Account session: a provider web session the
+  reader signed in for inside the app ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). It is
+  acquired only through a visible `WKWebView` on the provider's own sign-in page, in a
+  `WKWebsiteDataStore.nonPersistent()` made for that sheet and discarded with it, after a
+  per-provider consent naming the catalog's cookies and hosts. The app injects no script, reads no
+  page content, and intercepts no form or navigation; it reads that store's cookies, assembles the
+  header the catalog declares, and keeps it only if the provider validates it. Cookies stay in this
+  device's Keychain, one item per provider and account fingerprint, and reach only that provider's
+  fixed endpoints — never Relay, the App Group snapshot, a file, a log, or a diagnostic.
 
 - The local service's HTTP client follows no redirects and caps bodies at 1 MiB. On macOS it
   speaks TLS through Secure Transport (`reqwest` `native-tls`) rather than rustls: cursor.com's
   edge (Vercel) fingerprints the handshake and answers rustls with a 403 HTML page whatever the
   cookie says, which this service would otherwise report as `auth_required`. Linux builds keep
   rustls. Certificate validation is the platform's in both cases.
+- Provider status-page polls are unauthenticated GET of public JSON (`/api/v2/status.json` where
+  the catalog says `statuspage_v2`). They send `User-Agent: Quota/<version>`, follow no redirects,
+  time out at ten seconds, cap the body at 64 KiB, store only `status.indicator`,
+  `status.description`, and the time this device checked, and never send a cookie, API key, or
+  account identifier. A failed poll keeps the last reading. Quota iOS fetches the same URLs on the
+  device; Relay does not proxy them.
 
 ## Local credentials and identity
 
@@ -91,14 +106,49 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 ## Account authentication
 
-- QuotaRelay is the confidential GitHub OAuth client. Local clients never embed its secret and never
+- QuotaRelay is the confidential OAuth client for every identity provider it speaks. Local clients never embed its secret and never
   receive a GitHub access token, and login requests no scope at all.
 - Relay owns the browser sign-in end to end ([ADR 0025](decisions/0025-one-session-system.md)). Both
-  cookies take the `__Host-` prefix, the ten-minute HMAC-signed handoff carries the `state` and PKCE
-  verifier, and a missing, altered, expired, or mismatched handoff — or a code GitHub will not spend
-  twice — is 400 with no session. Relay reads only the bounded public GitHub profile over fixed
-  HTTPS, HMACs the numeric subject with `GITHUB_SUBJECT_KEY` into the Account id, and never writes
-  the GitHub access token anywhere.
+  cookies take the `__Host-` prefix, the ten-minute HMAC-signed handoff carries the `state`, the PKCE
+  verifier, the provider, and whether this round trip signs in or binds a channel to a named Account,
+  and a missing, altered, expired, or mismatched handoff — or a code GitHub will not spend twice — is
+  400 with no session. Relay reads only the bounded public GitHub profile over fixed HTTPS and never
+  writes the GitHub access token anywhere.
+- An Account owns the channels it is reached through, and none of them is stored as itself
+  ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). A GitHub numeric id, an Apple
+  `sub`, and a normalized address are each HMAC'd with `IDENTITY_SUBJECT_KEY` into
+  `account_identities.subject`; the Account id is opaque and derived from none of them, and no
+  subject is ever answered on the wire. Binding a channel another Account already holds is refused
+  rather than merged, and the last channel into an Account cannot be unbound.
+- Sign in with Apple is checked against Apple's own keys before its `sub` names anyone
+  ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). Relay verifies the identity token
+  is RS256 over a key Apple publishes at `https://appleid.apple.com/auth/keys` (cached for a day,
+  refetched when a `kid` is unknown), that `iss` is Apple, that `aud` is this flow's own audience —
+  the Services ID on the Web, the app's bundle identifier natively — that it has not expired, and
+  that its `nonce` is the one this round trip sent. An unverifiable token is one refusal with no
+  detail, so nothing tells a caller which part of a forgery to fix. `APPLE_SIGNIN_PRIVATE_KEY` is
+  read only to sign a five-minute ES256 `client_secret` per exchange; it is never sent anywhere and
+  no long-lived secret is minted from it. Apple's Web callback is a cross-site form POST, so its
+  handoff cookie alone is `SameSite=None` — still `__Host-`, signed, and ten minutes long, and the
+  `state` and `nonce` inside it are still what the callback is checked against. Apple states an
+  address only while the person shares one and it may be a private relay address; it is used as the
+  channel's label and, like every other subject, the `sub` itself is stored only as an HMAC.
+- The iOS app signs in with Apple on the device rather than through a browser: `POST /oauth/v2/apple`
+  takes the identity token `ASAuthorizationAppleIDProvider` produced plus the nonce behind it, in
+  the `native-authorize` rate-limit bucket, and answers with the same `quota-ios` session
+  `/oauth/v2/token` issues. The app hands Apple the nonce's SHA-256 and Relay the value, so a token
+  minted for an earlier request cannot be replayed into a new session. `intent: link` writes to the
+  Account the presented iOS session names and to no other.
+- Email sign-in is a one-time link, not a password and not a handoff cookie. `POST
+  /api/auth/email/start` always answers 202 so it does not say whether the address is an identity.
+  The mailed token is the credential: D1 stores only hashes of the address and of the token, the
+  row lasts fifteen minutes, spending it twice is a refusal, and expired rows leave with the grant
+  sweep. Opening a `sign_in` on another device is allowed. Completing a `link` still requires the
+  opening browser to hold the Account that asked, so a mailed link cannot bind the addressee to
+  whoever sent the mail. The same address is limited to one send per minute and five per hour;
+  those limits also answer 202. The IP shares the `web-signin` bucket and still 429s. Resend sees
+  the address for the send (`RESEND_API_KEY`, from `Quota <login@gotry.io>`); a failed send logs
+  `email_send_failed` with the first eight characters of the address hash, never the mailbox.
 - Native browser login uses Authorization Code with PKCE S256, a random state, and a temporary
   `127.0.0.1` callback on a random port that accepts the exact path, state, and an authorization
   code only, rejects tokens in query data, stops after success, cancellation, or timeout, and
@@ -115,12 +165,20 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   before keeping the session and why switching accounts uses an ephemeral sheet. The Quota
   session is one Keychain item with `activation: pending | active` and
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; a pending record may identify the account but
-  is not a signed-in session until Continue promotes it. UserDefaults holds UI preferences only,
-  and the client makes one single-flight refresh after 401. Its last-good cache holds only the decoded
-  summary, its fetch time, and its ETag in protected storage, is offered back only for the Account
-  the current Keychain session owns, and is cleared when orphaned, mismatched, or signed out. The
-  iOS alert dedup file (`Application Support/alert-state.json`) and pending reset reminders hold
-  only subscription selectors and remaining percents, never credentials. The app target alone
+  is not a signed-in session until Continue promotes it. A provider web session is a separate item
+  per provider and account fingerprint under `io.gotry.quota.provider-session`, with
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and `kSecAttrSynchronizable` false so iCloud
+  never carries it to another device, and Remove deletes it. UserDefaults holds UI preferences and
+  the provider consent answer only, and the client makes one single-flight refresh after 401. Its
+  last-good cache holds only the decoded summary, its fetch time, and its ETag in protected storage,
+  is offered back only for the Account the current Keychain session owns, and is cleared when
+  orphaned, mismatched, or signed out. The iOS alert dedup file
+  (`Application Support/alert-state.json`) and pending reset reminders hold only subscription
+  selectors and remaining percents, never credentials. The last local collection
+  (`Application Support/local-observations.json`, same protection, excluded from backup) holds the
+  quota readings this phone took and the session keys a provider refused — readings and ids, never
+  a cookie; the cookie stays in the Keychain item above, and this file is app-private rather than
+  App Group so the widget still has one data path. The app target alone
   performs OAuth, holds the session, and calls Relay; the extension has no network, Keychain,
   Security, or account modules. The widget snapshot may carry a locally salted `selection_id`; the
   32-byte salt lives in the app-private Keychain with
@@ -138,13 +196,40 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   and it appears in no log or response body but its own `Set-Cookie`.
 - A document navigation carrying no cookie of that shape is answered without reaching D1, SvelteKit
   never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
-  private, no-store`.
+  private, no-store`. The one document that reaches D1 with no cookie is `/u/<handle>`, whose whole
+  address is the handle; it still carries `private, no-store` like every other document, and only
+  the API answer behind it is cacheable ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
   `Origin` with same-origin Fetch Metadata when present. Delete Account and Delete Device require
   that same check, `account:manage`, and a session authenticated within ten minutes, which nothing
   advances except signing in again — so only a browser can make either. `POST /oauth/v2/revoke`
   needs no scope: presenting the refresh token is the proof, and it ends the whole family and signs
   out the Device the session spoke for.
+
+## The public profile page
+
+- A public page is the only account data Relay answers with no session, and what it may carry is
+  the whole of `PublicUsageResponseSchema`: the handle, when the page was published, when the
+  answer was folded, tokens/messages totals for the last 30 UTC days and for the retained window,
+  an optional API-equivalent cost amount and its status, provider and model shares in tokens and
+  thousandths, and 365 days of heatmap intensity as bands from 0 to 4. Nothing else is publishable
+  through it. An agent name, a device, a device count, an account id or display label, a
+  subscription, a fingerprint, a plan, remaining quota, an email, an unpriced-row detail, and a
+  per-day token count are all absent from that shape, so a public page cannot report one
+  ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+- `show_models` and `show_cost` are owner switches over that shape: with `show_cost` off no cost
+  field is present at all, and with `show_models` off no model list is. Cost is off until asked
+  for.
+- A handle is `^[a-z0-9][a-z0-9-]{2,29}$`, is not one of the reserved names, is unique without
+  regard to case, and is kept when the page is switched off so a shared link cannot be reassigned.
+  A malformed, unclaimed, and disabled handle are one 404 with one body, so the route cannot be
+  used to ask whether a person has an Account. Deleting the Account deletes the row in the same
+  batch as everything else.
+- `GET /api/v6/public/<handle>/usage` is the one route answered `Cache-Control: public, max-age=300`,
+  because its answer is the same for every reader. It is rate limited by Cloudflare's trusted
+  connecting-IP metadata, and its `ETag` is computed before any Usage row is read.
+  `PUT /api/v2/account/profile` writes it, and requires `account:manage`, an exact same-origin
+  `Origin` with same-origin Fetch Metadata when present, and a per-Account rate limit.
 
 ## Upload, Usage, and deletion safety
 
@@ -170,11 +255,20 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - Outbox payloads carry allowlisted aggregate fields only; file IDs, byte offsets, record hashes,
   paths, raw events, and parser diagnostics stay local, and payload, row, range, model, and
   dimension bounds plus token invariants are checked by the managed-data schema before upload and by
-  Relay before persistence. Model identifiers are opaque provider text: preserve any non-empty
-  bounded identifier, punctuation and `unknown` included, never rewrite or replace the raw value,
-  and never discard a valid fact because pricing is missing. Records with no tokens, billable tools,
-  or source cost do not become Usage facts, and an invalid record is isolated and counted in the
-  diagnostic report rather than rolling back an agent.
+  Relay before persistence. A local hour fact may keep `project_key`, the basename of a git work
+  tree or cwd, so This Mac can group Usage by repository; that column is stripped when an hour is
+  folded for upload and is never a path
+  ([ADR 0039](decisions/0039-project-attribution-stays-local.md)).
+- Local session rows in `cache.sqlite` (`usage_sessions`) retain only: the file-index hash, agent,
+  a basename `project_key` (never a path), `started_at`, `last_activity_at`, message and token
+  counts, optional `cost_micros`, and `top_model`. They keep no session id, conversation id, prompt,
+  or path, leave the machine never, and are deleted after 90 days of inactivity
+  ([ADR 0038](decisions/0038-sessions-are-a-local-view-of-files.md)).
+- Model identifiers are opaque provider text: preserve any non-empty bounded identifier,
+  punctuation and `unknown` included, never rewrite or replace the raw value, and never discard a
+  valid fact because pricing is missing. Records with no tokens, billable tools, or source cost do
+  not become Usage facts, and an invalid record is isolated and counted in the diagnostic report
+  rather than rolling back an agent.
 - The three lifecycle verbs are defined by
   [ADR 0006](decisions/0006-managed-account-device-usage.md). This is their enforcement. Delete
   Device runs in one transaction, old tokens and old-generation outbox entries are terminally
@@ -189,7 +283,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 - Provider credentials go only to the fixed endpoints in
   [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
-  import browser Cookies, and hidden WebView state is never an authentication source.
+  import browser Cookies, and hidden WebView state is never an authentication source. Quota iOS's
+  sign-in sheet is the visible opposite of that: the reader is looking at the page whose session is
+  being taken, and the sheet's store holds nothing else.
 - A refresh starts three kinds of process and no others, and no collector starts any of them: the
   two that drive a provider CLI run on the refresh worker before collection, so nothing on the
   five-minute timer can spawn on its own account.
@@ -273,12 +369,14 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   new retained fields as security-sensitive. Protocol routing is a trust boundary: v6 writes pass
   the closed v6 provider and agent schemas, and one managed contract is served, so a read excludes
   nothing a retired one could not carry.
-- Persist GitHub subjects, installation identities, token and grant secrets, session-store keys, and
+- Persist identity subjects, installation identities, token and grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
   appear only in the one successful issuance response, never in D1, and browser session tokens only
   in their `Set-Cookie`.
-- Retained business data is limited to Account and Device lifecycle metadata, normalized quota
-  observations, sparse hourly Usage rows, the daily rollup, and bounded rate limits. Nothing is kept
+- Retained business data is limited to Account and Device lifecycle metadata, the paid-sync
+  entitlement cache and webhook event log, one optional public profile row per Account,
+  normalized quota observations, sparse hourly Usage rows, the daily rollup, and bounded rate
+  limits. Nothing is kept
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject, and an anonymous
@@ -288,10 +386,16 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
   eligible at once; expired or revoked sessions remain seven days so logout retries stay
   diagnosable.
-- Production keys (`GITHUB_CLIENT_SECRET` and the subject, installation, and session HMAC keys) are
+- Production keys (`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_PRIVATE_KEY`, and the subject,
+  installation, and session HMAC keys) are
   Cloudflare secrets, are never tracked, and are never reused across purposes.
   `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser session token
   and `__Host-quota_oauth` signature included — each under its own domain label.
+- Production keys (`GITHUB_CLIENT_SECRET`, `RESEND_API_KEY`, and the subject, installation, and
+  session HMAC keys) are Cloudflare secrets, are never tracked, and are never reused across
+  purposes. `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser
+  session token, `__Host-quota_oauth` signature, and email challenge token included — each under
+  its own domain label.
 
 ## Failure behavior
 

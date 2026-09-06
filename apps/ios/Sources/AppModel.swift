@@ -1,8 +1,11 @@
+import AuthenticationServices
 import Foundation
 import Observation
 import QuotaAccount
 import QuotaAlerts
 import QuotaPresentation
+import QuotaProviderSessions
+import QuotaProviderStatus
 import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
@@ -10,6 +13,9 @@ import QuotaWire
 @MainActor
 @Observable
 final class AppModel {
+  /// Where this app is with the managed Account. It is not whether the app is usable: since
+  /// [ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md) this phone collects for
+  /// itself, so `signedOut` still shows tabs and whatever it read here.
   enum Phase: Equatable, Hashable {
     case launching
     case signedOut
@@ -43,17 +49,32 @@ final class AppModel {
   private let iosAlertSink: IOSAlertSink?
   private let resetScheduler: IOSResetReminderScheduler
   private let activity: any ActivityLoading
+  private let localStore: any LocalCollectionStoring
+  private let localCollector: LocalCollector
+  private let providerStatusClient: any ProviderStatusServing
+  private let budgetStore: UsageBudgetStore
   private let now: @Sendable () -> Date
+
+  /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
+  /// the rows; the sessions themselves are the Keychain store's.
+  let providers: ProvidersModel
+  /// The store side of paid sync. It buys; Relay's `entitlement` is what says sync is on.
+  let subscription: SubscriptionModel
 
   var phase: Phase = .launching
   var summary: AccountSummary?
+  /// What this iPhone last read from the providers it signed in to. Kept across launches so a
+  /// phone that opens offline still shows the quota it knows.
+  var localCollection: LocalCollection?
   var fetchedAt: Date?
   var fromCache = false
   var isRefreshing = false
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .overview
-  var selectedUsagePeriod: SelectedUsagePeriod = .last30Days
+  var usagePeriod: UsagePeriodSelection = .last30Days
+  /// The monthly budget this device keeps, which is a preference and never leaves it.
+  var budget: UsageBudget
   /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
@@ -62,7 +83,14 @@ final class AppModel {
   var activityChart: ActivityChartPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
-  private var sessionActivation: AccountSessionActivation?
+  /// The managed Account session this device holds, and how far along it is. Not private because
+  /// a visual fixture states it the way it states `phase`: what Usage, Devices, and the Settings
+  /// account group show turns on whether there is an account, not on which phase the app is in.
+  var sessionActivation: AccountSessionActivation?
+  /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
+  private var appleNonce: AppleSignInNonce?
+  /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
+  var providerStatus: [ProviderID: ProviderStatusReading] = [:]
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -83,8 +111,20 @@ final class AppModel {
       try AuthorizationRequest.make()
     },
     activity: (any ActivityLoading)? = nil,
+    providerSessions: any ProviderSessionStoring = KeychainProviderSessionStore(),
+    localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
+    localCollector: LocalCollector? = nil,
+    purchases: any PurchasesFacade = UnconfiguredPurchases(),
+    providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
+    budgetStore: UsageBudgetStore = UsageBudgetStore(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
+    self.providers = ProvidersModel(store: providerSessions)
+    self.localStore = localStore
+    self.localCollector =
+      localCollector ?? LocalCollector(sessions: providerSessions, now: now)
+    self.budgetStore = budgetStore
+    self.budget = budgetStore.load()
     self.account = account
     self.authenticator = authenticator
     self.widgetPublisher = widgetPublisher
@@ -103,11 +143,18 @@ final class AppModel {
       self.alertCoordinator = AlertCoordinator(
         rulesStore: alertRulesStore ?? IOSAlertRulesStore(),
         stateStore: alertStateStore ?? InMemoryIOSAlertStateStore(),
+        budgetStore: budgetStore,
         sink: sink,
         now: now
       )
     }
     self.activity = activity ?? AccountClientActivityLoading(client: account)
+    self.providerStatusClient = providerStatusClient
+    let subscription = SubscriptionModel(purchases: purchases)
+    self.subscription = subscription
+    subscription.onStoreChange = { [weak self] in
+      await self?.refresh()
+    }
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -122,20 +169,74 @@ final class AppModel {
       selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
       alertStateStore: FileIOSAlertStateStore.applicationSupport(),
-      notificationCenter: IOSNotificationCenter()
+      notificationCenter: IOSNotificationCenter(),
+      localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
+      purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
+        ?? UnconfiguredPurchases(),
+      providerStatusClient: ProviderStatusClient()
     )
   }
 
+  /// The Overview title. Without an account there is no label to print, and the app is still
+  /// showing quota, so it says what it is showing.
+  /// What Relay last said paid sync is worth to this Account. An Account read that has not
+  /// happened yet is `none`: nothing has been bought until a summary says so.
+  var entitlement: AccountEntitlement {
+    summary?.entitlement ?? .unsubscribed
+  }
+
+  var isSyncOn: Bool {
+    entitlement.status.allowsSync
+  }
+
+  /// The Overview banner a signed-in Account without paid sync gets. Its Macs keep collecting;
+  /// none of what they send reaches this Account until sync is on.
+  var syncBanner: String? {
+    guard phase == .signedIn, summary != nil, !isSyncOn else { return nil }
+    return SyncCopy.offBanner
+  }
+
+  /// The Overview title. Without an account there is no label to print, and the app is still
+  /// showing quota, so it says what it is showing.
   var accountLabel: String {
-    PlanDisplay.accountLabel(summary?.account.displayLabel) ?? "Account"
+    PlanDisplay.accountLabel(summary?.account.displayLabel)
+      ?? (summary == nil ? "Quota" : "Account")
+  }
+
+  /// When the readings on screen were last refreshed, from either side of the merge.
+  var updatedAt: Date? {
+    [fetchedAt, localCollection?.collectedAt].compactMap { $0 }.max()
+  }
+
+  /// Whether a session for the managed Account exists on this device, whatever state it is in.
+  var hasAccountSession: Bool { sessionActivation != nil }
+
+  /// The subscriptions this app shows: what this iPhone read for itself, merged with what Relay
+  /// resolved from every Mac. One rule, stated in `QuotaObservations` and judged by
+  /// `quota-observation-conformance.json`.
+  var subscriptions: [QuotaSubscription] {
+    LocalObservationMerge.subscriptions(
+      local: localCollection?.snapshots ?? [],
+      resolved: summary?.subscriptions ?? [],
+      now: now()
+    )
+  }
+
+  /// Which sides of the merge answered. Overview says nothing different for a merged row, but
+  /// the surfaces around it do: Today needs an account, and the empty state needs to know which
+  /// invitation it is short of.
+  var overviewSources: OverviewSources {
+    OverviewSources(
+      hasLocal: !(localCollection?.snapshots ?? []).isEmpty,
+      hasAccount: summary != nil
+    )
   }
 
   /// One group per provider, and inside it one Overview row per subscription rather than per
   /// reporting device: an account collected on three Macs is one subscription, not three,
   /// and Relay has already resolved it that way.
   var providerCards: [ProviderQuotaCardModel] {
-    guard let summary else { return [] }
-    let grouped = Dictionary(grouping: summary.subscriptions) { $0.snapshot.provider }
+    let grouped = Dictionary(grouping: subscriptions) { $0.snapshot.provider }
     return ProviderID.allCases.compactMap { provider in
       guard let subscriptions = grouped[provider], !subscriptions.isEmpty else { return nil }
       return ProviderQuotaCardModel(provider: provider, subscriptions: subscriptions)
@@ -143,6 +244,8 @@ final class AppModel {
   }
 
   func restore() async {
+    localCollection = try? localStore.load()
+    providers.markNeedsSignIn(localCollection?.needsSignIn ?? [])
     let cached = try? await account.loadCachedSummary()
     let session = try? await account.loadSession()
     sessionActivation = session?.activation
@@ -152,9 +255,8 @@ final class AppModel {
     switch session?.activation {
     case .active:
       phase = .signedIn
-      if let cached {
-        publishWidget(summary: cached.summary, fetchedAt: cached.fetchedAt)
-      }
+      // Publish what was already on disk so the widget is current before the network is.
+      if cached != nil { publishWidget() }
       resolvePendingSubscriptionSelection()
       await refresh()
     case .pending:
@@ -169,7 +271,12 @@ final class AppModel {
         }
       }
     case nil:
-      applySignedOut()
+      // Signed out is not empty any more: the providers this phone signed in to are still
+      // readable, and the last reading of them is already loaded. The refresh below publishes
+      // what that comes to; the widget keeps the previous snapshot until it does.
+      phase = .signedOut
+      resolvePendingSubscriptionSelection()
+      await refresh()
     }
   }
 
@@ -199,27 +306,80 @@ final class AppModel {
     } catch AccountClientError.sessionExpired {
       applyExpired()
     } catch let error as AccountClientError {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: error.userFacingMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(error.userFacingMessage)
     } catch let error as AuthorizationError {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: error.userFacingMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(error.userFacingMessage)
     } catch {
-      applySignedOut()
-      banner = Banner(
-        kind: .refreshFailed,
-        text: AuthorizationError.genericConnectFailureMessage,
-        symbolName: "exclamationmark.triangle"
-      )
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
     }
+  }
+
+  /// Bind the Sign in with Apple request the button is about to make.
+  ///
+  /// Apple is handed the nonce's digest and states it back inside the token it signs; this device
+  /// keeps the value, so a token minted for some earlier request proves nothing about this one.
+  /// An address is asked for because it is what names the channel on the Account, and Apple hands
+  /// it over only while the person is sharing one.
+  func prepareAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+    request.requestedScopes = [.fullName, .email]
+    let nonce = try? AppleSignIn.generateNonce()
+    appleNonce = nonce
+    request.nonce = nonce?.digest
+  }
+
+  /// Sign in with what Apple proved on this device.
+  ///
+  /// There is no browser round trip: `ASAuthorizationAppleIDProvider` has already asked the
+  /// question, so the token it signed goes straight to Relay, and what comes back is the same
+  /// pending session a browser sign-in opens — the confirm screen still asks which Account this
+  /// reached.
+  func connectWithApple(_ result: Result<ASAuthorization, any Error>) async {
+    guard phase != .connecting else { return }
+    guard let nonce = appleNonce else {
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      return
+    }
+    appleNonce = nil
+    switch result {
+    case .failure(let error):
+      // Cancel is not a failure: the person closed the sheet and is where they started.
+      if (error as? ASAuthorizationError)?.code == .canceled {
+        applySignedOut()
+      } else {
+        presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+      }
+    case .success(let authorization):
+      guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+        let data = credential.identityToken,
+        let identityToken = String(data: data, encoding: .utf8)
+      else {
+        presentConnectFailure(AuthorizationError.unexpectedBrowserResponseMessage)
+        return
+      }
+      await exchangeApple(identityToken: identityToken, nonce: nonce.value)
+    }
+  }
+
+  private func exchangeApple(identityToken: String, nonce: String) async {
+    phase = .connecting
+    banner = nil
+    expiredMessage = nil
+    do {
+      let session = try await account.exchangeApple(identityToken: identityToken, nonce: nonce)
+      sessionActivation = session.activation
+      await refresh()
+    } catch AccountClientError.sessionExpired {
+      applyExpired()
+    } catch let error as AccountClientError {
+      presentConnectFailure(error.userFacingMessage)
+    } catch {
+      presentConnectFailure(AuthorizationError.genericConnectFailureMessage)
+    }
+  }
+
+  private func presentConnectFailure(_ message: String) {
+    applySignedOut()
+    banner = Banner(kind: .refreshFailed, text: message, symbolName: "exclamationmark.triangle")
   }
 
   /// Keep the session this device just opened. Continue is the only promotion to `active`.
@@ -238,15 +398,14 @@ final class AppModel {
     sessionActivation = .active
     expiredMessage = nil
     phase = .signedIn
-    if let summary, let fetchedAt {
+    if summary != nil, fetchedAt != nil {
       banner = nil
-      publishWidget(summary: summary, fetchedAt: fetchedAt)
-      evaluateAlerts(summary: summary)
     } else {
       banner = failureBanner(hasCachedSummary: false, offline: false)
-      clearWidget()
     }
-    backgroundRefresh.scheduleNextRefresh()
+    publishWidget()
+    evaluateAlerts()
+    scheduleBackgroundRefresh()
     resolvePendingSubscriptionSelection()
     pruneOverviewPath()
   }
@@ -278,26 +437,78 @@ final class AppModel {
     await connectAccount(switchingAccount: true)
   }
 
-  /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read
-  /// the account summary, apply it, republish the widget snapshot from the result, evaluate
-  /// local remaining-quota alerts, rebuild reset reminders, and ask for the next background
-  /// window. Reports whether the read reached Relay, which is the success a `BGAppRefreshTask`
-  /// completes with.
+  /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read the
+  /// providers this phone signed in to and, when there is an account, the account summary — at
+  /// the same time, because neither waits on the other — then merge them, republish the widget
+  /// snapshot, evaluate local remaining-quota alerts, rebuild reset reminders, and ask for the
+  /// next background window. Reports whether either side answered, which is the success a
+  /// `BGAppRefreshTask` completes with.
   ///
-  /// The next window is only worth asking for while a session exists to read with. A read that
-  /// ends signed out — no session, or one Relay would not renew — leaves without asking, and
-  /// has already withdrawn the standing ask on its way through `applySignedOut`.
+  /// The next window is only worth asking for while something is left to read. A phone with
+  /// neither an account nor a provider session withdraws the standing ask on its way out.
   @discardableResult
-  func refresh() async -> Bool {
+  func refresh(budget: Duration = LocalCollector.foregroundBudget) async -> Bool {
     guard !isRefreshing else { return false }
     isRefreshing = true
     defer { isRefreshing = false }
-    let result = await account.fetchTodaySummary()
-    await apply(result)
-    if phase == .signedIn {
-      backgroundRefresh.scheduleNextRefresh()
+    #if DEBUG
+      if !skipsRestore {
+        await refreshProviderStatus()
+      }
+    #else
+      await refreshProviderStatus()
+    #endif
+    let collector = localCollector
+    let collects = !providers.sessions.isEmpty
+    async let collected: LocalCollection? =
+      collects ? await collector.collect(within: budget) : nil
+    // The session is read from its store rather than from what a previous read left in memory: a
+    // background refresh can run before anything has restored.
+    let reads = (try? await account.hasSession()) ?? false
+    let result: AccountRefreshResult? = reads ? await account.fetchTodaySummary() : nil
+    let collection = await collected
+    if let collection { applyLocalCollection(collection) }
+    if let result {
+      await apply(result, collected: collection != nil)
+      scheduleBackgroundRefresh()
+    } else {
+      applyWithoutAccount()
     }
-    return result.error == nil
+    // `result?.error == nil` would answer true for a refresh that never read at all, so what
+    // each side actually answered is asked separately.
+    return (result.map { $0.error == nil } ?? false) || collection != nil
+  }
+
+  /// A provider sign-in was kept or removed. What this phone can read changed, so the readings
+  /// on screen and the standing background ask both follow it.
+  func providerSessionsChanged() async {
+    updateBackgroundRefreshAsk()
+    await refresh()
+  }
+
+  /// Keep what this pass read, and let Settings say which sessions the provider refused.
+  private func applyLocalCollection(_ collection: LocalCollection) {
+    localCollection = collection
+    try? localStore.save(collection)
+    // A successful read moves `lastValidatedAt` in the Keychain, so the rows are re-read.
+    providers.load()
+    providers.markNeedsSignIn(collection.needsSignIn)
+  }
+
+  /// A refresh with no account to read. What this iPhone collected is the whole answer, and the
+  /// widget and the alert rules are evaluated against it just the same.
+  private func applyWithoutAccount() {
+    phase = .signedOut
+    publishWidget()
+    evaluateAlerts()
+    resolvePendingSubscriptionSelection()
+    pruneOverviewPath()
+    updateBackgroundRefreshAsk()
+  }
+
+  func refreshProviderStatus() async {
+    let readings = await providerStatusClient.refresh()
+    providerStatus = Dictionary(uniqueKeysWithValues: readings.map { ($0.provider, $0) })
   }
 
   func logout() async {
@@ -313,6 +524,11 @@ final class AppModel {
       callbackScheme: nil,
       prefersEphemeralWebBrowserSession: false
     )
+  }
+
+  /// Show the Providers group, which is where a sign-in to a provider starts.
+  func showProviders() {
+    selectedTab = .settings
   }
 
   func openDeepLink(_ url: URL) {
@@ -331,10 +547,11 @@ final class AppModel {
   /// No summary yet keeps the pending id so a later restore or refresh can answer it.
   func resolvePendingSubscriptionSelection() {
     guard let pending = pendingSubscriptionSelection else { return }
-    guard let summary else { return }
+    let subscriptions = subscriptions
+    guard !subscriptions.isEmpty else { return }
     guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
     pendingSubscriptionSelection = nil
-    if let match = summary.subscriptions.first(where: {
+    if let match = subscriptions.first(where: {
       WidgetSnapshotProjection.selectionID(for: $0, salt: salt) == pending
     }) {
       overviewPath = [match.key]
@@ -344,7 +561,17 @@ final class AppModel {
   }
 
   func subscription(forKey key: String) -> QuotaSubscription? {
-    summary?.subscriptions.first { $0.key == key }
+    subscriptions.first { $0.key == key }
+  }
+
+  /// The devices a subscription's readings can be attributed to: the Account's Macs, and this
+  /// iPhone for what it read itself.
+  var readingDeviceNames: [String: String] {
+    var names = [ThisDevice.sourceID: ThisDevice.displayName]
+    for device in summary?.devices ?? [] {
+      names[device.id] = device.displayName
+    }
+    return names
   }
 
   var activityToday: String {
@@ -353,6 +580,83 @@ final class AppModel {
 
   var activityDateRange: (from: String, to: String) {
     UsageActivityCalendar.range(endingOn: activityToday)
+  }
+
+  /// The dates the selected period covers, or nil for `all`, which names no first day.
+  var usagePeriodRange: (from: String, to: String)? {
+    usagePeriod.range(today: now())
+  }
+
+  /// The title above the totals: the range the selected period covers.
+  var usagePeriodTitle: String {
+    UsagePeriodTitle.text(for: usagePeriod, today: now())
+  }
+
+  /// The days a folded period may reach back over, which is what the activity read answered.
+  var usageEarliestDay: String {
+    activityDateRange.from
+  }
+
+  /// The activity days this device has, which is what a folded period is added up from.
+  var activityDays: [UsageActivityDay] {
+    if case .loaded(let days) = activityChart { return days }
+    return []
+  }
+
+  /// The selected period, read from the summary when it folds it and added up here when not.
+  ///
+  /// The summary answers four periods exactly, in the caller's own calendar. Anything else is
+  /// the activity days the page already holds, which are UTC days: a range is chosen in this
+  /// device's calendar and folded from the UTC days carrying those dates.
+  var usagePeriodValue: UsagePeriod? {
+    if let key = usagePeriod.summaryKey, let usage = summary?.usage {
+      return period(usage, key)
+    }
+    guard let range = usagePeriodRange, case .loaded(let days) = activityChart else { return nil }
+    return UsageDayFold.period(days, from: range.from, to: range.to)
+  }
+
+  /// Whether the shown period was added up here, which is why it has no model breakdown.
+  var usagePeriodIsFolded: Bool {
+    usagePeriod.summaryKey == nil
+  }
+
+  /// How far into this month's budget its spend has gone, or nil when there is no budget yet.
+  var budgetProgress: UsageBudgetProgress? {
+    guard let amount = budget.amountUSD,
+      let range = UsagePeriodSelection.thisMonth.range(today: now()),
+      case .loaded(let days) = activityChart
+    else { return nil }
+    let month = UsageDayFold.period(days, from: range.from, to: range.to)
+    let spent = UsageBudgetProgress.dollars(microusd: month.cost.amountMicrousd) ?? 0
+    return UsageBudgetProgress(
+      spentUSD: spent,
+      budgetUSD: amount,
+      partial: month.cost.status != .complete
+    )
+  }
+
+  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
+    usagePeriod = selection
+  }
+
+  func setBudget(_ next: UsageBudget) {
+    budget = budgetStore.save(next)
+    evaluateBudgetAlerts()
+  }
+
+  /// Says once per month that 80% and then 100% of the budget has been spent.
+  func evaluateBudgetAlerts() {
+    alertCoordinator.evaluateBudget(budget: budget, progress: budgetProgress)
+  }
+
+  private func period(_ usage: AccountUsage, _ key: UsageSummaryPeriodKey) -> UsagePeriod {
+    switch key {
+    case .today: usage.today
+    case .last7Days: usage.last7Days
+    case .last30Days: usage.last30Days
+    case .all: usage.all
+    }
   }
 
   /// First visit to Usage asks once. Retry is explicit. The answer stays in memory.
@@ -421,6 +725,7 @@ final class AppModel {
     switch result {
     case .activity(let response):
       activityChart = .loaded(response.days)
+      evaluateBudgetAlerts()
     case .failure(.sessionExpired):
       applyExpired()
     case .failure(.notSignedIn):
@@ -459,7 +764,7 @@ final class AppModel {
     sessionActivation == .pending
   }
 
-  private func apply(_ result: AccountRefreshResult) async {
+  private func apply(_ result: AccountRefreshResult, collected: Bool) async {
     summary = result.summary
     fetchedAt = result.fetchedAt
     fromCache = result.fromCache
@@ -472,12 +777,9 @@ final class AppModel {
       banner = nil
       expiredMessage = nil
       phase = .signedIn
-      if let summary = result.summary, let fetchedAt = result.fetchedAt {
-        publishWidget(summary: summary, fetchedAt: fetchedAt)
-        evaluateAlerts(summary: summary)
-      } else {
-        clearWidget()
-      }
+      publishWidget()
+      evaluateAlerts()
+      await identifySubscriber()
     case .sessionExpired:
       applyExpired()
     case .notSignedIn:
@@ -487,11 +789,11 @@ final class AppModel {
     case .relay(.unavailable), .relay(.timeout):
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
-      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
+      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil, collected: collected)
     case .some:
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
-      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil)
+      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil, collected: collected)
     }
     if phase == .signedIn {
       resolvePendingSubscriptionSelection()
@@ -553,18 +855,18 @@ final class AppModel {
   }
 
   private func pruneOverviewPath() {
-    guard let summary else {
-      overviewPath = []
-      return
-    }
-    overviewPath.removeAll { key in
-      !summary.subscriptions.contains { $0.key == key }
-    }
+    let keys = Set(subscriptions.map(\.key))
+    overviewPath.removeAll { !keys.contains($0) }
   }
 
-  private func syncWidgetAfterFailure(hasTrustedSummary: Bool) {
-    // Trusted cached summary stays published; absence of a trusted summary clears.
-    if !hasTrustedSummary {
+  /// A failed Relay read leaves the published snapshot alone: the reader already has last-good
+  /// data, and republishing an unchanged reading only moves the widget's age. A local collection
+  /// that answered in the same pass is new data, so it is published anyway. With nothing left
+  /// worth drawing — no trusted summary and nothing this phone read — the widget is cleared.
+  private func syncWidgetAfterFailure(hasTrustedSummary: Bool, collected: Bool) {
+    if collected {
+      publishWidget()
+    } else if !hasTrustedSummary && subscriptions.isEmpty {
       clearWidget()
     }
   }
@@ -600,43 +902,91 @@ final class AppModel {
     sessionActivation = nil
     phase = .signedOut
     selectedTab = .overview
-    selectedUsagePeriod = .last30Days
+    usagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     overviewPath = []
     activityChart = .idle
     activityDaySheet = nil
-    backgroundRefresh.cancelPendingRefresh()
+    // The providers this phone signed in to are not the account's, so what it collects for
+    // itself survives losing the account — and so does the background window that refreshes it.
+    updateBackgroundRefreshAsk()
+    Task { await subscription.signOut() }
     try? selectionSaltStore.clear()
-    clearWidget()
-    alertCoordinator.clearState()
     resetScheduler.removeAll()
+    if localCollection?.snapshots.isEmpty != false {
+      alertCoordinator.clearState()
+    }
+    publishWidget()
+    evaluateAlerts()
+  }
+
+  /// Something on this phone can still be read: an account to read from Relay, or a provider
+  /// session this device reads for itself. A session that has been issued but not confirmed is
+  /// not one yet, so it books no window.
+  private var hasSomethingToRead: Bool {
+    phase == .signedIn || !providers.sessions.isEmpty
+  }
+
+  private func scheduleBackgroundRefresh() {
+    guard hasSomethingToRead else { return }
+    backgroundRefresh.scheduleNextRefresh()
+  }
+
+  /// Ask for the next window, or withdraw the standing ask when nothing is left to read: a phone
+  /// with neither an account nor a provider session would wake only to discover that and go back
+  /// to sleep.
+  private func updateBackgroundRefreshAsk() {
+    if hasSomethingToRead {
+      backgroundRefresh.scheduleNextRefresh()
+    } else {
+      backgroundRefresh.cancelPendingRefresh()
+    }
   }
 
   /// Compare the latest Account readings against the last available ones, hand events to the
   /// sink, and rebuild reset reminders. A `windowReset` whose selector and window already have
   /// a scheduled reminder is left to that reminder.
-  private func evaluateAlerts(summary: AccountSummary) {
+  private func evaluateAlerts() {
     let instant = now()
-    let catalog = AlertCoordinator.catalog(from: summary.subscriptions)
+    let readings = subscriptions
+    let catalog = AlertCoordinator.catalog(from: readings)
     if let iosAlertSink {
       iosAlertSink.catalog = catalog
       iosAlertSink.scheduledResetKeys = resetScheduler.scheduledResetKeys
       iosAlertSink.now = instant
     }
-    alertCoordinator.evaluate(summary: summary)
+    alertCoordinator.evaluate(subscriptions: readings)
     resetScheduler.reschedule(
       rules: alertCoordinator.currentRules(),
-      subscriptions: AlertCoordinator.readings(from: summary.subscriptions),
+      subscriptions: AlertCoordinator.readings(from: readings),
       catalog: catalog,
       now: instant
     )
   }
 
-  private func publishWidget(summary: AccountSummary, fetchedAt: Date) {
+  /// Bind store purchases to this Account, and let the paywall know Relay has caught up.
+  private func identifySubscriber() async {
+    guard let accountID = summary?.account.accountID else { return }
+    if isSyncOn {
+      subscription.entitlementConfirmed()
+    }
+    await subscription.identify(accountID: accountID)
+  }
+
+  /// Republish the widget snapshot from the merged readings. The widget does not distinguish
+  /// where a reading came from, and neither does this: what it draws is what Overview shows.
+  private func publishWidget() {
+    let readings = subscriptions
+    guard !readings.isEmpty || summary != nil else {
+      clearWidget()
+      return
+    }
     guard let salt = try? selectionSaltStore.loadOrCreate() else { return }
+    let observed = [fetchedAt, localCollection?.collectedAt].compactMap { $0 }.max()
     let snapshot = WidgetSnapshotProjection.make(
-      summary: summary,
-      fetchedAt: fetchedAt,
+      subscriptions: readings,
+      today: summary?.usage.today,
+      fetchedAt: observed ?? now(),
       salt: salt
     )
     try? widgetPublisher.publish(snapshot)
@@ -645,6 +995,14 @@ final class AppModel {
   private func clearWidget() {
     try? widgetPublisher.clear()
   }
+}
+
+/// Which sides of the Overview merge answered on this phone.
+struct OverviewSources: Equatable, Sendable {
+  var hasLocal: Bool
+  var hasAccount: Bool
+
+  var isEmpty: Bool { !hasLocal && !hasAccount }
 }
 
 struct ProviderQuotaCardModel: Identifiable, Equatable {

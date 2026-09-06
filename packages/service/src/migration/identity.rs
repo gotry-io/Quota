@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 4;
+const CURRENT_SCHEMA: i64 = 5;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -33,6 +33,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             2 => migration_v2(&tx)?,
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
+            5 => migration_v5(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -140,6 +141,15 @@ fn migration_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Grouping Usage by project is a local display preference, default on.
+fn migration_v5(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "INSERT OR IGNORE INTO preferences(key, value)
+         VALUES ('group_usage_by_project', '1');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +190,15 @@ mod tests {
             .expect("cadence after upgrade"),
             "300"
         );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM preferences WHERE key = 'group_usage_by_project'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("grouping after upgrade"),
+            "1"
+        );
     }
 
     #[test]
@@ -211,6 +230,15 @@ mod tests {
             )
             .expect("cadence"),
             "300"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM preferences WHERE key = 'group_usage_by_project'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("grouping preference"),
+            "1"
         );
 
         // Re-applying is a no-op: the installation this device already answers as must not

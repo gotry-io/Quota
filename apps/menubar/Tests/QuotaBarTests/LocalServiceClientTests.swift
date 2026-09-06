@@ -54,8 +54,15 @@ struct LocalServiceClientTests {
         revision = 0
         for line in sys.stdin:
             request = json.loads(line)
-            revision += 1
             operation = request["operation"]
+            if operation == "ping":
+                print(json.dumps({
+                    "type": "response",
+                    "request_id": request["request_id"],
+                    "result": {"ok": True},
+                }), flush=True)
+                continue
+            revision += 1
             if operation == "get_state":
                 result = state(revision)
             elif operation == "refresh":
@@ -571,7 +578,7 @@ private struct TemporaryService {
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
       def ready():
-          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 1}), flush=True)
+          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 2}), flush=True)
       def component(status, value=None):
           return {
               "status": status,
@@ -584,9 +591,10 @@ private struct TemporaryService {
           return {"rebuilding": False, "reset_at": None}
       def state(revision):
           return {
-              "ipc_version": 1,
+              "ipc_version": 2,
               "revision": revision,
               "usage_upload_enabled": True,
+              "group_usage_by_project": True,
               "quota_refresh_interval_seconds": 300,
               "usage_periods": {"local": {}, "account": {}},
               "quota": component("unavailable"),
@@ -600,6 +608,7 @@ private struct TemporaryService {
               }),
               "pricing": component("unavailable"),
               "providers": [],
+              "provider_status": [],
               "provider_browser_sessions": [],
               "browser_scan_enabled": [],
               "overview": [],

@@ -1,17 +1,18 @@
 use super::scan::{
     UsageParser, discover_usage_files_at, file_index, finish_scan, is_cancelled,
-    matching_file_info, parse_range, push_reason, roots_for, scan_jsonl_files, source_coverage,
+    matching_file_info, parse_range, push_reason, remember_project_key, roots_for,
+    scan_jsonl_files, source_coverage,
 };
 use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
     NormalizedUsageEvent, NormalizedUsageRecord, ParsedLine, UsageAgent, UsageError,
     UsageFileDiscoveryResult, UsageFileIndex, UsageScanOptions, UsageScanResult, UsageSourceScan,
-    bounded_model, bounded_model_text, canonical_instant, context_bucket, object, optional_count,
-    safe_count, safe_sum,
+    bounded_model, bounded_model_text, canonical_instant, context_bucket, cwd_from_value, object,
+    optional_count, project_key_from_cwd, project_key_from_source_path, safe_count, safe_sum,
 };
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MAXIMUM_CURSOR_ROWS: usize = 2_000_000;
@@ -49,7 +50,7 @@ pub fn scan_cursor_usage(options: &UsageScanOptions) -> Result<UsageScanResult, 
             files: jsonl_files,
             reasons: Vec::new(),
         },
-        || CursorParser,
+        |_| CursorParser,
     )?;
     let databases = scan_databases(
         options,
@@ -81,16 +82,23 @@ pub fn scan_cursor_usage(options: &UsageScanOptions) -> Result<UsageScanResult, 
 struct CursorParser;
 
 impl UsageParser for CursorParser {
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        source_path: &Path,
+    ) -> ParsedLine {
         match usage_map(value) {
             Ok(None) => ParsedLine::empty(),
-            Ok(Some(usage)) => match observation_from_value(value, usage, source_file_id, "") {
-                Ok(observation) if observation_is_empty(&observation) => {
-                    ParsedLine::ignored_empty()
+            Ok(Some(usage)) => {
+                match observation_from_value(value, usage, source_file_id, "", source_path) {
+                    Ok(observation) if observation_is_empty(&observation) => {
+                        ParsedLine::ignored_empty()
+                    }
+                    Ok(observation) => fact_line(observation),
+                    Err(reason) => ParsedLine::reason(reason),
                 }
-                Ok(observation) => fact_line(observation),
-                Err(reason) => ParsedLine::reason(reason),
-            },
+            }
             Err(()) => ParsedLine::reason(CoverageReasonCode::InvalidUsage),
         }
     }
@@ -127,6 +135,7 @@ struct CursorObservation {
     source_cost: Option<String>,
     source_cost_present: bool,
     source_file_id: String,
+    project_key: Option<String>,
 }
 
 fn scan_databases(
@@ -142,6 +151,7 @@ fn scan_databases(
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut rows_seen = 0usize;
     let mut stopped = false;
     for file in discovery_files {
@@ -152,6 +162,7 @@ fn scan_databases(
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -211,6 +222,7 @@ fn scan_databases(
             parse_store_database(
                 &connection,
                 &current.source_file_id,
+                &current.path,
                 &range,
                 options,
                 &mut rows_seen,
@@ -220,6 +232,7 @@ fn scan_databases(
             parse_state_database(
                 &connection,
                 &current.source_file_id,
+                &current.path,
                 &range,
                 options,
                 &mut rows_seen,
@@ -270,6 +283,7 @@ fn scan_databases(
             unchanged_source_file_ids,
             deleted_source_file_ids: Vec::new(),
             sources,
+            project_keys,
         },
     ))
 }
@@ -277,6 +291,7 @@ fn scan_databases(
 fn parse_state_database(
     connection: &Connection,
     source_file_id: &str,
+    source_path: &Path,
     range: &super::scan::ScanRange,
     options: &UsageScanOptions,
     rows_seen: &mut usize,
@@ -322,18 +337,21 @@ fn parse_state_database(
         };
         match usage_map(&value) {
             Ok(None) => {}
-            Ok(Some(usage)) => match observation_from_value(&value, usage, source_file_id, &key) {
-                Ok(mut observation) => {
-                    if observation.composer_id.is_empty() {
-                        observation.composer_id = composer_id_from_key(&key).unwrap_or_default();
+            Ok(Some(usage)) => {
+                match observation_from_value(&value, usage, source_file_id, &key, source_path) {
+                    Ok(mut observation) => {
+                        if observation.composer_id.is_empty() {
+                            observation.composer_id =
+                                composer_id_from_key(&key).unwrap_or_default();
+                        }
+                        if observation.record_key.is_empty() {
+                            observation.record_key = key;
+                        }
+                        observations.push(observation);
                     }
-                    if observation.record_key.is_empty() {
-                        observation.record_key = key;
-                    }
-                    observations.push(observation);
+                    Err(reason) => push_reason(&mut reasons, reason),
                 }
-                Err(reason) => push_reason(&mut reasons, reason),
-            },
+            }
             Err(()) => push_reason(&mut reasons, CoverageReasonCode::InvalidUsage),
         }
     }
@@ -354,6 +372,7 @@ fn parse_state_database(
 fn parse_store_database(
     connection: &Connection,
     source_file_id: &str,
+    source_path: &Path,
     range: &super::scan::ScanRange,
     options: &UsageScanOptions,
     rows_seen: &mut usize,
@@ -398,7 +417,7 @@ fn parse_store_database(
         let Some(value) = decode_json_object(&raw) else {
             continue;
         };
-        let mut parsed = parser.parse(&value, source_file_id);
+        let mut parsed = parser.parse(&value, source_file_id, source_path);
         if let Some(record) = parsed.records.first_mut()
             && record.record_key.is_empty()
             && let Some(key) = key.filter(|value| !value.is_empty())
@@ -421,6 +440,7 @@ fn observation_from_value(
     usage: &Map<String, Value>,
     source_file_id: &str,
     record_key: &str,
+    source_path: &Path,
 ) -> Result<CursorObservation, CoverageReasonCode> {
     let tokens = parse_tokens(usage).ok_or(CoverageReasonCode::InvalidUsage)?;
     let source_cost = match source_cost_microusd(cost_value(value, usage)) {
@@ -447,6 +467,10 @@ fn observation_from_value(
         source_cost_present: source_cost.is_some(),
         source_cost,
         source_file_id: source_file_id.to_owned(),
+        project_key: cwd_from_value(value)
+            .or_else(|| object(value.get("message")).and_then(cwd_from_value))
+            .and_then(project_key_from_cwd)
+            .or_else(|| project_key_from_source_path(source_path)),
     })
 }
 
@@ -570,6 +594,7 @@ fn fact_record(
             } else {
                 0
             },
+            project_key: observation.project_key,
         },
         source_file_id: observation.source_file_id,
         record_key: observation.record_key,
@@ -782,6 +807,7 @@ fn billing_channel(provider: Option<&str>) -> (BillingChannel, ChannelSource) {
         Some("google-vertex") | Some("google_vertex") => {
             (BillingChannel::GoogleVertex, ChannelSource::Explicit)
         }
+        Some("google") | Some("gemini") => (BillingChannel::GoogleDirect, ChannelSource::Explicit),
         Some("openrouter") => (BillingChannel::Openrouter, ChannelSource::Explicit),
         Some("xai") => (BillingChannel::XaiDirect, ChannelSource::Explicit),
         Some("moonshotai") | Some("kimi-for-coding") => {
@@ -1001,6 +1027,8 @@ fn merge_scans(
     unchanged_source_file_ids.extend(databases.unchanged_source_file_ids);
     let mut sources = jsonl.sources;
     sources.extend(databases.sources);
+    let mut project_keys = jsonl.project_keys;
+    project_keys.extend(databases.project_keys);
     finish_scan(
         UsageAgent::Cursor,
         options,
@@ -1019,6 +1047,7 @@ fn merge_scans(
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     )
 }

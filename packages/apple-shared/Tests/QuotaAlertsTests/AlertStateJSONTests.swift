@@ -8,11 +8,19 @@ struct AlertStateJSONTests {
     let state = AlertDedupState(
       fired: [
         AlertDedupKey(
+          kind: .threshold,
           selector: "codex_acct",
           windowID: "weekly",
           resetsAt: resetsAt,
           threshold: 20
-        )
+        ),
+        AlertDedupKey(
+          kind: .pace,
+          selector: "codex_acct",
+          windowID: "weekly",
+          resetsAt: resetsAt,
+          threshold: nil
+        ),
       ],
       readings: [
         AlertStoredReading(

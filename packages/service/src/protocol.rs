@@ -7,14 +7,18 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub const IPC_VERSION: u32 = 1;
+pub const IPC_VERSION: u32 = 2;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 /// Allowed Quota collection intervals, in seconds. The default is five minutes.
 pub const QUOTA_REFRESH_INTERVALS_SECONDS: [u64; 5] = [60, 120, 300, 600, 900];
 pub const DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS: u64 = 300;
+/// How many local days one `usage_period` request may fold, which is a year and a leap day.
+pub const MAXIMUM_USAGE_PERIOD_DAYS: i64 = 366;
 /// How often a signed-in helper asks Relay for an Account summary without collecting quota.
 pub const ACCOUNT_SYNC_INTERVAL_SECONDS: u64 = 60;
+/// How often the helper polls each catalog status page. Failures keep the last reading.
+pub const PROVIDER_STATUS_INTERVAL_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,10 +29,12 @@ pub enum Operation {
     RecheckDiagnostics,
     Refresh,
     ResetCache,
+    UsagePeriod,
     Login,
     CancelLogin,
     Logout,
     SetUsageUpload,
+    SetGroupUsageByProject,
     SetQuotaRefreshInterval,
     SetOverviewSourcePin,
     SetProviderConfig,
@@ -81,6 +87,9 @@ pub enum ErrorCode {
     AuthenticationRequired,
     DeviceDeleted,
     StaleGeneration,
+    /// Relay refused a write because the Account has no paid sync entitlement. The session is
+    /// intact and the local data is not affected: what is missing is a subscription.
+    SubscriptionRequired,
     Unavailable,
     ProviderError,
     NetworkError,
@@ -337,9 +346,27 @@ pub struct ReplaceProviderBrowserSessionsPayload {
     pub access_denials: Vec<ProviderBrowserAccessDenial>,
 }
 
+/// The custom period a Usage page asks this device to fold, as two inclusive local dates.
+///
+/// `get_state` carries the four periods every panel opens on. Anything else — a week, a month,
+/// a range someone picked — is asked for one range at a time rather than folded four more times
+/// on every refresh.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsagePeriodPayload {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetUsageUploadPayload {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetGroupUsageByProjectPayload {
     pub enabled: bool,
 }
 
@@ -415,6 +442,12 @@ pub struct UsageUploadSetting {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct GroupUsageByProjectSetting {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaRefreshIntervalSetting {
     pub interval_seconds: u64,
 }
@@ -426,6 +459,20 @@ pub struct ProviderConfigView {
     pub configured: bool,
     pub masked_api_key: Option<String>,
     pub base_url: Option<String>,
+}
+
+/// Last-good official status-page reading for one catalog provider.
+///
+/// This is a field of the `providers` component, not a sixth component: it is public JSON
+/// about the provider, last-good on failure, and emitted on the same `providers` change
+/// event configuration already uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderStatusView {
+    pub provider: String,
+    pub indicator: String,
+    pub description: String,
+    pub checked_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -478,6 +525,34 @@ pub struct AccountComponentValue {
     pub device_id: Option<String>,
     pub device_generation: Option<u64>,
     pub account_summary: Option<Value>,
+    /// The paid-sync entitlement as the Account read answered it, or `None` before this device
+    /// has read one. Relay decides what it says; this carries it.
+    pub entitlement: Option<EntitlementView>,
+    /// Where a person buys the subscription, as Relay stated it for this Account.
+    pub purchase_url: Option<String>,
+}
+
+/// The paid-sync entitlement, as the Account read states it.
+///
+/// `stale` means Relay could not refresh the row from RevenueCat and answered with what it
+/// still had; `checked_at` is when that row last changed, so a stale answer can say its age.
+/// `status` stays a string: an unknown member is a member this build has not learned yet
+/// ([ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntitlementView {
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub will_renew: bool,
+    pub stale: bool,
+    pub checked_at: Option<String>,
+}
+
+impl EntitlementView {
+    /// Whether this entitlement is one Relay lets write.
+    pub fn allows_sync(&self) -> bool {
+        self.status == "active" || self.status == "grace"
+    }
 }
 
 /// OAuth, Device control, Account metadata, and the catalogs.
@@ -534,6 +609,7 @@ pub struct StateSnapshot {
     pub ipc_version: u32,
     pub revision: u64,
     pub usage_upload_enabled: bool,
+    pub group_usage_by_project: bool,
     pub quota_refresh_interval_seconds: u64,
     pub usage_periods: UsagePeriodCache,
     pub quota: ComponentState,
@@ -541,6 +617,7 @@ pub struct StateSnapshot {
     pub account: ComponentState,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
+    pub provider_status: Vec<ProviderStatusView>,
     pub provider_browser_sessions: Vec<ProviderBrowserSessionView>,
     pub browser_scan_enabled: Vec<String>,
     pub overview: Vec<QuotaOverviewItem>,
@@ -733,6 +810,7 @@ pub enum DiagnosticAttemptCode {
     MalformedData,
     TruncatedActiveSource,
     DeviceDeleted,
+    SubscriptionRequired,
 }
 
 /// One completed or still-running piece of work, as the copied report lists it.

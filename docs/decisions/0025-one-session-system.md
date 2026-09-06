@@ -5,6 +5,10 @@
 - Updates: [ADR 0006](0006-managed-account-device-usage.md), [ADR 0011](0011-sveltekit-document-worker.md)
 - Updated 2026-08-26 by [ADR 0027](0027-one-token-per-client.md), which renamed the table `sessions`
   and made it one row per client rather than a second one for a Device
+- Updated 2026-09-05 by [ADR 0032](0032-an-account-owns-its-identities.md), which made GitHub one
+  identity provider behind a port instead of the Account itself, renamed `GITHUB_SUBJECT_KEY` to
+  `IDENTITY_SUBJECT_KEY`, put the provider and the intent in the handoff, and sent every sign-in
+  through `/sign-in`
 
 ## Decision
 
@@ -17,8 +21,8 @@ answers for every client. Migration 0021 renamed that table `sessions` and its k
 and the same-origin path to return to in an HMAC-signed `__Host-quota_oauth` cookie good for ten
 minutes, then redirects to GitHub with `scope=` empty. `GET /api/auth/github/callback` compares
 `state` against that cookie, exchanges the code with the verifier inside a 20-second timeout, reads
-`GET /user` for a numeric id and login name, HMACs the id with `GITHUB_SUBJECT_KEY` into the Account
-id, writes one session row, sets `__Host-quota_session; HttpOnly; Secure; SameSite=Lax; Path=/`, and
+`GET /user` for a numeric id and login name, HMACs the id with `IDENTITY_SUBJECT_KEY` into the
+identity's subject, writes one session row, sets `__Host-quota_session; HttpOnly; Secure; SameSite=Lax; Path=/`, and
 returns the browser where it started. `POST /api/auth/logout` revokes the row and clears the cookie.
 
 Both cookies take the `__Host-` prefix, which a browser honours only for a `Secure`, `Path=/` cookie

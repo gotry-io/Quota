@@ -1,7 +1,9 @@
+import AuthenticationServices
 import SwiftUI
 
 struct ConnectAccountView: View {
   @Bindable var model: AppModel
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     GeometryReader { proxy in
@@ -34,8 +36,32 @@ struct ConnectAccountView: View {
       retryButton
       switchAccountButton
     } else {
-      connectButton
+      VStack(spacing: 12) {
+        connectButton
+        // Apple's control has no busy presentation of its own, so connecting draws the one
+        // button that does rather than a live second way in.
+        if !connecting {
+          appleButton
+        }
+      }
     }
+  }
+
+  /// Apple's own control, drawn by Apple: the mark, the label, and the sheet are theirs. It asks
+  /// on the device rather than in a browser, so nothing here opens one.
+  private var appleButton: some View {
+    SignInWithAppleButton(.continue) { request in
+      model.prepareAppleRequest(request)
+    } onCompletion: { result in
+      Task { await model.connectWithApple(result) }
+    }
+    // Apple's guidance pairs the black button with a light appearance and the white one with a
+    // dark appearance; either is theirs to draw.
+    .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+    .frame(maxWidth: .infinity)
+    .frame(height: 50)
+    .clipShape(Capsule())
+    .accessibilityIdentifier("connect.apple")
   }
 
   private var connecting: Bool {
@@ -123,7 +149,7 @@ struct ConnectAccountView: View {
   }
 
   private var footnote: some View {
-    Text("This iPhone only reads data reported by QuotaBar.")
+    Text("Signing in shows what QuotaBar reports from your Macs, alongside what this iPhone reads.")
       .font(.footnote)
       .foregroundStyle(.primary)
       .multilineTextAlignment(.center)

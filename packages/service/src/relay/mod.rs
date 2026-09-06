@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{AccountComponentValue, AuthStatus, CONTROL_PROTOCOL, MANAGED_DATA_PROTOCOL};
+use crate::protocol::{
+    AccountComponentValue, AuthStatus, CONTROL_PROTOCOL, EntitlementView, MANAGED_DATA_PROTOCOL,
+};
 use crate::service::{BackendError, LoginOutcome};
 use crate::state::StateStore;
 use base64::Engine;
@@ -681,6 +683,8 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
             "usage",
             "pricing_revision",
             "model_catalog_revision",
+            "entitlement",
+            "purchase",
         ],
     )?;
     let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
@@ -714,7 +718,59 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
         validate_quota_subscription(subscription)?;
     }
     validate_account_usage(object.get("usage").ok_or(RelayError::InvalidResponse)?)?;
+    validate_entitlement(
+        object
+            .get("entitlement")
+            .ok_or(RelayError::InvalidResponse)?,
+    )?;
+    if !object
+        .get("purchase")
+        .and_then(|purchase| purchase.get("web_url"))
+        .and_then(Value::as_str)
+        .is_some_and(is_purchase_url)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
     Ok(())
+}
+
+/// The entitlement carries a status this build may not know — a read takes the member it is
+/// given ([ADR 0023](../../../docs/decisions/0023-strict-writes-tolerant-reads.md)) — but the
+/// shape around it is checked.
+fn validate_entitlement(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(
+        value,
+        &["status", "expires_at", "will_renew", "stale", "checked_at"],
+    )?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if !valid_read_enum(object.get("status").and_then(Value::as_str))
+        || object.get("will_renew").and_then(Value::as_bool).is_none()
+        || object.get("stale").and_then(Value::as_bool).is_none()
+        || ["expires_at", "checked_at"].iter().any(|key| {
+            !object
+                .get(*key)
+                .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
+        })
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+/// Reads the entitlement the Account answered with, keeping only what this Mac states.
+fn entitlement_view(value: &Value) -> Option<EntitlementView> {
+    let object = value.get("entitlement")?.as_object()?;
+    Some(EntitlementView {
+        status: object.get("status")?.as_str()?.to_owned(),
+        expires_at: object.get("expires_at")?.as_str().map(str::to_owned),
+        will_renew: object.get("will_renew")?.as_bool()?,
+        stale: object.get("stale")?.as_bool()?,
+        checked_at: object.get("checked_at")?.as_str().map(str::to_owned),
+    })
+}
+
+fn is_purchase_url(value: &str) -> bool {
+    value.len() <= 2_048 && Url::parse(value).is_ok_and(|url| url.scheme() == "https")
 }
 
 fn validate_account_record(value: &Value) -> Result<(), RelayError> {
@@ -1300,6 +1356,8 @@ impl AccountManager {
                 .map(str::to_owned),
             device_generation: session.get("device_generation").and_then(Value::as_u64),
             account_summary: None,
+            entitlement: None,
+            purchase_url: None,
         };
         Ok(LoginOutcome { session, account })
     }
@@ -1320,6 +1378,10 @@ impl AccountManager {
     ///
     /// `timezone` is this device's IANA zone, and it decides where the three trailing periods
     /// begin and end: a local day starts at local midnight. `all` is every retained day.
+    ///
+    /// The paid-sync entitlement and the purchase link ride the same read: Relay states both
+    /// on the summary, so this device carries them to the panel rather than asking twice or
+    /// deriving either ([ADR 0033](../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
     pub fn refresh_account_state(
         &self,
         timezone: &str,
@@ -1345,6 +1407,12 @@ impl AccountManager {
                 .map(str::to_owned),
             device_id,
             device_generation,
+            entitlement: entitlement_view(&summary),
+            purchase_url: summary
+                .get("purchase")
+                .and_then(|purchase| purchase.get("web_url"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             account_summary: Some(summary),
         })
         .unwrap_or(Value::Null))
@@ -2127,6 +2195,12 @@ pub(crate) fn relay_error_for_backend(error: RelayError) -> crate::protocol::Ipc
             "stale_generation" => {
                 crate::protocol::IpcError::new(ErrorCode::StaleGeneration, RecoveryAction::Login)
             }
+            // A write refused for want of a paid subscription. The session is intact, so this
+            // is not a sign-out and not something retrying sooner would fix; subscribing is.
+            "subscription_required" => crate::protocol::IpcError::new(
+                ErrorCode::SubscriptionRequired,
+                RecoveryAction::None,
+            ),
             "invalid_request" | "invalid_response" => {
                 crate::protocol::IpcError::new(ErrorCode::InvalidResponse, RecoveryAction::Retry)
             }
@@ -2993,9 +3067,10 @@ mod tests {
             ("account_summary", validate_account_summary),
             ("usage_submission", validate_usage_submission),
         ];
-        // This service never fetches GET /api/v6/account/usage/activity, so it has no
-        // trust-boundary restatement of that read (ADR 0019). TypeScript and Swift answer it.
-        const SKIPPED_CONTRACTS: &[&str] = &["account_usage_activity"];
+        // This service never fetches GET /api/v6/account/usage/activity or GET /api/v2/account,
+        // so it has no trust-boundary restatement of either read (ADR 0019). TypeScript answers
+        // both, and Swift answers the activity one.
+        const SKIPPED_CONTRACTS: &[&str] = &["account_usage_activity", "account_response"];
         let registered = validators.map(|(contract, _)| contract);
         for skipped in SKIPPED_CONTRACTS {
             assert!(
@@ -3525,6 +3600,106 @@ mod tests {
         })
     }
 
+    /// The paid-sync entitlement and the purchase link are stated by Relay and carried, not
+    /// derived. The shape is checked; the status member is not, because a read takes the
+    /// member it is given (ADR 0023).
+    #[test]
+    fn a_summary_states_the_entitlement_and_where_to_buy_one() {
+        let summary = valid_summary(serde_json::json!([]));
+        assert!(validate_account_summary(&summary).is_ok());
+        let view = entitlement_view(&summary).expect("entitlement");
+        assert!(view.allows_sync());
+        assert_eq!(view.checked_at.as_deref(), Some("2026-09-05T00:00:00Z"));
+
+        let mut unknown_status = summary.clone();
+        unknown_status["entitlement"]["status"] = serde_json::json!("complimentary");
+        assert!(validate_account_summary(&unknown_status).is_ok());
+        assert!(
+            !entitlement_view(&unknown_status)
+                .expect("entitlement")
+                .allows_sync()
+        );
+
+        // A stale answer with no stored row has nothing to date, which is a null, not a gap.
+        let mut never_checked = summary.clone();
+        never_checked["entitlement"]["checked_at"] = Value::Null;
+        never_checked["entitlement"]["expires_at"] = Value::Null;
+        assert!(validate_account_summary(&never_checked).is_ok());
+        assert!(
+            entitlement_view(&never_checked)
+                .expect("entitlement")
+                .checked_at
+                .is_none()
+        );
+
+        for broken in [
+            serde_json::json!({"entitlement": Value::Null}),
+            serde_json::json!({"purchase": Value::Null}),
+            serde_json::json!({"purchase": {"web_url": "javascript:alert(1)"}}),
+        ] {
+            let mut refused = summary.clone();
+            for (key, value) in broken.as_object().expect("object") {
+                refused[key] = value.clone();
+            }
+            assert!(validate_account_summary(&refused).is_err(), "{refused}");
+        }
+
+        let mut missing_instant = summary;
+        missing_instant["entitlement"]
+            .as_object_mut()
+            .expect("entitlement")
+            .remove("checked_at");
+        assert!(validate_account_summary(&missing_instant).is_err());
+    }
+
+    /// A write Relay refuses for want of a subscription is not a session ending: the token
+    /// still works, so nothing is signed out and nothing is retried in a tighter loop.
+    #[test]
+    fn a_write_refused_for_want_of_a_subscription_is_not_a_sign_out() {
+        let (origin, server) = spawn_mock_server(vec![http_json(
+            402,
+            None,
+            &serde_json::json!({"error": {"code": "subscription_required"}}),
+        )]);
+        let root = std::env::temp_dir().join(format!("quota-unpaid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let (_, epoch) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        );
+
+        let error = manager
+            .sync_control_and_update()
+            .expect_err("an unpaid account cannot write");
+
+        assert_eq!(
+            error.error.code,
+            crate::protocol::ErrorCode::SubscriptionRequired
+        );
+        assert!(!error.error.code.requires_login());
+        assert!(error.sign_out_epoch().is_none());
+        let (session, after) = state
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session still installed");
+        assert_eq!(after, epoch);
+        assert_eq!(
+            session.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        let _ = server.join().expect("mock server");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn valid_summary(agents: Value) -> Value {
         serde_json::json!({
             "protocol_version": MANAGED_DATA_PROTOCOL,
@@ -3537,7 +3712,17 @@ mod tests {
             "subscriptions": [],
             "usage": valid_usage(agents),
             "pricing_revision": "2026-08-01",
-            "model_catalog_revision": "2026-08-01"
+            "model_catalog_revision": "2026-08-01",
+            "entitlement": {
+                "status": "active",
+                "expires_at": "2026-10-05T00:00:00Z",
+                "will_renew": true,
+                "product_id": "quota_sync_monthly",
+                "store": "app_store",
+                "stale": false,
+                "checked_at": "2026-09-05T00:00:00Z"
+            },
+            "purchase": { "web_url": "https://pay.rev.cat/testtoken/account_1" }
         })
     }
 

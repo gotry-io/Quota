@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::protocol::*;
+use crate::provider_status;
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
     session_is_usable,
@@ -250,6 +251,14 @@ pub trait LocalBackend: Send + Sync {
         let _ = (cancel, updates, trigger);
         unavailable_refresh_outcome()
     }
+    /// One custom period, folded from the hours this device has stored.
+    ///
+    /// `from` and `to` are inclusive local dates. The four periods `get_state` carries are
+    /// folded on every refresh; a range someone picked is folded when it is asked for.
+    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
+        let _ = (from, to);
+        Err(BackendError::unavailable())
+    }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -274,6 +283,19 @@ pub trait LocalBackend: Send + Sync {
         provider: crate::catalog::ProviderId,
         cookie_header: &str,
     ) -> Result<crate::providers::ValidatedBrowserSession, BackendError>;
+    /// Version stamped on `Quota/<version>` for public, unauthenticated fetches.
+    fn client_version(&self) -> &str {
+        "test"
+    }
+    /// Official status-page readings. Test backends return nothing so they never leave the process.
+    fn poll_provider_status(
+        &self,
+        user_agent: &str,
+        checked_at: &str,
+    ) -> std::collections::BTreeMap<String, crate::provider_status::ProviderStatusReading> {
+        let _ = (user_agent, checked_at);
+        std::collections::BTreeMap::new()
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +444,7 @@ struct ServiceInner {
     scheduler: Mutex<SchedulerPlan>,
     scheduler_wakeup: Condvar,
     scheduler_signal: Mutex<schedule::SchedulerSignal>,
+    provider_status_inflight: AtomicBool,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
     #[cfg(test)]
@@ -464,6 +487,7 @@ impl LocalService {
                 }),
                 scheduler_wakeup: Condvar::new(),
                 scheduler_signal: Mutex::new(schedule::SchedulerSignal::Idle),
+                provider_status_inflight: AtomicBool::new(false),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
                 #[cfg(test)]
@@ -477,18 +501,21 @@ impl LocalService {
     pub fn start_scheduler(&self) {
         let service = self.clone();
         service.request_refresh_with_trigger(DiagnosticAttemptTrigger::Startup);
+        service.request_provider_status();
         thread::Builder::new()
             .name("quota-refresh-scheduler".to_owned())
             .spawn(move || {
                 let mut next_account = Instant::now() + schedule::account_sync_interval();
                 let mut next_quota = Instant::now() + service.quota_refresh_interval();
+                let mut next_status = Instant::now() + schedule::provider_status_interval();
                 service.store_next_quota(next_quota);
                 loop {
                     if service.is_shutdown() {
                         break;
                     }
                     let reset_at = service.reset_deadline_instant();
-                    let (kind, wake_at) = schedule::next_wake(next_account, next_quota, reset_at);
+                    let (kind, wake_at) =
+                        schedule::next_wake(next_account, next_quota, reset_at, next_status);
                     let wait = wake_at.saturating_duration_since(Instant::now());
                     let signal = service.inner.scheduler_signal.lock();
                     let Ok(signal) = signal else { break };
@@ -539,6 +566,10 @@ impl LocalService {
                                 RefreshLane::Quota,
                                 DiagnosticAttemptTrigger::Scheduled,
                             );
+                        }
+                        schedule::SchedulerWake::ProviderStatus => {
+                            next_status = now + schedule::provider_status_interval();
+                            service.request_provider_status();
                         }
                     }
                 }
@@ -620,10 +651,14 @@ impl LocalService {
             Operation::RecheckDiagnostics => self.recheck_diagnostics(&request).map(as_json),
             Operation::Refresh => self.refresh(&request).map(as_json),
             Operation::ResetCache => self.reset_cache(&request).map(as_json),
+            Operation::UsagePeriod => self.usage_period(&request),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
             Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
+            Operation::SetGroupUsageByProject => {
+                self.set_group_usage_by_project(&request).map(as_json)
+            }
             Operation::SetQuotaRefreshInterval => {
                 self.set_quota_refresh_interval(&request).map(as_json)
             }
@@ -685,6 +720,15 @@ impl LocalService {
         Ok(PingResult { ok: true })
     }
 
+    /// Folds one custom local period, which `get_state` does not carry.
+    fn usage_period(&self, request: &IpcRequest) -> Result<Value, IpcError> {
+        let payload = request.decode_payload::<UsagePeriodPayload>()?;
+        self.inner
+            .backend
+            .usage_period(&payload.from, &payload.to)
+            .map_err(|error| error.error)
+    }
+
     fn get_state(&self, request: &IpcRequest) -> Result<StateSnapshot, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
         self.inner.state.snapshot().map_err(state_error)
@@ -721,6 +765,7 @@ impl LocalService {
         }
         self.inner.state.reset_cache();
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::Manual);
+        self.request_provider_status();
         Ok(EmptyResult {})
     }
 
@@ -976,6 +1021,22 @@ impl LocalService {
         self.emit(vec![ComponentName::Usage]);
         let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
         Ok(UsageUploadSetting {
+            enabled: payload.enabled,
+        })
+    }
+
+    fn set_group_usage_by_project(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<crate::protocol::GroupUsageByProjectSetting, IpcError> {
+        let payload: crate::protocol::SetGroupUsageByProjectPayload = request.decode_payload()?;
+        self.inner
+            .state
+            .set_group_usage_by_project(payload.enabled)
+            .map_err(state_error)?;
+        self.emit(vec![ComponentName::Usage]);
+        let _ = self.request_refresh_with_trigger(DiagnosticAttemptTrigger::SettingsChange);
+        Ok(crate::protocol::GroupUsageByProjectSetting {
             enabled: payload.enabled,
         })
     }
@@ -1293,6 +1354,77 @@ impl LocalService {
 
     fn request_account_sync(&self) {
         let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poll_provider_status_for_test(&self) {
+        self.poll_provider_status();
+    }
+
+    fn request_provider_status(&self) {
+        if self
+            .inner
+            .provider_status_inflight
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let service = self.clone();
+        if thread::Builder::new()
+            .name("quota-provider-status".to_owned())
+            .spawn(move || {
+                service.poll_provider_status();
+                service
+                    .inner
+                    .provider_status_inflight
+                    .store(false, Ordering::Release);
+            })
+            .is_err()
+        {
+            self.inner
+                .provider_status_inflight
+                .store(false, Ordering::Release);
+        }
+    }
+
+    fn poll_provider_status(&self) {
+        if self.is_shutdown() {
+            return;
+        }
+        let user_agent = format!("Quota/{}", self.inner.backend.client_version());
+        let checked_at = now_rfc3339();
+        let fresh = self
+            .inner
+            .backend
+            .poll_provider_status(&user_agent, &checked_at);
+        let last = self
+            .inner
+            .state
+            .component(ComponentName::Providers)
+            .ok()
+            .flatten()
+            .and_then(|record| record.value);
+        let last_map = provider_status::readings_from_component(last.as_ref());
+        let merged = provider_status::merge(last_map.clone(), fresh);
+        if merged == last_map {
+            return;
+        }
+        let value = provider_status::component_value(&merged);
+        if self
+            .inner
+            .state
+            .set_component(
+                ComponentName::Providers,
+                ComponentStatus::Ready,
+                Some(value),
+                Some(checked_at),
+                None,
+                false,
+            )
+            .is_ok()
+        {
+            self.emit(vec![ComponentName::Providers]);
+        }
     }
 
     fn request_lane(&self, lane: RefreshLane, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
@@ -1844,6 +1976,8 @@ impl LocalService {
                             device_id: None,
                             device_generation: None,
                             account_summary: None,
+                            entitlement: None,
+                            purchase_url: None,
                         })),
                         Some(now_rfc3339()),
                     )
@@ -2045,6 +2179,8 @@ impl LocalService {
                         device_id: None,
                         device_generation: None,
                         account_summary: None,
+                        entitlement: None,
+                        purchase_url: None,
                     })),
                     None,
                     Some(error.error),
@@ -2174,6 +2310,8 @@ impl LocalService {
             device_id: None,
             device_generation: None,
             account_summary: None,
+            entitlement: None,
+            purchase_url: None,
         };
         self.update_component(
             ComponentName::Account,
@@ -2325,6 +2463,7 @@ fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
             DiagnosticAttemptCode::AuthenticationRequired
         }
         ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
+        ErrorCode::SubscriptionRequired => DiagnosticAttemptCode::SubscriptionRequired,
         ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
         ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
         ErrorCode::InvalidState | ErrorCode::ClientUpgradeRequired => {
@@ -2369,6 +2508,8 @@ fn account_value_from(
             device_id: None,
             device_generation: None,
             account_summary: None,
+            entitlement: None,
+            purchase_url: None,
         };
     };
     let Some(object) = value.as_object() else {
@@ -2379,6 +2520,8 @@ fn account_value_from(
             device_id: None,
             device_generation: None,
             account_summary: None,
+            entitlement: None,
+            purchase_url: None,
         };
     };
     AccountComponentValue {
@@ -2400,6 +2543,14 @@ fn account_value_from(
             .get("account_summary")
             .cloned()
             .filter(|v| !v.is_null()),
+        entitlement: object
+            .get("entitlement")
+            .filter(|value| !value.is_null())
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        purchase_url: object
+            .get("purchase_url")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     }
 }
 
@@ -2531,6 +2682,59 @@ mod tests {
     impl EventSink for RecordingSink {
         fn event(&self, event: IpcEvent) {
             self.0.lock().expect("events").push(event);
+        }
+    }
+
+    #[derive(Default)]
+    struct StatusPollBackend {
+        user_agent: Mutex<Option<String>>,
+    }
+
+    impl LocalBackend for StatusPollBackend {
+        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
+            let unavailable = || Err(BackendError::unavailable());
+            RefreshOutcome {
+                quota: unavailable(),
+                usage: unavailable(),
+                account: unavailable(),
+                pricing: unavailable(),
+                overview: None,
+            }
+        }
+        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+            Err(BackendError::unavailable())
+        }
+        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+            Err(BackendError::unavailable())
+        }
+        fn logout(&self, _: &Value) -> Result<(), BackendError> {
+            Err(BackendError::unavailable())
+        }
+        fn validate_provider_browser_session(
+            &self,
+            _: crate::catalog::ProviderId,
+            _: &str,
+        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+            Err(BackendError::unavailable())
+        }
+        fn poll_provider_status(
+            &self,
+            user_agent: &str,
+            checked_at: &str,
+        ) -> std::collections::BTreeMap<String, crate::provider_status::ProviderStatusReading>
+        {
+            *self.user_agent.lock().expect("user agent") = Some(user_agent.to_owned());
+            let mut readings = std::collections::BTreeMap::new();
+            readings.insert(
+                "claude".to_owned(),
+                crate::provider_status::ProviderStatusReading {
+                    provider: "claude".to_owned(),
+                    indicator: "minor".to_owned(),
+                    description: "Partial System Outage".to_owned(),
+                    checked_at: checked_at.to_owned(),
+                },
+            );
+            readings
         }
     }
 
@@ -2919,8 +3123,45 @@ mod tests {
             .expect("cache object");
         assert_eq!(cache["rebuilding"], false);
         assert!(cache["reset_at"].is_null());
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("provider_status")),
+            Some(&serde_json::json!([]))
+        );
         service.shutdown();
         drop(service);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_status_poll_lands_on_the_providers_component() {
+        let root = std::env::temp_dir().join(format!("quota-service-status-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let backend = Arc::new(StatusPollBackend::default());
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            backend.clone(),
+        );
+        service.poll_provider_status_for_test();
+        let snapshot = state.snapshot().expect("snapshot");
+        assert_eq!(snapshot.provider_status.len(), 1);
+        assert_eq!(snapshot.provider_status[0].provider, "claude");
+        assert_eq!(snapshot.provider_status[0].indicator, "minor");
+        assert_eq!(
+            snapshot.provider_status[0].description,
+            "Partial System Outage"
+        );
+        assert_eq!(
+            backend.user_agent.lock().expect("user agent").as_deref(),
+            Some("Quota/test")
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -3261,6 +3502,57 @@ mod tests {
                 .snapshot()
                 .expect("updated state")
                 .usage_upload_enabled
+        );
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Usage])
+        );
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn grouping_usage_by_project_is_durable_and_emits_usage_state() {
+        let root = std::env::temp_dir().join(format!("quota-group-project-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
+        assert!(
+            state
+                .snapshot()
+                .expect("initial state")
+                .group_usage_by_project
+        );
+        let request: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "group-project",
+            "operation": "set_group_usage_by_project",
+            "payload": {"enabled": false}
+        }))
+        .expect("request");
+
+        let response = service.handle(request);
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !state
+                .snapshot()
+                .expect("updated state")
+                .group_usage_by_project
         );
         assert!(
             sink.0
@@ -3700,6 +3992,8 @@ mod tests {
             device_id: Some("device_1".into()),
             device_generation: Some(1),
             account_summary: summary,
+            entitlement: None,
+            purchase_url: None,
         }
     }
 
@@ -4290,6 +4584,8 @@ mod tests {
                     device_id: None,
                     device_generation: None,
                     account_summary: None,
+                    entitlement: None,
+                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,
@@ -4329,6 +4625,8 @@ mod tests {
                     device_id: None,
                     device_generation: None,
                     account_summary: None,
+                    entitlement: None,
+                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,
@@ -4370,6 +4668,8 @@ mod tests {
                     device_id: Some("device_test".into()),
                     device_generation: Some(1),
                     account_summary: None,
+                    entitlement: None,
+                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,

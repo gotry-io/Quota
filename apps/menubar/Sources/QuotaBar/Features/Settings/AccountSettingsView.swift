@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// What the Account page offers, top to bottom.
@@ -7,6 +8,7 @@ import SwiftUI
 /// reaches the page; signing out is what leaves it.
 enum AccountSettingsItem: String, CaseIterable, Identifiable, Sendable {
   case identity
+  case sync
   case syncUsage
   case devices
   case website
@@ -59,8 +61,31 @@ struct AccountSettingsView: View {
       .accessibilityElement(children: .combine)
       .accessibilityLabel("Signed in as \(model.accountDisplayLabel)")
 
+    case .sync:
+      SettingsListRow(
+        title: SyncStatusCopy.title,
+        subtitle: model.syncStatusLabel,
+        systemImage: "checkmark.seal"
+      ) {
+        // Nothing is offered until the account read has said where to buy it; that state is
+        // the one the status line calls "Checking…".
+        if let url = model.syncActionURL {
+          Button(model.syncActionLabel) {
+            NSWorkspace.shared.open(url)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("\(SyncStatusCopy.title): \(model.syncStatusLabel)")
+
     case .syncUsage:
-      SettingsListRow(title: "Sync Usage", systemImage: "arrow.triangle.2.circlepath") {
+      SettingsListRow(
+        title: "Sync Usage",
+        subtitle: model.syncUsageDisabledReason,
+        systemImage: "arrow.triangle.2.circlepath"
+      ) {
         Toggle(
           "Sync Usage",
           isOn: Binding(
@@ -75,8 +100,10 @@ struct AccountSettingsView: View {
       }
       .accessibilityElement(children: .combine)
       .accessibilityLabel("Sync Usage")
-      .accessibilityHint("Upload this Mac's Usage to your Quota account")
-      .disabled(model.isUpdatingUsageUpload)
+      .accessibilityHint(
+        model.syncUsageDisabledReason ?? "Upload this Mac's Usage to your Quota account"
+      )
+      .disabled(model.isUpdatingUsageUpload || model.syncUsageDisabledReason != nil)
 
     case .devices:
       Button(action: onOpenDevices) {

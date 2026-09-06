@@ -11,7 +11,6 @@ struct MenuBarContentView: View {
   @State private var navigationTransitionGeneration = 0
   @State private var isLogoutConfirmationPresented = false
   @State private var usageSource: UsageSource = .account
-  @State private var usagePeriod: UsagePeriod = .today
   @State private var diagnostics = DiagnosticsPageModel()
   @State private var isResetConfirmationPresented = false
   private let performsInitialRefresh: Bool
@@ -22,6 +21,7 @@ struct MenuBarContentView: View {
     model: MenuBarViewModel,
     panelSession: MenuBarPanelSession? = nil,
     initialPath: [MenuBarRoute] = [],
+    initialUsageSource: UsageSource = .account,
     performsInitialRefresh: Bool = true,
     performsDiagnosticsCheckOnEntry: Bool = true,
     diagnosticsModel: DiagnosticsPageModel? = nil,
@@ -33,6 +33,7 @@ struct MenuBarContentView: View {
     self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
+    _usageSource = State(initialValue: initialUsageSource)
     _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
   }
 
@@ -201,6 +202,7 @@ struct MenuBarContentView: View {
         onOpenNotifications: { navigate(to: .notifications) },
         onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
         onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
+        onOpenResetCopy: { navigate(to: .resetCopy) },
         onOpenSupport: { navigate(to: .support) },
         onOpenRefreshInterval: { navigate(to: .quotaRefreshInterval) }
       )
@@ -212,6 +214,7 @@ struct MenuBarContentView: View {
       )
     case .agents:
       AgentsSettingsView(
+        model: model,
         statusLine: { provider in model.agentStatusLine(for: provider) },
         onOpenProvider: { provider in navigate(to: .provider(provider)) }
       )
@@ -245,7 +248,7 @@ struct MenuBarContentView: View {
     case .devices:
       AccountDevicesView(model: model)
     case .usage:
-      AccountUsageView(model: model, source: $usageSource, period: $usagePeriod)
+      AccountUsageView(model: model, source: $usageSource, now: now)
     case .notifications:
       NotificationsSettingsView(model: model)
     case .menuBarStyle:
@@ -254,6 +257,8 @@ struct MenuBarContentView: View {
       MenuBarProviderSettingsView(
         providers: ProviderDisplayOrder.enabledProviders()
       )
+    case .resetCopy:
+      ResetCopySettingsView(onSelect: navigateBack)
     case .quotaRefreshInterval:
       QuotaRefreshIntervalSettingsView(
         selected: QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds)
@@ -360,6 +365,7 @@ enum MenuBarRoute: Hashable {
   case notifications
   case menuBarStyle
   case menuBarProvider
+  case resetCopy
   case quotaRefreshInterval
   case support
   case diagnostics
@@ -381,6 +387,7 @@ enum MenuBarRoute: Hashable {
     // The section header says Menu Bar; a page carries its own context.
     case .menuBarStyle: "Menu Bar Style"
     case .menuBarProvider: "Menu Bar Provider"
+    case .resetCopy: "Reset time"
     case .quotaRefreshInterval: "Refresh Interval"
     case .support: "Support"
     case .diagnostics: "Diagnostics"

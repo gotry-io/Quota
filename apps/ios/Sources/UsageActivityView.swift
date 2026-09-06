@@ -39,6 +39,9 @@ struct UsageActivitySection: View {
           Text("No activity in the last year.")
             .font(.body)
             .foregroundStyle(Color.primary)
+            // An accessibility text size needs more than one line, and a list row only gives
+            // one unless the text asks for its full height.
+            .fixedSize(horizontal: false, vertical: true)
             .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityIdentifier("usage.activity.empty")
         }
@@ -371,8 +374,14 @@ struct UsageDayDetailSheet: View {
           .accessibilityIdentifier("usage.day.empty")
       }
     case .loaded(let agents):
+      // Shares are of the rows on screen: the tree is the day's own fold, so its agents sum to
+      // what the headline says, and a headline behind the tree can only make a share overstate.
+      let daySections = UsageBreakdown.sections(agents: agents)
+      let treeTokens = daySections.flatMap(\.providers).flatMap(\.models)
+        .reduce(0) { $0 + $1.totals.totalTokens }
       UsageAgentListSections(
-        sections: UsageBreakdown.sections(agents: agents),
+        sections: daySections,
+        periodTokens: max(sheet.headline.totals.totalTokens, treeTokens),
         expandedProviderIDs: $expandedProviderIDs,
         modelIdentifier: "usage.day.model"
       )

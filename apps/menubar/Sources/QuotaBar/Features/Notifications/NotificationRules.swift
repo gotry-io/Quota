@@ -8,6 +8,7 @@ import QuotaAlerts
 enum NotificationRules {
   static let enabledKey = "notifications.enabled"
   static let resetRemindersKey = "notifications.resetReminders"
+  static let paceAlertsKey = "notifications.paceAlerts"
   static let thresholdsKey = "notifications.thresholds"
 
   /// Remaining-percent choices the Notifications page offers. The second slot may be Off.
@@ -17,6 +18,7 @@ enum NotificationRules {
     let enabled = defaults.object(forKey: enabledKey) as? Bool ?? AlertRules.defaultEnabled
     let resetReminders =
       defaults.object(forKey: resetRemindersKey) as? Bool ?? AlertRules.defaultResetReminders
+    let paceAlerts = defaults.object(forKey: paceAlertsKey) as? Bool ?? AlertRules.defaultPaceAlerts
     var parsed: [String: [Int]] = [:]
     if let raw = defaults.dictionary(forKey: thresholdsKey) {
       for (selector, value) in raw {
@@ -28,6 +30,7 @@ enum NotificationRules {
     return AlertRules(
       enabled: enabled,
       resetReminders: resetReminders,
+      paceAlerts: paceAlerts,
       thresholds: parsed
     )
   }
@@ -35,6 +38,7 @@ enum NotificationRules {
   static func save(_ rules: AlertRules, to defaults: UserDefaults = .standard) {
     defaults.set(rules.enabled, forKey: enabledKey)
     defaults.set(rules.resetReminders, forKey: resetRemindersKey)
+    defaults.set(rules.paceAlerts, forKey: paceAlertsKey)
     defaults.set(
       rules.thresholds.mapValues { AlertRules.normalized($0) } as [String: Any],
       forKey: thresholdsKey

@@ -345,6 +345,117 @@ pub fn resolve_pricing_entry(catalog: &PricingCatalog, row: &DatedUsageRow) -> P
     }
 }
 
+/// What reading from a cache saved, against paying the uncached input price for the same tokens.
+///
+/// See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageCacheSaved {
+    pub amount_microusd: Option<String>,
+    pub status: UsageCostStatus,
+    pub unpriced_rows: u64,
+}
+
+/// One row's part in a saving. A row that read nothing from a cache takes no part at all.
+#[derive(Clone, Debug)]
+enum PreparedUsageCacheSavedRow {
+    Saved(BigUint),
+    Unpriced,
+    NoCacheRead,
+}
+
+/// How much of a period's input tokens came back from a cache, in basis points.
+///
+/// `input_tokens` is every input token the request was billed for and the cache counts are parts
+/// of it, so this is one share of one whole. A period with no input has no rate rather than a
+/// rate of zero, and basis points keep the answer an integer so every runtime agrees exactly.
+///
+/// See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+#[must_use]
+pub fn usage_cache_hit_basis_points(totals: &crate::usage::UsageSummaryTotals) -> Option<u64> {
+    if totals.input_tokens == 0 {
+        return None;
+    }
+    let input = BigUint::from(totals.input_tokens);
+    let scaled = BigUint::from(totals.cache_read_input_tokens) * 20_000u32 + &input;
+    u64::try_from(scaled / (input * 2u32)).ok()
+}
+
+/// What the cache reads in these rows saved, priced through the entry their cost resolved to.
+///
+/// Only the uncached-input and cache-read rates take part: a cache write is what buying the
+/// cache cost and is already in the cost beside this. A row whose entry states no rate for
+/// either side is counted rather than guessed at, and a catalog that priced a cache read above
+/// uncached input saved nothing on that row.
+///
+/// See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+pub fn calculate_usage_cache_saved(
+    rows: &[DatedUsageRow],
+    catalog: Option<&PricingCatalog>,
+) -> Result<UsageCacheSaved, UsageError> {
+    let catalog = catalog.and_then(|catalog| validate_catalog(catalog).valid.then_some(catalog));
+    let mut amount = BigUint::zero();
+    let mut priced = 0u64;
+    let mut unpriced = 0u64;
+    for row in rows {
+        super::usage::validate_dated_row(row)?;
+        match prepare_row_cache_saved(catalog, row) {
+            PreparedUsageCacheSavedRow::NoCacheRead => {}
+            PreparedUsageCacheSavedRow::Unpriced => unpriced += 1,
+            PreparedUsageCacheSavedRow::Saved(value) => {
+                amount += value;
+                priced += 1;
+            }
+        }
+    }
+    Ok(UsageCacheSaved {
+        amount_microusd: (unpriced == 0 || priced > 0).then(|| amount.to_string()),
+        status: if unpriced == 0 {
+            UsageCostStatus::Complete
+        } else if priced > 0 {
+            UsageCostStatus::Partial
+        } else {
+            UsageCostStatus::Unavailable
+        },
+        unpriced_rows: unpriced,
+    })
+}
+
+fn prepare_row_cache_saved(
+    catalog: Option<&PricingCatalog>,
+    row: &DatedUsageRow,
+) -> PreparedUsageCacheSavedRow {
+    if row.cache_read_tokens == 0 {
+        return PreparedUsageCacheSavedRow::NoCacheRead;
+    }
+    let Some(catalog) = catalog else {
+        return PreparedUsageCacheSavedRow::Unpriced;
+    };
+    let PricingResolution::Priced { entry, .. } = resolve_pricing_entry(catalog, row) else {
+        return PreparedUsageCacheSavedRow::Unpriced;
+    };
+    let uncached = [(
+        row.cache_read_tokens,
+        entry.rates.uncached_input_per_million.as_ref(),
+        false,
+    )];
+    let cached = [(
+        row.cache_read_tokens,
+        entry.rates.cache_read_per_million.as_ref(),
+        false,
+    )];
+    match (
+        round_decimal_components(&uncached),
+        round_decimal_components(&cached),
+    ) {
+        (Ok(full), Ok(actual)) => PreparedUsageCacheSavedRow::Saved(if full > actual {
+            full - actual
+        } else {
+            BigUint::zero()
+        }),
+        _ => PreparedUsageCacheSavedRow::Unpriced,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum PreparedUsageCostRow {
     Priced {
@@ -928,6 +1039,7 @@ fn is_vendor_direct_channel(channel: BillingChannel) -> bool {
             | BillingChannel::XaiDirect
             | BillingChannel::MoonshotDirect
             | BillingChannel::DeepseekDirect
+            | BillingChannel::GoogleDirect
     )
 }
 
@@ -1112,6 +1224,63 @@ mod tests {
         assert!(result.issues.is_empty(), "{:?}", result.issues);
     }
 
+    const METRICS_FIXTURE: &str =
+        include_str!("../../protocol/fixtures/usage-metrics-conformance.json");
+
+    fn metrics_fixture() -> Value {
+        serde_json::from_str(METRICS_FIXTURE).expect("usage metrics conformance fixture")
+    }
+
+    #[test]
+    fn cache_hit_rate_matches_shared_fixture() {
+        let root = metrics_fixture();
+        let cases = root
+            .get("hit_rate")
+            .and_then(Value::as_array)
+            .expect("hit rate cases");
+        assert!(cases.len() > 1);
+        for case in cases {
+            let name = case.get("name").and_then(Value::as_str).expect("case name");
+            let totals: crate::usage::UsageSummaryTotals =
+                serde_json::from_value(case.get("totals").cloned().expect("totals"))
+                    .expect("Usage summary totals");
+            let expected = case
+                .get("expected_basis_points")
+                .and_then(|value| value.as_u64().map(Some).unwrap_or_default());
+            assert_eq!(usage_cache_hit_basis_points(&totals), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn cache_saving_matches_shared_fixture() {
+        let root = metrics_fixture();
+        let cases = root
+            .get("saved")
+            .and_then(Value::as_array)
+            .expect("saving cases");
+        assert!(cases.len() > 1);
+        for case in cases {
+            let name = case.get("name").and_then(Value::as_str).expect("case name");
+            let catalog = case
+                .get("catalog")
+                .and_then(Value::as_str)
+                .map(|value| catalog(&root, value));
+            let rows: Vec<DatedUsageRow> = case
+                .get("rows")
+                .and_then(Value::as_array)
+                .expect("saving rows")
+                .iter()
+                .map(|value| row(&root, value.as_str().expect("row name")))
+                .collect();
+            let saved = calculate_usage_cache_saved(&rows, catalog.as_ref()).expect("cache saving");
+            assert_eq!(
+                serde_json::to_value(&saved).expect("saving json"),
+                *case.get("expected").expect("expected saving"),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn pricing_validation_matches_shared_fixture() {
         let root = fixture();
@@ -1255,6 +1424,7 @@ mod tests {
     fn unnamed_channel_row(model: &str) -> DatedUsageRow {
         DatedUsageRow {
             date: "2026-08-10".into(),
+            project_key: String::new(),
             row: UsageRow {
                 agent: UsageAgent::Grok,
                 billing_channel: BillingChannel::Unknown,

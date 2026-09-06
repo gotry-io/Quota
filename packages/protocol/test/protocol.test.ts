@@ -4,14 +4,18 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
   AccountUsageActivityResponseSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
+  IDENTITY_PROVIDERS,
+  identityProviderDisplayName,
   IOS_OAUTH_CLIENT_ID,
   IOS_OAUTH_REDIRECT_URI,
   IosLoginExchangeRequestSchema,
@@ -26,7 +30,12 @@ import {
   PROTOCOL_VERSION,
   PROVIDER_IDS,
   PricingCatalogSchema,
+  PublicProfileHandleSchema,
+  PublicProfileUpdateRequestSchema,
+  PublicUsageResponseSchema,
+  PUBLIC_PROFILE_HANDLE_PATTERN,
   ProviderIdSchema,
+  RESERVED_PUBLIC_PROFILE_HANDLES,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -38,6 +47,8 @@ import {
 describe("quota protocol", () => {
   it("accepts every managed provider and keeps local-only collectors out of the wire", () => {
     expect(PROVIDER_IDS).toContain("cursor");
+    expect(PROVIDER_IDS).toContain("gemini");
+    expect(PROVIDER_IDS).toContain("copilot");
     expect(ProviderIdSchema.safeParse("cursor").success).toBe(true);
     expect(LOCAL_PROVIDER_IDS).toEqual(expect.arrayContaining([...PROVIDER_IDS]));
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
@@ -53,6 +64,8 @@ describe("quota protocol", () => {
   it("carries one managed-data version on quota and Usage", () => {
     expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(6);
     expect(protocol.BILLING_AGENTS).toContain("cursor");
+    expect(protocol.BILLING_AGENTS).toContain("gemini");
+    expect(protocol.BILLING_AGENTS).toContain("copilot");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
     // The shared fixture owns the retired managed-data version; this pins the control one,
@@ -312,6 +325,97 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
+  it("states every channel an Account is reached through, and only known ones", () => {
+    const account = {
+      protocol_version: PROTOCOL_VERSION,
+      account: {
+        account_id: "account_01",
+        display_label: "octocat",
+        created_at: "2026-01-04T12:00:00Z",
+      },
+      identities: [
+        { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+        { provider: "apple", label: null, linked_at: "2026-02-04T12:00:00Z" },
+      ],
+      entitlement: {
+        status: "none",
+        expires_at: null,
+        will_renew: false,
+        product_id: null,
+        store: null,
+        checked_at: null,
+        stale: false,
+      },
+      purchase: { web_url: "https://pay.rev.cat/token/account_01" },
+    };
+    expect(AccountResponseSchema.safeParse(account).success).toBe(true);
+    // The channels are a closed vocabulary, and the subject a provider proved is never answered.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [
+          { provider: "carrier-pigeon", label: null, linked_at: "2026-01-04T12:00:00Z" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [{ ...account.identities[0], subject: "5b2c" }],
+      }).success,
+    ).toBe(false);
+    // An Account holds a channel at most once, so it can never state more than there are.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        identities: [...account.identities, ...account.identities],
+      }).success,
+    ).toBe(false);
+    expect(AccountResponseSchema.safeParse({ ...account, identities: undefined }).success).toBe(
+      false,
+    );
+    expect(IDENTITY_PROVIDERS.map(identityProviderDisplayName)).toEqual([
+      "GitHub",
+      "Apple",
+      "Email",
+    ]);
+  });
+
+  it("states what Sign in with Apple posts from inside the app", () => {
+    const request = {
+      protocol_version: 2,
+      client_id: IOS_OAUTH_CLIENT_ID,
+      identity_token: `${"a".repeat(20)}.${"b".repeat(200)}.${"c".repeat(342)}`,
+      nonce: "n".repeat(43),
+    };
+    expect(AppleNativeSignInRequestSchema.safeParse(request).success).toBe(true);
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, intent: "link" }).success).toBe(
+      true,
+    );
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, intent: "unlink" }).success).toBe(
+      false,
+    );
+    // QuotaBar signs in through a browser; this is the iOS app's route and no one else's.
+    expect(
+      AppleNativeSignInRequestSchema.safeParse({ ...request, client_id: "quotabar" }).success,
+    ).toBe(false);
+    // A token is a compact JWS or it is not a token.
+    expect(
+      AppleNativeSignInRequestSchema.safeParse({ ...request, identity_token: "a.b" }).success,
+    ).toBe(false);
+    expect(AppleNativeSignInRequestSchema.safeParse({ ...request, nonce: "short" }).success).toBe(
+      false,
+    );
+    expect(protocol.IOS_BUNDLE_ID).toBe("io.gotry.quota");
+    expect(
+      protocol.IdentityLinkResponseSchema.safeParse({
+        protocol_version: 2,
+        provider: "apple",
+        status: "already_linked",
+      }).success,
+    ).toBe(true);
+  });
+
   it("adds a strictly additive quota-ios account-only token contract", () => {
     const iosExchange = {
       protocol_version: 2,
@@ -522,6 +626,7 @@ describe("quota protocol", () => {
     const period = {
       totals: emptyTotals(),
       cost: emptyCost(),
+      cache_saved: emptySaving(),
       partial: false,
       agents: [
         {
@@ -620,6 +725,49 @@ describe("quota protocol", () => {
     expect(protocol.exceedsContractBound(wrong.error)).toBe(false);
     expect(protocol.exceedsContractBound(new Error("D1_ERROR"))).toBe(false);
     expect(protocol.exceedsContractBound(undefined)).toBe(false);
+  });
+
+  it("states the paid-sync entitlement on the Account read and the summary", () => {
+    const summary = accountSummary();
+    expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
+    expect(AccountSummarySchema.safeParse({ ...summary, entitlement: undefined }).success).toBe(
+      false,
+    );
+    expect(
+      AccountSummarySchema.safeParse({
+        ...summary,
+        entitlement: { ...summary.entitlement, status: "complimentary" },
+      }).success,
+    ).toBe(false);
+
+    const account = {
+      protocol_version: 2 as const,
+      account: summary.account,
+      identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
+      entitlement: summary.entitlement,
+      purchase: summary.purchase,
+    };
+    expect(AccountResponseSchema.safeParse(account).success).toBe(true);
+    // A stale answer has to say how old it is, so the instant the row was written is part of
+    // the contract rather than something a reader may or may not find.
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        entitlement: { ...summary.entitlement, checked_at: undefined },
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountResponseSchema.safeParse({
+        ...account,
+        entitlement: { ...summary.entitlement, stale: true, checked_at: null },
+      }).success,
+    ).toBe(true);
+    expect(AccountResponseSchema.safeParse({ ...account, purchase: undefined }).success).toBe(
+      false,
+    );
+    // The summary answers the same pair, so a Mac that reads it needs no second request to
+    // say what sync costs.
+    expect(AccountSummarySchema.safeParse({ ...summary, purchase: undefined }).success).toBe(false);
   });
 
   it("validates subscriptions and Usage as one normalized read summary", () => {
@@ -752,6 +900,7 @@ describe("quota protocol", () => {
             status: "partial",
           },
         ],
+        sessions: emptySessions(),
       }).success,
     ).toBe(true);
   });
@@ -771,6 +920,7 @@ describe("quota protocol", () => {
           status: "partial",
         },
       ],
+      sessions: emptySessions(),
     };
     const parsed = LocalUsageReportSchema.parse(report);
     expect(parsed.model_catalog_revision).toBe("model_2026_08_02");
@@ -792,6 +942,84 @@ describe("quota protocol", () => {
     ).toBe(false);
     expect(
       LocalUsageReportSchema.safeParse({ ...report, model_catalog_revision: undefined }).success,
+    ).toBe(false);
+  });
+
+  it("lists local sessions without a file identity or a path", () => {
+    const session = {
+      agent: "codex" as const,
+      project_key: "Quota",
+      started_at: "2026-08-02T11:00:00Z",
+      last_activity_at: "2026-08-02T12:28:00Z",
+      messages: 4,
+      tokens: 1300,
+      cost: {
+        ...emptyCost(),
+        basis: "reported" as const,
+        amount_microusd: "12",
+        reported_rows: 1,
+      },
+      top_model: "gpt-5",
+      is_active: true,
+    };
+    const report = {
+      generated_at: "2026-08-02T12:30:00Z",
+      aggregation_timezone: "UTC",
+      range: { from: "2026-08-02", to: "2026-08-02" },
+      status: "complete" as const,
+      model_catalog_revision: null,
+      coverage: [
+        {
+          agent: "codex" as const,
+          start_at: "2026-08-02T00:00:00Z",
+          end_at: "2026-08-03T00:00:00Z",
+          status: "complete" as const,
+        },
+      ],
+      sessions: { active: 1, today: 1, recent: [session] },
+    };
+    expect(LocalUsageReportSchema.parse(report).sessions.recent[0]?.project_key).toBe("Quota");
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { ...report.sessions, recent: [{ ...session, project_key: "src/app" }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: {
+          ...report.sessions,
+          recent: [{ ...session, source_file_id: "abc" }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        status: "unavailable",
+        aggregation_timezone: null,
+        coverage: [],
+        sessions: report.sessions,
+      }).success,
+    ).toBe(false);
+    const older = {
+      ...session,
+      started_at: "2026-08-01T11:00:00Z",
+      last_activity_at: "2026-08-01T12:28:00Z",
+      is_active: false,
+    };
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { active: 1, today: 2, recent: [older, session] },
+      }).success,
+    ).toBe(false);
+    expect(
+      LocalUsageReportSchema.safeParse({
+        ...report,
+        sessions: { active: 1, today: 1, recent: Array.from({ length: 21 }, () => session) },
+      }).success,
     ).toBe(false);
   });
 
@@ -843,6 +1071,83 @@ describe("quota protocol", () => {
         const referencedFile = reference.split("#", 1)[0];
         if (referencedFile) expect(schemaFiles).toContain(referencedFile);
       }
+    }
+  });
+
+  it("takes a public profile handle only in the one shape a URL can carry", () => {
+    for (const handle of ["kyle", "a1b", "a".repeat(30), "kyle-2", "0abc"]) {
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(true);
+    }
+    for (const handle of [
+      "ab",
+      "a".repeat(31),
+      "-lead",
+      "Kyle",
+      "kyle_2",
+      "kyle.2",
+      "kyle 2",
+      "kyle/2",
+      "",
+    ]) {
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(false);
+    }
+    // Every reserved handle is refused, and each one is a handle the pattern would take: a
+    // reserved word the pattern already refuses is a line nobody is relying on.
+    for (const handle of RESERVED_PUBLIC_PROFILE_HANDLES) {
+      expect(PUBLIC_PROFILE_HANDLE_PATTERN.test(handle) || handle.length < 3, handle).toBe(true);
+      expect(PublicProfileHandleSchema.safeParse(handle).success, handle).toBe(false);
+    }
+  });
+
+  it("cannot state a public page with no address, and refuses a key the page does not publish", () => {
+    const profile = { handle: "kyle", enabled: true, show_models: true, show_cost: false };
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({ protocol_version: PROTOCOL_VERSION, profile })
+        .success,
+    ).toBe(true);
+    for (const broken of [
+      { ...profile, handle: null },
+      { ...profile, display_label: "octocat" },
+      { ...profile, enabled: "yes" },
+    ]) {
+      expect(
+        PublicProfileUpdateRequestSchema.safeParse({
+          protocol_version: PROTOCOL_VERSION,
+          profile: broken,
+        }).success,
+        JSON.stringify(broken),
+      ).toBe(false);
+    }
+  });
+
+  it("keeps agent, device, account, and quota out of the shape a public page answers with", () => {
+    const period = {
+      totals: { total_tokens: 12, input_tokens: 10, output_tokens: 2, messages: 1 },
+      providers: [{ provider: "openai", total_tokens: 12, share_permille: 1_000 }],
+    };
+    const page = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      handle: "kyle",
+      published_at: "2026-09-01T00:00:00Z",
+      generated_at: "2026-09-06T12:00:00Z",
+      last_30_days: period,
+      all: period,
+      activity: [{ date: "2026-09-06", level: 4 }],
+    };
+    expect(PublicUsageResponseSchema.safeParse(page).success).toBe(true);
+
+    for (const extra of [
+      { account: { account_id: "account_1" } },
+      { devices: [] },
+      { subscriptions: [] },
+      { last_30_days: { ...period, agents: [] } },
+      { activity: [{ date: "2026-09-06", level: 4, total_tokens: 12 }] },
+      { activity: [{ date: "2026-09-06", level: 5 }] },
+    ]) {
+      expect(
+        PublicUsageResponseSchema.safeParse({ ...page, ...extra }).success,
+        JSON.stringify(extra),
+      ).toBe(false);
     }
   });
 });
@@ -932,8 +1237,22 @@ function emptyCost() {
   };
 }
 
+function emptySaving() {
+  return { amount_microusd: "0", status: "complete" as const, unpriced_rows: 0 };
+}
+
+function emptySessions() {
+  return { active: 0, today: 0, recent: [] };
+}
+
 function emptyPeriod() {
-  return { totals: emptyTotals(), cost: emptyCost(), partial: false, agents: [] };
+  return {
+    totals: emptyTotals(),
+    cost: emptyCost(),
+    cache_saved: emptySaving(),
+    partial: false,
+    agents: [],
+  };
 }
 
 function accountSummary() {
@@ -969,6 +1288,16 @@ function accountSummary() {
     },
     pricing_revision: "pricing_2026_08_02",
     model_catalog_revision: "model_2026_08_02",
+    entitlement: {
+      status: "active" as const,
+      expires_at: "2026-09-12T00:00:00Z",
+      will_renew: true,
+      product_id: "quota_sync_monthly",
+      store: "app_store",
+      stale: false,
+      checked_at: "2026-09-05T00:00:00Z",
+    },
+    purchase: { web_url: "https://pay.rev.cat/token/account_01" },
   };
 }
 

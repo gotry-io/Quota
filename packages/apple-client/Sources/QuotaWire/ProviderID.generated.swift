@@ -19,6 +19,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
   case `kimi`
   case `litellm`
   case `cursor`
+  case `gemini`
+  case `copilot`
   case unknown(String)
 
   /// Every provider this build knows. An unknown id is not one of them.
@@ -31,6 +33,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     .`kimi`,
     .`litellm`,
     .`cursor`,
+    .`gemini`,
+    .`copilot`,
   ]
 
   public init?(rawValue: String) {
@@ -58,6 +62,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: "kimi"
     case .`litellm`: "litellm"
     case .`cursor`: "cursor"
+    case .`gemini`: "gemini"
+    case .`copilot`: "copilot"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -76,6 +82,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: "Kimi Code"
     case .`litellm`: "LiteLLM"
     case .`cursor`: "Cursor"
+    case .`gemini`: "Gemini CLI"
+    case .`copilot`: "GitHub Copilot"
     case .unknown: "Unknown provider"
     }
   }
@@ -90,7 +98,77 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`kimi`: 5
     case .`litellm`: 6
     case .`cursor`: 7
+    case .`gemini`: 8
+    case .`copilot`: 9
     case .unknown: Int.max
     }
+  }
+
+  /// The web session this provider's sign-in leaves in a browser, when it has one. Both Apple
+  /// products read the same catalog entry: QuotaBar to collect the cookie from a Mac's browsers,
+  /// Quota iOS to sign in inside the app and read quota with what that leaves behind.
+  public var browserSession: BrowserSessionSpec? {
+    switch self {
+    case .`codex`: BrowserSessionSpec(
+      loginURL: "https://chatgpt.com/",
+      cookieHosts: ["chatgpt.com", "www.chatgpt.com"],
+      cookieNames: ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1", "__Secure-next-auth.session-token.2", "__Host-next-auth.session-token", "__Secure-authjs.session-token", "authjs.session-token", "_account"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`claude`: BrowserSessionSpec(
+      loginURL: "https://claude.ai/",
+      cookieHosts: ["claude.ai", "www.claude.ai"],
+      cookieNames: ["sessionKey", "lastActiveOrg"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`grok`: BrowserSessionSpec(
+      loginURL: "https://grok.com/",
+      cookieHosts: ["grok.com", "www.grok.com"],
+      cookieNames: ["sso", "sso-rw"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`openrouter`: nil
+    case .`deepseek`: nil
+    case .`kimi`: BrowserSessionSpec(
+      loginURL: "https://www.kimi.com/code/console",
+      cookieHosts: ["www.kimi.com", "kimi.com"],
+      cookieNames: ["kimi-auth"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: false)
+    case .`litellm`: nil
+    case .`cursor`: BrowserSessionSpec(
+      loginURL: "https://authenticator.cursor.sh/",
+      cookieHosts: ["cursor.com", "www.cursor.com", "cursor.sh", "authenticator.cursor.sh"],
+      cookieNames: ["WorkosCursorSessionToken", "wos-session", "__Secure-wos-session"],
+      browserPriority: ["safari", "chrome", "edge", "brave", "arc", "dia", "chromium", "firefox"],
+      exclusive: true)
+    case .`gemini`: nil
+    case .`copilot`: nil
+    case .unknown: nil
+    }
+  }
+}
+
+/// Where a provider's browser sign-in lives, and which cookies are that sign-in.
+public struct BrowserSessionSpec: Equatable, Sendable {
+  public let loginURL: String
+  public let cookieHosts: [String]
+  public let cookieNames: [String]
+  /// macOS cookie stores, in the order QuotaBar reads them.
+  public let browserPriority: [String]
+  public let exclusive: Bool
+
+  public init(
+    loginURL: String,
+    cookieHosts: [String],
+    cookieNames: [String],
+    browserPriority: [String],
+    exclusive: Bool
+  ) {
+    self.loginURL = loginURL
+    self.cookieHosts = cookieHosts
+    self.cookieNames = cookieNames
+    self.browserPriority = browserPriority
+    self.exclusive = exclusive
   }
 }

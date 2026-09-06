@@ -1,15 +1,17 @@
 use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_files};
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
-    ParsedLine, UsageAgent, UsageError, bounded_model, canonical_instant, context_bucket, object,
+    ParsedLine, UsageAgent, UsageError, bounded_model, canonical_instant, context_bucket,
+    cwd_from_value, object, project_key_from_cwd,
 };
 use serde_json::{Map, Value};
+use std::path::Path;
 
 pub fn scan_pi_usage(
     options: &super::UsageScanOptions,
 ) -> Result<super::UsageScanResult, UsageError> {
     let discovery = discover_usage_files_at(UsageAgent::Pi, &roots_for(UsageAgent::Pi, options))?;
-    scan_jsonl_files(UsageAgent::Pi, options, discovery, || PiParser)
+    scan_jsonl_files(UsageAgent::Pi, options, discovery, |_| PiParser)
 }
 
 struct PiParser;
@@ -17,7 +19,12 @@ struct PiParser;
 impl UsageParser for PiParser {
     const CONTEXT_FREE: bool = true;
 
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        _source_path: &Path,
+    ) -> ParsedLine {
         if value.get("type").and_then(Value::as_str) != Some("message") {
             return ParsedLine::empty();
         }
@@ -94,6 +101,9 @@ impl UsageParser for PiParser {
                     billable_tools: BillableTools::default(),
                     source_cost_microusd: source_cost.clone(),
                     source_cost_covered_requests: if source_cost.is_some() { 1 } else { 0 },
+                    project_key: cwd_from_value(value)
+                        .or_else(|| object(value.get("message")).and_then(cwd_from_value))
+                        .and_then(project_key_from_cwd),
                 },
                 source_file_id: source_file_id.to_owned(),
                 record_key: String::new(),
@@ -155,6 +165,7 @@ fn billing_channel(provider: Option<&str>) -> BillingChannel {
         Some("azure-openai") => BillingChannel::AzureOpenai,
         Some("amazon-bedrock") | Some("bedrock") => BillingChannel::AwsBedrock,
         Some("google-vertex") => BillingChannel::GoogleVertex,
+        Some("google") | Some("gemini") => BillingChannel::GoogleDirect,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
         Some("moonshotai") | Some("kimi-for-coding") => BillingChannel::MoonshotDirect,

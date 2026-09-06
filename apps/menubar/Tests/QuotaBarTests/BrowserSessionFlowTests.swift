@@ -783,11 +783,16 @@ private actor FlowService: LocalServiceServing {
     enabledScans = state.browserScanEnabled
   }
 
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    throw LocalServiceClientError.invalidMessage
+  }
+
   func state() async throws -> LocalServiceState {
     LocalServiceState(
       ipcVersion: stateValue.ipcVersion,
       revision: stateValue.revision,
       usageUploadEnabled: stateValue.usageUploadEnabled,
+      groupUsageByProject: stateValue.groupUsageByProject,
       quotaRefreshIntervalSeconds: stateValue.quotaRefreshIntervalSeconds,
       usagePeriods: stateValue.usagePeriods,
       quota: stateValue.quota,
@@ -808,6 +813,7 @@ private actor FlowService: LocalServiceServing {
   func cancelLogin() async throws {}
   func logout() async throws -> LocalServiceLogoutResult { throw LocalServiceClientError.serviceMissing }
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting { throw LocalServiceClientError.serviceMissing }
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting { throw LocalServiceClientError.serviceMissing }
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting { throw LocalServiceClientError.serviceMissing }
   func setOverviewSourcePin(
     provider: ProviderID,
@@ -950,16 +956,17 @@ private func flowState(
     quota = empty()
   }
   return LocalServiceState(
-    ipcVersion: 1,
+    ipcVersion: 2,
     revision: revision,
     usageUploadEnabled: true,
+    groupUsageByProject: true,
     quotaRefreshIntervalSeconds: 300,
     usagePeriods: LocalServiceUsagePeriodCache(local: emptyPeriods, account: emptyPeriods),
     quota: quota,
     usage: empty(),
     account: LocalServiceComponent(
       status: .signedOut,
-      value: LocalServiceAccountState(authStatus: .signedOut, accountID: nil, displayLabel: nil, deviceID: nil, deviceGeneration: nil, accountSummary: nil),
+      value: LocalServiceAccountState(authStatus: .signedOut, accountID: nil, displayLabel: nil, deviceID: nil, deviceGeneration: nil, accountSummary: nil, entitlement: nil, purchaseURL: nil),
       updatedAt: nil, lastError: nil, refreshing: false),
     pricing: empty(),
     providers: [],

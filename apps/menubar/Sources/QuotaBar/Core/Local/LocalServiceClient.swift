@@ -59,6 +59,8 @@ protocol LocalServiceServing: Sendable {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
+  /// One custom local period, folded from the hours this Mac has stored.
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail
   func diagnose() async throws -> LocalServiceDiagnosticReport
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func resetCache() async throws
@@ -67,6 +69,7 @@ protocol LocalServiceServing: Sendable {
   func cancelLogin() async throws
   func logout() async throws -> LocalServiceLogoutResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting
   func setOverviewSourcePin(
     provider: ProviderID,
@@ -174,6 +177,17 @@ actor LocalServiceClient: LocalServiceServing {
     return state
   }
 
+  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+    let detail: LocalServiceUsageDetail = try await request(
+      operation: "usage_period",
+      payload: UsagePeriodPayload(from: from, to: to)
+    )
+    guard detail.isValid else {
+      throw LocalServiceClientError.invalidMessage
+    }
+    return detail
+  }
+
   func diagnose() async throws -> LocalServiceDiagnosticReport {
     let report: LocalServiceDiagnosticReport = try await request(
       operation: "diagnose", payload: EmptyPayload())
@@ -213,6 +227,13 @@ actor LocalServiceClient: LocalServiceServing {
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
     try await request(
       operation: "set_usage_upload",
+      payload: SetUsageUploadPayload(enabled: enabled)
+    )
+  }
+
+  func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting {
+    try await request(
+      operation: "set_group_usage_by_project",
       payload: SetUsageUploadPayload(enabled: enabled)
     )
   }
@@ -820,6 +841,10 @@ private struct EmptyResult: Decodable {
 }
 private struct ProviderPayload: Encodable { let provider: String }
 private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
+private struct UsagePeriodPayload: Encodable {
+  let from: String
+  let to: String
+}
 private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
 private struct SetOverviewSourcePinPayload: Encodable {
   let provider: String

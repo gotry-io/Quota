@@ -3,19 +3,43 @@ import SwiftUI
 
 struct OverviewView: View {
   @Bindable var model: AppModel
+  @State private var showsPaywall = false
 
   var body: some View {
     List {
-      if let banner = model.banner {
+      if let status = statusLine {
         Section {
-          StatusMessage(symbolName: banner.symbolName, text: banner.text)
+          StatusMessage(symbolName: status.symbolName, text: status.text)
             .accessibilityIdentifier("overview.status")
+        }
+      }
+
+      if let sync = model.syncBanner {
+        Section {
+          Button {
+            showsPaywall = true
+          } label: {
+            HStack(spacing: 12) {
+              StatusMessage(symbolName: "arrow.trianglehead.2.clockwise.rotate.90", text: sync)
+              Image(systemName: "chevron.forward")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            }
+          }
+          .accessibilityHint("Opens Sync across devices")
+          .accessibilityIdentifier("overview.sync-off")
         }
       }
 
       quotaSection
 
-      TodayUsageSection(summary: model.summary)
+      // Today Usage is the Account's fold of what every device reported. A phone with no account
+      // has no such number, and a zero it never measured would be a lie rather than an empty
+      // state.
+      if let summary = model.summary {
+        TodayUsageSection(summary: summary)
+      }
 
       if model.summary?.devices.isEmpty == true {
         MacSetupGuideSection()
@@ -29,6 +53,27 @@ struct OverviewView: View {
     }
     .navigationTitle(model.accountLabel)
     .navigationBarTitleDisplayMode(.large)
+    .sheet(isPresented: $showsPaywall) {
+      NavigationStack {
+        PaywallView(model: model)
+          .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+              Button("Done") { showsPaywall = false }
+            }
+          }
+      }
+    }
+  }
+
+  /// An expired session is the reason to sign in again, so it outranks a refresh failure.
+  private var statusLine: (symbolName: String, text: String)? {
+    if let expired = model.expiredMessage {
+      return ("lock.slash", expired)
+    }
+    if let banner = model.banner {
+      return (banner.symbolName, banner.text)
+    }
+    return nil
   }
 
   @ViewBuilder
@@ -36,17 +81,7 @@ struct OverviewView: View {
     let providerCards = model.providerCards
     Section {
       if providerCards.isEmpty {
-        ContentUnavailableView {
-          Label("No quota yet", systemImage: "gauge.with.dots.needle.33percent")
-        } description: {
-          Text("Set up QuotaBar on a Mac to start reporting.")
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, minHeight: 180)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+        OverviewEmptyState(model: model)
       } else {
         ForEach(providerCards) { card in
           ForEach(Array(card.subscriptions.enumerated()), id: \.element.id) {
@@ -56,7 +91,8 @@ struct OverviewView: View {
               ProviderQuotaRow(
                 provider: card.provider,
                 snapshot: subscription.snapshot,
-                accountIndex: index
+                accountIndex: index,
+                serviceStatus: model.providerStatus[card.provider]
               )
               .foregroundStyle(.primary)
             }
@@ -69,8 +105,8 @@ struct OverviewView: View {
         }
       }
     } footer: {
-      if let fetchedAt = model.fetchedAt {
-        Text(QuotaFormat.updated(fetchedAt))
+      if let updatedAt = model.updatedAt {
+        Text(QuotaFormat.updated(updatedAt))
           .font(.footnote.monospacedDigit())
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("section.footer.updated")
@@ -79,8 +115,52 @@ struct OverviewView: View {
   }
 }
 
+/// Nothing to show, and the two ways to change that.
+///
+/// A phone reads its own providers and an account answers for every Mac, so an empty Overview
+/// offers whichever of those this phone is short of rather than a single instruction to install
+/// something on a computer it may not have.
+struct OverviewEmptyState: View {
+  @Bindable var model: AppModel
+
+  static let title = "No quota yet"
+  static let localAndAccount =
+    "Connect a provider to read your quota on this iPhone, or sign in to Quota to see what your "
+    + "Macs report."
+  static let accountOnly =
+    "Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone."
+  static let connectProvider = "Connect a provider"
+  static let signIn = "Sign in to Quota"
+
+  var body: some View {
+    ContentUnavailableView {
+      Label(Self.title, systemImage: "gauge.with.dots.needle.33percent")
+    } description: {
+      Text(model.hasAccountSession ? Self.accountOnly : Self.localAndAccount)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    } actions: {
+      VStack(spacing: 12) {
+        Button(Self.connectProvider) { model.showProviders() }
+          .frame(minHeight: QuotaTheme.minimumTouchTarget)
+          .accessibilityIdentifier("overview.connect-provider")
+        if !model.hasAccountSession {
+          Button(Self.signIn) { Task { await model.connectAccount() } }
+            .frame(minHeight: QuotaTheme.minimumTouchTarget)
+            .accessibilityIdentifier("overview.signin")
+        }
+      }
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .frame(maxWidth: .infinity, minHeight: 200)
+    .listRowBackground(Color.clear)
+    .listRowSeparator(.hidden)
+    .accessibilityIdentifier("overview.empty")
+  }
+}
+
 struct TodayUsageSection: View {
-  let summary: AccountSummary?
+  let summary: AccountSummary
 
   var body: some View {
     Section {
@@ -95,9 +175,9 @@ struct TodayUsageSection: View {
 
   @ViewBuilder
   private var todayContent: some View {
-    if let usage = summary?.usage.today,
-      usage.totals.messages > 0 || usage.totals.inputTokens > 0
-        || usage.totals.outputTokens > 0
+    let usage = summary.usage.today
+    if usage.totals.messages > 0 || usage.totals.inputTokens > 0
+      || usage.totals.outputTokens > 0
     {
       todayRow(
         label: "Tokens",

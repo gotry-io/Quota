@@ -34,7 +34,18 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["codex", "claude", "grok", "openrouter", "deepseek", "kimi", "litellm", "cursor"]
+          "enum": [
+            "codex",
+            "claude",
+            "grok",
+            "openrouter",
+            "deepseek",
+            "kimi",
+            "litellm",
+            "cursor",
+            "gemini",
+            "copilot"
+          ]
         },
         "account": {
           "type": "object",

@@ -1,15 +1,18 @@
 //! Local Usage discovery, parsing, aggregation, and protocol-shaped facts.
 //!
-//! This module deliberately keeps source paths and file-index metadata local.  The public
-//! `UsageHourlyFact` and `NormalizedUsageEvent` types contain only the
-//! allow-listed fields that may cross the service boundary.
+//! This module deliberately keeps source paths and file-index metadata local. Upload-shaped
+//! `UsageRow` values contain only the allow-listed fields that may leave this Mac;
+//! `NormalizedUsageEvent.project_key` and `LocalHourlyFact` stay on the disposable cache.
 
 mod claude;
 mod codex;
+mod copilot;
 mod cursor;
+mod gemini;
 mod grok;
 mod opencode;
 mod pi;
+mod project;
 mod scan;
 
 #[cfg(test)]
@@ -17,17 +20,26 @@ mod tests;
 
 pub use claude::scan_claude_usage;
 pub use codex::scan_codex_usage;
+pub use copilot::scan_copilot_usage;
 pub use cursor::scan_cursor_usage;
+pub use gemini::scan_gemini_usage;
 pub use grok::scan_grok_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
-pub use scan::{DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage};
+pub use project::{
+    cwd_from_value, project_key_from_cwd, project_key_from_encoded_dir,
+    project_key_from_source_path,
+};
+pub use scan::{
+    DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage,
+    session_project_key,
+};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -46,7 +58,18 @@ pub const MAX_USAGE_ROWS_PER_HOUR: usize = 512;
 pub const USAGE_OTHER_MODEL: &str = "other";
 /// Local v3 report model-detail bound. Exact totals remain available when detail is truncated.
 pub const MAX_USAGE_MODELS: usize = 1_000;
+/// Local report project-detail bound. Remaining work folds into [`USAGE_OTHER_PROJECT`].
+pub const MAX_USAGE_PROJECTS: usize = 50;
+/// The project every row folded past [`MAX_USAGE_PROJECTS`], and every unattributed event, is
+/// shown as.
+pub const USAGE_OTHER_PROJECT: &str = "other";
 pub const MAX_USAGE_COVERAGE_ITEMS: usize = 2_048;
+/// Local session rows older than this are dropped from `cache.sqlite`.
+pub const USAGE_SESSION_RETENTION_DAYS: i64 = 90;
+/// A session is active when its file was written inside this window.
+pub const USAGE_SESSION_ACTIVE_SECS: i64 = 5 * 60;
+/// Newest local sessions the Usage report lists.
+pub const MAX_USAGE_SESSIONS_RECENT: usize = 20;
 /// No agent this Account accepts existed before this instant, so an hour reaching back past it
 /// was computed from a missing lower bound rather than scanned.
 pub const EARLIEST_USAGE_INSTANT: &str = "2020-01-01T00:00:00Z";
@@ -67,16 +90,22 @@ pub enum UsageAgent {
     Pi,
     #[serde(rename = "cursor")]
     Cursor,
+    #[serde(rename = "gemini")]
+    Gemini,
+    #[serde(rename = "copilot")]
+    Copilot,
 }
 
 impl UsageAgent {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::Grok,
         Self::OpenCode,
         Self::Pi,
         Self::Cursor,
+        Self::Gemini,
+        Self::Copilot,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -87,6 +116,8 @@ impl UsageAgent {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::Cursor => "cursor",
+            Self::Gemini => "gemini",
+            Self::Copilot => "copilot",
         }
     }
 }
@@ -109,11 +140,12 @@ pub enum BillingChannel {
     XaiDirect,
     MoonshotDirect,
     DeepseekDirect,
+    GoogleDirect,
     Unknown,
 }
 
 impl BillingChannel {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::OpenaiDirect,
         Self::AzureOpenai,
         Self::AnthropicDirect,
@@ -123,6 +155,7 @@ impl BillingChannel {
         Self::XaiDirect,
         Self::MoonshotDirect,
         Self::DeepseekDirect,
+        Self::GoogleDirect,
         Self::Unknown,
     ];
 
@@ -137,6 +170,7 @@ impl BillingChannel {
             Self::XaiDirect => "xai_direct",
             Self::MoonshotDirect => "moonshot_direct",
             Self::DeepseekDirect => "deepseek_direct",
+            Self::GoogleDirect => "google_direct",
             Self::Unknown => "unknown",
         }
     }
@@ -318,6 +352,9 @@ pub struct NormalizedUsageEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_cost_microusd: Option<String>,
     pub source_cost_covered_requests: u64,
+    /// Basename of the git work tree or cwd. Local cache only; never copied onto an upload row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -365,6 +402,8 @@ pub struct UsageScanResult {
     /// Complete replacement units for changed/new files. Each unit's records
     /// cover the requested range and replace that source's persisted rows.
     pub sources: Vec<UsageSourceScan>,
+    /// Basename `project_key` for every discovered file this scan saw, including unchanged ones.
+    pub project_keys: HashMap<String, String>,
 }
 
 impl UsageScanResult {
@@ -514,6 +553,9 @@ impl UsageRow {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DatedUsageRow {
     pub date: String,
+    /// Empty when the row was folded without a project dimension (agent tree, upload).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub project_key: String,
     #[serde(flatten)]
     pub row: UsageRow,
 }
@@ -590,23 +632,88 @@ pub struct LocalUsageAgentSummary {
     pub providers: Vec<LocalUsageProviderSummary>,
 }
 
+/// One local calendar day of a bounded period, on the same midnights the period itself keeps.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageDay {
+    pub date: String,
+    pub totals: UsageSummaryTotals,
+    pub cost: crate::pricing::UsageCostOutcome,
+}
+
+/// One hour of the local clock, summed over every day of the period that reached it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageHourOfDay {
+    pub hour: u8,
+    pub total_tokens: u64,
+    pub cost_microusd: Option<String>,
+}
+
+/// One period's facts, each placed on the local clock by the caller that knows the zone.
+#[derive(Clone, Debug)]
+pub struct LocalHourUsage {
+    /// The local calendar date the hour began in.
+    pub date: String,
+    /// The local hour of that date, 0 through 23.
+    pub hour: u8,
+    pub row: DatedUsageRow,
+}
+
+/// A day has 24 hours, and a rhythm names every one of them.
+pub const HOURS_OF_DAY: usize = 24;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LocalUsagePeriodSummary {
     pub totals: UsageSummaryTotals,
     pub cost: crate::pricing::UsageCostOutcome,
+    pub cache_saved: crate::pricing::UsageCacheSaved,
     pub agents: Vec<LocalUsageAgentSummary>,
+    #[serde(default)]
+    pub projects: Vec<LocalUsageProjectSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<Vec<LocalUsageDay>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hours_of_day: Option<Vec<LocalUsageHourOfDay>>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub models_truncated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LocalUsageProjectSummary {
+    pub project_key: String,
+    pub total_tokens: u64,
+    pub cost: crate::pricing::UsageCostOutcome,
+    pub messages: u64,
+    pub top_model: String,
+}
+
+/// One locally stored hour row, including the project dimension that never goes on the wire.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalHourlyFact {
+    pub project_key: String,
+    pub row: UsageRow,
 }
 
 /// Aggregate normalized request facts into the deterministic rows of one UTC hour.
 ///
 /// The events handed in are the ones this device has retained for that hour, so the answer
 /// is the whole hour rather than a delta: an hour is replaced by version, never merged.
+/// Project keys are collapsed: this is the upload-shaped hour.
 pub fn aggregate_hour_rows(events: &[NormalizedUsageEvent]) -> Result<Vec<UsageRow>, UsageError> {
-    let mut rows: BTreeMap<Vec<String>, UsageRow> = BTreeMap::new();
+    fold_project_dimension(aggregate_hourly_facts(events)?)
+}
+
+/// Aggregate one hour keeping the local project dimension.
+pub fn aggregate_hourly_facts(
+    events: &[NormalizedUsageEvent],
+) -> Result<Vec<LocalHourlyFact>, UsageError> {
+    let mut rows: BTreeMap<Vec<String>, LocalHourlyFact> = BTreeMap::new();
     for event in events {
         validate_event(event)?;
+        let project_key = event
+            .project_key
+            .as_deref()
+            .and_then(project::bounded_project_key)
+            .unwrap_or_default();
         let row = UsageRow {
             agent: event.agent,
             billing_channel: event.billing_channel,
@@ -629,11 +736,26 @@ pub fn aggregate_hour_rows(events: &[NormalizedUsageEvent]) -> Result<Vec<UsageR
             source_cost_microusd: event.source_cost_microusd.clone(),
             source_cost_covered_requests: event.source_cost_covered_requests,
         };
-        let key = row_key(&row);
+        let mut key = row_key(&row);
+        key.push(project_key.clone());
         if let Some(existing) = rows.get_mut(&key) {
-            add_row(existing, &row)?;
+            add_row(&mut existing.row, &row)?;
         } else {
-            rows.insert(key, row);
+            rows.insert(key, LocalHourlyFact { project_key, row });
+        }
+    }
+    Ok(rows.into_values().collect())
+}
+
+/// Merge facts that differ only by project into upload-shaped rows.
+pub fn fold_project_dimension(facts: Vec<LocalHourlyFact>) -> Result<Vec<UsageRow>, UsageError> {
+    let mut rows: BTreeMap<Vec<String>, UsageRow> = BTreeMap::new();
+    for fact in facts {
+        let key = row_key(&fact.row);
+        if let Some(existing) = rows.get_mut(&key) {
+            add_row(existing, &fact.row)?;
+        } else {
+            rows.insert(key, fact.row);
         }
     }
     Ok(rows.into_values().collect())
@@ -703,6 +825,15 @@ pub fn fold_usage_rows(rows: &[DatedUsageRow]) -> Result<UsageTokenTotals, Usage
 
 pub fn build_local_usage_summary(
     rows: &[DatedUsageRow],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+) -> Result<LocalUsagePeriodSummary, UsageError> {
+    build_local_usage_summary_with_projects(rows, None, pricing_catalog, model_catalog)
+}
+
+pub fn build_local_usage_summary_with_projects(
+    rows: &[DatedUsageRow],
+    project_rows: Option<&[DatedUsageRow]>,
     pricing_catalog: Option<&crate::pricing::PricingCatalog>,
     model_catalog: Option<&crate::model_catalog::ModelCatalog>,
 ) -> Result<LocalUsagePeriodSummary, UsageError> {
@@ -802,8 +933,164 @@ pub fn build_local_usage_summary(
     Ok(LocalUsagePeriodSummary {
         totals,
         cost,
+        cache_saved: crate::pricing::calculate_usage_cache_saved(rows, pricing_catalog)?,
         agents,
+        projects: match project_rows {
+            Some(project_rows) if !project_rows.is_empty() => {
+                build_local_usage_projects(project_rows, pricing_catalog, model_catalog)?
+            }
+            _ => Vec::new(),
+        },
+        days: None,
+        hours_of_day: None,
         models_truncated,
+    })
+}
+
+/// The per-day table and the 24-hour rhythm of one period bounded by two local midnights.
+///
+/// Both folds read the same facts the period's totals read, grouped by where the local clock
+/// puts them rather than by the UTC date that prices them. Every hour of the day is named,
+/// including the ones nothing reached, because a rhythm with holes in it is not a rhythm.
+pub fn build_local_usage_rhythm(
+    entries: &[LocalHourUsage],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+) -> Result<(Vec<LocalUsageDay>, Vec<LocalUsageHourOfDay>), UsageError> {
+    let mut by_date: BTreeMap<&str, Vec<DatedUsageRow>> = BTreeMap::new();
+    let mut by_hour: BTreeMap<u8, Vec<DatedUsageRow>> = BTreeMap::new();
+    for entry in entries {
+        if entry.hour as usize >= HOURS_OF_DAY {
+            return Err(UsageError("Usage hour is not an hour of the day".into()));
+        }
+        by_date
+            .entry(entry.date.as_str())
+            .or_default()
+            .push(entry.row.clone());
+        by_hour
+            .entry(entry.hour)
+            .or_default()
+            .push(entry.row.clone());
+    }
+
+    let mut days = Vec::with_capacity(by_date.len());
+    for (date, rows) in by_date {
+        days.push(LocalUsageDay {
+            date: date.to_owned(),
+            totals: summary_totals(&rows)?,
+            cost: crate::pricing::calculate_usage_cost(
+                &rows,
+                pricing_catalog,
+                crate::pricing::UsageCostMode::Auto,
+            )?,
+        });
+    }
+
+    let mut hours = Vec::with_capacity(HOURS_OF_DAY);
+    for hour in 0..HOURS_OF_DAY {
+        let rows = by_hour.remove(&(hour as u8)).unwrap_or_default();
+        let cost = crate::pricing::calculate_usage_cost(
+            &rows,
+            pricing_catalog,
+            crate::pricing::UsageCostMode::Auto,
+        )?;
+        hours.push(LocalUsageHourOfDay {
+            hour: hour as u8,
+            total_tokens: summary_totals(&rows)?.total_tokens,
+            cost_microusd: cost.amount_microusd,
+        });
+    }
+    Ok((days, hours))
+}
+
+fn build_local_usage_projects(
+    rows: &[DatedUsageRow],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+) -> Result<Vec<LocalUsageProjectSummary>, UsageError> {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        let key = if row.project_key.is_empty() {
+            USAGE_OTHER_PROJECT.to_owned()
+        } else {
+            row.project_key.clone()
+        };
+        groups.entry(key).or_default().push(index);
+    }
+    let mut ranked: Vec<(String, Vec<usize>, u64)> = Vec::new();
+    for (project_key, indexes) in groups {
+        let project_rows = rows_for_indexes(rows, &indexes);
+        let tokens = summary_totals(&project_rows)?.total_tokens;
+        ranked.push((project_key, indexes, tokens));
+    }
+    ranked.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
+    if ranked.len() > MAX_USAGE_PROJECTS {
+        let overflow = ranked.split_off(MAX_USAGE_PROJECTS - 1);
+        let mut other_indexes = Vec::new();
+        ranked.retain(|(key, indexes, _)| {
+            if key == USAGE_OTHER_PROJECT {
+                other_indexes.extend_from_slice(indexes);
+                false
+            } else {
+                true
+            }
+        });
+        for (_, indexes, _) in overflow {
+            other_indexes.extend(indexes);
+        }
+        if !other_indexes.is_empty() {
+            ranked.push((USAGE_OTHER_PROJECT.to_owned(), other_indexes, 0));
+        }
+    }
+    let mut projects = Vec::new();
+    for (project_key, indexes, _) in ranked {
+        projects.push(project_summary(
+            project_key,
+            &rows_for_indexes(rows, &indexes),
+            pricing_catalog,
+            model_catalog,
+        )?);
+    }
+    projects.sort_by(|left, right| {
+        right
+            .total_tokens
+            .cmp(&left.total_tokens)
+            .then_with(|| left.project_key.cmp(&right.project_key))
+    });
+    Ok(projects)
+}
+
+fn project_summary(
+    project_key: String,
+    project_rows: &[DatedUsageRow],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+) -> Result<LocalUsageProjectSummary, UsageError> {
+    let mut model_tokens: BTreeMap<String, u64> = BTreeMap::new();
+    for row in project_rows {
+        let model = match model_catalog {
+            Some(catalog) => crate::model_catalog::resolve_model(catalog, &row.row, &row.date)
+                .unwrap_or_else(|| row.model.clone()),
+            None => row.model.clone(),
+        };
+        let tokens = row.input_tokens.saturating_add(row.output_tokens);
+        *model_tokens.entry(model).or_default() += tokens;
+    }
+    let top_model = model_tokens
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)))
+        .map(|(model, _)| model)
+        .unwrap_or_else(|| USAGE_OTHER_MODEL.to_owned());
+    let totals = summary_totals(project_rows)?;
+    Ok(LocalUsageProjectSummary {
+        project_key,
+        total_tokens: totals.total_tokens,
+        cost: crate::pricing::calculate_usage_cost(
+            project_rows,
+            pricing_catalog,
+            crate::pricing::UsageCostMode::Auto,
+        )?,
+        messages: totals.messages,
+        top_model,
     })
 }
 

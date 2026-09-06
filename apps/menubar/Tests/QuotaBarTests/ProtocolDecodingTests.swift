@@ -44,6 +44,11 @@ private func usagePeriodJSON(cost: String) -> String {
       "messages": 1
     },
     "cost": \(cost),
+    "cache_saved": {
+      "amount_microusd": "190",
+      "status": "complete",
+      "unpriced_rows": 0
+    },
     "partial": false,
     "agents": []
   }
@@ -90,7 +95,15 @@ private func accountSummaryJSON() -> Data {
         "all": \(usagePeriodJSON(cost: completeCostJSON))
       },
       "pricing_revision": "pricing_1",
-      "model_catalog_revision": "models_1"
+      "model_catalog_revision": "models_1",
+      "entitlement": {
+        "status": "active",
+        "expires_at": "2026-09-14T12:00:00Z",
+        "will_renew": true,
+        "product_id": "quota_sync_monthly",
+        "store": "app_store",
+        "stale": false
+      }
     }
     """.utf8
   )
@@ -221,9 +234,10 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
     {
-      "ipc_version": 1,
+      "ipc_version": 2,
       "revision": 0,
       "usage_upload_enabled": true,
+      "group_usage_by_project": true,
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -266,6 +280,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
         "refreshing": false
       },
       "providers": [],
+      "provider_status": [],
       "provider_browser_sessions": [],
       "browser_scan_enabled": [],
       "overview": [],
@@ -302,6 +317,141 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   #expect(String(decoding: nestedExtra, as: UTF8.self).contains("\"extra\""))
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: nestedExtra)
+  }
+}
+
+@Test
+func decodesProviderStatusReadings() throws {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 1,
+      "revision": 0,
+      "usage_upload_enabled": true,
+      "group_usage_by_project": true,
+      "quota_refresh_interval_seconds": 300,
+      "usage_periods": {"local": {}, "account": {}},
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "signed_out",
+        "value": {
+          "auth_status": "signed_out",
+          "account_id": null,
+          "device_id": null,
+          "device_generation": null,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "pricing": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "provider_status": [
+        {
+          "provider": "claude",
+          "indicator": "minor",
+          "description": "Partial System Outage",
+          "checked_at": "2026-09-06T00:00:00Z"
+        }
+      ],
+      "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
+      "overview": [],
+      "cache": { "rebuilding": false, "reset_at": null }
+    }
+    """#.utf8
+  )
+  let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
+  #expect(state.providerStatus.count == 1)
+  #expect(state.providerStatus[0].provider == .claude)
+  #expect(state.providerStatus[0].indicator == .minor)
+  #expect(state.providerStatus[0].description == "Partial System Outage")
+  #expect(state.providerStatus[0].settingsLine == "Degraded · Partial System Outage")
+}
+
+@Test
+func rejectsUnknownProviderStatusIndicators() {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 1,
+      "revision": 0,
+      "usage_upload_enabled": true,
+      "group_usage_by_project": true,
+      "quota_refresh_interval_seconds": 300,
+      "usage_periods": {"local": {}, "account": {}},
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "signed_out",
+        "value": {
+          "auth_status": "signed_out",
+          "account_id": null,
+          "device_id": null,
+          "device_generation": null,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "pricing": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "provider_status": [
+        {
+          "provider": "claude",
+          "indicator": "maintenance",
+          "description": "Scheduled",
+          "checked_at": "2026-09-06T00:00:00Z"
+        }
+      ],
+      "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
+      "overview": [],
+      "cache": { "rebuilding": false, "reset_at": null }
+    }
+    """#.utf8
+  )
+  #expect(throws: DecodingError.self) {
+    try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
   }
 }
 
@@ -573,8 +723,9 @@ func decodesLocalUsageReportShape() throws {
   )
   let data = try QuotaWireCodec.makeEncoder().encode(report)
   let encodedText = String(decoding: data, as: UTF8.self)
-  #expect(!encodedText.contains("\"today\""))
+  #expect(encodedText.contains("\"sessions\""))
   #expect(!encodedText.contains("\"usage\""))
+  #expect(!encodedText.contains("\"last_7_days\""))
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
   #expect(decoded.status == .unavailable)
 
@@ -594,6 +745,90 @@ func decodesLocalUsageReportShape() throws {
   let retiredMarker = try JSONSerialization.data(withJSONObject: retiredMarkerObject)
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: retiredMarker)
+  }
+}
+
+@Test
+func decodesLocalUsageSessions() throws {
+  let now = Date(timeIntervalSince1970: 1_754_080_000)
+  let cost = UsageCostOutcome(
+    mode: .auto,
+    basis: .reported,
+    status: .complete,
+    amountMicrousd: "12",
+    catalogRevision: nil,
+    calculatedRows: 0,
+    reportedRows: 1,
+    unpricedRows: 0,
+    assumptions: [.sourceReported],
+    unpriced: []
+  )
+  let report = LocalUsageReport(
+    generatedAt: now,
+    aggregationTimezone: "UTC",
+    range: UsageDateRange(from: "2026-08-01", to: "2026-08-02"),
+    status: .complete,
+    modelCatalogRevision: nil,
+    coverage: [
+      LocalUsageCoverage(
+        agent: .codex,
+        startAt: "2026-08-01T00:00:00Z",
+        endAt: "2026-08-03T00:00:00Z",
+        status: .complete
+      )
+    ],
+    sessions: LocalUsageSessions(
+      active: 1,
+      today: 1,
+      recent: [
+        LocalUsageSession(
+          agent: .codex,
+          projectKey: "Quota",
+          startedAt: now.addingTimeInterval(-600),
+          lastActivityAt: now.addingTimeInterval(-30),
+          messages: 4,
+          tokens: 1300,
+          cost: cost,
+          topModel: "gpt-5",
+          isActive: true
+        )
+      ]
+    )
+  )
+  let data = try QuotaWireCodec.makeEncoder().encode(report)
+  let encodedText = String(decoding: data, as: UTF8.self)
+  #expect(encodedText.contains("\"sessions\""))
+  #expect(!encodedText.contains("source_file_id"))
+  let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
+  #expect(decoded.sessions.active == 1)
+  #expect(decoded.sessions.recent[0].projectKey == "Quota")
+
+  func mutateRecent(_ mutate: (inout [[String: Any]]) throws -> Void) throws -> Data {
+    var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    var sessions = try #require(object["sessions"] as? [String: Any])
+    var recent = try #require(sessions["recent"] as? [[String: Any]])
+    try mutate(&recent)
+    sessions["recent"] = recent
+    object["sessions"] = sessions
+    return try JSONSerialization.data(withJSONObject: object)
+  }
+
+  let pathData = try mutateRecent { $0[0]["project_key"] = "src/app" }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: pathData)
+  }
+
+  let fileData = try mutateRecent { $0[0]["source_file_id"] = "abc" }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: fileData)
+  }
+
+  let tooManyData = try mutateRecent { recent in
+    let row = try #require(recent.first)
+    recent = Array(repeating: row, count: 21)
+  }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: tooManyData)
   }
 }
 
@@ -637,10 +872,30 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
     cost: cost,
     providers: [provider]
   )
+  let namedProject = LocalUsageProjectSummary(
+    projectKey: "Quota",
+    totalTokens: 130,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
+  let otherProject = LocalUsageProjectSummary(
+    projectKey: "other",
+    totalTokens: 10,
+    cost: cost,
+    messages: 1,
+    topModel: "gpt-5.5"
+  )
   let summary = LocalUsagePeriodSummary(
     totals: summaryTotals,
     cost: cost,
-    agents: [client]
+    cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
+    agents: [client],
+    projects: [namedProject, otherProject],
+    days: [LocalUsageDay(date: "2026-08-10", totals: summaryTotals, cost: cost)],
+    hoursOfDay: (0..<24).map {
+      LocalUsageHourOfDay(hour: $0, totalTokens: $0 == 12 ? 1 : 0, costMicrousd: nil)
+    }
   )
   let data = try QuotaWireCodec.makeEncoder().encode(summary)
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: data)
@@ -649,6 +904,20 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.agents.first?.providers.first?.provider == .openai)
   #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
   #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
+  #expect(decoded.cacheSaved.status == .complete)
+  #expect(decoded.projects.map(\.projectKey) == ["Quota", "other"])
+  #expect(decoded.projects.map(\.displayName) == ["Quota", "Other"])
+  #expect(decoded.days?.map(\.date) == ["2026-08-10"])
+  #expect(decoded.hoursOfDay?.count == 24)
+  #expect(decoded.hoursOfDay?[12].totalTokens == 1)
+
+  // A bounded period carries both local folds; a period that carries one of them is not one.
+  var oneFoldObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  oneFoldObject.removeValue(forKey: "hours_of_day")
+  let oneFold = try JSONSerialization.data(withJSONObject: oneFoldObject)
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: oneFold)
+  }
 
   var modelObject = try #require(
     JSONSerialization.jsonObject(with: QuotaWireCodec.makeEncoder().encode(model))

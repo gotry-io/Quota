@@ -36,7 +36,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   );
   assert.match(landing, /Free &amp; open source · MIT · macOS 14\+/);
   assert.match(landing, /Download for macOS/);
-  assert.match(landing, /Sign in with GitHub/);
+  assert.match(landing, />Sign in</);
   assert.match(landing, /signInHref/);
   assert.match(landing, /InstallOptions/);
   assert.match(
@@ -47,7 +47,7 @@ test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(install, /aria-live="polite"/);
   assert.match(install, /copied \? "Copied" : "Copy"/);
   assert.match(landing, /id="platforms"/);
-  assert.match(header, /Sign in with GitHub/);
+  assert.match(header, /Sign in\n/);
   assert.match(header, /id="header-account"/);
   assert.match(header, /Settings/);
   assert.match(header, /Sign out/);
@@ -94,9 +94,9 @@ test("works-with names come from the catalog and billing agents", () => {
     .slice()
     .sort((left, right) => left.order - right.order)
     .map((provider) => provider.display_name);
-  assert.equal(catalogNames.length, 8);
+  assert.equal(catalogNames.length, 10);
   assert.deepEqual(PROVIDER_DISPLAY_NAMES, catalogNames);
-  assert.equal(AGENT_DISPLAY_NAMES.length, 6);
+  assert.equal(AGENT_DISPLAY_NAMES.length, 8);
   assert.deepEqual(
     AGENT_DISPLAY_NAMES,
     BILLING_AGENTS.map((agent) => agentDisplayName(agent)),
@@ -198,6 +198,13 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.doesNotMatch(settings, /notifications-title/);
   assert.doesNotMatch(settings, /Sign out/);
   assert.match(settings, /id="appearance-title"/);
+  assert.match(settings, /id="sync-title"/);
   assert.match(settings, /id="account-title"/);
   assert.match(settings, /id="legal-title"/);
+  assert.match(settings, /target="_blank"/);
+  assert.match(settings, /rel="noopener"/);
+  assert.ok(settings.indexOf('id="appearance-title"') < settings.indexOf('id="sync-title"'));
+  assert.match(overview, /SYNC_OFF_COPY/);
+  assert.match(overview, /showSyncOff/);
+  assert.match(devices, /Paused|subscribed/);
 });

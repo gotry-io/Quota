@@ -45,11 +45,16 @@ struct ProviderQuotaView: View {
   }
 
   private var headerAccessibilityLabel: String {
-    if let title = presentation.status?.title {
-      "\(presentation.provider.displayName). \(title)"
-    } else {
-      presentation.provider.displayName
+    var parts = [presentation.provider.displayName]
+    if let serviceStatus = presentation.serviceStatus,
+      ProviderServiceStatusCopy.showsDot(serviceStatus.indicator)
+    {
+      parts.append(serviceStatus.description)
     }
+    if let title = presentation.status?.title {
+      parts.append(title)
+    }
+    return parts.joined(separator: ". ")
   }
 
   private var providerHeader: some View {
@@ -58,6 +63,18 @@ struct ProviderQuotaView: View {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
           .quotaRowTitleStyle()
+        if let serviceStatus = presentation.serviceStatus,
+          ProviderServiceStatusCopy.showsDot(serviceStatus.indicator)
+        {
+          Circle()
+            .fill(statusDotColor(serviceStatus.indicator))
+            .frame(
+              width: QuotaDesign.Layout.statusDotSize,
+              height: QuotaDesign.Layout.statusDotSize
+            )
+            .help(serviceStatus.description)
+            .accessibilityHidden(true)
+        }
       }
       .layoutPriority(1)
 
@@ -74,6 +91,17 @@ struct ProviderQuotaView: View {
       Image(systemName: "chevron.right")
         .quotaChevronStyle()
         .accessibilityHidden(true)
+    }
+  }
+
+  private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
+    switch indicator {
+    case .none:
+      QuotaPalette.mute
+    case .minor:
+      QuotaPalette.warning
+    case .major, .critical:
+      QuotaPalette.critical
     }
   }
 }
@@ -139,6 +167,8 @@ struct QuotaWindowRow: View {
   let provider: ProviderID
   let isStale: Bool
   let now: Date
+  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
+    ResetCopyStylePreference.fallback
 
   private var remainingLabel: String {
     window.overviewRemainingDisplayLabel(provider: provider)
@@ -151,6 +181,19 @@ struct QuotaWindowRow: View {
 
   private var valueColor: Color {
     isStale ? QuotaPalette.mute : QuotaPalette.ink
+  }
+
+  /// The pace this window's reading was published with, and whether it warns.
+  ///
+  /// The service derived it; the panel prints it. A window with no pace takes no line.
+  private var paceLine: (text: String, warns: Bool)? {
+    guard let pace = window.pace,
+      let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt)
+    else {
+      return nil
+    }
+    if case .runsOut = pace { return (text, true) }
+    return (text, false)
   }
 
   var body: some View {
@@ -172,13 +215,21 @@ struct QuotaWindowRow: View {
       }
 
       if let resetsAt = window.resetsAt,
-        let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
+        let reset = FreshnessCopy.resetCopy(
+          resetsAt: resetsAt, now: now, style: resetCopyStyle.style)
       {
         Text(reset)
           .quotaMetaStyle()
       } else if window.resetsAt == nil, FreshnessCopy.showsNoResetTime(window) {
         Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
+      }
+
+      if let paceLine {
+        Text(paceLine.text)
+          .quotaFont(.meta)
+          .foregroundStyle(paceLine.warns ? QuotaPalette.warning : QuotaPalette.mute)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .padding(.top, 2)

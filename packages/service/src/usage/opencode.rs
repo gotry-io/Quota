@@ -1,17 +1,18 @@
 use super::scan::{
     UsageParser, discover_usage_files_at, file_index, finish_scan, is_cancelled,
-    matching_file_info, parse_range, push_reason, roots_for, scan_jsonl_files, source_coverage,
+    matching_file_info, parse_range, push_reason, remember_project_key, roots_for,
+    scan_jsonl_files, source_coverage,
 };
 use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
     NormalizedUsageEvent, NormalizedUsageRecord, ParsedLine, UsageAgent, UsageError,
     UsageFileDiscoveryResult, UsageFileIndex, UsageScanResult, UsageSourceScan, bounded_model,
-    context_bucket, object, safe_count, safe_sum,
+    context_bucket, cwd_from_value, object, project_key_from_cwd, safe_count, safe_sum,
 };
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Map, Number, Value};
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 const MAXIMUM_OPENCODE_ROWS: usize = 2_000_000;
 
@@ -47,13 +48,18 @@ pub fn scan_opencode_usage(
             .collect()
     };
     let discovery = discover_usage_files_at(UsageAgent::OpenCode, &legacy_roots)?;
-    scan_jsonl_files(UsageAgent::OpenCode, options, discovery, || OpenCodeParser)
+    scan_jsonl_files(UsageAgent::OpenCode, options, discovery, |_| OpenCodeParser)
 }
 
 struct OpenCodeParser;
 
 impl UsageParser for OpenCodeParser {
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        _source_path: &Path,
+    ) -> ParsedLine {
         if value.get("role").and_then(Value::as_str) != Some("assistant") {
             return ParsedLine::empty();
         }
@@ -123,6 +129,7 @@ impl UsageParser for OpenCodeParser {
                     billable_tools: BillableTools::default(),
                     source_cost_microusd: source_cost.clone(),
                     source_cost_covered_requests: if source_cost.is_some() { 1 } else { 0 },
+                    project_key: cwd_from_value(value).and_then(project_key_from_cwd),
                 },
                 source_file_id: source_file_id.to_owned(),
                 record_key: String::new(),
@@ -158,6 +165,7 @@ fn scan_databases(
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut rows_seen = 0usize;
     let mut stopped = false;
     for file in discovery_files {
@@ -168,6 +176,7 @@ fn scan_databases(
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -232,7 +241,7 @@ fn scan_databases(
                     continue;
                 }
             };
-        let mut statement = match connection.prepare(DATABASE_QUERY) {
+        let mut statement = match connection.prepare(database_query(&connection)) {
             Ok(value) => value,
             Err(_) => {
                 push_reason(&mut source_reasons, CoverageReasonCode::SourceUnreadable);
@@ -277,9 +286,14 @@ fn scan_databases(
                                 continue;
                             }
                         };
-                        let value = db_row.value();
+                        let mut value = db_row.value();
+                        if let Some(directory) = &db_row.directory
+                            && !directory.is_empty()
+                        {
+                            value.insert("directory".into(), Value::String(directory.clone()));
+                        }
                         let mut parser = OpenCodeParser;
-                        let parsed = parser.parse(&value, &current.source_file_id);
+                        let parsed = parser.parse(&value, &current.source_file_id, &current.path);
                         ignored_empty_records =
                             ignored_empty_records.saturating_add(super::scan::collect_parsed(
                                 parsed,
@@ -350,6 +364,7 @@ fn scan_databases(
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     ))
 }
@@ -367,6 +382,7 @@ struct DatabaseRow {
     cache_read_tokens: Option<i64>,
     cache_write_tokens: Option<i64>,
     cost: Option<f64>,
+    directory: Option<String>,
 }
 
 impl DatabaseRow {
@@ -463,7 +479,19 @@ fn map_database_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DatabaseRow> {
         cache_read_tokens: row.get(9)?,
         cache_write_tokens: row.get(10)?,
         cost: row.get(11)?,
+        directory: row.get(12)?,
     })
+}
+
+fn database_query(connection: &Connection) -> &'static str {
+    if connection
+        .prepare("SELECT directory FROM session LIMIT 0")
+        .is_ok()
+    {
+        DATABASE_QUERY_WITH_SESSION
+    } else {
+        DATABASE_QUERY
+    }
 }
 
 const DATABASE_QUERY: &str = r#"
@@ -479,7 +507,39 @@ SELECT
   json_extract(data, '$.tokens.reasoning'),
   json_extract(data, '$.tokens.cache.read'),
   json_extract(data, '$.tokens.cache.write'),
-  json_extract(data, '$.cost')
+  json_extract(data, '$.cost'),
+  COALESCE(
+    json_extract(data, '$.directory'),
+    json_extract(data, '$.path'),
+    json_extract(data, '$.cwd')
+  )
+FROM message
+WHERE json_extract(data, '$.role') = 'assistant'
+  AND COALESCE(json_extract(data, '$.time.completed'), json_extract(data, '$.time.created'), time_created) >= ?1
+  AND COALESCE(json_extract(data, '$.time.completed'), json_extract(data, '$.time.created'), time_created) < ?2
+ORDER BY time_created, id
+"#;
+
+const DATABASE_QUERY_WITH_SESSION: &str = r#"
+SELECT
+  id,
+  json_extract(data, '$.role'),
+  json_extract(data, '$.modelID'),
+  json_extract(data, '$.providerID'),
+  json_extract(data, '$.time.created'),
+  json_extract(data, '$.time.completed'),
+  json_extract(data, '$.tokens.input'),
+  json_extract(data, '$.tokens.output'),
+  json_extract(data, '$.tokens.reasoning'),
+  json_extract(data, '$.tokens.cache.read'),
+  json_extract(data, '$.tokens.cache.write'),
+  json_extract(data, '$.cost'),
+  COALESCE(
+    json_extract(data, '$.directory'),
+    json_extract(data, '$.path'),
+    json_extract(data, '$.cwd'),
+    (SELECT directory FROM session WHERE session.id = json_extract(data, '$.sessionID') LIMIT 1)
+  )
 FROM message
 WHERE json_extract(data, '$.role') = 'assistant'
   AND COALESCE(json_extract(data, '$.time.completed'), json_extract(data, '$.time.created'), time_created) >= ?1
@@ -537,6 +597,7 @@ fn provider_billing_channel(value: Option<&str>) -> BillingChannel {
         Some("azure-openai") => BillingChannel::AzureOpenai,
         Some("amazon-bedrock") | Some("bedrock") => BillingChannel::AwsBedrock,
         Some("google-vertex") => BillingChannel::GoogleVertex,
+        Some("google") | Some("gemini") => BillingChannel::GoogleDirect,
         Some("openrouter") => BillingChannel::Openrouter,
         Some("xai") => BillingChannel::XaiDirect,
         // `kimi-for-coding` and `moonshotai` are registered provider ids that

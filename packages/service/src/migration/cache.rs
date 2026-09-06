@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 2;
+const CURRENT_SCHEMA: i64 = 5;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -35,6 +35,9 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
         match version {
             1 => migration_v1(&tx, revision_floor)?,
             2 => migration_v2(&tx)?,
+            3 => migration_v3(&tx)?,
+            4 => migration_v4(&tx)?,
+            5 => migration_v5(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -260,6 +263,139 @@ fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// A write Relay refused for want of a subscription is evidence like any other refusal
+/// (ADR 0028, ADR 0033). SQLite cannot widen a CHECK, so the table is rebuilt; the cache is
+/// disposable.
+fn migration_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v2;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'quota_upload', 'account_sync', 'pricing_refresh'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source',
+                'device_deleted', 'subscription_required'
+            ))
+         );
+         INSERT INTO diagnostic_attempts(
+            id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+            duration_ms, outcome, code
+         )
+         SELECT id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+                duration_ms, outcome, code
+         FROM diagnostic_attempts_v2
+         ORDER BY id;
+         DROP TABLE diagnostic_attempts_v2;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
+    )?;
+    Ok(())
+}
+
+/// Local hour facts keep a project basename that upload rows never carry.
+fn migration_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE usage_hourly_facts RENAME TO usage_hourly_facts_v1;
+         CREATE TABLE usage_hourly_facts (
+            agent TEXT NOT NULL,
+            bucket_start_utc TEXT NOT NULL,
+            billing_channel TEXT NOT NULL,
+            channel_source TEXT NOT NULL,
+            model TEXT NOT NULL,
+            context_bucket TEXT NOT NULL,
+            service_tier TEXT NOT NULL,
+            speed TEXT NOT NULL,
+            inference_geo TEXT NOT NULL,
+            project_key TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cache_write_5m_tokens INTEGER NOT NULL,
+            cache_write_1h_tokens INTEGER NOT NULL,
+            cache_write_inferred_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            reasoning_tokens INTEGER NOT NULL,
+            requests INTEGER NOT NULL,
+            web_search_requests INTEGER NOT NULL,
+            web_fetch_requests INTEGER NOT NULL,
+            source_cost_microusd INTEGER,
+            source_cost_covered_requests INTEGER NOT NULL,
+            partial INTEGER NOT NULL CHECK (partial IN (0, 1)),
+            scan_version INTEGER NOT NULL,
+            PRIMARY KEY(agent, bucket_start_utc, billing_channel, channel_source, model,
+                        context_bucket, service_tier, speed, inference_geo, project_key)
+         );
+         INSERT INTO usage_hourly_facts(
+            agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+            service_tier, speed, inference_geo, project_key, input_tokens, cache_read_tokens,
+            cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+            output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+            source_cost_microusd, source_cost_covered_requests, partial, scan_version
+         )
+         SELECT agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+                service_tier, speed, inference_geo, '', input_tokens, cache_read_tokens,
+                cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+                output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
+                source_cost_microusd, source_cost_covered_requests, partial, scan_version
+         FROM usage_hourly_facts_v1;
+         DROP TABLE usage_hourly_facts_v1;
+         CREATE INDEX usage_hourly_facts_day ON usage_hourly_facts(bucket_start_utc);
+         CREATE INDEX usage_hourly_facts_period ON usage_hourly_facts(
+            substr(bucket_start_utc, 1, 10), agent, billing_channel, channel_source, model,
+            context_bucket, service_tier, speed, inference_geo);
+         CREATE INDEX usage_hourly_facts_project ON usage_hourly_facts(
+            substr(bucket_start_utc, 1, 10), project_key);",
+    )?;
+    Ok(())
+}
+
+/// A session is one source file. The row hangs off the file index and is rebuilt from the
+/// records that index already holds.
+fn migration_v5(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE usage_sessions (
+            source_file_id TEXT PRIMARY KEY NOT NULL,
+            agent TEXT NOT NULL,
+            project_key TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            last_activity_at TEXT NOT NULL,
+            messages INTEGER NOT NULL,
+            tokens_in INTEGER NOT NULL,
+            tokens_out INTEGER NOT NULL,
+            cost_micros INTEGER,
+            top_model TEXT
+         );
+         CREATE INDEX usage_sessions_last_activity
+            ON usage_sessions(last_activity_at DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +447,120 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("kinds");
         assert_eq!(kinds, ["usage_upload", "quota_upload"]);
+    }
+
+    #[test]
+    fn a_refusal_for_want_of_a_subscription_is_a_code_the_journal_can_hold() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn, 0).expect("schema");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome, code)
+             VALUES ('account_sync', 'scheduled', '2026-09-05T00:00:00Z', 'failed',
+                     'subscription_required')",
+            [],
+        )
+        .expect("refusal row");
+        assert_eq!(
+            conn.query_row(
+                "SELECT code FROM diagnostic_attempts ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .expect("code"),
+            "subscription_required"
+        );
+    }
+
+    #[test]
+    fn a_v1_cache_gains_the_project_key_on_hour_facts() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');
+             INSERT INTO usage_hourly_facts(
+                agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+                service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
+                cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+                output_tokens, reasoning_tokens, requests, web_search_requests,
+                web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
+                partial, scan_version
+             ) VALUES (
+                'codex', '2026-08-10T12:00:00Z', 'openai_direct', 'explicit', 'gpt-5', 'le_128k',
+                'standard', 'standard', 'global', 10, 0, 0, 0, 0, 1, 0, 1, 0, 0, NULL, 0, 0, 1
+             );",
+        )
+        .expect("v1 row");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+        let project_key: String = conn
+            .query_row("SELECT project_key FROM usage_hourly_facts", [], |row| {
+                row.get(0)
+            })
+            .expect("project_key");
+        assert_eq!(project_key, "");
+        conn.execute(
+            "INSERT INTO usage_hourly_facts(
+                agent, bucket_start_utc, billing_channel, channel_source, model, context_bucket,
+                service_tier, speed, inference_geo, project_key, input_tokens, cache_read_tokens,
+                cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
+                output_tokens, reasoning_tokens, requests, web_search_requests,
+                web_fetch_requests, source_cost_microusd, source_cost_covered_requests,
+                partial, scan_version
+             ) VALUES (
+                'codex', '2026-08-10T12:00:00Z', 'openai_direct', 'explicit', 'gpt-5', 'le_128k',
+                'standard', 'standard', 'global', 'Quota', 10, 0, 0, 0, 0, 1, 0, 1, 0, 0,
+                NULL, 0, 0, 1
+             )",
+            [],
+        )
+        .expect("same dimensions, different project");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_hourly_facts", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_cache_below_v5_gains_the_sessions_table() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        migration_v2(&tx).expect("v2");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');
+             INSERT INTO schema_migrations(version, applied_at) VALUES (2, '2026-08-31T00:00:00Z');",
+        )
+        .expect("v2 marker");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+        conn.execute(
+            "INSERT INTO usage_sessions(
+                source_file_id, agent, project_key, started_at, last_activity_at,
+                messages, tokens_in, tokens_out, cost_micros, top_model
+             ) VALUES (
+                'file-1', 'codex', 'Quota', '2026-08-31T00:00:00Z', '2026-08-31T01:00:00Z',
+                2, 10, 4, 12, 'gpt-5'
+             )",
+            [],
+        )
+        .expect("session row");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_sessions", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 1);
     }
 
     #[test]

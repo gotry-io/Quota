@@ -10,16 +10,21 @@ import {
   type AccountUsage,
   AccountUsageActivityResponseSchema,
   AccountUsageSchema,
+  AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
   IanaTimezoneSchema,
+  type IdentityProvider,
+  IdentityProviderSchema,
   IosLoginExchangeRequestSchema,
+  IdentityLinkResponseSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
+  identityProviderDisplayName,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
@@ -30,6 +35,8 @@ import {
   PROTOCOL_VERSION,
   type PricingCatalog,
   PricingCatalogSchema,
+  PublicProfileResponseSchema,
+  PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   type RelayErrorCode,
@@ -43,17 +50,31 @@ import {
 import type {
   AccountMaintenanceInput,
   AccountState,
+  PublicProfileRecord,
   AccountUsageVersionStamp,
   AccountVersionStamp,
   DeviceRecord,
   DeviceWriterPrincipal,
   SessionPrincipal,
   SessionScope,
+  StoredEntitlement,
   StoredQuotaSnapshot,
   UsageState,
 } from "@gotry-io/relay-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import {
+  type BrowserSignInFailureReason,
+  htmlOrJsonSignInError,
+} from "./account/browser-error-page.ts";
+import {
+  EmailMagicLink,
+  hashEmailAddress,
+  normalizeEmailAddress,
+  readEmailStartBody,
+} from "./account/email-identity.ts";
+import type { EmailSender } from "./account/email-sender.ts";
+import { clearedHandoffCookie, type SignInIntent } from "./account/identity.ts";
 import { consumeNamedRateLimit } from "./account/rate-limit.ts";
 import {
   AccountFlowError,
@@ -63,25 +84,37 @@ import {
   isLoopbackRedirect,
   refreshTokenDomain,
 } from "./account/service.ts";
+import { type AppleNativeSignIn, isNativeIdentityRefusal } from "./account/apple-native.ts";
 import {
-  type BrowserSignInFailureReason,
-  htmlOrJsonSignInError,
-} from "./account/browser-error-page.ts";
-import {
-  clearedHandoffCookie,
   clearedSessionCookie,
   DEFAULT_RETURN_PATH,
+  type RegisteredIdentityProvider,
   safeReturnPath,
   type WebSessionPort,
+  type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
-import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
-import { bearerToken, canonicalDigest, type SecretHasher } from "./security.ts";
+import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
+import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
+import {
+  type BillingBindings,
+  foldWebhookEvent,
+  isPaidSyncStatus,
+  parseRevenueCatWebhookBody,
+  purchaseWebUrl,
+  readEntitlement,
+  sanitizeRevenueCatEvent,
+  transferSourceIds,
+  webhookAppUserId,
+  webhookEventId,
+  webhookEventType,
+} from "./entitlement.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
 
-/** The issuer GitHub states in its authorization-code redirect (RFC 9207). */
-const GITHUB_ISSUER = "https://github.com/login/oauth";
+/** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
+const SIGN_IN_PATH = "/sign-in";
 
 const maximumCredentialBodyBytes = 64 * 1024;
 const maximumSnapshotBodyBytes = 256 * 1024;
@@ -147,8 +180,12 @@ const rateLimits = {
   nativeAuthorize: { limit: 60, windowSeconds: 10 * 60 },
   token: { limit: 180, windowSeconds: 10 * 60 },
   webSignIn: { limit: 30, windowSeconds: 10 * 60 },
+  emailStartMinute: { limit: 1, windowSeconds: 60 },
+  emailStartHour: { limit: 5, windowSeconds: 60 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
+  profileMutation: { limit: 30, windowSeconds: 10 * 60 },
+  publicRead: { limit: 120, windowSeconds: 60 },
 } as const;
 
 interface StrictSchema<Output> {
@@ -160,10 +197,20 @@ export interface RelayAppOptions {
   usageState: UsageState;
   accountService: AccountService;
   webSessions: WebSessionPort;
+  /**
+   * Sign in with Apple as the iOS app performs it, when this deployment is configured for it.
+   *
+   * Absent, `POST /oauth/v2/apple` answers the same 404 an unregistered provider's round trip
+   * does: Relay does not sign in through a channel it holds no keys for.
+   */
+  appleNativeSignIn?: AppleNativeSignIn;
   hasher: SecretHasher;
+  /** When omitted, Relay does not send sign-in mail and `POST /api/auth/email/start` is 404. */
+  emailSender?: EmailSender;
   now?: () => Date;
   pricingCatalog?: PricingCatalog;
   modelCatalog?: ModelCatalog;
+  billing?: BillingBindings;
   /** Test override for the Usage fold/representation version in the activity ETag. */
   usageFoldVersion?: number;
 }
@@ -214,6 +261,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   const modelCatalogETag = options.modelCatalog
     ? '"' + options.modelCatalog.revision + '"'
     : '"' + modelCatalog.revision + '"';
+  const billing: BillingBindings = {
+    webhookSecret: options.billing?.webhookSecret ?? "",
+    restSecret: options.billing?.restSecret ?? "",
+    webPurchaseUrl: options.billing?.webPurchaseUrl || "https://pay.rev.cat/unconfigured",
+    ...(options.billing?.fetch === undefined ? {} : { fetch: options.billing.fetch }),
+  };
 
   app.get("/healthz", (context) => context.json({ status: "ok", ...managedServiceInfo() }));
   for (const path of [
@@ -224,6 +277,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/device/*",
     "/api/v6/account/*",
     "/api/v6/device/*",
+    "/api/billing/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -241,10 +295,75 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
+  for (const path of ["/api/v2/device/profile", "/api/v2/account/profile"]) {
+    app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
+  }
   app.use(
-    "/api/v2/device/profile",
-    bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }),
+    "/api/billing/revenuecat/webhook",
+    bodyLimit({ maxSize: maximumSnapshotBodyBytes, onError: requestBodyTooLarge }),
   );
+
+  app.post("/api/billing/revenuecat/webhook", async (context) => {
+    if (
+      billing.webhookSecret.length === 0 ||
+      !constantTimeEqual(context.req.header("Authorization") ?? "", billing.webhookSecret)
+    ) {
+      return relayError(context, 401, "unauthorized", "A valid authorization header is required.");
+    }
+    const checkedAt = now();
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) {
+      return context.body(null, 200);
+    }
+    const event = parseRevenueCatWebhookBody(raw);
+    const eventId = event ? webhookEventId(event) : null;
+    const accountId = event ? webhookAppUserId(event) : null;
+    const type = event ? webhookEventType(event) : null;
+    if (event === null || eventId === null || accountId === null || type === null) {
+      return context.body(null, 200);
+    }
+    const account = await options.state.getAccount(accountId);
+    const folded = foldWebhookEvent(event, checkedAt);
+    const entitlement =
+      account && folded
+        ? {
+            account_id: accountId,
+            ...folded,
+            source: "webhook" as const,
+            last_event_id: eventId,
+            updated_at: checkedAt.toISOString(),
+          }
+        : null;
+    const transferSources: StoredEntitlement[] = [];
+    if (type === "TRANSFER") {
+      for (const sourceId of transferSourceIds(event)) {
+        if (sourceId === accountId) continue;
+        const source = await options.state.getAccount(sourceId);
+        if (!source) continue;
+        transferSources.push({
+          account_id: sourceId,
+          status: "none",
+          product_id: null,
+          store: null,
+          expires_at: null,
+          will_renew: false,
+          source: "webhook",
+          last_event_id: eventId,
+          updated_at: checkedAt.toISOString(),
+        });
+      }
+    }
+    await options.state.applyRevenueCatWebhook({
+      event_id: eventId,
+      account_id: accountId,
+      type,
+      received_at: checkedAt.toISOString(),
+      payload_json: JSON.stringify(sanitizeRevenueCatEvent(event)),
+      entitlement,
+      transfer_sources: transferSources,
+    });
+    return context.body(null, account ? 200 : 202);
+  });
 
   app.get("/readyz", async (context) => {
     try {
@@ -257,13 +376,32 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
   app.get("/api/v2/info", (context) => context.json(managedServiceInfo()));
-  // Sign-in is a plain navigation: the browser leaves for GitHub carrying a signed cookie that
-  // states which sign-in this is, and comes back to the callback below with nothing else.
-  app.get("/api/auth/github/start", async (context) => {
-    if (!hasOnlyQueryKeys(context, ["return_to"])) return invalidRequest(context);
-    const requested = context.req.query("return_to");
-    const returnTo = requested === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(requested);
+  const email =
+    options.emailSender === undefined
+      ? null
+      : new EmailMagicLink({
+          state: options.state,
+          hasher: options.hasher,
+          sender: options.emailSender,
+        });
+  app.post("/api/auth/email/start", async (context) => {
+    if (!email) return unknownProvider(context);
+    const raw = await parseRawJSON(context);
+    if (raw instanceof Response) return raw;
+    const body = readEmailStartBody(raw);
+    if (!body) return invalidRequest(context);
+    const address = normalizeEmailAddress(body.email);
+    if (!address) return invalidRequest(context);
+    const returnTo =
+      body.return_to === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(body.return_to);
     if (returnTo === null) return invalidRequest(context);
+    const requestedIntent = body.intent ?? "sign_in";
+    let intent: SignInIntent = { kind: "sign_in" };
+    if (requestedIntent === "link") {
+      const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+      if (!principal) return unauthorized(context);
+      intent = { kind: "link", account_id: principal.account_id };
+    }
     const limited = await enforceRateLimit(
       context,
       options.state,
@@ -274,17 +412,34 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       now(),
     );
     if (limited) return limited;
-    return beginGitHubSignIn(context, options, returnTo, now());
-  });
-
-  app.get("/api/auth/github/callback", async (context) => {
-    // GitHub names itself in the redirect (`iss`, RFC 9207). A callback that names any other
-    // issuer is not GitHub's; one that names none is an older GitHub and still is.
-    if (!hasOnlyQueryKeys(context, ["code", "state", "iss"])) {
-      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    const emailHash = await hashEmailAddress(options.hasher, address);
+    const minute = await consumeNamedRateLimit(
+      options.state,
+      options.hasher,
+      "email-start-minute",
+      emailHash,
+      rateLimits.emailStartMinute,
+      now(),
+    );
+    // A per-address limit is not a 429: that would say this mailbox is being asked for, which
+    // is the existence leak this route exists not to make. The IP bucket above still 429s.
+    if (minute.allowed) {
+      const hour = await consumeNamedRateLimit(
+        options.state,
+        options.hasher,
+        "email-start-hour",
+        emailHash,
+        rateLimits.emailStartHour,
+        now(),
+      );
+      if (hour.allowed) {
+        await email.issue(address, intent, returnTo, now());
+      }
     }
-    const issuer = context.req.query("iss");
-    if (issuer !== undefined && issuer !== GITHUB_ISSUER) {
+    return context.json({ status: "accepted" }, 202);
+  });
+  app.get("/api/auth/email/verify", async (context) => {
+    if (!hasOnlyQueryKeys(context, ["token"])) {
       return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
     const limited = await enforceRateLimit(
@@ -297,20 +452,32 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       now(),
     );
     if (limited) return browserSignInFailure(context, limited, "rate_limited");
-    let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
+    if (!email) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    const consumed = await email.consume(context.req.query("token") ?? "", now());
+    if (consumed.outcome !== "proved") {
+      return browserSignInFailure(
+        context,
+        consumed.outcome === "expired"
+          ? relayError(context, 400, "expired_token", "This sign-in link has expired.")
+          : invalidRequest(context),
+        consumed.outcome === "expired" ? "expired" : "invalid_request",
+      );
+    }
+    let completed: Awaited<ReturnType<WebSessionPort["completeProvedIdentity"]>>;
     try {
-      completed = await options.webSessions.completeSignIn(
-        {
-          cookie: context.req.header("Cookie") ?? null,
-          state: context.req.query("state") ?? null,
-          code: context.req.query("code") ?? null,
-        },
+      completed = await options.webSessions.completeProvedIdentity(
+        "email",
+        consumed.proof,
+        consumed.intent,
+        consumed.return_to,
+        context.req.raw.headers,
         now(),
       );
     } catch (error) {
-      // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
-      // a credential; without them a production sign-in that dies mid-verification is invisible.
       console.error("web_signin_failed", {
+        provider: "email",
         name: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
       });
@@ -320,25 +487,83 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         "invalid_request",
       );
     }
-    if (completed.outcome !== "signed_in") {
-      // The reason is a category, never a value: enough to tell a lost cookie from a refused
-      // code when a sign-in fails in production, and nothing a log reader could replay.
-      console.warn("web_signin_rejected", { reason: completed.reason });
-      context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
-      const reason: BrowserSignInFailureReason =
-        completed.reason === "handoff" ? "no_session" : "invalid_request";
-      return browserSignInFailure(
-        context,
-        relayError(context, 400, "invalid_request", "The sign-in request could not be completed."),
-        reason,
-      );
+    return answerWebSignIn(context, completed, "email");
+  });
+  // Sign-in is a plain navigation: the browser leaves for a provider carrying a signed cookie
+  // that states which round trip this is, and comes back to the callback below with nothing else.
+  app.get("/api/auth/:provider/start", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider) return unknownProvider(context);
+    if (!hasOnlyQueryKeys(context, ["return_to", "intent"])) return invalidRequest(context);
+    const requested = context.req.query("return_to");
+    const returnTo = requested === undefined ? DEFAULT_RETURN_PATH : safeReturnPath(requested);
+    if (returnTo === null) return invalidRequest(context);
+    const requestedIntent = context.req.query("intent");
+    if (
+      requestedIntent !== undefined &&
+      requestedIntent !== "sign_in" &&
+      requestedIntent !== "link"
+    ) {
+      return invalidRequest(context);
     }
-    context.header("Set-Cookie", completed.session, { append: true });
-    context.header("Set-Cookie", completed.handoff, { append: true });
-    // Checked here as well as where it was accepted. This value has been out of Relay's hands
-    // and back — through a signed cookie, but a cookie all the same — and it is about to become
-    // a `Location` on an authenticated response, which is the exact shape of an open redirect.
-    return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "web-signin",
+      anonymousClientSubject(context),
+      rateLimits.webSignIn,
+      now(),
+    );
+    if (limited) return limited;
+    let intent: SignInIntent = { kind: "sign_in" };
+    if (requestedIntent === "link") {
+      // Binding a channel writes to an Account, so it takes the session that names one. A
+      // signed-out browser asking to link has nothing to link to.
+      const principal = await options.webSessions.authorize(context.req.raw.headers, now());
+      if (!principal) return unauthorized(context);
+      intent = { kind: "link", account_id: principal.account_id };
+    }
+    const started = await options.webSessions.beginSignIn(provider.id, intent, returnTo, now());
+    context.header("Set-Cookie", started.handoff, { append: true });
+    return context.redirect(started.location, 302);
+  });
+
+  // A provider that redirects answers in a query; one that answers with a cross-site form POST
+  // answers in a body. Both are the same callback, so both reach the same completion.
+  app.get("/api/auth/:provider/callback", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider || provider.callbackDelivery !== "redirect") return unknownProvider(context);
+    if (!hasOnlyQueryKeys(context, provider.callbackParameterKeys)) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    return completeBrowserSignIn(
+      context,
+      options,
+      provider,
+      new URL(context.req.url).searchParams,
+      now,
+    );
+  });
+
+  app.post("/api/auth/:provider/callback", async (context) => {
+    const provider = registeredProvider(context, options);
+    if (!provider || provider.callbackDelivery !== "form_post") return unknownProvider(context);
+    if (
+      !hasOnlyQueryKeys(context, []) ||
+      !(context.req.header("Content-Type") ?? "").startsWith("application/x-www-form-urlencoded")
+    ) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    // Read as bytes: a form body is not text, and asking for it as text is what a runtime warns
+    // about even when the bytes are exactly the ASCII a form encodes to.
+    const parameters = new URLSearchParams(
+      new TextDecoder().decode(await context.req.arrayBuffer()),
+    );
+    if (!hasOnlyKeys(parameters, provider.callbackParameterKeys)) {
+      return browserSignInFailure(context, invalidRequest(context), "invalid_request");
+    }
+    return completeBrowserSignIn(context, options, provider, parameters, now);
   });
 
   app.post("/api/auth/logout", async (context) => {
@@ -404,7 +629,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         `/oauth/v2/complete?login_token=${encodeURIComponent(login.login_token)}`,
       );
       if (callback === null) return invalidRequest(context);
-      return await beginGitHubSignIn(context, options, callback, now());
+      // A native login no longer leaves for a provider on its own. It goes to the page that asks
+      // which Account this is, because a browser already signed in as one would otherwise be
+      // handed silently back to whichever Account its provider session belongs to.
+      return context.redirect(`${SIGN_IN_PATH}?return_to=${encodeURIComponent(callback)}`, 302);
     } catch (error) {
       return accountFlowError(context, error);
     }
@@ -414,7 +642,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!hasOnlyQueryKeys(context, ["login_token"])) {
       return browserSignInFailure(context, invalidRequest(context), "invalid_request");
     }
-    // The other end of the same browser round trip as the GitHub callback, and the only route
+    // The other end of the same browser round trip as the provider callback, and the only route
     // that turns a login token into an authorization code, so it is guessable at exactly the
     // rate that one is.
     const limited = await enforceRateLimit(
@@ -432,13 +660,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!loginToken || loginToken.length > 4_096 || !principal) {
       return browserSignInFailure(context, unauthorized(context), "no_session");
     }
-    const account = await options.state.getAccount(principal.account_id);
-    if (!account) return browserSignInFailure(context, unauthorized(context), "no_session");
+    // A session naming an Account that no longer exists authenticates nothing, and a completion
+    // is the one place that would otherwise write a grant against it.
+    if (!(await options.state.getAccount(principal.account_id))) {
+      return browserSignInFailure(context, unauthorized(context), "no_session");
+    }
     try {
       const completion = await options.accountService.completeBrowserLogin(
         loginToken,
         principal.account_id,
-        account.display_label ?? "GitHub account",
         now(),
       );
       if (!isLoopbackRedirect(completion.redirect_uri) && !isIosRedirect(completion.redirect_uri)) {
@@ -455,6 +685,65 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         accountFlowReason(error),
       );
     }
+  });
+
+  /**
+   * Sign in with Apple, as the iOS app performs it.
+   *
+   * The app has already proved this identity to Apple on the device, so there is no browser round
+   * trip to make it prove it again: it posts the identity token, Relay checks it against Apple's
+   * own keys, and answers with the viewer's one session — the same session, in the same
+   * credential domains, that `/oauth/v2/token` issues
+   * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)).
+   */
+  app.post("/oauth/v2/apple", async (context) => {
+    const apple = options.appleNativeSignIn;
+    if (!apple) return unknownProvider(context);
+    const request = await parseJSON(context, AppleNativeSignInRequestSchema);
+    if (request instanceof Response) return request;
+    // A native sign-in is the same guessable-at-a-distance surface `/oauth/v2/authorize` is, and
+    // is limited in the same bucket.
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "native-authorize",
+      anonymousClientSubject(context),
+      rateLimits.nativeAuthorize,
+      now(),
+    );
+    if (limited) return limited;
+    if (request.intent === "link") {
+      // Binding a channel writes to an Account, so it takes the session that names one.
+      const principal = await authorizeAccount(context, options, "account:read", now());
+      if (principal instanceof Response) return principal;
+      if (principal.client_kind !== "ios") return forbidden(context);
+      const outcome = await apple.link(
+        principal.account_id,
+        request.identity_token,
+        request.nonce,
+        now(),
+      );
+      if (isNativeIdentityRefusal(outcome)) return appleTokenRefused(context);
+      if (outcome === "identity_taken") {
+        return relayError(
+          context,
+          409,
+          "conflict",
+          "That identity already belongs to another Quota account.",
+        );
+      }
+      return context.json(
+        IdentityLinkResponseSchema.parse({
+          protocol_version: PROTOCOL_VERSION,
+          provider: "apple",
+          status: outcome,
+        }),
+      );
+    }
+    const issued = await apple.signIn(request.identity_token, request.nonce, now());
+    if (isNativeIdentityRefusal(issued)) return appleTokenRefused(context);
+    return context.json(IosOAuthTokenResponseSchema.parse(iosOAuthTokenResponse(issued)));
   });
 
   app.post("/oauth/v2/token", async (context) => {
@@ -579,14 +868,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
-    const account = await options.state.getAccount(principal.account_id);
+    const [account, identities] = await Promise.all([
+      options.state.getAccount(principal.account_id),
+      options.state.listAccountIdentities(principal.account_id),
+    ]);
     if (!account) {
       return unauthorized(context);
     }
+    const entitlement = await readEntitlement(options.state, billing, principal.account_id, now());
     return context.json(
       AccountResponseSchema.parse({
         protocol_version: PROTOCOL_VERSION,
         account: publicAccount(account),
+        identities: identities.map((identity) => ({
+          provider: identity.provider,
+          label: identity.label,
+          linked_at: identity.created_at,
+        })),
+        entitlement,
+        purchase: { web_url: purchaseWebUrl(billing.webPurchaseUrl, principal.account_id) },
       }),
     );
   });
@@ -598,6 +898,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!hasOnlyQueryKeys(context, ["tz"])) return invalidRequest(context);
     const timezone = requestedTimezone(context);
     if (timezone === null) return invalidRequest(context);
+    const entitlement = await readEntitlement(
+      options.state,
+      billing,
+      principal.account_id,
+      checkedAt,
+    );
     // A local day begins at local midnight, so the caller's calendar decides where the three
     // trailing periods start and end — and, one local midnight at a time, when this answer stops
     // being the one they already hold.
@@ -666,6 +972,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         usage,
         pricing_revision: catalog.revision,
         model_catalog_revision: modelCatalog.revision,
+        entitlement,
+        purchase: { web_url: purchaseWebUrl(billing.webPurchaseUrl, principal.account_id) },
       }),
     );
   });
@@ -747,6 +1055,48 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.body(null, 204);
   });
 
+  app.delete("/api/v2/account/identities/:provider", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) {
+      return principal;
+    }
+    // Any channel an Account can hold may be unbound, whether or not Relay currently offers a
+    // round trip through it: what is stored decides this, not what can be started.
+    const provider = IdentityProviderSchema.safeParse(context.req.param("provider"));
+    if (!provider.success) return unknownProvider(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "identity-unlink",
+      principal.account_id,
+      rateLimits.destructiveMutation,
+      now(),
+    );
+    if (limited) {
+      return limited;
+    }
+    const unsafe = requireRecentWebMutation(context, principal, now());
+    if (unsafe) {
+      return unsafe;
+    }
+    const outcome = await options.state.unlinkIdentity(
+      principal.account_id,
+      provider.data,
+      now().toISOString(),
+    );
+    if (outcome === "not_found") return notFound(context);
+    if (outcome === "last_identity") {
+      return relayError(
+        context,
+        409,
+        "conflict",
+        "An Account keeps at least one way to sign in to it.",
+      );
+    }
+    return context.body(null, 204);
+  });
+
   app.delete("/api/v2/account/devices/:device_id", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
     if (principal instanceof Response) {
@@ -793,6 +1143,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const control = await options.state.getDeviceSyncControl(
       principal.device_id,
       principal.device_generation,
@@ -817,6 +1169,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const raw = await parseRawJSON(context);
     if (raw instanceof Response) {
       return raw;
@@ -849,6 +1203,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const envelope = await parseJSON(context, QuotaSnapshotEnvelopeSchema);
     if (envelope instanceof Response) {
       return envelope;
@@ -873,6 +1229,8 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (principal instanceof Response) {
       return principal;
     }
+    const gated = await requirePaidSync(context, options.state, billing, principal, now());
+    if (gated) return gated;
     const upload = await parseJSON(context, UsageUploadSchema);
     if (upload instanceof Response) {
       return upload;
@@ -890,6 +1248,113 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         ignored: written.ignored,
       }),
     );
+  });
+
+  /**
+   * The owner's own view of their public page, whether or not it is on.
+   *
+   * An Account that has never chosen a handle has no row, and that is not a failure: it is a
+   * page that has not been published, which is what the empty profile below says.
+   */
+  app.get("/api/v2/account/profile", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const profile = await options.state.getPublicProfile(principal.account_id);
+    return context.json(
+      PublicProfileResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: publicProfileView(profile),
+      }),
+    );
+  });
+
+  /**
+   * Publish, change, or take down this Account's public page.
+   *
+   * Only a browser may write it: this is the one control that makes account data readable with
+   * no session at all, so it takes the same same-origin check every other web mutation does.
+   * A handle another Account already holds is a conflict rather than a bad request, because
+   * nothing about the request was wrong. Taking a page down is `enabled: false`, which keeps
+   * the handle: releasing it would hand every link already shared to whoever claimed it next.
+   */
+  app.put("/api/v2/account/profile", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:manage", now());
+    if (principal instanceof Response) return principal;
+    const unsafe = requireWebOrigin(context, principal);
+    if (unsafe) return unsafe;
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "public-profile-update",
+      principal.account_id,
+      rateLimits.profileMutation,
+      now(),
+    );
+    if (limited) return limited;
+    const update = await parseJSON(context, PublicProfileUpdateRequestSchema);
+    if (update instanceof Response) return update;
+    const written = await options.state.writePublicProfile({
+      account_id: principal.account_id,
+      handle: update.profile.handle,
+      enabled: update.profile.enabled,
+      show_models: update.profile.show_models,
+      show_cost: update.profile.show_cost,
+      written_at: now().toISOString(),
+    });
+    if (written.outcome === "handle_taken") {
+      return relayError(context, 409, "conflict", "That handle is already taken.");
+    }
+    return context.json(
+      PublicProfileResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: publicProfileView(written.profile),
+      }),
+    );
+  });
+
+  /**
+   * One public page's Usage, to whoever asks.
+   *
+   * This is the only route that answers account data with no principal, so it is also the only
+   * one whose answer a shared cache may hold: what it says is the same for every reader, which
+   * is what makes `public` correct here and wrong for the signed-in reads
+   * ([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+   * A handle that is malformed, unclaimed, or switched off is one 404: telling those apart
+   * would turn this route into a way to enumerate who has an Account.
+   */
+  app.get("/api/v6/public/:handle/usage", async (context) => {
+    const checkedAt = now();
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "public-profile-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    try {
+      const read = await readPublicProfile({
+        state: options.state,
+        usageState: options.usageState,
+        catalog,
+        modelCatalog,
+        handle: context.req.param("handle"),
+        checkedAt,
+      });
+      if (!read) return notFound(context);
+      context.header("ETag", read.etag);
+      context.header("Cache-Control", `public, max-age=${PUBLIC_PROFILE_MAX_AGE_SECONDS}`);
+      if (context.req.header("If-None-Match") === read.etag) return context.body(null, 304);
+      return context.json(await read.payload());
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+      throw error;
+    }
   });
 
   app.get("/api/v2/pricing/catalog", (context) => {
@@ -1057,15 +1522,126 @@ async function answerIfNoneMatch(
   return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
-async function beginGitHubSignIn(
+/**
+ * One provider round trip, finished.
+ *
+ * Whether the answer arrived as a redirect's query or as a cross-site form POST's body, what it
+ * carries is the same and what it decides is the same: the session this browser now holds, the
+ * channel just bound to the Account it already held, or a category naming why neither happened.
+ */
+async function completeBrowserSignIn(
   context: Context,
   options: RelayAppOptions,
-  returnTo: string,
-  now: Date,
+  provider: RegisteredIdentityProvider,
+  parameters: URLSearchParams,
+  now: () => Date,
 ): Promise<Response> {
-  const started = await options.webSessions.beginSignIn(returnTo, now);
-  context.header("Set-Cookie", started.handoff, { append: true });
-  return context.redirect(started.location, 302);
+  const limited = await enforceRateLimit(
+    context,
+    options.state,
+    options.hasher,
+    "web-signin",
+    anonymousClientSubject(context),
+    rateLimits.webSignIn,
+    now(),
+  );
+  if (limited) return browserSignInFailure(context, limited, "rate_limited");
+  let completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>;
+  try {
+    completed = await options.webSessions.completeSignIn(
+      provider.id,
+      { headers: context.req.raw.headers, parameters },
+      now(),
+    );
+  } catch (error) {
+    // The class and message of a failure here name a subsystem (fetch, D1, WebCrypto), never
+    // a credential; without them a production sign-in that dies mid-verification is invisible.
+    console.error("web_signin_failed", {
+      provider: provider.id,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+    });
+    return browserSignInFailure(
+      context,
+      relayError(context, 502, "internal_error", "Identity verification is unavailable."),
+      "invalid_request",
+    );
+  }
+  return answerWebSignIn(context, completed, provider.id);
+}
+
+function answerWebSignIn(
+  context: Context,
+  completed: Awaited<ReturnType<WebSessionPort["completeSignIn"]>>,
+  provider: IdentityProvider,
+): Response {
+  if (completed.outcome === "rejected") {
+    // The reason is a category, never a value: enough to tell a lost cookie from a refused
+    // code when a sign-in fails in production, and nothing a log reader could replay.
+    console.warn("web_signin_rejected", { provider, reason: completed.reason });
+    context.header("Set-Cookie", clearedHandoffCookie(), { append: true });
+    return browserSignInFailure(
+      context,
+      completed.reason === "identity_taken"
+        ? relayError(
+            context,
+            409,
+            "conflict",
+            "That identity already belongs to another Quota account.",
+          )
+        : relayError(
+            context,
+            400,
+            "invalid_request",
+            "The sign-in request could not be completed.",
+          ),
+      signInFailureReason(completed.reason),
+      identityProviderDisplayName(provider),
+    );
+  }
+  if (completed.outcome === "signed_in") {
+    context.header("Set-Cookie", completed.session, { append: true });
+  }
+  context.header("Set-Cookie", completed.handoff, { append: true });
+  // Checked here as well as where it was accepted. This value has been out of Relay's hands
+  // and back — through a signed cookie, but a cookie all the same — and it is about to become
+  // a `Location` on an authenticated response, which is the exact shape of an open redirect.
+  return context.redirect(safeReturnPath(completed.return_to) ?? DEFAULT_RETURN_PATH, 302);
+}
+
+/**
+ * What Apple's identity token proved, when it proved nothing.
+ *
+ * A bad signature, another app's audience, a stale nonce, and an expiry are one answer on
+ * purpose: the app can do nothing with the difference, and stating it would tell a caller
+ * probing the route which part of its forgery to fix.
+ */
+function appleTokenRefused(context: Context): Response {
+  return relayError(context, 400, "invalid_grant", "Apple did not prove that identity.");
+}
+
+function unknownProvider(context: Context): Response {
+  return relayError(context, 404, "not_found", "Quota does not sign in through that provider.");
+}
+
+/** The provider this route is for, or null when Relay speaks no such channel. */
+function registeredProvider(
+  context: Context,
+  options: RelayAppOptions,
+): RegisteredIdentityProvider | null {
+  return options.webSessions.identityProvider(context.req.param("provider") ?? "");
+}
+
+/**
+ * What a browser is told when a round trip does not finish.
+ *
+ * Everything but a lost handoff and a taken identity is one category on purpose: a person cannot
+ * act on the difference between a refused code and a refused profile read, and the log line
+ * already carries it.
+ */
+function signInFailureReason(rejection: WebSignInRejection): BrowserSignInFailureReason {
+  if (rejection === "handoff" || rejection === "link_session") return "no_session";
+  return rejection === "identity_taken" ? "identity_taken" : "invalid_request";
 }
 
 /**
@@ -1236,6 +1812,21 @@ async function enforceRateLimit(
   return relayError(context, 429, "rate_limited", "Too many requests. Retry later.");
 }
 
+/**
+ * A public profile as its owner reads it back, including the one an Account never created.
+ *
+ * The defaults are what a page would carry if it were published now: models named, cost not.
+ * Cost is the one figure a person may not want beside their name, so it is off until asked for.
+ */
+function publicProfileView(profile: PublicProfileRecord | null) {
+  return {
+    handle: profile?.handle ?? null,
+    enabled: profile?.enabled ?? false,
+    show_models: profile?.show_models ?? true,
+    show_cost: profile?.show_cost ?? false,
+  };
+}
+
 function publicAccount(account: { id: string; display_label: string | null; created_at: string }) {
   return {
     account_id: account.id,
@@ -1324,7 +1915,12 @@ async function parseRawJSON(context: Context): Promise<unknown | Response> {
 }
 
 function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean {
-  const keys = [...new URL(context.req.url).searchParams.keys()];
+  return hasOnlyKeys(new URL(context.req.url).searchParams, allowed);
+}
+
+/** Each key at most once, and every key one this route names. */
+function hasOnlyKeys(parameters: URLSearchParams, allowed: readonly string[]): boolean {
+  const keys = [...parameters.keys()];
   return new Set(keys).size === keys.length && keys.every((key) => allowed.includes(key));
 }
 
@@ -1399,13 +1995,35 @@ function browserSignInFailure(
   context: Context,
   json: Response,
   reason: BrowserSignInFailureReason,
+  providerName?: string,
 ): Response {
-  return htmlOrJsonSignInError(context.req.header("Accept"), json, reason);
+  return htmlOrJsonSignInError(context.req.header("Accept"), json, reason, providerName);
+}
+
+async function requirePaidSync(
+  context: Context,
+  state: AccountState,
+  billing: BillingBindings,
+  principal: SessionPrincipal,
+  checkedAt: Date,
+): Promise<Response | null> {
+  const entitlement = await readEntitlement(state, billing, principal.account_id, checkedAt);
+  if (isPaidSyncStatus(entitlement.status)) return null;
+  console.error(
+    JSON.stringify({
+      event: "relay_write_refused",
+      path: new URL(context.req.url).pathname,
+      status: 402,
+      code: "subscription_required",
+      account_id: principal.account_id,
+    }),
+  );
+  return relayError(context, 402, "subscription_required", "A paid sync subscription is required.");
 }
 
 function relayError(
   context: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
+  status: 400 | 401 | 402 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
   code: RelayErrorCode,
   message: string,
 ): Response {

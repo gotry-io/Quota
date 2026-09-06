@@ -96,15 +96,29 @@ enum Fixtures {
     return try JSONSerialization.data(withJSONObject: object)
   }
 
+  static func cacheSaved(
+    amountMicrousd: String? = "190",
+    status: String = "complete",
+    unpricedRows: Int = 0
+  ) -> [String: Any] {
+    [
+      "amount_microusd": amountMicrousd as Any,
+      "status": status,
+      "unpriced_rows": unpricedRows,
+    ]
+  }
+
   static func usagePeriod(
     totals: [String: Any]? = nil,
     cost: [String: Any]? = nil,
+    cacheSaved saved: [String: Any]? = nil,
     partial: Bool = false,
     agents: [[String: Any]] = []
   ) -> [String: Any] {
     [
       "totals": totals ?? summaryTotals(),
       "cost": cost ?? completeCost(),
+      "cache_saved": saved ?? cacheSaved(),
       "partial": partial,
       "agents": agents,
     ]
@@ -124,7 +138,8 @@ enum Fixtures {
     extraRoot: [String: Any] = [:],
     usage: [String: Any]? = nil,
     subscriptions: [[String: Any]] = [],
-    devices: [[String: Any]] = []
+    devices: [[String: Any]] = [],
+    entitlement: [String: Any]? = nil
   ) throws -> Data {
     var object: [String: Any] = [
       "protocol_version": 6,
@@ -138,11 +153,31 @@ enum Fixtures {
       "usage": usage ?? accountUsage(),
       "pricing_revision": "pricing_1",
       "model_catalog_revision": "models_1",
+      "entitlement": entitlement ?? self.entitlement(),
     ]
     for (key, value) in extraRoot {
       object[key] = value
     }
     return try JSONSerialization.data(withJSONObject: object)
+  }
+
+  static func entitlement(
+    status: String = "active",
+    expiresAt: String? = "2026-09-14T12:00:00Z",
+    willRenew: Bool = true,
+    productID: String? = "quota_sync_monthly",
+    store: String? = "app_store",
+    stale: Bool = false
+  ) -> [String: Any] {
+    // `as Any?` keeps an explicit null in the object rather than dropping the key.
+    [
+      "status": status,
+      "expires_at": expiresAt as Any? ?? NSNull(),
+      "will_renew": willRenew,
+      "product_id": productID as Any? ?? NSNull(),
+      "store": store as Any? ?? NSNull(),
+      "stale": stale,
+    ]
   }
 
   static func quotaSubscription() -> [String: Any] {

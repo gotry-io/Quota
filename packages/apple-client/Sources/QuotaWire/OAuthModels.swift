@@ -116,6 +116,44 @@ public struct IosLoginExchangeRequest: Encodable, Equatable, Sendable {
   }
 }
 
+/// What Sign in with Apple posts from inside the app.
+///
+/// `ASAuthorizationAppleIDProvider` has already proved this identity on the device, so there is
+/// no browser round trip: the token Apple signed goes straight to Relay, which checks it against
+/// Apple's own keys. `nonce` is the value this device generated; Apple was handed its SHA-256, so
+/// sending the value is what proves the token answers this request.
+public struct AppleNativeSignInRequest: Encodable, Equatable, Sendable {
+  public let protocolVersion = WireCodec.oauthProtocolVersion
+  public let clientID = QuotaIOSOAuth.clientID
+  public let identityToken: String
+  public let nonce: String
+  /// Absent when signing in. `link` binds Apple to the Account the session already names.
+  public let intent: String?
+
+  public init(identityToken: String, nonce: String, intent: String? = nil) {
+    self.identityToken = identityToken
+    self.nonce = nonce
+    self.intent = intent
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(protocolVersion, forKey: .protocolVersion)
+    try container.encode(clientID, forKey: .clientID)
+    try container.encode(identityToken, forKey: .identityToken)
+    try container.encode(nonce, forKey: .nonce)
+    try container.encodeIfPresent(intent, forKey: .intent)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case protocolVersion
+    case clientID = "clientId"
+    case identityToken
+    case nonce
+    case intent
+  }
+}
+
 public struct IosSessionRefreshRequest: Encodable, Equatable, Sendable {
   public let protocolVersion = WireCodec.oauthProtocolVersion
   public let grantType = "refresh_token"

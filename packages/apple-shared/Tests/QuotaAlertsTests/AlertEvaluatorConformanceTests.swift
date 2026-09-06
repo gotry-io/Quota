@@ -1,12 +1,13 @@
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import Testing
 
 /// QuotaBar and Quota iOS both answer this file. A case one of them changes cannot quietly drift.
 struct AlertEvaluatorConformanceTests {
   @Test func everyAlertTransitionCaseMatchesTheSharedFixture() throws {
     let fixture = try AlertTransitionFixture.load()
-    #expect(fixture.cases.count >= 8)
+    #expect(fixture.cases.count >= 11)
     for testCase in fixture.cases {
       if testCase.signOut {
         #expect(eventsMatch([], testCase.expectedEvents), "\(testCase.name)")
@@ -22,6 +23,37 @@ struct AlertEvaluatorConformanceTests {
       #expect(eventsMatch(result.events, testCase.expectedEvents), "\(testCase.name)")
       #expect(statesMatch(result.state, testCase.expectedStateAfter), "\(testCase.name)")
     }
+  }
+
+  @Test func everyBudgetCaseMatchesTheSharedFixture() throws {
+    let fixture = try AlertTransitionFixture.load()
+    #expect(fixture.budgetCases.count >= 6)
+    for testCase in fixture.budgetCases {
+      let result = BudgetAlertEvaluator.evaluate(
+        budget: testCase.budget,
+        progress: testCase.progress,
+        month: testCase.month,
+        previous: AlertDedupState(fired: testCase.previousFired, readings: [])
+      )
+      #expect(budgetEventsMatch(result.events, testCase.expectedEvents), "\(testCase.name)")
+      #expect(
+        result.state.sorted().fired == AlertDedupState(fired: testCase.expectedFiredAfter, readings: [])
+          .sorted().fired,
+        "\(testCase.name)"
+      )
+    }
+  }
+}
+
+private func budgetEventsMatch(
+  _ actual: [AlertEvent],
+  _ expected: [AlertTransitionFixture.BudgetEvent]
+) -> Bool {
+  guard actual.count == expected.count else { return false }
+  return zip(actual, expected).allSatisfy { lhs, rhs in
+    guard case .budgetCrossed(let month, let threshold, let budgetUSD) = lhs else { return false }
+    return rhs.type == "budget_crossed" && rhs.month == month && rhs.threshold == threshold
+      && Decimal(string: rhs.budgetUSD) == budgetUSD
   }
 }
 
@@ -46,8 +78,21 @@ private func eventsMatch(
         && rhs.threshold == nil
         && rhs.remainingPercent == nil
         && rhs.resetsAt == resetsAt
+    case .paceRunsOut(let selector, let windowID, let pace, let resetsAt):
+      rhs.type == "pace_runs_out"
+        && rhs.selector == selector
+        && rhs.windowID == windowID
+        && rhs.resetsAt == resetsAt
+        && exhaustsAt(pace) == rhs.exhaustsAt
+    case .budgetCrossed:
+      false
     }
   }
+}
+
+private func exhaustsAt(_ pace: QuotaPace) -> Date? {
+  guard case .runsOut(_, let exhaustsAt) = pace else { return nil }
+  return exhaustsAt
 }
 
 private func statesMatch(_ actual: AlertDedupState, _ expected: AlertDedupState) -> Bool {
@@ -56,6 +101,72 @@ private func statesMatch(_ actual: AlertDedupState, _ expected: AlertDedupState)
 
 private struct AlertTransitionFixture: Decodable {
   var cases: [Case]
+  var budgetCases: [BudgetCase]
+
+  struct BudgetCase {
+    var name: String
+    var budget: UsageBudget
+    var progress: UsageBudgetProgress?
+    var month: String
+    var previousFired: [AlertDedupKey]
+    var expectedEvents: [BudgetEvent]
+    var expectedFiredAfter: [AlertDedupKey]
+  }
+
+  struct BudgetEvent: Decodable {
+    var type: String
+    var month: String
+    var threshold: Int
+    var budgetUSD: String
+
+    enum CodingKeys: String, CodingKey {
+      case type
+      case month
+      case threshold
+      case budgetUSD = "budget_usd"
+    }
+  }
+
+  struct BudgetDTO: Decodable {
+    var amountUSD: String?
+    var alerts: Bool
+
+    enum CodingKeys: String, CodingKey {
+      case amountUSD = "amount_usd"
+      case alerts
+    }
+  }
+
+  /// The fixture states a progress by the percent it reached, which is all a crossing reads.
+  struct ProgressDTO: Decodable {
+    var percent: Int
+    var partial: Bool
+  }
+
+  struct BudgetKeyDTO: Decodable {
+    var month: String
+    var threshold: Int
+  }
+
+  struct BudgetCaseDTO: Decodable {
+    var name: String
+    var budget: BudgetDTO
+    var progress: ProgressDTO?
+    var month: String
+    var previousFired: [BudgetKeyDTO]
+    var expectedEvents: [BudgetEvent]
+    var expectedFiredAfter: [BudgetKeyDTO]
+
+    enum CodingKeys: String, CodingKey {
+      case name
+      case budget
+      case progress
+      case month
+      case previousFired = "previous_fired"
+      case expectedEvents = "expected_events"
+      case expectedFiredAfter = "expected_fired_after"
+    }
+  }
 
   struct Case {
     var name: String
@@ -75,6 +186,7 @@ private struct AlertTransitionFixture: Decodable {
     var threshold: Int?
     var remainingPercent: Double?
     var resetsAt: Date?
+    var exhaustsAt: Date?
 
     enum CodingKeys: String, CodingKey {
       case type
@@ -83,17 +195,20 @@ private struct AlertTransitionFixture: Decodable {
       case threshold
       case remainingPercent = "remaining_percent"
       case resetsAt = "resets_at"
+      case exhaustsAt = "exhausts_at"
     }
   }
 
   struct RulesDTO: Decodable {
     var enabled: Bool
     var resetReminders: Bool
+    var paceAlerts: Bool
     var thresholds: [String: [Int]]
 
     enum CodingKeys: String, CodingKey {
       case enabled
       case resetReminders = "reset_reminders"
+      case paceAlerts = "pace_alerts"
       case thresholds
     }
   }
@@ -104,12 +219,14 @@ private struct AlertTransitionFixture: Decodable {
   }
 
   struct FiredDTO: Decodable {
+    var kind: AlertKind
     var selector: String
     var windowID: String
     var resetsAt: Date?
     var threshold: Int?
 
     enum CodingKeys: String, CodingKey {
+      case kind
       case selector
       case windowID = "window_id"
       case resetsAt = "resets_at"
@@ -142,6 +259,7 @@ private struct AlertTransitionFixture: Decodable {
     var title: String
     var remainingPercent: Double
     var resetsAt: Date?
+    var durationSeconds: Int?
     var primaryCadence: String?
 
     enum CodingKeys: String, CodingKey {
@@ -149,6 +267,7 @@ private struct AlertTransitionFixture: Decodable {
       case title
       case remainingPercent = "remaining_percent"
       case resetsAt = "resets_at"
+      case durationSeconds = "duration_seconds"
       case primaryCadence = "primary_cadence"
     }
   }
@@ -183,6 +302,7 @@ private struct AlertTransitionFixture: Decodable {
           rules: AlertRules(
             enabled: rules.enabled,
             resetReminders: rules.resetReminders,
+            paceAlerts: rules.paceAlerts,
             thresholds: rules.thresholds
           ),
           previous: previous.map(Self.state),
@@ -196,6 +316,7 @@ private struct AlertTransitionFixture: Decodable {
                   title: $0.title,
                   remainingPercent: $0.remainingPercent,
                   resetsAt: $0.resetsAt,
+                  durationSeconds: $0.durationSeconds,
                   primaryCadence: $0.primaryCadence
                 )
               }
@@ -207,14 +328,49 @@ private struct AlertTransitionFixture: Decodable {
       )
     }
     cases = decoded
+    budgetCases = try root.decode([BudgetCaseDTO].self, forKey: .budgetCases).map { dto in
+      let amount = dto.budget.amountUSD.flatMap { Decimal(string: $0) }
+      let budget = UsageBudget(amountUSD: amount, alerts: dto.budget.alerts)
+      return BudgetCase(
+        name: dto.name,
+        budget: budget,
+        progress: dto.progress.map { progress in
+          // A percent is a spend against the budget, so the fixture's percent is written back
+          // as the spend that reaches it.
+          UsageBudgetProgress(
+            spentUSD: (amount ?? 1) * Decimal(progress.percent) / 100,
+            budgetUSD: amount ?? 1,
+            partial: progress.partial
+          )
+        },
+        month: dto.month,
+        previousFired: dto.previousFired.map(Self.budgetKey),
+        expectedEvents: dto.expectedEvents,
+        expectedFiredAfter: dto.expectedFiredAfter.map(Self.budgetKey)
+      )
+    }
   }
 
-  private enum RootKeys: String, CodingKey { case cases }
+  private enum RootKeys: String, CodingKey {
+    case cases
+    case budgetCases = "budget_cases"
+  }
+
+  private static func budgetKey(_ dto: BudgetKeyDTO) -> AlertDedupKey {
+    AlertDedupKey(
+      kind: .budget,
+      selector: BudgetAlertEvaluator.selector,
+      windowID: dto.month,
+      resetsAt: nil,
+      threshold: dto.threshold
+    )
+  }
 
   private static func state(_ dto: StateDTO) -> AlertDedupState {
     AlertDedupState(
       fired: dto.fired.map {
         AlertDedupKey(
+          kind: $0.kind,
           selector: $0.selector,
           windowID: $0.windowID,
           resetsAt: $0.resetsAt,

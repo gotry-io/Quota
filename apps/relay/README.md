@@ -28,13 +28,41 @@ The v6 data contract is four routes
   body. The same D1 batch rewrites `usage_daily` for the UTC dates it touched.
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
-  and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
+  the pricing and model-catalog revisions, and the paid-sync `entitlement` object. The summary ETag
+  includes `entitlements.updated_at`. A local day begins at local midnight, so `tz` decides
   where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
   carry gets a shorter `all` rather than no summary at all.
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
+  day's `totals` carries `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+  `cache_write_input_tokens`, `reasoning_tokens`, and `messages` beside `total_tokens`, and its
+  `cost` is priced the same way a period's is — so a per-day table needs no second read. A
   single-day read may take `detail=agents` and then carries that day's agent tree.
+
+The four periods in a summary are the four every client opens on. Any other period a Usage page
+offers — a week, a month, a range someone picked — is these same days added up by the client, which
+is why this read answers a range rather than one more named period. A day carries no agent tree
+unless it was asked for on its own, so a client-folded period carries totals and cost only. The
+fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
+website and both Apple apps answer that file.
+
+Each period of `usage` also carries `cache_saved`: what its cache reads saved against paying the
+uncached input price for the same tokens, folded from the rows it already priced and therefore
+costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache
+hit rate is not on the wire; every client derives it from the totals beside it.
+One more v6 route answers with no principal at all
+([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)):
+
+- `GET /api/v6/public/<handle>/usage` answers the page an Account publishes at
+  `quota.gotry.io/u/<handle>`: tokens, messages, an optional API-equivalent cost, provider and
+  model shares, and a year of heatmap bands, all on UTC dates. A handle that is malformed,
+  unclaimed, or switched off is one 404 with one body. It is the only route answered
+  `Cache-Control: public, max-age=300`, because its answer is the same for every reader, and its
+  `ETag` is computed from the Usage version stamp before any row is folded, so a held answer costs
+  no rollup read. `GET` and `PUT /api/v2/account/profile` are how the owner reads and writes the
+  handle and its two display switches; the write is browser-only and same-origin, and a handle
+  another Account holds is `409 conflict`.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
@@ -55,27 +83,68 @@ pnpm dev
 The Worker requires these secrets:
 
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
-- `GITHUB_SUBJECT_KEY`
+- `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`, and
+  `APPLE_SIGNIN_PRIVATE_KEY` (the Sign in with Apple signing key, as the PKCS#8 PEM Apple hands
+  out once)
+- `IDENTITY_SUBJECT_KEY`
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
+- `RESEND_API_KEY`
+- `REVENUECAT_WEBHOOK_SECRET` — the Authorization header value configured on the RevenueCat
+  webhook
+- `REVENUECAT_SECRET_KEY` — RevenueCat REST API v1 secret key
+- `REVENUECAT_WEB_PURCHASE_URL` — Web Purchase Link base (`https://pay.rev.cat/<token>`), also
+  acceptable as a Cloudflare var
 
-That is the whole list. The extra signing secret the retired browser-auth framework required is
+`POST /api/billing/revenuecat/webhook` is the RevenueCat webhook. It compares the `Authorization`
+header to `REVENUECAT_WEBHOOK_SECRET`, records the event, and folds the `sync` entitlement.
+`GET /api/v2/account` carries `entitlement` and `purchase.web_url` (the base with the Account id
+appended). `PUT /api/v6/device/snapshots`, `PUT /api/v6/device/usage`, `GET /api/v2/device/sync`,
+and `PUT /api/v2/device/profile` answer 402 `subscription_required` unless that entitlement is
+`active` or `grace`. See [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
+
+The extra signing secret the retired browser-auth framework required is
 not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is
 named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Register the GitHub OAuth App callback as
-`https://quota.gotry.io/api/auth/github/callback`. QuotaRelay owns the browser sign-in itself:
-`GET /api/auth/github/start` seals a 256-bit `state` and a PKCE verifier in a signed ten-minute
-`__Host-quota_oauth` cookie and redirects to GitHub with no scope; the callback checks that cookie, spends
-the code once, and opens one `sessions` row with `client_kind = 'web'` behind a
-`__Host-quota_session` cookie. Native login uses the same GitHub round trip, then
-`GET /oauth/v2/complete` turns the web session into an authorization code. A browser whose
-`Accept` includes `text/html` and that fails on `/api/auth/github/callback` or
-`/oauth/v2/complete` (no session, expired grant, rate limited, invalid request) gets a 200 HTML
-page titled **Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try
-again.** — never a token. Callers that do not ask for HTML still receive the original JSON status
-and body. `POST /api/auth/logout` revokes it, and `DELETE /api/v2/account` removes
-the Account and everything stored for it in one D1 batch. See
+`https://quota.gotry.io/api/auth/github/callback`, and the Apple Services ID's one Return URL as
+`https://quota.gotry.io/api/auth/apple/callback`. QuotaRelay owns the browser sign-in itself, and
+an Account owns the channels it is reached through
+([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)):
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. |
+| `GET /api/auth/:provider/callback` | The callback of a provider that redirects. Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
+| `POST /api/auth/:provider/callback` | The same completion for a provider that answers with a cross-site form POST, which today is Apple alone. Each provider accepts one delivery; the other is 404. |
+| `GET /api/auth/:provider/start?return_to=&intent=sign_in\|link` | Seals a 256-bit `state`, a PKCE verifier, the provider, the intent, and where to return to in a signed ten-minute `__Host-quota_oauth` cookie, then redirects to that provider. `intent=link` requires a web session; a provider Relay does not sign in through is 404. Email is not this route. |
+| `GET /api/auth/:provider/callback` | Checks the cookie, spends the code once, and either opens one `sessions` row with `client_kind = 'web'` behind a `__Host-quota_session` cookie, or binds the channel to the signed-in Account. |
+| `POST /api/auth/email/start` | JSON `{ email, return_to?, intent? }`. Writes a fifteen-minute one-time challenge, mails a link through Resend, and always answers 202. One send per address per minute and five per hour; the IP shares the `web-signin` bucket. `intent=link` requires a web session. |
+| `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the same browser error page (`expired` / `invalid_request` / `identity_taken`). |
+| `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
+| `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
+| `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
+| `DELETE /api/v2/account` | Removes the Account and everything stored for it in one D1 batch. |
+| `GET /oauth/v2/authorize` | Redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…` rather than to a provider, so a native login confirms which Account it is. |
+| `GET /oauth/v2/complete` | Turns the web session into an authorization code. |
+| `POST /oauth/v2/apple` | Sign in with Apple from inside the iOS app. Takes `{client_id: 'quota-ios', identity_token, nonce, intent?}`, checks the token against Apple's published keys, and answers with the `quota-ios` session — or, with `intent: 'link'` and a Bearer iOS session, binds Apple to that Account. |
+
+`github` and `apple` are the providers registered today; `email` is the remaining channel an Account
+can hold. Apple is asked for `name email`, which requires `response_mode=form_post`, so its handoff
+cookie alone is sealed `SameSite=None` — still `__Host-`, still signed, still ten minutes. Its
+`client_secret` is an ES256 JWT signed per exchange rather than a stored string. A browser whose `Accept` includes `text/html` and that fails on
+`/api/auth/:provider/callback` or `/oauth/v2/complete` (no session, expired grant, rate limited,
+invalid request, or a channel that already reaches another Account) gets a 200 HTML page titled
+**Sign-in didn't finish**, one sentence for that reason, and **Return to Quota and try again.** —
+never a token. Callers that do not ask for HTML still receive the original JSON status and body. See
+GitHub is the OAuth provider registered today; email is a mailed one-time link on its own routes.
+`github`, `apple`, and `email` are the channels an Account can hold. A browser whose `Accept`
+includes `text/html` and that fails on `/api/auth/:provider/callback`, `/api/auth/email/verify`, or
+`/oauth/v2/complete` (no session, expired grant, rate limited, invalid request, or a channel that
+already reaches another Account) gets a 200 HTML page titled **Sign-in didn't finish**, one
+sentence for that reason, and **Return to Quota and try again.** — never a token. Callers that do
+not ask for HTML still receive the original JSON status and body. See
 [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Every client's session is a row in that same table, and one login issues one access/refresh family

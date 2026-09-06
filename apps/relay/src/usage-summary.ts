@@ -1,7 +1,10 @@
 import {
   type DatedUsageRow,
+  foldPreparedUsageCacheSaved,
   foldPreparedUsageCosts,
+  type PreparedUsageCacheSaved,
   type PreparedUsageCosts,
+  prepareUsageCacheSaved,
   prepareUsageCosts,
   resolveModel,
   resolveProvider,
@@ -72,9 +75,10 @@ export function buildAccountUsage(input: AccountUsageInput): AccountUsage {
   const rows = [...input.daily, ...input.boundaries.flatMap((boundary) => boundary.rows)];
   const facts = rows.map(usageRow);
   const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const saved = prepareUsageCacheSaved(facts, input.catalog);
   const selected = selectPeriods(input);
   const period = (indexes: readonly number[]) =>
-    buildUsagePeriod(rows, facts, prepared, indexes, input.modelCatalog);
+    buildUsagePeriod(rows, facts, prepared, saved, indexes, input.modelCatalog);
   return boundedResult(() =>
     AccountUsageSchema.parse({
       today: period(selected.today),
@@ -149,12 +153,14 @@ function buildUsagePeriod(
   rows: readonly StoredUsageDailyRow[],
   facts: readonly DatedUsageRow[],
   prepared: PreparedUsageCosts,
+  saved: PreparedUsageCacheSaved,
   indexes: readonly number[],
   modelCatalog: ModelCatalog,
 ): UsagePeriod {
   return UsagePeriodSchema.parse({
     totals: summaryTotals(facts, indexes),
     cost: boundedFoldPreparedUsageCosts(prepared, indexes),
+    cache_saved: foldPreparedUsageCacheSaved(saved, indexes),
     partial: indexes.some((index) => (rows[index]?.partial_hours ?? 0) > 0),
     agents: buildAgentTree(facts, prepared, indexes, modelCatalog),
   });

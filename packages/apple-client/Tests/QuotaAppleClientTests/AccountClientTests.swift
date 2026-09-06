@@ -44,6 +44,60 @@ struct AccountClientTests {
     #expect(try cache.load()?.summary.account.displayLabel == "octocat")
   }
 
+  /// Relay refuses a write the entitlement does not cover with 402 `subscription_required`.
+  /// That reaches callers as its own case rather than as one more rejected status, so the app
+  /// can offer the paywall instead of saying the request was malformed.
+  @Test
+  func aRefusedSubscriptionIsItsOwnErrorAndKeepsTheStoredRead() async throws {
+    let stored = try WireCodec.decode(
+      AccountSummary.self,
+      from: try Fixtures.accountSummaryJSON()
+    )
+    let cache = MemoryAccountSummaryStore(
+      value: CachedAccountSummary(
+        summary: stored,
+        fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+      )
+    )
+    let client = AccountClient(
+      relay: RelayClient(
+        transport: ScriptedTransport([
+          .init(status: 402, body: try Fixtures.errorBody(code: "subscription_required"))
+        ])
+      ),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: cache,
+      calendar: Calendar(identifier: .gregorian),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    let result = await client.fetchTodaySummary()
+    #expect(result.error == .subscriptionRequired)
+    #expect(result.fromCache)
+    #expect(result.summary?.account.accountID == "account_01")
+    #expect(
+      result.error?.userFacingMessage == AccountClientError.subscriptionRequiredMessage)
+  }
+
+  /// A 402 that is not the entitlement refusal stays a rejected status.
+  @Test
+  func anotherPaymentRequiredStatusStaysARejection() async throws {
+    let client = AccountClient(
+      relay: RelayClient(
+        transport: ScriptedTransport([
+          .init(status: 402, body: try Fixtures.errorBody(code: "invalid_request"))
+        ])
+      ),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    #expect(
+      await client.fetchTodaySummary().error
+        == .relay(.rejected(code: "invalid_request", status: 402)))
+  }
+
   /// One contract: a 304 is an answer. The stored summary stands, the read is not reported as
   /// coming from a failure, and the second request is the one that offered the validator.
   @Test
@@ -285,6 +339,55 @@ struct AccountClientTests {
     #expect(try sessions.load() == prior)
     #expect(try cache.load()?.fetchedAt == cached.fetchedAt)
     #expect(try cache.load()?.summary.account.displayLabel == "octocat")
+  }
+
+  @Test
+  func appleSignInPostsTheSignedTokenAndKeepsAPendingSession() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.tokenResponse())
+    ])
+    let sessions = MemoryAccountSessionStore()
+    let cache = MemoryAccountSummaryStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: cache
+    )
+    let nonce = try AppleSignIn.generateNonce()
+    let identityToken = "\(String(repeating: "a", count: 20)).\(String(repeating: "b", count: 40)).\(String(repeating: "c", count: 43))"
+
+    let session = try await client.exchangeApple(identityToken: identityToken, nonce: nonce.value)
+    #expect(session.accessToken == Fixtures.accessToken)
+    // Which Account this reached is still the question the confirm screen asks.
+    #expect(session.activation == .pending)
+    #expect(try sessions.load()?.activation == .pending)
+    #expect(try cache.load() == nil)
+    #expect(transport.recordedURLs.map(\.path) == ["/oauth/v2/apple"])
+
+    let body =
+      try JSONSerialization.jsonObject(with: transport.recordedBodies[0]) as? [String: Any] ?? [:]
+    #expect(body["client_id"] as? String == "quota-ios")
+    // Apple was handed the digest; Relay is handed the value and digests it again.
+    #expect(body["nonce"] as? String == nonce.value)
+    #expect(body["identity_token"] as? String == identityToken)
+    #expect(body["intent"] == nil)
+  }
+
+  @Test
+  func appleSignInRefusesAnythingThatIsNotASignedToken() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.tokenResponse())
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let nonce = try AppleSignIn.generateNonce()
+    await #expect(throws: AccountClientError.relay(.invalidResponse)) {
+      _ = try await client.exchangeApple(identityToken: "not-a-jws", nonce: nonce.value)
+    }
+    #expect(transport.recordedURLs.isEmpty)
   }
 
   @Test

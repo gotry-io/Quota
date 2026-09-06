@@ -1,0 +1,624 @@
+{
+  "$comment": "How the activity days a range covers fold into the one period a Usage page shows. The website and both Apple apps answer this file. An Account summary folds four periods on the server; any other period is the same days added up, by whichever client is showing it. Token counts add. Cost amounts and row counts add, and the basis and the status then follow from the counts exactly as they do for one row: complete when no row was left unpriced, partial when some were and some were priced, unavailable when none were priced. Two days priced against different catalog revisions name no revision. Unpriced items are merged by (billing_channel, model, reason) and sorted by that triple. A period is incomplete when any day in it is. A folded period carries no agent tree: a day carries one only when it was asked for on its own. It also states no cache saving: a saving is priced per row, and a day carries the cost it reached rather than the rows behind it, so every row a fold counted is one whose saving went unpriced — and a period that counted no rows saved nothing.",
+  "cases": [
+    {
+      "name": "an empty range folds to a period that counted nothing",
+      "from": "2026-09-10",
+      "to": "2026-09-11",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-02",
+          "totals": {
+            "total_tokens": 300,
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 5
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "2500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 3,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0,
+          "messages": 0
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "none",
+          "status": "complete",
+          "amount_microusd": null,
+          "catalog_revision": null,
+          "calculated_rows": 0,
+          "reported_rows": 0,
+          "unpriced_rows": 0,
+          "assumptions": [],
+          "unpriced": []
+        },
+        "cache_saved": {
+          "amount_microusd": "0",
+          "status": "complete",
+          "unpriced_rows": 0
+        },
+        "partial": false
+      }
+    },
+    {
+      "name": "two priced days add their amounts, their rows, and their tokens",
+      "from": "2026-09-01",
+      "to": "2026-09-02",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-02",
+          "totals": {
+            "total_tokens": 300,
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 5
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "2500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 3,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 450,
+          "input_tokens": 300,
+          "output_tokens": 150,
+          "cache_read_input_tokens": 10,
+          "cache_write_input_tokens": 5,
+          "reasoning_tokens": 20,
+          "messages": 8
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "calculated",
+          "status": "complete",
+          "amount_microusd": "4000000",
+          "catalog_revision": "r1",
+          "calculated_rows": 5,
+          "reported_rows": 0,
+          "unpriced_rows": 0,
+          "assumptions": ["model_alias"],
+          "unpriced": []
+        },
+        "cache_saved": {
+          "amount_microusd": null,
+          "status": "unavailable",
+          "unpriced_rows": 5
+        },
+        "partial": false
+      }
+    },
+    {
+      "name": "a day that left a row unpriced makes the period partly priced",
+      "from": "2026-09-01",
+      "to": "2026-09-03",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-03",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 10,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "none",
+            "status": "unavailable",
+            "amount_microusd": null,
+            "catalog_revision": "r1",
+            "calculated_rows": 0,
+            "reported_rows": 0,
+            "unpriced_rows": 1,
+            "assumptions": [],
+            "unpriced": [
+              {
+                "billing_channel": "openai_direct",
+                "model": "gpt-x",
+                "reason": "unknown_model",
+                "rows": 1
+              }
+            ]
+          },
+          "partial": false
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 160,
+          "input_tokens": 110,
+          "output_tokens": 50,
+          "cache_read_input_tokens": 10,
+          "cache_write_input_tokens": 5,
+          "reasoning_tokens": 20,
+          "messages": 4
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "calculated",
+          "status": "partial",
+          "amount_microusd": "1500000",
+          "catalog_revision": "r1",
+          "calculated_rows": 2,
+          "reported_rows": 0,
+          "unpriced_rows": 1,
+          "assumptions": ["model_alias"],
+          "unpriced": [
+            {
+              "billing_channel": "openai_direct",
+              "model": "gpt-x",
+              "reason": "unknown_model",
+              "rows": 1
+            }
+          ]
+        },
+        "cache_saved": {
+          "amount_microusd": null,
+          "status": "unavailable",
+          "unpriced_rows": 3
+        },
+        "partial": false
+      }
+    },
+    {
+      "name": "a calculated day and a reported day fold to a mixed basis, and two catalog revisions to none",
+      "from": "2026-09-01",
+      "to": "2026-09-04",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-04",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 5,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "reported",
+            "status": "complete",
+            "amount_microusd": "700000",
+            "catalog_revision": "r2",
+            "calculated_rows": 0,
+            "reported_rows": 1,
+            "unpriced_rows": 0,
+            "assumptions": ["source_reported"],
+            "unpriced": []
+          },
+          "partial": false
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 160,
+          "input_tokens": 105,
+          "output_tokens": 55,
+          "cache_read_input_tokens": 10,
+          "cache_write_input_tokens": 5,
+          "reasoning_tokens": 20,
+          "messages": 4
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "mixed",
+          "status": "complete",
+          "amount_microusd": "2200000",
+          "catalog_revision": null,
+          "calculated_rows": 2,
+          "reported_rows": 1,
+          "unpriced_rows": 0,
+          "assumptions": ["model_alias", "source_reported"],
+          "unpriced": []
+        },
+        "cache_saved": {
+          "amount_microusd": null,
+          "status": "unavailable",
+          "unpriced_rows": 3
+        },
+        "partial": false
+      }
+    },
+    {
+      "name": "a day scanned incompletely makes the period incomplete",
+      "from": "2026-09-05",
+      "to": "2026-09-05",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-05",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 2
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "300000",
+            "catalog_revision": "r1",
+            "calculated_rows": 1,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": [],
+            "unpriced": []
+          },
+          "partial": true
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 10,
+          "input_tokens": 7,
+          "output_tokens": 3,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0,
+          "messages": 2
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "calculated",
+          "status": "complete",
+          "amount_microusd": "300000",
+          "catalog_revision": "r1",
+          "calculated_rows": 1,
+          "reported_rows": 0,
+          "unpriced_rows": 0,
+          "assumptions": [],
+          "unpriced": []
+        },
+        "cache_saved": {
+          "amount_microusd": null,
+          "status": "unavailable",
+          "unpriced_rows": 1
+        },
+        "partial": true
+      }
+    },
+    {
+      "name": "only the days inside the range are folded",
+      "from": "2026-09-02",
+      "to": "2026-09-03",
+      "days": [
+        {
+          "date": "2026-09-01",
+          "totals": {
+            "total_tokens": 150,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 10,
+            "cache_write_input_tokens": 5,
+            "reasoning_tokens": 20,
+            "messages": 3
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "1500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 2,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-02",
+          "totals": {
+            "total_tokens": 300,
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 5
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "2500000",
+            "catalog_revision": "r1",
+            "calculated_rows": 3,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": ["model_alias"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-03",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 10,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "none",
+            "status": "unavailable",
+            "amount_microusd": null,
+            "catalog_revision": "r1",
+            "calculated_rows": 0,
+            "reported_rows": 0,
+            "unpriced_rows": 1,
+            "assumptions": [],
+            "unpriced": [
+              {
+                "billing_channel": "openai_direct",
+                "model": "gpt-x",
+                "reason": "unknown_model",
+                "rows": 1
+              }
+            ]
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-04",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 5,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "reported",
+            "status": "complete",
+            "amount_microusd": "700000",
+            "catalog_revision": "r2",
+            "calculated_rows": 0,
+            "reported_rows": 1,
+            "unpriced_rows": 0,
+            "assumptions": ["source_reported"],
+            "unpriced": []
+          },
+          "partial": false
+        },
+        {
+          "date": "2026-09-05",
+          "totals": {
+            "total_tokens": 10,
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 2
+          },
+          "cost": {
+            "mode": "auto",
+            "basis": "calculated",
+            "status": "complete",
+            "amount_microusd": "300000",
+            "catalog_revision": "r1",
+            "calculated_rows": 1,
+            "reported_rows": 0,
+            "unpriced_rows": 0,
+            "assumptions": [],
+            "unpriced": []
+          },
+          "partial": true
+        }
+      ],
+      "expected": {
+        "totals": {
+          "total_tokens": 310,
+          "input_tokens": 210,
+          "output_tokens": 100,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0,
+          "messages": 6
+        },
+        "cost": {
+          "mode": "auto",
+          "basis": "calculated",
+          "status": "partial",
+          "amount_microusd": "2500000",
+          "catalog_revision": "r1",
+          "calculated_rows": 3,
+          "reported_rows": 0,
+          "unpriced_rows": 1,
+          "assumptions": ["model_alias"],
+          "unpriced": [
+            {
+              "billing_channel": "openai_direct",
+              "model": "gpt-x",
+              "reason": "unknown_model",
+              "rows": 1
+            }
+          ]
+        },
+        "cache_saved": {
+          "amount_microusd": null,
+          "status": "unavailable",
+          "unpriced_rows": 4
+        },
+        "partial": false
+      }
+    }
+  ]
+}

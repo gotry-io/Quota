@@ -18,11 +18,22 @@ import {
   Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
+  type UsageActivityDayRead,
+  type UsageCacheSaved,
+  UsageCacheSavedSchema,
   type UsageCostOutcome,
+  type UsageCostOutcomeRead,
+  UsageCostOutcomeReadSchema,
   UsageCostOutcomeSchema,
+  MAXIMUM_UNPRICED_ITEMS,
   type UsageRow,
   UsageRowSchema,
+  type UsagePeriodRead,
+  UsagePeriodReadSchema,
+  type UsageSummaryTotals,
+  type UsageSummaryTotalsRead,
   type UsageUnpricedItem,
+  type UsageUnpricedItemRead,
   type UsageUnpricedReason,
 } from "@gotry-io/quota-protocol";
 
@@ -31,10 +42,15 @@ export function remainingPercent(usedPercent: number): number {
 }
 
 /** Remaining and limit as a window carries them. */
-type RemainingQuotaWindow = {
+export type RemainingQuotaWindow = {
+  used_percent?: number | undefined;
   remaining_value?: number | undefined;
   limit_value?: number | undefined;
+  value_unit?: string | undefined;
 };
+
+/** How far remaining/limit may drift from used_percent and still be the same quantity. */
+export const AMOUNT_OF_LIMIT_PERCENT_TOLERANCE = 1;
 
 /**
  * Wallet-style window: absolute remaining only, no budget/limit ratio.
@@ -44,10 +60,146 @@ export function isBalanceOnly(window: RemainingQuotaWindow): boolean {
 }
 
 /**
- * Rate-limit / budget meters need a percent bar. Balance-only wallets do not.
+ * A usd or credits window whose remaining and limit describe the same quantity as used_percent.
+ * Those print remaining of limit and drop the meter. Included dollars that are a different
+ * quantity keep the percent meter.
+ */
+export function isAmountOfLimit(window: RemainingQuotaWindow): boolean {
+  const remaining = window.remaining_value;
+  const limit = window.limit_value;
+  const unit = window.value_unit;
+  if (remaining === undefined || limit === undefined || !(limit > 0)) return false;
+  if (unit !== "usd" && unit !== "credits") return false;
+  if (window.used_percent === undefined) return true;
+  const remainingPct = remainingPercent(window.used_percent);
+  const fromAmount = Math.max(0, Math.min(100, (remaining / limit) * 100));
+  return Math.abs(fromAmount - remainingPct) < AMOUNT_OF_LIMIT_PERCENT_TOLERANCE;
+}
+
+/**
+ * Rate-limit / budget meters need a percent bar. Balance-only wallets and amount-of-limit
+ * usd/credits windows do not.
  */
 export function showsPercentMeter(window: RemainingQuotaWindow): boolean {
-  return !isBalanceOnly(window);
+  return !isBalanceOnly(window) && !isAmountOfLimit(window);
+}
+
+export function formatPercent(value: number): string {
+  const remaining = Math.max(0, Math.min(100, value));
+  if (Math.abs(Math.round(remaining) - remaining) < 0.05) {
+    return `${Math.round(remaining)}%`;
+  }
+  return `${remaining.toFixed(1)}%`;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function formatCreditsAmount(value: number): string {
+  return value.toFixed(2);
+}
+
+/**
+ * Remaining copy for one window: remaining percent, a wallet amount, or remaining of limit.
+ */
+export function formatWindowTitle(title: string, window: RemainingQuotaWindow): string {
+  if (isBalanceOnly(window) && title.toLowerCase().startsWith("balance")) return "Balance";
+  return title;
+}
+
+export function formatRemaining(window: RemainingQuotaWindow): string {
+  const remainingPct = remainingPercent(window.used_percent ?? 0);
+  if (
+    isAmountOfLimit(window) &&
+    window.remaining_value !== undefined &&
+    window.limit_value !== undefined
+  ) {
+    if (window.value_unit === "usd") {
+      return `${formatUsd(window.remaining_value)} of ${formatUsd(window.limit_value)}`;
+    }
+    return `${formatCreditsAmount(window.remaining_value)} of ${formatCreditsAmount(window.limit_value)} credits`;
+  }
+  const absolute = formatAbsoluteRemaining(window);
+  if (absolute === undefined) return formatPercent(remainingPct);
+  if (isBalanceOnly(window)) return absolute;
+  return `${formatPercent(remainingPct)} · ${absolute}`;
+}
+
+function formatAbsoluteRemaining(window: RemainingQuotaWindow): string | undefined {
+  if (window.remaining_value === undefined) return undefined;
+  if (window.value_unit === "usd") return formatUsd(window.remaining_value);
+  if (window.value_unit === "credits")
+    return `${formatCreditsAmount(window.remaining_value)} credits`;
+  if (window.value_unit === "count") return window.remaining_value.toFixed(0);
+  if (isBalanceOnly(window)) return window.remaining_value.toFixed(2);
+  return undefined;
+}
+
+export type ResetCopyStyle = "relative" | "absolute";
+
+/**
+ * The line under a window that still has a future refill, or `null` once that instant has passed.
+ *
+ * English is fixed; `timeZone` is the IANA zone the reader is in. Minutes round up, and a
+ * duration under a minute still reads as `Resets in 1m`. Absolute always uses the local date
+ * the relative rule would fall back to after a day.
+ */
+export function resetCopy(
+  resetsAt: string | number | Date,
+  now: Date = new Date(),
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  style: ResetCopyStyle = "relative",
+): string | null {
+  const resetDate = new Date(resetsAt);
+  const seconds = (resetDate.getTime() - now.getTime()) / 1000;
+  if (!(seconds > 0)) return null;
+  if (style === "relative") {
+    const wholeMinutes = Math.max(1, Math.ceil(seconds / 60));
+    if (wholeMinutes < 60) {
+      return `Resets in ${wholeMinutes}m`;
+    }
+    if (seconds < 86_400) {
+      let hours = Math.floor(seconds / 3_600);
+      let minutes = Math.ceil((seconds - hours * 3_600) / 60);
+      if (minutes === 60) {
+        hours += 1;
+        minutes = 0;
+      }
+      if (minutes === 0) return `Resets in ${hours}h`;
+      return `Resets in ${hours}h ${minutes}m`;
+    }
+  }
+  const parts = zonedDateParts(resetDate, timeZone);
+  if (seconds < 604_800) {
+    return `Resets ${parts.weekday} ${parts.hour}:${parts.minute}`;
+  }
+  return `Resets ${parts.month} ${parts.day}`;
+}
+
+function zonedDateParts(
+  date: Date,
+  timeZone: string,
+): { weekday: string; month: string; day: string; hour: string; minute: string } {
+  const values = new Map<string, string>();
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date)) {
+    if (part.type !== "literal") values.set(part.type, part.value);
+  }
+  return {
+    weekday: values.get("weekday") ?? "",
+    month: values.get("month") ?? "",
+    day: values.get("day") ?? "",
+    hour: (values.get("hour") ?? "00").padStart(2, "0"),
+    minute: (values.get("minute") ?? "00").padStart(2, "0"),
+  };
 }
 
 /**
@@ -766,6 +918,112 @@ export function foldPreparedUsageCosts(
   });
 }
 
+/**
+ * How much of a period's input tokens came back from a cache, in basis points.
+ *
+ * `input_tokens` is every input token the request was billed for, and the cache counts are the
+ * parts of it that were read from or written to a cache, so the hit rate is one share of one
+ * whole rather than a ratio between two different measurements. A period with no input has no
+ * rate — not a rate of zero. Basis points keep the answer an integer, so the three runtimes
+ * that state this rule agree exactly rather than to within a rounding.
+ *
+ * See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export function usageCacheHitBasisPoints(totals: UsageSummaryTotals): number | null {
+  if (totals.input_tokens === 0) return null;
+  const input = BigInt(totals.input_tokens);
+  return Number((BigInt(totals.cache_read_input_tokens) * 20_000n + input) / (input * 2n));
+}
+
+/**
+ * What the cache reads in these rows saved against paying the uncached input price for them.
+ *
+ * Only the uncached-input and cache-read rates take part: a cache write is what buying the
+ * cache cost, and it is already in the cost above this. A row is priced by the same entry its
+ * cost resolved through, so a saving and a cost never disagree about which model was used. A
+ * row whose entry states no rate for either side is counted as unpriced and the saving says so,
+ * because a saving nobody can price is not a saving of zero.
+ *
+ * A catalog that priced a cache read above uncached input saved nothing on that row, which is
+ * what "saved" means; it is not evidence of a loss the cost outcome did not already carry.
+ *
+ * See [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export function calculateUsageCacheSaved(
+  inputRows: readonly DatedUsageRow[],
+  catalogInput: unknown,
+): UsageCacheSaved {
+  return foldPreparedUsageCacheSaved(prepareUsageCacheSaved(inputRows, catalogInput));
+}
+
+/**
+ * One row's part in the saving: what it saved, or that nothing could price it.
+ *
+ * A row that read nothing from a cache takes no part at all, which is why it is neither.
+ */
+export type PreparedUsageCacheSavedRow =
+  | { status: "saved"; amount_microusd: bigint }
+  | { status: "unpriced" }
+  | { status: "no_cache_read" };
+
+export interface PreparedUsageCacheSaved {
+  rows: readonly PreparedUsageCacheSavedRow[];
+}
+
+/** Resolve every row once so overlapping periods fold the same answer without re-resolving it. */
+export function prepareUsageCacheSaved(
+  inputRows: readonly DatedUsageRow[],
+  catalogInput: unknown,
+): PreparedUsageCacheSaved {
+  const rows = inputRows.map((row) => DatedUsageRowSchema.parse(row));
+  const validation = validatePricingCatalogOnce(catalogInput);
+  const catalog = validation.valid ? validation.catalog : null;
+  return {
+    rows: rows.map((row): PreparedUsageCacheSavedRow => {
+      if (row.cache_read_tokens === 0) return { status: "no_cache_read" };
+      const saved = catalog === null ? null : rowCacheSaved(catalog, row);
+      return saved === null ? { status: "unpriced" } : { status: "saved", amount_microusd: saved };
+    }),
+  };
+}
+
+/** Fold all prepared rows, or a caller-selected set of row indexes. */
+export function foldPreparedUsageCacheSaved(
+  prepared: PreparedUsageCacheSaved,
+  indexes?: readonly number[],
+): UsageCacheSaved {
+  let amount = 0n;
+  let priced = 0;
+  let unpriced = 0;
+  for (const index of indexes ?? prepared.rows.keys()) {
+    const row = prepared.rows[index];
+    if (!row) throw new RangeError(`Missing prepared Usage cache saving at index ${index}.`);
+    if (row.status === "unpriced") unpriced += 1;
+    else if (row.status === "saved") {
+      amount += row.amount_microusd;
+      priced += 1;
+    }
+  }
+  return UsageCacheSavedSchema.parse({
+    amount_microusd: unpriced > 0 && priced === 0 ? null : amount.toString(),
+    status: unpriced === 0 ? "complete" : priced > 0 ? "partial" : "unavailable",
+    unpriced_rows: unpriced,
+  });
+}
+
+/** One row's saving, or `null` when the catalog cannot price both sides of the comparison. */
+function rowCacheSaved(catalog: PricingCatalog, row: DatedUsageRow): bigint | null {
+  const resolution = resolvePricingEntry(catalog, row);
+  if (resolution.status === "unpriced") return null;
+  const uncached = resolution.entry.rates.uncached_input_per_million;
+  const cached = resolution.entry.rates.cache_read_per_million;
+  if (uncached === null || cached === null) return null;
+  const count = BigInt(row.cache_read_tokens);
+  const full = roundDecimalComponents([{ count, rate: uncached }]);
+  const actual = roundDecimalComponents([{ count, rate: cached }]);
+  return full > actual ? full - actual : 0n;
+}
+
 export type CalculatedUsageRowCost =
   | {
       status: "priced";
@@ -929,7 +1187,8 @@ function isVendorDirectChannel(channel: BillingChannel): boolean {
     channel === "anthropic_direct" ||
     channel === "xai_direct" ||
     channel === "moonshot_direct" ||
-    channel === "deepseek_direct"
+    channel === "deepseek_direct" ||
+    channel === "google_direct"
   );
 }
 
@@ -1024,11 +1283,226 @@ function parseDecimal(value: string): { numerator: bigint; scale: number } {
   return { numerator: BigInt(`${integer}${fraction}`), scale: fraction.length };
 }
 
-function compareUnpricedItems(left: UsageUnpricedItem, right: UsageUnpricedItem): number {
+function compareUnpricedItems(
+  left: UsageUnpricedItem | UsageUnpricedItemRead,
+  right: UsageUnpricedItem | UsageUnpricedItemRead,
+): number {
   return `${left.billing_channel}\u0000${left.model}\u0000${left.reason}`.localeCompare(
     `${right.billing_channel}\u0000${right.model}\u0000${right.reason}`,
   );
 }
 
+/**
+ * Folds the activity days a range covers into the one period a Usage page shows.
+ *
+ * An Account summary folds four periods on the server, because those four are what every client
+ * opens on. Any other period — a week, a month, a range someone picked — is the same days added
+ * up, and the days are already here: the activity read answers a year at a time. The rule is
+ * stated in `packages/protocol/fixtures/usage-day-fold-conformance.json`, which this and both
+ * Apple apps answer.
+ *
+ * Only the totals and the cost fold. A day carries its agent tree only when it was asked for on
+ * its own, so a folded period carries no breakdown.
+ */
+export function foldUsageActivityDays(
+  days: readonly UsageActivityDayRead[],
+  range?: { from: string; to: string },
+): UsagePeriodRead {
+  const selected = range
+    ? days.filter((day) => day.date >= range.from && day.date <= range.to)
+    : [...days];
+  const cost = foldUsageCostOutcomes(selected.map((day) => day.cost));
+  return UsagePeriodReadSchema.parse({
+    totals: foldUsageSummaryTotals(selected.map((day) => day.totals)),
+    cost,
+    cache_saved: foldedUsageCacheSaved(cost),
+    partial: selected.some((day) => day.partial),
+    agents: [],
+  });
+}
+
+/**
+ * What a folded period says its cache reads saved, which is that it does not know.
+ *
+ * A saving is priced per row against the uncached input rate (ADR 0036), and a day carries the
+ * cost it reached rather than the rows behind it. So every row a folded period counted is one
+ * whose saving went unpriced — and a period that counted no rows saved nothing.
+ */
+export function foldedUsageCacheSaved(cost: UsageCostOutcomeRead): UsageCacheSaved {
+  const rows = cost.calculated_rows + cost.reported_rows + cost.unpriced_rows;
+  return UsageCacheSavedSchema.parse({
+    amount_microusd: rows === 0 ? "0" : null,
+    status: rows === 0 ? "complete" : "unavailable",
+    unpriced_rows: rows,
+  });
+}
+
+/** Adds token counts, which are counts of the same events over disjoint days. */
+export function foldUsageSummaryTotals(
+  values: readonly UsageSummaryTotalsRead[],
+): UsageSummaryTotalsRead {
+  const sum = (take: (totals: UsageSummaryTotalsRead) => number) =>
+    values.reduce((total, value) => total + take(value), 0);
+  return {
+    total_tokens: sum((totals) => totals.total_tokens),
+    input_tokens: sum((totals) => totals.input_tokens),
+    output_tokens: sum((totals) => totals.output_tokens),
+    cache_read_input_tokens: sum((totals) => totals.cache_read_input_tokens),
+    cache_write_input_tokens: sum((totals) => totals.cache_write_input_tokens),
+    reasoning_tokens: sum((totals) => totals.reasoning_tokens),
+    messages: sum((totals) => totals.messages),
+  };
+}
+
+/**
+ * Adds cost outcomes, then reaches the same verdict one row does.
+ *
+ * The amount and the row counts add. The basis and the status follow from the counts, so a
+ * period is partly priced exactly when one of its days left a row unpriced. Two days priced
+ * against different catalog revisions name no single revision, so the fold names none.
+ */
+export function foldUsageCostOutcomes(
+  outcomes: readonly UsageCostOutcomeRead[],
+): UsageCostOutcomeRead {
+  const assumptions = new Set<string>();
+  const unpricedCounts = new Map<string, UsageUnpricedItemRead>();
+  let amount = 0n;
+  let priced = false;
+  let calculatedRows = 0;
+  let reportedRows = 0;
+  let unpricedRows = 0;
+  let truncated = false;
+  let revision: string | null = outcomes[0]?.catalog_revision ?? null;
+
+  for (const outcome of outcomes) {
+    if (outcome.catalog_revision !== revision) revision = null;
+    if (outcome.amount_microusd !== null) {
+      amount += BigInt(outcome.amount_microusd);
+      priced = true;
+    }
+    calculatedRows += outcome.calculated_rows;
+    reportedRows += outcome.reported_rows;
+    unpricedRows += outcome.unpriced_rows;
+    for (const assumption of outcome.assumptions) assumptions.add(assumption);
+    truncated = truncated || outcome.unpriced_truncated === true;
+    for (const item of outcome.unpriced) {
+      const key = `${item.billing_channel}\u0000${item.model}\u0000${item.reason}`;
+      const existing = unpricedCounts.get(key);
+      if (existing) existing.rows += item.rows;
+      else unpricedCounts.set(key, { ...item });
+    }
+  }
+
+  const pricedRows = calculatedRows + reportedRows;
+  const unpriced = [...unpricedCounts.values()].sort(compareUnpricedItems);
+  return UsageCostOutcomeReadSchema.parse({
+    mode: outcomes[0]?.mode ?? "auto",
+    basis:
+      calculatedRows > 0 && reportedRows > 0
+        ? "mixed"
+        : calculatedRows > 0
+          ? "calculated"
+          : reportedRows > 0
+            ? "reported"
+            : "none",
+    status: unpricedRows === 0 ? "complete" : pricedRows > 0 ? "partial" : "unavailable",
+    amount_microusd: priced && pricedRows > 0 ? amount.toString() : null,
+    catalog_revision: revision,
+    calculated_rows: calculatedRows,
+    reported_rows: reportedRows,
+    unpriced_rows: unpricedRows,
+    assumptions: [...assumptions].sort(),
+    unpriced: unpriced.slice(0, MAXIMUM_UNPRICED_ITEMS),
+    ...(truncated || unpriced.length > MAXIMUM_UNPRICED_ITEMS
+      ? { unpriced_truncated: true as const }
+      : {}),
+  });
+}
+
 export type { DatedUsageRow, PricingCatalog, PricingCatalogEntry, PricingRates, UsageRow };
 export { PROTOCOL_VERSION };
+
+/** Whether a window's current burn rate lasts to its reset, and how far off the even rate it is. */
+export type QuotaPaceTempo = "ahead" | "on_track" | "behind";
+
+/**
+ * The pace of one window. `none` is a window this cannot answer for: no cadence, a wallet
+ * with no budget to spend against, or too little of the window behind it to mean anything.
+ */
+export type QuotaPace =
+  | { kind: "none" }
+  | {
+      kind: "lasts" | "runs_out";
+      tempo: QuotaPaceTempo;
+      delta_percent: number;
+      projected_at_reset: number;
+      exhausts_at?: string;
+    };
+
+/** A window as pace reads it. */
+type PaceWindow = RemainingQuotaWindow & {
+  used_percent: number;
+  resets_at?: string | undefined;
+  duration_seconds?: number | undefined;
+};
+
+/** Below this much of the window elapsed, the sample says nothing about the rest of it. */
+export const MINIMUM_PACE_ELAPSED_FRACTION = 0.05;
+
+/** Below this much used, the sample says nothing either: a few percent is noise, not a rate. */
+export const MINIMUM_PACE_USED_PERCENT = 2;
+
+/** The projection is a ratio of a small number and runs away; this is where it stops. */
+export const MAXIMUM_PACE_PROJECTION_PERCENT = 999;
+
+/** Inside this band of the even rate, a window is neither ahead nor behind. */
+export const PACE_ON_TRACK_BAND: readonly [number, number] = [0.9, 1.1];
+
+/** Half away from zero, so every runtime rounds a negative delta the same way. */
+function roundAwayFromZero(value: number): number {
+  return Math.sign(value) * Math.round(Math.abs(value));
+}
+
+/**
+ * Whether this window's burn rate lasts to its reset, derived from the reading alone.
+ *
+ * `used_percent`, `resets_at`, and `duration_seconds` are the whole input, so a reader
+ * answers it without history and without a collector having projected anything. The window
+ * started one cadence before it resets; how much of it is behind the reader is what turns a
+ * used percent into a rate. See ADR 0035.
+ */
+export function quotaPace(window: PaceWindow, now: Date): QuotaPace {
+  const cadence = window.duration_seconds;
+  if (window.resets_at === undefined || cadence === undefined || cadence <= 0) {
+    return { kind: "none" };
+  }
+  if (isBalanceOnly(window)) return { kind: "none" };
+  const resetsAt = Date.parse(window.resets_at);
+  if (Number.isNaN(resetsAt)) return { kind: "none" };
+  const windowStart = resetsAt - cadence * 1_000;
+  const elapsed = Math.min(Math.max((now.getTime() - windowStart) / 1_000 / cadence, 0), 1);
+  const used = window.used_percent;
+  if (elapsed < MINIMUM_PACE_ELAPSED_FRACTION || used < MINIMUM_PACE_USED_PERCENT) {
+    return { kind: "none" };
+  }
+  const projected = Math.min(used / elapsed, MAXIMUM_PACE_PROJECTION_PERCENT);
+  const ratio = projected / 100;
+  const [low, high] = PACE_ON_TRACK_BAND;
+  const tempo: QuotaPaceTempo = ratio > high ? "ahead" : ratio < low ? "behind" : "on_track";
+  const shared = {
+    tempo,
+    delta_percent: roundAwayFromZero((ratio - 1) * 100),
+    projected_at_reset: projected,
+  };
+  if (projected <= 100) return { kind: "lasts", ...shared };
+  // At the current rate the window is spent this far into itself, stated to the second so
+  // every runtime names the same instant.
+  const offsetSeconds = roundAwayFromZero(cadence * (100 / used) * elapsed);
+  return {
+    kind: "runs_out",
+    ...shared,
+    exhausts_at: new Date(windowStart + offsetSeconds * 1_000)
+      .toISOString()
+      .replace(/\.\d+Z$/, "Z"),
+  };
+}

@@ -7,11 +7,14 @@
 - Updated 2026-08-26 by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md),
   [ADR 0025](./0025-one-session-system.md), and [ADR 0027](./0027-one-token-per-client.md), which
   left one session per client and no CLI or device grant
+- Updated 2026-09-05 by [ADR 0032](./0032-an-account-owns-its-identities.md), which made an Account
+  own the channels it is reached through rather than being a GitHub identity
 
 ## Decision
 
 Quota supports one managed service at `https://quota.gotry.io`, running only as a Cloudflare Worker
-backed by D1, and GitHub is its only account identity provider. There is no self-hosted runtime,
+backed by D1. GitHub was its only account identity provider; an Account now owns the identities
+that reach it ([ADR 0032](./0032-an-account-owns-its-identities.md)). There is no self-hosted runtime,
 SQLite adapter, Relay discovery document, arbitrary Relay URL, or anonymous owner. Relay owns the
 browser OAuth round trip and the session it opens ([ADR 0025](./0025-one-session-system.md)).
 

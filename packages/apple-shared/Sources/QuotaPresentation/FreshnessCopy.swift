@@ -8,8 +8,9 @@ import Foundation
 /// the exception: it is a countdown or a local date, never an age.
 ///
 /// `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
-/// thresholds, phrases, when the no-reset phrase prints, and how a future refill is named; this
-/// type and `apps/web/src/lib/format.ts` both answer it.
+/// thresholds, phrases, and when the no-reset phrase prints. How a future refill is named is
+/// `reset-copy-conformance.json`. This type, `packages/quota-model`, and `apps/web/src/lib/format.ts`
+/// all answer those files.
 public enum FreshnessCopy: Sendable {
   /// Stands in for an age before anything has been read at all.
   public static let notChecked = "Not checked"
@@ -27,11 +28,15 @@ public enum FreshnessCopy: Sendable {
 
   /// Same rule, with both scalars derived from the window.
   public static func showsNoResetTime(_ window: some RemainingQuotaWindow) -> Bool {
-    showsNoResetTime(
-      remainingPercent: RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent),
+    let remainingPercent = RemainingQuotaFormat.remainingPercent(usedPercent: window.usedPercent)
+    return showsNoResetTime(
+      remainingPercent: remainingPercent,
       showsPercentMeter: RemainingQuotaFormat.showsPercentMeter(
+        remainingPercent: remainingPercent,
         remainingValue: window.remainingValue,
-        hasLimit: window.limitValue != nil
+        limitValue: window.limitValue,
+        hasLimit: window.limitValue != nil,
+        unit: window.remainingUnit
       )
     )
   }
@@ -75,30 +80,34 @@ public enum FreshnessCopy: Sendable {
   /// The line under a window that still has a future refill, or `nil` once that instant has passed.
   ///
   /// English is fixed; `timeZone` is the local zone the reader is in. Minutes round up, and a
-  /// duration under a minute still reads as `Resets in 1m`.
+  /// duration under a minute still reads as `Resets in 1m`. Absolute always uses the local date
+  /// the relative rule would fall back to after a day.
   public static func resetCopy(
     resetsAt: Date,
     now: Date = Date(),
     timeZone: TimeZone = .current,
-    calendar: Calendar = .current
+    calendar: Calendar = .current,
+    style: ResetCopyStyle = .relative
   ) -> String? {
     let seconds = resetsAt.timeIntervalSince(now)
     guard seconds > 0 else { return nil }
-    let wholeMinutes = max(1, Int((seconds / 60).rounded(.up)))
-    if wholeMinutes < 60 {
-      return "Resets in \(wholeMinutes)m"
-    }
-    if seconds < 86_400 {
-      var hours = Int(seconds / 3_600)
-      var minutes = Int(((seconds - TimeInterval(hours * 3_600)) / 60).rounded(.up))
-      if minutes == 60 {
-        hours += 1
-        minutes = 0
+    if style == .relative {
+      let wholeMinutes = max(1, Int((seconds / 60).rounded(.up)))
+      if wholeMinutes < 60 {
+        return "Resets in \(wholeMinutes)m"
       }
-      if minutes == 0 {
-        return "Resets in \(hours)h"
+      if seconds < 86_400 {
+        var hours = Int(seconds / 3_600)
+        var minutes = Int(((seconds - TimeInterval(hours * 3_600)) / 60).rounded(.up))
+        if minutes == 60 {
+          hours += 1
+          minutes = 0
+        }
+        if minutes == 0 {
+          return "Resets in \(hours)h"
+        }
+        return "Resets in \(hours)h \(minutes)m"
       }
-      return "Resets in \(hours)h \(minutes)m"
     }
     var calendar = calendar
     calendar.timeZone = timeZone
@@ -112,6 +121,12 @@ public enum FreshnessCopy: Sendable {
   }
 }
 
+/// Relative is a countdown under a day; absolute always uses the local date.
+public enum ResetCopyStyle: String, Sendable {
+  case relative
+  case absolute
+}
+
 /// Remaining and limit as a window carries them. ``FreshnessCopy/showsNoResetTime(_:)``
 /// derives the percent and meter scalars from these rather than asking the caller to
 /// precompute them.
@@ -119,4 +134,5 @@ public protocol RemainingQuotaWindow {
   var usedPercent: Double { get }
   var remainingValue: Double? { get }
   var limitValue: Double? { get }
+  var remainingUnit: RemainingQuotaUnit? { get }
 }

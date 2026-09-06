@@ -145,10 +145,15 @@ const wanted = [
   "subscription-detail",
   "devices-content",
   "devices-empty",
+  "overview-sync-off",
+  "settings-sync-active",
+  "paywall",
+  "paywall-unavailable",
   "settings-main",
   "settings-notifications",
   "settings-appearance",
   "settings-about",
+  "settings-providers",
 ];
 const found = new Map();
 for (const test of manifest) {

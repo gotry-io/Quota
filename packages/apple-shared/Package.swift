@@ -11,11 +11,16 @@ let package = Package(
   products: [
     .library(name: "QuotaPresentation", targets: ["QuotaPresentation"]),
     .library(name: "QuotaAlerts", targets: ["QuotaAlerts"]),
+    .library(name: "QuotaObservations", targets: ["QuotaObservations"]),
   ],
   targets: [
     .target(name: "QuotaPresentation"),
     .target(
       name: "QuotaAlerts",
+      dependencies: ["QuotaPresentation"]
+    ),
+    .target(
+      name: "QuotaObservations",
       dependencies: ["QuotaPresentation"]
     ),
     .testTarget(
@@ -24,7 +29,11 @@ let package = Package(
     ),
     .testTarget(
       name: "QuotaAlertsTests",
-      dependencies: ["QuotaAlerts"]
+      dependencies: ["QuotaAlerts", "QuotaPresentation"]
+    ),
+    .testTarget(
+      name: "QuotaObservationsTests",
+      dependencies: ["QuotaObservations"]
     ),
   ],
   swiftLanguageModes: [.v6]

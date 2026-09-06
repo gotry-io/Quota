@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-08-24
 - Updated 2026-08-25 by [ADR 0023](./0023-strict-writes-tolerant-reads.md), inline below
+- Updated 2026-09-05: the provider browser-session rung answers its own conformance fixture,
+  inline below
+- Updated 2026-09-06: the observation merge is written once per runtime rather than once in total,
+  inline below
 
 ## Decision
 
@@ -35,9 +39,22 @@ disagree about and are gone.
 **The restatements answer one judge.** `packages/protocol/fixtures/wire-conformance.json` states each
 contract as accepted and refused payloads, and the zod schema, the Rust validators in
 `packages/service`, and the Swift decoders in `packages/apple-client` and QuotaBar each answer it.
+Updated 2026-09-05: a collector is a contract with a provider, and the browser-session rung is now
+written twice — the Rust collectors in `packages/service/src/providers` and `QuotaProviderWeb` in
+`packages/apple-client`. `packages/protocol/fixtures/provider-web-conformance.json` states each
+provider's exchanges and what they answer, and both runtimes drive it, because a fingerprint the two
+compute differently resolves one account into two subscriptions.
 [ADR 0023](./0023-strict-writes-tolerant-reads.md) changed what a restatement may refuse — a write is
 checked against exactly the contract, a read takes what it names and ignores the rest — so the
 fixture answers each contract from the side it is on.
+Updated 2026-09-06: the observation merge is now written three times — TypeScript in
+`packages/quota-model`, Rust in `packages/service`, and Swift in `packages/apple-shared`'s
+`QuotaObservations` — because every runtime that shows quota now also resolves it: Quota iOS
+collects for itself ([ADR 0034](./0034-ios-collects-for-itself.md)) and so has a local reading to
+compare a resolved row against, which no amount of TypeScript on a phone would answer.
+"Implemented once" therefore becomes one implementation per runtime held to one fixture:
+`packages/protocol/fixtures/quota-observation-conformance.json` states the merge and the two-way
+merge as cases, and all three answer it.
 
 ## Rationale
 
@@ -45,9 +62,11 @@ The wire contract is stated three times by hand: zod defines it, the Rust servic
 response it receives from Relay, and Swift checks everything that crosses IPC. That redundancy is
 deliberate — both products must fail closed on the same input — but until now each could satisfy its
 own tests while disagreeing with the others. That is the same shape as the defect that started this
-work: one merge rule, five implementations, no shared judge. A conformance fixture costs one file and
-turns disagreement into a test failure instead of a production surprise, and removing a field nothing
-reads removes three hand-written checks.
+work: one merge rule, five implementations, no shared judge. The answer was never one
+implementation — it was one judge; a runtime that has to resolve quota locally needs the rule in
+its own language, and the fixture is what keeps those languages agreeing. A conformance fixture
+costs one file and turns disagreement into a test failure instead of a production surprise, and
+removing a field nothing reads removes three hand-written checks.
 
 ## Consequences
 

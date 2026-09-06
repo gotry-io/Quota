@@ -63,6 +63,7 @@ struct AlertCoordinatorTests {
       state: AlertDedupState(
         fired: [
           AlertDedupKey(
+            kind: .threshold,
             selector: "ccfc96629357", windowID: "weekly", resetsAt: nil, threshold: 20)
         ],
         readings: [
@@ -145,6 +146,11 @@ func alertSummaryJSON(usedPercent: Double = 88, resetsAt: String = "2026-08-18T0
       "assumptions": ["agent_default_channel"],
       "unpriced": [],
     ] as [String: Any],
+    "cache_saved": [
+      "amount_microusd": "0",
+      "status": "complete",
+      "unpriced_rows": 0,
+    ] as [String: Any],
     "partial": false,
     "agents": [],
   ]
@@ -190,6 +196,7 @@ func alertSummaryJSON(usedPercent: Double = 88, resetsAt: String = "2026-08-18T0
       ],
       "pricing_revision": "pricing_1",
       "model_catalog_revision": "models_1",
+      "entitlement": Fixtures.entitlement(),
     ] as [String: Any]
   )
 }

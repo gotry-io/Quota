@@ -1,0 +1,101 @@
+{
+  "$comment": "When a window refills, in the words every Quota client uses. Relative is the default: a countdown under a day, then a local weekday and 24-hour time, then a month and day. Absolute always uses the local date. English is fixed; weekday and month cases pin `now` and `resets_at` as RFC 3339 with an offset so every runtime formats that local time. `packages/quota-model`, `packages/apple-shared` FreshnessCopy, and `apps/web/src/lib/format.ts` all answer this file.",
+  "cases": [
+    {
+      "name": "the last second before a minute still rounds up to a minute",
+      "seconds_until": 59,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T14:00:59-07:00",
+      "relative": "Resets in 1m",
+      "absolute": "Resets Mon 14:00"
+    },
+    {
+      "name": "a whole minute is the first exact minute",
+      "seconds_until": 60,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T14:01:00-07:00",
+      "relative": "Resets in 1m",
+      "absolute": "Resets Mon 14:01"
+    },
+    {
+      "name": "the last second before an hour rounds up into the hour",
+      "seconds_until": 3599,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T14:59:59-07:00",
+      "relative": "Resets in 1h",
+      "absolute": "Resets Mon 14:59"
+    },
+    {
+      "name": "an hour drops the zero minutes",
+      "seconds_until": 3600,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T15:00:00-07:00",
+      "relative": "Resets in 1h",
+      "absolute": "Resets Mon 15:00"
+    },
+    {
+      "name": "three hours exactly omits the minutes",
+      "seconds_until": 10800,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T17:00:00-07:00",
+      "relative": "Resets in 3h",
+      "absolute": "Resets Mon 17:00"
+    },
+    {
+      "name": "three hours and twelve minutes names both",
+      "seconds_until": 11520,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T17:12:00-07:00",
+      "relative": "Resets in 3h 12m",
+      "absolute": "Resets Mon 17:12"
+    },
+    {
+      "name": "the last minute before a day still counts in hours",
+      "seconds_until": 86340,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-08T13:59:00-07:00",
+      "relative": "Resets in 23h 59m",
+      "absolute": "Resets Tue 13:59"
+    },
+    {
+      "name": "a day away names the weekday and the 24-hour local time",
+      "seconds_until": 86400,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-08T14:00:00-07:00",
+      "relative": "Resets Tue 14:00",
+      "absolute": "Resets Tue 14:00"
+    },
+    {
+      "name": "the last hour before a week still names the weekday",
+      "seconds_until": 601200,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-14T13:00:00-07:00",
+      "relative": "Resets Mon 13:00",
+      "absolute": "Resets Mon 13:00"
+    },
+    {
+      "name": "a week away names the month and day",
+      "seconds_until": 604800,
+      "now": "2026-09-05T12:00:00-07:00",
+      "resets_at": "2026-09-12T12:00:00-07:00",
+      "relative": "Resets Sep 12",
+      "absolute": "Resets Sep 12"
+    },
+    {
+      "name": "a reset that has already passed prints nothing",
+      "seconds_until": -1,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-07T13:59:59-07:00",
+      "relative": null,
+      "absolute": null
+    },
+    {
+      "name": "a reset a day ago prints nothing",
+      "seconds_until": -86400,
+      "now": "2026-09-07T14:00:00-07:00",
+      "resets_at": "2026-09-06T14:00:00-07:00",
+      "relative": null,
+      "absolute": null
+    }
+  ]
+}

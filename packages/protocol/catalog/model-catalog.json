@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "revision": "official-2026-09-01-1",
+  "revision": "official-2026-09-06-1",
   "families": [
     {
       "prefix": "gpt-",
@@ -120,6 +120,47 @@
           "provider": "moonshot",
           "agent": "opencode",
           "effective_from": "2026-02-01"
+        }
+      ]
+    },
+    {
+      "canonical_id": "gemini-2.5-pro",
+      "aliases": [
+        {
+          "reported_model": "gemini-2.5-pro-preview",
+          "provider": "google",
+          "effective_from": "2025-05-06"
+        }
+      ]
+    },
+    {
+      "canonical_id": "gemini-2.5-flash",
+      "aliases": [
+        {
+          "reported_model": "gemini-2.5-flash-preview",
+          "provider": "google",
+          "effective_from": "2025-05-20"
+        }
+      ]
+    },
+    {
+      "canonical_id": "gemini-3.1-pro-preview",
+      "aliases": [
+        {
+          "reported_model": "gemini-3-pro-preview",
+          "provider": "google",
+          "agent": "gemini",
+          "effective_from": "2026-01-01"
+        }
+      ]
+    },
+    {
+      "canonical_id": "gemini-3.5-flash",
+      "aliases": [
+        {
+          "reported_model": "gemini-3-flash-preview",
+          "provider": "google",
+          "effective_from": "2026-01-01"
         }
       ]
     }

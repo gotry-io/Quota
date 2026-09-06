@@ -124,7 +124,10 @@ struct AccountDevicesView: View {
 struct AccountUsageView: View {
   @Bindable var model: MenuBarViewModel
   @Binding var source: UsageSource
-  @Binding var period: UsagePeriod
+  let now: Date
+  @State private var rangeEditor = false
+  @State private var draftFrom = Date()
+  @State private var draftTo = Date()
 
   var body: some View {
     QuotaNavigationStableContent(state: pageState) { state in
@@ -139,7 +142,12 @@ struct AccountUsageView: View {
       accountWarning: presentedSource == .account ? model.accountErrorMessage : nil,
       statusWarning: usageStatusWarning(source: presentedSource),
       usage: presentedUsage(source: presentedSource),
-      isPreparing: model.isPreparingUsage(source: presentedSource)
+      sessions: model.localUsage?.sessions,
+      isPreparing: model.isPreparingUsage(source: presentedSource) || model.customUsageLoading,
+      title: model.usagePeriodTitle(),
+      available: model.usagePeriodIsAvailable(
+        source: presentedSource, selection: model.usagePeriod),
+      budget: model.budgetProgress
     )
   }
 
@@ -157,6 +165,15 @@ struct AccountUsageView: View {
         }
 
         usagePeriodTabs
+        usagePeriodStepper(state)
+
+        if rangeEditor {
+          rangeEditorRow
+        }
+
+        if let progress = state.budget {
+          budgetBar(progress)
+        }
 
         if let warning = state.statusWarning {
           QuotaInlineNotice(message: warning)
@@ -165,6 +182,12 @@ struct AccountUsageView: View {
         if let usage = state.usage {
           SettingsSection(title: "Summary") {
             usageSummary(usage)
+          }
+
+          if let days = usage.days, days.contains(where: { $0.totals.totalTokens > 0 }) {
+            SettingsSection(title: "Daily") {
+              dailyUsage(days)
+            }
           }
 
           SettingsSection(title: "Models") {
@@ -178,11 +201,24 @@ struct AccountUsageView: View {
                 alignment: .leading,
                 spacing: QuotaDesign.Spacing.sm
               ) {
+                topModels(usage)
                 ForEach(providers) { provider in
-                  providerUsage(provider)
+                  providerUsage(provider, of: usage.totals.totalTokens)
                 }
               }
               .padding(.vertical, QuotaDesign.Spacing.sm)
+            }
+          }
+
+          if !usage.projects.isEmpty {
+            SettingsSection(title: "Projects") {
+              projectUsage(usage.projects)
+            }
+          }
+
+          if let hours = usage.hoursOfDay, hours.contains(where: { $0.totalTokens > 0 }) {
+            SettingsSection(title: "Rhythm") {
+              rhythm(hours)
             }
           }
 
@@ -191,9 +227,15 @@ struct AccountUsageView: View {
             QuotaSectionStateView(
               presentation: state.isPreparing
                 ? .loading(title: "Preparing Usage…")
-                : .empty(message: "No Usage is available for this period.")
+                : .empty(message: state.available
+                  ? "No Usage is available for this period."
+                  : "This period is folded from this Mac's own hours. Switch the source to this Mac to see it.")
             )
           }
+        }
+
+        if let sessions = state.sessions {
+          sessionsSection(sessions)
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -206,19 +248,22 @@ struct AccountUsageView: View {
     model.effectiveUsageSource(source)
   }
 
+  /// The six segments a period is named by. A custom range selects none of them and says what it
+  /// covers in the title row instead.
   private var usagePeriodTabs: some View {
     HStack(spacing: 0) {
-      ForEach(UsagePeriod.allCases) { value in
-        Button { period = value } label: {
-          Text(value.label)
+      ForEach(UsagePeriodSegment.allCases.filter { $0 != .custom }) { value in
+        let selected = model.usagePeriod.segment == value
+        Button { model.selectUsagePeriod(.selection(for: value, custom: nil)) } label: {
+          Text(value.title)
             .quotaFont(.listSecondary)
-            .foregroundStyle(value == period ? QuotaPalette.ink : QuotaPalette.body)
+            .foregroundStyle(selected ? QuotaPalette.ink : QuotaPalette.body)
             .frame(
               maxWidth: .infinity,
               minHeight: QuotaDesign.Layout.minimumInteractiveDimension
             )
             .background {
-              if value == period {
+              if selected {
                 RoundedRectangle(
                   cornerRadius: QuotaDesign.Layout.rowCornerRadius,
                   style: .continuous
@@ -230,8 +275,8 @@ struct AccountUsageView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(value.accessibilityLabel)
-        .accessibilityAddTraits(value == period ? .isSelected : [])
+        .accessibilityLabel(value.accessibilityTitle)
+        .accessibilityAddTraits(selected ? .isSelected : [])
       }
     }
     .background {
@@ -245,8 +290,84 @@ struct AccountUsageView: View {
     .accessibilityLabel("Usage period")
   }
 
+  private func usagePeriodStepper(_ state: AccountUsagePageState) -> some View {
+    HStack(spacing: QuotaDesign.Spacing.sm) {
+      stepButton(
+        symbol: "chevron.left", label: "Previous period", target: model.usagePeriod.previous)
+      Text(state.title)
+        .quotaFont(.listSecondary)
+        .foregroundStyle(QuotaPalette.body)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Period \(state.title)")
+      stepButton(symbol: "chevron.right", label: "Next period", target: model.usagePeriod.next)
+      Button {
+        let range = model.usagePeriod.range(today: Date())
+        draftFrom = range.flatMap { UsageDateText.date(from: $0.from) } ?? Date()
+        draftTo = range.flatMap { UsageDateText.date(from: $0.to) } ?? Date()
+        rangeEditor.toggle()
+      } label: {
+        Image(systemName: "calendar")
+          .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Custom range")
+    }
+    .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+  }
+
+  private func stepButton(
+    symbol: String,
+    label: String,
+    target: UsagePeriodSelection?
+  ) -> some View {
+    Button { if let target { model.selectUsagePeriod(target) } } label: {
+      Image(systemName: symbol)
+        .foregroundStyle(target == nil ? QuotaPalette.body.opacity(0.4) : QuotaPalette.ink)
+        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+    }
+    .buttonStyle(.plain)
+    .disabled(target == nil)
+    .accessibilityLabel(label)
+  }
+
+  private var rangeEditorRow: some View {
+    HStack(spacing: QuotaDesign.Spacing.sm) {
+      DatePicker("From", selection: $draftFrom, displayedComponents: .date)
+      DatePicker("To", selection: $draftTo, displayedComponents: .date)
+      Button("Apply") {
+        model.selectUsagePeriod(
+          .custom(
+            from: UsageDateText.date(min(draftFrom, draftTo)),
+            to: UsageDateText.date(max(draftFrom, draftTo))
+          )
+        )
+        rangeEditor = false
+      }
+    }
+    .datePickerStyle(.field)
+    .quotaFont(.listSecondary)
+  }
+
+  /// This month's spend against the budget this Mac keeps, which is never uploaded.
+  private func budgetBar(_ progress: UsageBudgetProgress) -> some View {
+    SettingsSection(title: "Monthly budget") {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        ProgressView(value: progress.fraction)
+        Text(progress.text)
+          .quotaMonoListValueStyle()
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+      .padding(.vertical, QuotaDesign.Layout.groupContentInset)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Monthly budget")
+      .accessibilityValue(progress.accessibilityText)
+    }
+  }
+
   private func usageStatusWarning(source: UsageSource) -> String? {
-    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
+    guard let detail = model.usageDetail(source: source, selection: model.usagePeriod) else {
+      return nil
+    }
     guard detail.incomplete || detail.detailsTruncated else { return nil }
     return source == .local
       ? "Some local Usage may be incomplete."
@@ -254,7 +375,9 @@ struct AccountUsageView: View {
   }
 
   private func presentedUsage(source: UsageSource) -> PresentedUsage? {
-    guard let detail = model.usageDetail(source: source, period: period) else { return nil }
+    guard let detail = model.usageDetail(source: source, selection: model.usagePeriod) else {
+      return nil
+    }
     let usage = detail.usage
     let localModels = usage.agents.flatMap { agent in
       agent.providers.flatMap { provider in
@@ -266,24 +389,34 @@ struct AccountUsageView: View {
     return PresentedUsage(
       totals: PresentedUsageTotals(usage.totals),
       cost: usage.cost,
-      models: localModels
+      cacheSaved: usage.cacheSaved,
+      cacheHitBasisPoints: usage.cacheHitBasisPoints,
+      days: usage.days,
+      hoursOfDay: usage.hoursOfDay,
+      models: localModels,
+      projects: source == .local && model.groupUsageByProject ? usage.projects : []
     )
   }
 
   private func usageSummary(_ usage: PresentedUsage) -> some View {
     let tokens = UsageValueFormatter.count(usage.totals.totalTokens)
     let cost = UsageValueFormatter.compactCost(usage.cost)
+    let hit = UsageMetrics.cacheHitPercentLabel(basisPoints: usage.cacheHitBasisPoints) ?? "—"
+    let saved = UsageValueFormatter.cacheSaved(usage.cacheSaved)
     return VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.md) {
         summaryMetric("Tokens", tokens)
         summaryMetric("Cost", cost)
+        summaryMetric("Cache hit", hit, detail: saved)
       }
       .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
       .padding(.top, QuotaDesign.Layout.groupContentInset)
       .padding(.bottom, QuotaDesign.Spacing.sm)
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Usage summary")
-      .accessibilityValue("\(tokens) tokens, \(cost)")
+      .accessibilityValue(
+        "\(tokens) tokens, \(cost), cache hit \(hit)" + (saved.map { ", \($0)" } ?? "")
+      )
 
       Divider()
         .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
@@ -294,7 +427,7 @@ struct AccountUsageView: View {
     }
   }
 
-  private func summaryMetric(_ label: String, _ value: String) -> some View {
+  private func summaryMetric(_ label: String, _ value: String, detail: String? = nil) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(label)
         .quotaMetaStyle()
@@ -303,19 +436,27 @@ struct AccountUsageView: View {
         .monospacedDigit()
         .foregroundStyle(QuotaPalette.ink)
         .lineLimit(1)
+      if let detail {
+        Text(detail)
+          .quotaMetaStyle()
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func providerUsage(_ provider: PresentedUsageProvider) -> some View {
+  private func providerUsage(_ provider: PresentedUsageProvider, of total: Int) -> some View {
     let models = Array(sortedModels(provider.models).prefix(5))
     let duplicateNames = Set(
       Dictionary(grouping: provider.models, by: \.model)
         .filter { $0.value.count > 1 }
         .keys
     )
+    let providerTokens = provider.models.reduce(0) { $0 + $1.totals.totalTokens }
     return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
       providerHeading(provider.provider)
+      shareBar(providerTokens, of: total)
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         ForEach(models, id: \.id) { model in
           let title =
@@ -324,10 +465,148 @@ struct AccountUsageView: View {
           } else {
             model.model
           }
-          modelUsageRow(model, title: title)
+          modelUsageRow(model, title: title, of: total)
         }
       }
     }
+  }
+
+  /// A provider's share of the period, drawn once under its name.
+  private func shareBar(_ tokens: Int, of total: Int) -> some View {
+    let share = total > 0 ? min(1, Double(tokens) / Double(total)) : 0
+    return HStack(spacing: QuotaDesign.Spacing.sm) {
+      GeometryReader { proxy in
+        ZStack(alignment: .leading) {
+          Capsule().fill(QuotaPalette.progressTrack)
+          Capsule()
+            .fill(QuotaPalette.ink.opacity(0.55))
+            .frame(width: proxy.size.width * share)
+        }
+      }
+      .frame(height: 4)
+      Text(UsageValueFormatter.share(tokens, of: total) ?? "—")
+        .quotaMetaStyle()
+        .monospacedDigit()
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    .padding(
+      .leading,
+      QuotaDesign.Layout.settingsIconColumnWidth + QuotaDesign.Spacing.sm
+    )
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Share of period")
+    .accessibilityValue(UsageValueFormatter.share(tokens, of: total) ?? "none")
+  }
+
+  /// The three models this period was mostly spent on, above the tree that holds all of them.
+  @ViewBuilder
+  private func topModels(_ usage: PresentedUsage) -> some View {
+    let ranked = Array(sortedByTokens(usage.models).prefix(3))
+    if ranked.count > 1 {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        Text("Top models")
+          .quotaMetaStyle()
+        ForEach(ranked, id: \.id) { model in
+          HStack(spacing: QuotaDesign.Spacing.xxs) {
+            Text(model.model)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.ink)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+            Text(
+              "\(UsageValueFormatter.share(model.totals.totalTokens, of: usage.totals.totalTokens) ?? "—") · \(UsageValueFormatter.count(model.totals.totalTokens))"
+            )
+            .quotaMonoListValueStyle()
+            .lineLimit(1)
+          }
+          .accessibilityElement(children: .combine)
+        }
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.bottom, QuotaDesign.Spacing.sm)
+    }
+  }
+
+  /// One bar per local day, and the numbers behind them.
+  private func dailyUsage(_ days: [LocalUsageDay]) -> some View {
+    let maximum = days.map(\.totals.totalTokens).max() ?? 0
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(days, id: \.date) { day in
+          let share = maximum > 0 ? Double(day.totals.totalTokens) / Double(maximum) : 0
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(QuotaPalette.ink.opacity(day.totals.totalTokens > 0 ? 0.55 : 0.12))
+            .frame(maxWidth: .infinity)
+            .frame(height: max(2, 44 * share))
+            .help("\(day.date) · \(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))")
+        }
+      }
+      .frame(height: 44, alignment: .bottom)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Usage by day")
+      .accessibilityValue(
+        "\(days.count) days, most in a day \(UsageValueFormatter.accessibleCount(maximum)) tokens"
+      )
+
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+        ForEach(days.reversed().prefix(7), id: \.date) { day in
+          HStack(spacing: QuotaDesign.Spacing.xxs) {
+            Text(day.date)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.body)
+            Spacer(minLength: 0)
+            Text(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+          }
+          .accessibilityElement(children: .combine)
+        }
+      }
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+    .padding(.vertical, QuotaDesign.Layout.groupContentInset)
+  }
+
+  /// The hours of the local clock this Mac works in, and the four stretches they fall into.
+  private func rhythm(_ hours: [LocalUsageHourOfDay]) -> some View {
+    let maximum = hours.map(\.totalTokens).max() ?? 0
+    let total = hours.reduce(0) { $0 + $1.totalTokens }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(hours, id: \.hour) { hour in
+          let share = maximum > 0 ? Double(hour.totalTokens) / Double(maximum) : 0
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(QuotaPalette.ink.opacity(hour.totalTokens > 0 ? 0.55 : 0.12))
+            .frame(maxWidth: .infinity)
+            .frame(height: max(2, 36 * share))
+            .help("\(hour.hour):00 · \(UsageValueFormatter.count(hour.totalTokens)) tokens")
+        }
+      }
+      .frame(height: 36, alignment: .bottom)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Usage by hour of the day")
+
+      LazyVGrid(
+        columns: [GridItem(.flexible()), GridItem(.flexible())],
+        alignment: .leading,
+        spacing: QuotaDesign.Spacing.meta
+      ) {
+        ForEach(UsageDayPart.allCases, id: \.self) { part in
+          let tokens = hours.filter { part.hours.contains($0.hour) }.reduce(0) { $0 + $1.totalTokens }
+          HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.meta) {
+            Text(part.title).quotaMetaStyle()
+            Spacer(minLength: 2)
+            Text(UsageValueFormatter.share(tokens, of: total) ?? "—")
+              .quotaMonoListValueStyle()
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(part.title)
+          .accessibilityValue(UsageValueFormatter.share(tokens, of: total) ?? "none")
+        }
+      }
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
+    .padding(.vertical, QuotaDesign.Layout.groupContentInset)
   }
 
   private func providerHeading(_ provider: InferenceProvider?) -> some View {
@@ -348,11 +627,71 @@ struct AccountUsageView: View {
     .accessibilityLabel("Provider \(title)")
   }
 
+  private func projectUsage(_ projects: [LocalUsageProjectSummary]) -> some View {
+    let ordered = projects.sorted {
+      UsageValueFormatter.precedes(
+        cost: $0.cost, tokens: $0.totalTokens, name: $0.projectKey,
+        before: $1.cost, tokens: $1.totalTokens, name: $1.projectKey
+      )
+    }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+      HStack(spacing: QuotaDesign.Spacing.xxs) {
+        Text("Project")
+          .quotaMetaStyle()
+        Spacer(minLength: 0)
+        Text("Tokens")
+          .quotaMetaStyle()
+          .frame(minWidth: 52, alignment: .trailing)
+        Text("Cost")
+          .quotaMetaStyle()
+          .frame(minWidth: 52, alignment: .trailing)
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .padding(.top, QuotaDesign.Spacing.sm)
+      .accessibilityHidden(true)
+
+      ForEach(ordered, id: \.projectKey) { project in
+        let tokens = UsageValueFormatter.count(project.totalTokens)
+        let cost = UsageValueFormatter.compactCost(project.cost)
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.xxs) {
+            Text(project.displayName)
+              .quotaFont(.listSecondary)
+              .foregroundStyle(QuotaPalette.body)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+            Text(tokens)
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+              .frame(minWidth: 52, alignment: .trailing)
+            Text(cost)
+              .quotaMonoListValueStyle()
+              .lineLimit(1)
+              .minimumScaleFactor(0.75)
+              .frame(minWidth: 52, alignment: .trailing)
+          }
+          Text(project.topModel)
+            .quotaMetaStyle()
+            .lineLimit(1)
+        }
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(project.displayName)
+        .accessibilityValue("\(tokens) tokens, \(cost), top model \(project.topModel)")
+      }
+    }
+    .padding(.bottom, QuotaDesign.Spacing.sm)
+  }
+
   private func modelUsageRow(
     _ model: PresentedUsageModel,
-    title: String
+    title: String,
+    of total: Int
   ) -> some View {
-    let summary = UsageValueFormatter.tokensAndCost(model.totals.totalTokens, model.cost)
+    let share = UsageValueFormatter.share(model.totals.totalTokens, of: total)
+    let summary =
+      UsageValueFormatter.tokensAndCost(model.totals.totalTokens, model.cost)
+      + (share.map { " · \($0)" } ?? "")
     return HStack(spacing: QuotaDesign.Spacing.xxs) {
       Text(title)
         .quotaFont(.listSecondary)
@@ -389,6 +728,78 @@ struct AccountUsageView: View {
     }
   }
 
+  private func sessionsSection(_ sessions: LocalUsageSessions) -> some View {
+    SettingsSection(
+      title: "Sessions",
+      trailing: {
+        Text("\(sessions.active) active · \(sessions.today) today")
+          .quotaMetaStyle()
+          .accessibilityLabel("\(sessions.active) active, \(sessions.today) today")
+      },
+      content: {
+        if sessions.recent.isEmpty {
+          QuotaSectionStateView(
+            presentation: .empty(message: "No sessions in the last 90 days.")
+          )
+        } else {
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+            ForEach(sessions.recent) { session in
+              sessionRow(session, now: now)
+            }
+          }
+          .padding(.vertical, QuotaDesign.Spacing.sm)
+        }
+      }
+    )
+  }
+
+  private func sessionRow(_ session: LocalUsageSession, now: Date) -> some View {
+    let summary = UsageValueFormatter.tokensAndCost(session.tokens, session.cost)
+    let age = FreshnessCopy.age(since: session.lastActivityAt, now: now)
+    let active = session.isActive
+    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
+      ZStack(alignment: .topTrailing) {
+        UsageAgentIcon(agent: session.agent, size: QuotaDesign.Layout.usageProviderIconSize)
+          .frame(width: QuotaDesign.Layout.settingsIconColumnWidth)
+        if active {
+          Circle()
+            .fill(QuotaPalette.accent)
+            .frame(width: 6, height: 6)
+            .offset(x: 2, y: -2)
+            .accessibilityHidden(true)
+        }
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        Text(session.projectKey)
+          .quotaFont(.listSecondary)
+          .foregroundStyle(QuotaPalette.ink)
+          .lineLimit(1)
+        Text(age)
+          .quotaMetaStyle()
+          .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+      Text(summary)
+        .quotaMonoListValueStyle()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(sessionAccessibilityLabel(session, age: age, summary: summary, active: active))
+  }
+
+  private func sessionAccessibilityLabel(
+    _ session: LocalUsageSession,
+    age: String,
+    summary: String,
+    active: Bool
+  ) -> String {
+    var parts = [UsageValueFormatter.agent(session.agent), session.projectKey, age, summary]
+    if active { parts.insert("Active", at: 0) }
+    return parts.joined(separator: ", ")
+  }
+
   private func modelMetric(_ label: String, _ value: Int) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.meta) {
       Text(label).quotaMetaStyle()
@@ -420,6 +831,14 @@ struct AccountUsageView: View {
       }
   }
 
+  private func sortedByTokens(_ models: [PresentedUsageModel]) -> [PresentedUsageModel] {
+    models.sorted {
+      $0.totals.totalTokens != $1.totals.totalTokens
+        ? $0.totals.totalTokens > $1.totals.totalTokens
+        : $0.model < $1.model
+    }
+  }
+
   private func sortedModels(_ models: [PresentedUsageModel]) -> [PresentedUsageModel] {
     models.sorted {
       UsageValueFormatter.precedes(
@@ -430,36 +849,30 @@ struct AccountUsageView: View {
   }
 }
 
-extension UsagePeriod {
-  var label: String {
-    switch self {
-    case .today: "Today"
-    case .last7Days: "7 Days"
-    case .last30Days: "30 Days"
-    case .all: "2 Years"
-    }
-  }
-
-  var accessibilityLabel: String {
-    switch self {
-    case .all: "Up to 2 years"
-    default: label
-    }
-  }
-}
-
 private struct AccountUsagePageState: Equatable {
   let refreshWarning: String?
   let accountWarning: String?
   let statusWarning: String?
   let usage: PresentedUsage?
+  let sessions: LocalUsageSessions?
   let isPreparing: Bool
+  /// The range the period covers, which is what the title row reads.
+  let title: String
+  /// Whether this source can answer this period at all.
+  let available: Bool
+  let budget: UsageBudgetProgress?
 }
 
 private struct PresentedUsage: Equatable {
   let totals: PresentedUsageTotals
   let cost: UsageCostOutcome
+  let cacheSaved: UsageCacheSaved
+  let cacheHitBasisPoints: Int?
+  /// Present for a period bounded by two local midnights, and absent for every retained day.
+  let days: [LocalUsageDay]?
+  let hoursOfDay: [LocalUsageHourOfDay]?
   let models: [PresentedUsageModel]
+  let projects: [LocalUsageProjectSummary]
 }
 
 private struct PresentedUsageProvider: Identifiable {
@@ -522,6 +935,23 @@ private struct PresentedUsageModel: Equatable {
   }
 }
 
+private struct UsageAgentIcon: View {
+  let agent: BillingAgent
+  var size = QuotaDesign.Layout.settingsIconColumnWidth
+
+  var body: some View {
+    if let assetName = agent.brandAssetName {
+      BrandAssetIcon(assetName: assetName, size: size)
+    } else {
+      Image(systemName: "questionmark.square.dashed")
+        .quotaFont(.secondary)
+        .foregroundStyle(QuotaPalette.body)
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+  }
+}
+
 private struct UsageProviderIcon: View {
   let provider: InferenceProvider?
   var size = QuotaDesign.Layout.settingsIconColumnWidth
@@ -545,6 +975,22 @@ private struct UsageProviderIcon: View {
   }
 }
 
+extension BillingAgent {
+  fileprivate var brandAssetName: String? {
+    switch self {
+    case .codex: "openai"
+    case .claudeCode: "claude"
+    case .grok: "grok"
+    case .opencode: "opencode"
+    case .pi: "pi"
+    case .cursor: "cursor"
+    case .gemini: "gemini"
+    case .copilot: "copilot"
+    case .unknown: nil
+    }
+  }
+}
+
 extension InferenceProvider {
   /// No owned Google mark yet, so Google takes the semantic symbol rather than a borrowed logo.
   fileprivate var brandAssetName: String? {
@@ -555,7 +1001,8 @@ extension InferenceProvider {
     case .moonshot: "kimi"
     case .deepseek: "deepseek"
     case .cursor: "cursor"
-    case .google, .unknown: nil
+    case .google: "gemini"
+    case .unknown: nil
     }
   }
 

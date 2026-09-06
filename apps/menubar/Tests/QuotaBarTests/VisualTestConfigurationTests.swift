@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import QuotaPresentation
   import QuotaWire
   import Testing
 
@@ -48,6 +49,7 @@
       ("notifications", "Notifications", 2),
       ("menu-bar-style", "Menu Bar Style", 2),
       ("menu-bar-provider", "Menu Bar Provider", 2),
+      ("reset-time", "Reset time", 2),
       ("support", "Support", 2),
       ("diagnostics", "Diagnostics", 3),
     ]
@@ -80,11 +82,21 @@
     #expect(configuration.initialPath == [.settings, .usage])
     #expect(configuration.appearance == .dark)
     #expect(configuration.textSize == .accessibility)
+    #expect(model.groupUsageByProject)
+    #expect(
+      model.usagePeriods?.local.today?.usage.projects.map(\.projectKey) == ["Quota", "other"])
+    #expect(
+      model.usagePeriods?.local.today?.usage.projects.map(\.displayName) == ["Quota", "Other"])
     #expect(model.accountState == .signedIn)
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
     #expect(model.accountSummary?.usage.today.cost.status == .partial)
     #expect(model.accountSummary?.usage.today.partial == true)
+    #expect(model.localUsage?.sessions.active == 2)
+    #expect(model.localUsage?.sessions.today == 14)
+    #expect(model.localUsage?.sessions.recent.count == 3)
+    #expect(model.localUsage?.sessions.recent.map(\.isActive) == [true, true, false])
+    #expect(model.localUsage?.sessions.recent.map(\.projectKey) == ["Quota", "Quota", "menubar"])
     #expect(
       model.accountSummary?.usage.today.agents.flatMap { agent in
         agent.providers.flatMap { $0.models.map(\.model) }
@@ -108,6 +120,11 @@
     }
     #expect(warning == nil)
     #expect(providers.map(\.provider) == [.codex, .claude, .grok])
+    let claude = try #require(providers.first { $0.provider == .claude })
+    #expect(claude.serviceStatus?.indicator == .minor)
+    #expect(claude.serviceStatus?.description == "Partial System Outage")
+    #expect(model.agentStatusLine(for: .claude) == "Degraded · Partial System Outage")
+    #expect(providers.first { $0.provider == .codex }?.serviceStatus == nil)
     // Every fixture row is an account device's reading, and the row's spoken label — the only
     // place the source and its age survive — names that device.
     #expect(

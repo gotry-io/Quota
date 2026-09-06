@@ -11,7 +11,22 @@ public enum AccountClientError: Error, Equatable, Sendable {
   case missingAuthorizationCode
   case unexpectedCallbackToken
   case accountMismatch
+  /// Relay refused a write this Account's entitlement does not cover: 402 `subscription_required`.
+  /// It is a state of the account rather than a transport failure, so it is named here instead of
+  /// reaching callers as one more rejected status.
+  case subscriptionRequired
   case relay(RelayClientError)
+
+  init(_ error: RelayClientError) {
+    if case .rejected(let code, let status) = error,
+      status == 402,
+      code == RelayErrorCode.subscriptionRequired.rawValue
+    {
+      self = .subscriptionRequired
+    } else {
+      self = .relay(error)
+    }
+  }
 }
 
 public struct AccountRefreshResult: Equatable, Sendable {
@@ -101,6 +116,24 @@ public actor AccountClient {
       try persist(session)
       return session
     } catch let error as RelayClientError {
+      throw AccountClientError(error)
+    }
+  }
+
+  /// Sign in with what Apple proved on this device, and keep the session it answers with.
+  ///
+  /// The session it writes is `pending`, exactly as a browser sign-in's is: which Account this
+  /// reached is still a question the person answers on the confirm screen.
+  public func exchangeApple(identityToken: String, nonce: String) async throws -> AccountSession {
+    do {
+      let tokens = try await relay.exchangeAppleIdentityToken(
+        identityToken: identityToken,
+        nonce: nonce
+      )
+      let session = AccountSession(tokens)
+      try persist(session)
+      return session
+    } catch let error as RelayClientError {
       throw AccountClientError.relay(error)
     }
   }
@@ -128,7 +161,7 @@ public actor AccountClient {
     } catch let error as AccountClientError {
       return failureResult(cached: cached, error: error)
     } catch let error as RelayClientError {
-      return failureResult(cached: cached, error: .relay(error))
+      return failureResult(cached: cached, error: AccountClientError(error))
     } catch {
       return failureResult(cached: cached, error: .relay(.unavailable))
     }
@@ -153,7 +186,7 @@ public actor AccountClient {
     } catch let error as AccountClientError {
       return .failure(error)
     } catch let error as RelayClientError {
-      return .failure(.relay(error))
+      return .failure(AccountClientError(error))
     } catch {
       return .failure(.relay(.unavailable))
     }
@@ -230,12 +263,12 @@ public actor AccountClient {
       } catch let error as AccountClientError {
         throw error
       } catch let error as RelayClientError {
-        throw AccountClientError.relay(error)
+        throw AccountClientError(error)
       }
     } catch let error as AccountClientError {
       throw error
     } catch let error as RelayClientError {
-      throw AccountClientError.relay(error)
+      throw AccountClientError(error)
     }
   }
 
@@ -304,7 +337,7 @@ public actor AccountClient {
       try? summaryStore.clear()
       throw AccountClientError.sessionExpired
     } catch let error as RelayClientError {
-      throw AccountClientError.relay(error)
+      throw AccountClientError(error)
     }
   }
 
@@ -342,6 +375,10 @@ public actor AccountClient {
 }
 
 extension AccountClientError {
+  /// What a client says when Relay answers 402: the Macs are still collecting, but nothing they
+  /// send reaches this Account until paid sync is on.
+  public static let subscriptionRequiredMessage = "Sync is off. Subscribe to see your Macs here."
+
   /// Copy a Connect Account failure can show. Cancel is handled before this is read.
   public var userFacingMessage: String {
     switch self {
@@ -351,6 +388,8 @@ extension AccountClientError {
       "Couldn't reach quota.gotry.io."
     case .relay(.invalidGrant), .relay(.unauthorized), .sessionExpired:
       AuthorizationError.expiredSignInMessage
+    case .subscriptionRequired:
+      Self.subscriptionRequiredMessage
     case .relay(.rejected(code: _, status: let status)) where (400...499).contains(status):
       AuthorizationError.expiredSignInMessage
     default:

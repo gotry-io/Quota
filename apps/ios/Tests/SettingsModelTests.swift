@@ -94,10 +94,12 @@ struct SettingsModelTests {
   }
 
   @Test func deleteAccountStartEncodesReturnToSoTheQueryDoesNotSplit() {
-    let url = QuotaWebLinks.githubStartURL(returnTo: "/my/settings?delete=account")
+    let url = QuotaWebLinks.signInURL(returnTo: "/my/settings?delete=account")
+    // Re-authenticating goes through the page that asks which Account this is, not through one
+    // channel's round trip.
     #expect(
       url.absoluteString
-        == "https://quota.gotry.io/api/auth/github/start?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
     )
     #expect(QuotaWebLinks.deleteAccountStart == url)
     #expect(QuotaWebLinks.deleteAccountReturnTo == "/my/settings?delete=account")
@@ -109,9 +111,10 @@ struct SettingsModelTests {
     #expect(SettingsCopy.licenseValue == "MIT")
     #expect(
       SettingsCopy.productSentence
-        == "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
+        == "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
+        + "and usage QuotaBar reports from your Macs."
     )
-    #expect(SettingsCopy.privacySentence == "This iPhone does not collect or upload local usage.")
+    #expect(SettingsCopy.privacySentence == "This iPhone does not upload anything it reads.")
   }
 
   @Test func subscriptionsUseCatalogOrderMaskedLabelsAndDefaultThresholds() {

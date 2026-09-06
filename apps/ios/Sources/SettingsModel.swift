@@ -28,6 +28,7 @@ enum SettingsCopy {
   static let notifications = "Notifications"
   static let enableNotifications = "Enable Notifications"
   static let resetReminders = "Reset Reminders"
+  static let paceAlerts = "Pace Warnings"
   static let footer = "Alerts are checked when Quota refreshes."
   static let permissionDenied = "Allow notifications for Quota in Settings."
   static let openSettings = "Open Settings"
@@ -39,16 +40,21 @@ enum SettingsCopy {
   static let appearance = "Appearance"
   static let about = "About"
   static let productSentence =
-    "Quota shows remaining quota and usage reported by QuotaBar on your Mac."
-  static let privacySentence = "This iPhone does not collect or upload local usage."
+    "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
+    + "and usage QuotaBar reports from your Macs."
+  static let privacySentence = "This iPhone does not upload anything it reads."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
   static let manageDevices = "Manage Devices on Web"
   static let deleteAccount = "Delete Account…"
   static let deleteAccountExplanation =
-    "Deletion happens on the website after you sign in again with GitHub."
+    "Deletion happens on the website after you sign in again."
   static let deleteAccountFollowUp = "If you deleted the Account, sign out here too."
   static let logOut = "Log Out"
+  static let signIn = "Sign in to Quota"
+  /// What an account adds to a phone that already reads its own providers.
+  static let signInExplanation =
+    "Sign in to see what QuotaBar reports from your Macs, and your usage across them."
   static let license = "License"
   static let licenseValue = "MIT"
   static let website = "Website"
@@ -80,20 +86,29 @@ enum QuotaWebLinks {
   static let website = URL(string: origin)!
   static let githubRepository = URL(string: "https://github.com/gotry-io/Quota")!
   static let privacy = URL(string: "\(origin)/privacy")!
+  static let terms = URL(string: "\(origin)/terms")!
+  /// The system's own subscription management, which is where an App Store subscription is
+  /// cancelled or changed. Quota does not reimplement it.
+  static let appleSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
   static let support = URL(string: "\(origin)/support")!
   static let manageDevices = URL(string: "\(origin)/my/devices")!
   static let deleteAccountReturnTo = "/my/settings?delete=account"
 
   static var deleteAccountStart: URL {
-    githubStartURL(returnTo: deleteAccountReturnTo)
+    signInURL(returnTo: deleteAccountReturnTo)
   }
 
+  /// Where the website asks, or confirms, which Account this browser is signing in as.
+  ///
+  /// An Account owns its identities rather than being one, so re-authenticating goes through the
+  /// page that asks which Account this is instead of straight to one channel's round trip
+  /// ([ADR 0032](../../../docs/decisions/0032-an-account-owns-its-identities.md)).
   /// `return_to` is encoded so `/`, `?`, and `=` cannot split the query.
-  static func githubStartURL(returnTo: String) -> URL {
+  static func signInURL(returnTo: String) -> URL {
     var allowed = CharacterSet.alphanumerics
     allowed.insert(charactersIn: "-._~")
     let encoded = returnTo.addingPercentEncoding(withAllowedCharacters: allowed)!
-    return URL(string: "\(origin)/api/auth/github/start?return_to=\(encoded)")!
+    return URL(string: "\(origin)/sign-in?return_to=\(encoded)")!
   }
 }
 
@@ -242,6 +257,10 @@ final class SettingsModel {
 
   func setResetReminders(_ enabled: Bool) {
     persist { $0.resetReminders = enabled }
+  }
+
+  func setPaceAlerts(_ enabled: Bool) {
+    persist { $0.paceAlerts = enabled }
   }
 
   func setFirstThreshold(_ value: Int, for selector: String) {

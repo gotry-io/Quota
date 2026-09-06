@@ -1,5 +1,5 @@
 {
-  "$comment": "When a remaining-quota reading should fire a local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS both answer this file. Evaluation covers only each subscription's primary_cadence window, or the first percent window when none is marked. Non-available statuses neither fire nor change state. Dedup keys are (selector, window_id, resets_at or none, threshold or none): the same key fires once per reset cycle. First seeing a remaining percent already at or below a threshold fires that threshold. A window reset (old resets_at has passed, or resets_at moved later, and remaining rose) fires a reset event, clears that window's crossed keys, and starts a new cycle. Raising a threshold is a new key. Sign-out clears the store.",
+  "$comment": "When a remaining-quota reading should fire a local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS both answer this file. Evaluation covers only each subscription's primary_cadence window, or the first percent window when none is marked. Non-available statuses neither fire nor change state. A window whose pace stops lasting to its reset warns once per cycle when `pace_alerts` is on; the pace rule itself is `fixtures/quota-pace-conformance.json`. Dedup keys are (kind, selector, window_id, resets_at or none, threshold or none): the same key fires once per reset cycle. First seeing a remaining percent already at or below a threshold fires that threshold. A window reset (old resets_at has passed, or resets_at moved later, and remaining rose) fires a reset event, clears that window's crossed keys, and starts a new cycle. Raising a threshold is a new key. Sign-out clears the store. The monthly budget uses the same dedup keys: the selector is \"budget\", the window is the local month, and the thresholds are shares of the budget that have been spent. `budget_cases` state when a budget crossing fires; a month is a cycle of its own, so a new month starts with nothing fired.",
   "cases": [
     {
       "name": "first seen already below 20 fires that threshold",
@@ -7,6 +7,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -40,6 +41,7 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -62,6 +64,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -105,6 +108,7 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -127,6 +131,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -134,6 +139,7 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -177,12 +183,14 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
             "threshold": 20
           },
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -205,6 +213,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -212,12 +221,14 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
             "threshold": 20
           },
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -252,12 +263,14 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
             "threshold": 20
           },
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -280,6 +293,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -287,12 +301,14 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-15T12:00:00Z",
             "threshold": 20
           },
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-15T12:00:00Z",
@@ -334,6 +350,7 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "reset",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -356,6 +373,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [30]
         }
@@ -363,6 +381,7 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -406,12 +425,14 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
             "threshold": 20
           },
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -434,6 +455,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -441,6 +463,7 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -475,6 +498,7 @@
       "expected_state_after": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -498,6 +522,7 @@
       "rules": {
         "enabled": true,
         "reset_reminders": true,
+        "pace_alerts": true,
         "thresholds": {
           "codex_acct": [20, 10]
         }
@@ -505,6 +530,7 @@
       "previous": {
         "fired": [
           {
+            "kind": "threshold",
             "selector": "codex_acct",
             "window_id": "weekly",
             "resets_at": "2026-03-22T12:00:00Z",
@@ -540,6 +566,407 @@
         "fired": [],
         "readings": []
       }
+    },
+    {
+      "name": "a window whose rate no longer lasts to its reset warns once",
+      "now": "2026-03-19T00:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "pace_alerts": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 55,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 40,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "pace_runs_out",
+          "selector": "codex_acct",
+          "window_id": "weekly",
+          "resets_at": "2026-03-22T12:00:00Z",
+          "exhausts_at": "2026-03-21T08:00:00Z"
+        }
+      ],
+      "expected_state_after": {
+        "fired": [
+          {
+            "kind": "pace",
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": null
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 40,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "the same cycle does not warn about pace again",
+      "now": "2026-03-19T00:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "pace_alerts": true,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [
+          {
+            "kind": "pace",
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": null
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 55,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 40,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [],
+      "expected_state_after": {
+        "fired": [
+          {
+            "kind": "pace",
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "resets_at": "2026-03-22T12:00:00Z",
+            "threshold": null
+          }
+        ],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 40,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pace warnings turned off state nothing",
+      "now": "2026-03-19T00:00:00Z",
+      "rules": {
+        "enabled": true,
+        "reset_reminders": true,
+        "pace_alerts": false,
+        "thresholds": {
+          "codex_acct": [20, 10]
+        }
+      },
+      "previous": {
+        "fired": [],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 55,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      },
+      "current": [
+        {
+          "selector": "codex_acct",
+          "status": "available",
+          "windows": [
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "remaining_percent": 40,
+              "resets_at": "2026-03-22T12:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            }
+          ]
+        }
+      ],
+      "expected_events": [],
+      "expected_state_after": {
+        "fired": [],
+        "readings": [
+          {
+            "selector": "codex_acct",
+            "window_id": "weekly",
+            "remaining_percent": 40,
+            "resets_at": "2026-03-22T12:00:00Z"
+          }
+        ]
+      }
+    }
+  ],
+  "budget_cases": [
+    {
+      "name": "a month under 80% of its budget says nothing",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 42,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
+    },
+    {
+      "name": "crossing 80% fires once",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 81,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 80,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "the same month past 80% does not fire again",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 92,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ],
+      "expected_events": [],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "reaching the whole budget fires the second threshold only",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 100,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 100,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ]
+    },
+    {
+      "name": "a month already past both thresholds fires both at once",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 140,
+        "partial": true
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 80,
+          "budget_usd": "50"
+        },
+        {
+          "type": "budget_crossed",
+          "month": "2026-09",
+          "threshold": 100,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ]
+    },
+    {
+      "name": "the next month starts a new cycle",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": true
+      },
+      "progress": {
+        "percent": 81,
+        "partial": false
+      },
+      "month": "2026-10",
+      "previous_fired": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "budget_crossed",
+          "month": "2026-10",
+          "threshold": 80,
+          "budget_usd": "50"
+        }
+      ],
+      "expected_fired_after": [
+        {
+          "month": "2026-09",
+          "threshold": 80
+        },
+        {
+          "month": "2026-09",
+          "threshold": 100
+        },
+        {
+          "month": "2026-10",
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "name": "budget alerts switched off fire nothing",
+      "budget": {
+        "amount_usd": "50",
+        "alerts": false
+      },
+      "progress": {
+        "percent": 140,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
+    },
+    {
+      "name": "no budget set fires nothing",
+      "budget": {
+        "amount_usd": null,
+        "alerts": true
+      },
+      "progress": {
+        "percent": 140,
+        "partial": false
+      },
+      "month": "2026-09",
+      "previous_fired": [],
+      "expected_events": [],
+      "expected_fired_after": []
     }
   ]
 }

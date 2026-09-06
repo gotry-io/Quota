@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 enum LocalServiceComponentStatus: String, Decodable, Sendable {
@@ -60,6 +61,7 @@ enum UsageSource: String, Codable, CaseIterable, Identifiable, Sendable {
   var id: Self { self }
 }
 
+/// The four periods `get_state` carries, keyed the way the private IPC state keys them.
 enum UsagePeriod: String, Codable, CaseIterable, Identifiable, Sendable {
   case today
   case last7Days = "last_7_days"
@@ -67,6 +69,15 @@ enum UsagePeriod: String, Codable, CaseIterable, Identifiable, Sendable {
   case all
 
   var id: Self { self }
+
+  init(summaryKey: UsageSummaryPeriodKey) {
+    switch summaryKey {
+    case .today: self = .today
+    case .last7Days: self = .last7Days
+    case .last30Days: self = .last30Days
+    case .all: self = .all
+    }
+  }
 }
 
 enum LocalServiceErrorCode: String, Decodable, Sendable {
@@ -79,6 +90,7 @@ enum LocalServiceErrorCode: String, Decodable, Sendable {
   case authenticationRequired = "authentication_required"
   case deviceDeleted = "device_deleted"
   case staleGeneration = "stale_generation"
+  case subscriptionRequired = "subscription_required"
   case unavailable
   case providerError = "provider_error"
   case networkError = "network_error"
@@ -144,6 +156,67 @@ extension LocalServiceComponent {
   }
 }
 
+/// The paid-sync entitlement as Relay states it, carried through IPC unchanged.
+///
+/// A status this build does not know reads as `unknown`, which syncs nothing and offers the
+/// purchase link, because only `active` and `grace` are entitlements Relay lets write.
+enum LocalServiceEntitlementStatus: String, Codable, Sendable, TolerantWireEnum {
+  case active
+  case grace
+  case expired
+  case none
+  case unknown
+}
+
+/// Whether this account may sync, until when, and how old that answer is.
+///
+/// `stale` means Relay could not refresh the entitlement from the billing system and answered
+/// with the row it still had; `checkedAt` is when that row was last written, so a stale answer
+/// can say its age instead of leaving the reader to guess.
+struct LocalServiceEntitlement: Decodable, Equatable, Sendable {
+  let status: LocalServiceEntitlementStatus
+  let expiresAt: Date?
+  let willRenew: Bool
+  let stale: Bool
+  let checkedAt: Date?
+
+  var allowsSync: Bool { status == .active || status == .grace }
+
+  private enum CodingKeys: String, CodingKey {
+    case status
+    case expiresAt
+    case willRenew
+    case stale
+    case checkedAt
+  }
+
+  init(
+    status: LocalServiceEntitlementStatus,
+    expiresAt: Date?,
+    willRenew: Bool,
+    stale: Bool,
+    checkedAt: Date?
+  ) {
+    self.status = status
+    self.expiresAt = expiresAt
+    self.willRenew = willRenew
+    self.stale = stale
+    self.checkedAt = checkedAt
+  }
+
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "status", "expiresAt", "willRenew", "stale", "checkedAt",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    status = try container.decode(LocalServiceEntitlementStatus.self, forKey: .status)
+    expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+    willRenew = try container.decode(Bool.self, forKey: .willRenew)
+    stale = try container.decode(Bool.self, forKey: .stale)
+    checkedAt = try container.decodeIfPresent(Date.self, forKey: .checkedAt)
+  }
+}
+
 /// What this Mac knows about the account it is signed in to.
 ///
 /// `displayLabel` is what the sign-in itself said the account is called. It arrives with the
@@ -156,6 +229,10 @@ struct LocalServiceAccountState: Decodable, Sendable {
   let deviceID: String?
   let deviceGeneration: Int?
   let accountSummary: AccountSummary?
+  /// The paid-sync entitlement from the account read, absent until this Mac has made one.
+  let entitlement: LocalServiceEntitlement?
+  /// Where this account buys the subscription, as Relay stated it.
+  let purchaseURL: URL?
 
   private enum CodingKeys: String, CodingKey {
     case authStatus
@@ -164,6 +241,8 @@ struct LocalServiceAccountState: Decodable, Sendable {
     case deviceID = "deviceId"
     case deviceGeneration
     case accountSummary
+    case entitlement
+    case purchaseURL = "purchaseUrl"
   }
 
 }
@@ -172,6 +251,7 @@ extension LocalServiceAccountState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "authStatus", "accountId", "displayLabel", "deviceId", "deviceGeneration", "accountSummary",
+      "entitlement", "purchaseUrl",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     authStatus = try container.decode(LocalServiceAuthStatus.self, forKey: .authStatus)
@@ -180,6 +260,37 @@ extension LocalServiceAccountState {
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
     accountSummary = try container.decodeIfPresent(AccountSummary.self, forKey: .accountSummary)
+    entitlement = try container.decodeIfPresent(LocalServiceEntitlement.self, forKey: .entitlement)
+    purchaseURL = try container.decodeIfPresent(URL.self, forKey: .purchaseURL)
+  }
+}
+
+struct LocalServiceProviderStatus: Decodable, Equatable, Sendable {
+  let provider: ProviderID
+  let indicator: ProviderServiceStatusIndicator
+  let description: String
+  let checkedAt: Date
+
+  private enum CodingKeys: String, CodingKey {
+    case provider
+    case indicator
+    case description
+    case checkedAt
+  }
+}
+
+extension LocalServiceProviderStatus {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["provider", "indicator", "description", "checkedAt"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    provider = try container.decode(ProviderID.self, forKey: .provider)
+    indicator = try container.decode(ProviderServiceStatusIndicator.self, forKey: .indicator)
+    description = try container.decode(String.self, forKey: .description)
+    checkedAt = try container.decode(Date.self, forKey: .checkedAt)
+  }
+
+  var settingsLine: String {
+    ProviderServiceStatusCopy.settingsLine(indicator: indicator, description: description)
   }
 }
 
@@ -469,11 +580,12 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   /// The one private IPC version this app speaks. The two ship together, so a helper that
   /// announces anything else is not the one in this bundle.
-  static let supportedIPCVersion = 1
+  static let supportedIPCVersion = 2
 
   let ipcVersion: Int
   let revision: Int
   let usageUploadEnabled: Bool
+  let groupUsageByProject: Bool
   let quotaRefreshIntervalSeconds: Int
   let usagePeriods: LocalServiceUsagePeriodCache
   let quota: LocalServiceComponent<QuotaCollectionReport>
@@ -481,6 +593,7 @@ struct LocalServiceState: Decodable, Sendable {
   let account: LocalServiceComponent<LocalServiceAccountState>
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
+  var providerStatus: [LocalServiceProviderStatus] = []
   let providerBrowserSessions: [LocalServiceProviderBrowserSession]
   let browserScanEnabled: [ProviderID]
   let overview: [LocalServiceOverviewItem]
@@ -490,6 +603,7 @@ struct LocalServiceState: Decodable, Sendable {
     case ipcVersion
     case revision
     case usageUploadEnabled
+    case groupUsageByProject
     case quotaRefreshIntervalSeconds
     case usagePeriods
     case quota
@@ -497,6 +611,7 @@ struct LocalServiceState: Decodable, Sendable {
     case account
     case pricing
     case providers
+    case providerStatus
     case providerBrowserSessions
     case browserScanEnabled
     case overview
@@ -516,6 +631,8 @@ struct LocalServiceState: Decodable, Sendable {
         config.provider.isConfigurable
           && (!config.configured || config.maskedAPIKey?.isEmpty == false)
       }),
+      providerStatus.count <= ProviderID.allCases.count,
+      Set(providerStatus.map(\.provider)).count == providerStatus.count,
       providerBrowserSessions.count <= 256,
       providerBrowserSessions.allSatisfy(\.isValid),
       browserScanEnabled.count <= ProviderID.allCases.count,
@@ -556,15 +673,18 @@ struct LocalServiceState: Decodable, Sendable {
 extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "ipcVersion", "revision", "usageUploadEnabled", "quotaRefreshIntervalSeconds",
+      "ipcVersion", "revision", "usageUploadEnabled", "groupUsageByProject",
+      "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "providerBrowserSessions", "browserScanEnabled",
+      "account", "pricing", "providers", "providerStatus", "providerBrowserSessions",
+      "browserScanEnabled",
       "overview", "cache",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     ipcVersion = try container.decode(Int.self, forKey: .ipcVersion)
     revision = try container.decode(Int.self, forKey: .revision)
     usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
+    groupUsageByProject = try container.decode(Bool.self, forKey: .groupUsageByProject)
     quotaRefreshIntervalSeconds = try container.decode(Int.self, forKey: .quotaRefreshIntervalSeconds)
     usagePeriods = try container.decode(LocalServiceUsagePeriodCache.self, forKey: .usagePeriods)
     quota = try container.decode(LocalServiceComponent<QuotaCollectionReport>.self, forKey: .quota)
@@ -573,6 +693,8 @@ extension LocalServiceState {
       LocalServiceComponent<LocalServiceAccountState>.self, forKey: .account)
     pricing = try container.decode(LocalServiceComponent<PricingCatalog>.self, forKey: .pricing)
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
+    providerStatus = try container.decode(
+      [LocalServiceProviderStatus].self, forKey: .providerStatus)
     providerBrowserSessions = try container.decode(
       [LocalServiceProviderBrowserSession].self, forKey: .providerBrowserSessions)
     browserScanEnabled = try container.decode([ProviderID].self, forKey: .browserScanEnabled)
@@ -649,6 +771,22 @@ struct LocalServiceUsageUploadSetting: Decodable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case enabled
+  }
+}
+
+struct LocalServiceGroupUsageByProjectSetting: Decodable, Sendable {
+  let enabled: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+  }
+}
+
+extension LocalServiceGroupUsageByProjectSetting {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["enabled"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
   }
 }
 

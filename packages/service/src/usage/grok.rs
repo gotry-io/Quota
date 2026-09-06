@@ -1,17 +1,19 @@
 use super::scan::{UsageParser, discover_usage_files_at, roots_for, scan_jsonl_files};
 use super::{
     BillableTools, BillingChannel, ChannelSource, NormalizedUsageEvent, NormalizedUsageRecord,
-    ParsedLine, UsageAgent, UsageError, bounded_model_text, context_bucket, object,
+    ParsedLine, UsageAgent, UsageError, bounded_model_text, context_bucket, cwd_from_value, object,
+    project_key_from_cwd,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
+use std::path::Path;
 
 pub fn scan_grok_usage(
     options: &super::UsageScanOptions,
 ) -> Result<super::UsageScanResult, UsageError> {
     let discovery =
         discover_usage_files_at(UsageAgent::Grok, &roots_for(UsageAgent::Grok, options))?;
-    scan_jsonl_files(UsageAgent::Grok, options, discovery, || GrokParser)
+    scan_jsonl_files(UsageAgent::Grok, options, discovery, |_| GrokParser)
 }
 
 struct GrokParser;
@@ -19,7 +21,12 @@ struct GrokParser;
 impl UsageParser for GrokParser {
     const CONTEXT_FREE: bool = true;
 
-    fn parse(&mut self, value: &Map<String, Value>, source_file_id: &str) -> ParsedLine {
+    fn parse(
+        &mut self,
+        value: &Map<String, Value>,
+        source_file_id: &str,
+        _source_path: &Path,
+    ) -> ParsedLine {
         if value.get("method").and_then(Value::as_str) != Some("_x.ai/session/update") {
             return ParsedLine::empty();
         }
@@ -125,6 +132,9 @@ impl GrokParser {
                     billable_tools: BillableTools::default(),
                     source_cost_covered_requests: if source_cost.is_some() { messages } else { 0 },
                     source_cost_microusd: source_cost,
+                    project_key: cwd_from_value(value)
+                        .or_else(|| object(value.get("params")).and_then(cwd_from_value))
+                        .and_then(project_key_from_cwd),
                 },
                 source_file_id: source_file_id.to_owned(),
                 record_key: String::new(),

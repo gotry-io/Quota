@@ -57,9 +57,26 @@ export const MAXIMUM_USAGE_PERIOD_LEAVES = 200;
 /** The model that every leaf past {@link MAXIMUM_USAGE_PERIOD_LEAVES} folds into. */
 export const USAGE_OTHER_MODEL = "other";
 const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
+/**
+ * The most local days one bounded local period can name.
+ *
+ * A local period runs from a local midnight to a local midnight, so the widest of the three —
+ * the last 30 days — names exactly 30 dates. The bound leaves one spare so a reader refusing
+ * the array is refusing a producer that lost count, not a calendar.
+ */
+const MAXIMUM_LOCAL_USAGE_DAYS = 31;
+/** A day has 24 hours, and a rhythm names every one of them. */
+const HOURS_OF_DAY = 24;
 const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 const MAXIMUM_PRICING_ENTRIES = 4_096;
+/** Recent local sessions the Usage report may list, newest write first. */
+export const MAXIMUM_USAGE_SESSIONS_RECENT = 20;
+/**
+ * A session's project label is a basename, never a path. Claude's encoded project folder and a
+ * generic log's parent directory are the longest values this field is meant to hold.
+ */
+const SESSION_PROJECT_KEY_PATTERN = /^[^\\/\p{Cc}]{1,128}$/u;
 
 /**
  * Whether a schema refused this value for overrunning a bound the contract states.
@@ -84,6 +101,8 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const NONNEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,12})?$/;
 const PKCE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
+/** A compact JWS: three base64url segments. What Apple hands a native app is one of these. */
+const COMPACT_JWS_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 // A wire enum member, as a reader takes it: lowercase snake_case, bounded, membership unchecked.
 const WIRE_ENUM_PATTERN = /^[a-z][a-z0-9_]*$/;
 
@@ -340,18 +359,101 @@ const AccountDeviceSchema = z
   .strict();
 export type AccountDevice = z.infer<typeof AccountDeviceSchema>;
 
+/**
+ * Every channel an Account can be reached through.
+ *
+ * An Account owns its identities rather than being one
+ * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)), so this vocabulary is
+ * what a bound channel is named by, on the wire and in storage.
+ */
+export const IDENTITY_PROVIDERS = ["github", "apple", "email"] as const;
+export const IdentityProviderSchema = z.enum(IDENTITY_PROVIDERS);
+export type IdentityProvider = z.infer<typeof IdentityProviderSchema>;
+
+/** What a person calls the channel, wherever one is named to them. */
+export function identityProviderDisplayName(provider: IdentityProvider): string {
+  return provider === "github" ? "GitHub" : provider === "apple" ? "Apple" : "Email";
+}
+
+/**
+ * One channel bound to an Account: which it is, what it calls this person, and when it was bound.
+ *
+ * The subject the provider proved is never on the wire — only its HMAC is stored, and not even
+ * that is answered.
+ */
+const AccountIdentitySchema = z
+  .object({
+    provider: IdentityProviderSchema,
+    label: AccountDisplayLabelSchema,
+    linked_at: Rfc3339InstantSchema,
+  })
+  .strict();
+export type AccountIdentity = z.infer<typeof AccountIdentitySchema>;
+export const EntitlementStatusSchema = z.enum(["active", "grace", "expired", "none"]);
+export type EntitlementStatus = z.infer<typeof EntitlementStatusSchema>;
+
+/**
+ * The paid-sync entitlement Relay last observed for this Account.
+ *
+ * `stale` is a read-time flag: the row could not be refreshed from RevenueCat and the
+ * stored values are what Relay still has. `checked_at` is when the stored row last changed,
+ * which is what makes a stale answer readable: it says how old the values beside it are, and
+ * is null when there is no stored row at all. See
+ * [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
+ */
+export const EntitlementSchema = z
+  .object({
+    status: EntitlementStatusSchema,
+    expires_at: Rfc3339InstantSchema.nullable(),
+    will_renew: z.boolean(),
+    product_id: z.string().min(1).max(256).nullable(),
+    store: z.string().min(1).max(64).nullable(),
+    stale: z.boolean(),
+    checked_at: Rfc3339InstantSchema.nullable(),
+  })
+  .strict();
+export type Entitlement = z.infer<typeof EntitlementSchema>;
+
+const EntitlementReadSchema = EntitlementSchema.loose();
+
+/**
+ * Where this Account buys paid sync.
+ *
+ * Both Account reads carry it, because the entitlement and the way to change it are one
+ * answer: a client that has read either can say what sync costs it without a second request.
+ */
+export const PurchaseSchema = z
+  .object({
+    web_url: z.string().url().max(2_048),
+  })
+  .strict();
+export type Purchase = z.infer<typeof PurchaseSchema>;
+
 export const AccountResponseSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     account: AccountSchema,
+    /**
+     * One per provider at most, oldest first: the first one is what the Account is called, and
+     * an Account always keeps at least one way to sign in to it.
+     */
+    identities: z.array(AccountIdentitySchema).min(1).max(IDENTITY_PROVIDERS.length),
+    entitlement: EntitlementSchema,
+    purchase: PurchaseSchema,
   })
   .strict();
+export type AccountResponse = z.infer<typeof AccountResponseSchema>;
 
 const NativeClientSchema = z.literal("quotabar");
 const InstallationIdSchema = z.string().uuid();
 
 export const IOS_OAUTH_CLIENT_ID = "quota-ios" as const;
 export const IOS_OAUTH_REDIRECT_URI = "io.gotry.quota:/oauth/callback" as const;
+/**
+ * The iOS app's bundle identifier, which is also the audience Apple states in the identity token
+ * `ASAuthorizationAppleIDProvider` hands the app.
+ */
+export const IOS_BUNDLE_ID = "io.gotry.quota" as const;
 const IosClientSchema = z.literal(IOS_OAUTH_CLIENT_ID);
 const IosRedirectUriSchema = z.literal(IOS_OAUTH_REDIRECT_URI);
 
@@ -380,6 +482,41 @@ export const IosLoginExchangeRequestSchema = z
   })
   .strict();
 export type IosLoginExchangeRequest = z.infer<typeof IosLoginExchangeRequestSchema>;
+
+/**
+ * The identity token Apple hands a native app, and the nonce it was asked for.
+ *
+ * Nothing about it is trusted here beyond its shape: the signature, issuer, audience, expiry, and
+ * nonce are all checked by Relay against Apple's own keys before the `sub` inside it names anyone
+ * ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). `intent` is what the
+ * app is asking for — signing in, or binding Apple to the Account this session already names —
+ * and defaults to signing in.
+ */
+export const AppleNativeSignInRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    client_id: IosClientSchema,
+    identity_token: z.string().min(16).max(8_192).regex(COMPACT_JWS_PATTERN),
+    nonce: z.string().regex(PKCE_VERIFIER_PATTERN),
+    intent: z.enum(["sign_in", "link"]).optional(),
+  })
+  .strict();
+export type AppleNativeSignInRequest = z.infer<typeof AppleNativeSignInRequestSchema>;
+
+/**
+ * What binding a channel to the Account a session already names answers with.
+ *
+ * `already_linked` is the same channel on the same Account, which is what a repeated bind is and
+ * is not a failure. A refusal is a 409, not a status here.
+ */
+export const IdentityLinkResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    provider: IdentityProviderSchema,
+    status: z.enum(["linked", "already_linked"]),
+  })
+  .strict();
+export type IdentityLinkResponse = z.infer<typeof IdentityLinkResponseSchema>;
 
 const SessionTokenSchema = z
   .object({
@@ -514,7 +651,16 @@ export const DeleteDeviceResponseSchema = z
   })
   .strict();
 
-export const BILLING_AGENTS = ["codex", "claude_code", "grok", "opencode", "pi", "cursor"] as const;
+export const BILLING_AGENTS = [
+  "codex",
+  "claude_code",
+  "grok",
+  "opencode",
+  "pi",
+  "cursor",
+  "gemini",
+  "copilot",
+] as const;
 const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
 
@@ -525,6 +671,8 @@ const AGENT_DISPLAY_NAMES: Readonly<Record<BillingAgent, string>> = {
   opencode: "OpenCode",
   pi: "Pi",
   cursor: "Cursor",
+  gemini: "Gemini CLI",
+  copilot: "GitHub Copilot",
 };
 
 /** An agent this build has never heard of is named as what it is. */
@@ -578,6 +726,7 @@ export const BillingChannelSchema = z.enum([
   "anthropic_direct",
   "aws_bedrock",
   "google_vertex",
+  "google_direct",
   "openrouter",
   "xai_direct",
   "moonshot_direct",
@@ -922,6 +1071,24 @@ const UsageSummaryTotalsSchema = z
 export type UsageSummaryTotals = z.infer<typeof UsageSummaryTotalsSchema>;
 
 /**
+ * What reading from a cache saved, against paying the uncached input price for the same tokens.
+ *
+ * Only a row that carries cache reads can save anything, so a period with none is `complete` at
+ * zero. A row whose price the catalog cannot resolve is counted rather than guessed at, which is
+ * what separates `partial` from `complete`. See
+ * [ADR 0036](../../../docs/decisions/0036-usage-derived-metrics.md).
+ */
+export const UsageCacheSavedSchema = z
+  .object({
+    amount_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+    status: UsageCostStatusSchema,
+    unpriced_rows: SafeNonnegativeIntegerSchema,
+  })
+  .strict()
+  .superRefine(validateCacheSaved);
+export type UsageCacheSaved = z.infer<typeof UsageCacheSavedSchema>;
+
+/**
  * One model's share of a period: its totals and what they cost.
  *
  * The private local report and the managed Account period both carry this leaf, and they carry
@@ -956,14 +1123,78 @@ const LocalUsageAgentSummarySchema = z
   .strict();
 export type LocalUsageAgentSummary = z.infer<typeof LocalUsageAgentSummarySchema>;
 
+/** One local calendar day of a bounded period, on the same midnights the period itself keeps. */
+const LocalUsageDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+  })
+  .strict();
+export type LocalUsageDay = z.infer<typeof LocalUsageDaySchema>;
+
+/**
+ * One hour of the local clock, summed over every day of the period that reached it.
+ *
+ * Cost is the amount alone: a rhythm compares hours against each other, and the basis and
+ * coverage that qualify an amount are already stated once for the period above it.
+ */
+const LocalUsageHourOfDaySchema = z
+  .object({
+    hour: z
+      .number()
+      .int()
+      .min(0)
+      .max(HOURS_OF_DAY - 1),
+    total_tokens: SafeNonnegativeIntegerSchema,
+    cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+  })
+  .strict();
+export type LocalUsageHourOfDay = z.infer<typeof LocalUsageHourOfDaySchema>;
+
+/**
+ * One period of this Mac's own Usage.
+ *
+ * `days` and `hours_of_day` describe a period bounded by two local midnights, so the three
+ * trailing periods carry them and `all` — every retained day — does not: the per-day shape of
+ * two years of history is what the activity heatmap answers, and folding it on every scan would
+ * cost more than any reader asks for.
+ */
 const LocalUsagePeriodSummarySchema = z
   .object({
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
+    cache_saved: UsageCacheSavedSchema,
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length),
+    days: z.array(LocalUsageDaySchema).max(MAXIMUM_LOCAL_USAGE_DAYS).optional(),
+    hours_of_day: z.array(LocalUsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
     models_truncated: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((summary, context) => {
+    const days = summary.days;
+    if (days?.some((day, index) => index > 0 && day.date <= (days[index - 1]?.date ?? ""))) {
+      context.addIssue({
+        code: "custom",
+        path: ["days"],
+        message: "Days must be distinct and in ascending date order.",
+      });
+    }
+    if (summary.hours_of_day?.some((hour, index) => hour.hour !== index)) {
+      context.addIssue({
+        code: "custom",
+        path: ["hours_of_day"],
+        message: "Hours of the day must name 0 through 23 in order.",
+      });
+    }
+    if ((summary.days === undefined) !== (summary.hours_of_day === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["hours_of_day"],
+        message: "A period bounded by local midnights carries both folds, or neither.",
+      });
+    }
+  });
 export type LocalUsagePeriodSummary = z.infer<typeof LocalUsagePeriodSummarySchema>;
 
 /** A range of calendar dates. `to` names the last day it covers, inclusive. */
@@ -1002,6 +1233,62 @@ export const UsageActivityRangeSchema = UsageDateRangeSchema.superRefine((range,
 const LocalUsageReportStatusSchema = UsageCostStatusSchema;
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;
 
+const SessionProjectKeySchema = z.string().regex(SESSION_PROJECT_KEY_PATTERN);
+
+/**
+ * One local session file, as the Usage page lists it. The file-index hash that keys the row
+ * stays in `cache.sqlite` and never appears here.
+ */
+export const LocalUsageSessionSchema = z
+  .object({
+    agent: BillingAgentSchema,
+    project_key: SessionProjectKeySchema,
+    started_at: Rfc3339InstantSchema,
+    last_activity_at: Rfc3339InstantSchema,
+    messages: SafeNonnegativeIntegerSchema,
+    tokens: SafeNonnegativeIntegerSchema,
+    cost: UsageCostOutcomeSchema,
+    top_model: ModelSchema.nullable(),
+    is_active: z.boolean(),
+  })
+  .strict()
+  .superRefine((session, context) => {
+    if (Date.parse(session.last_activity_at) < Date.parse(session.started_at)) {
+      context.addIssue({
+        code: "custom",
+        path: ["last_activity_at"],
+        message: "last_activity_at must not precede started_at.",
+      });
+    }
+  });
+export type LocalUsageSession = z.infer<typeof LocalUsageSessionSchema>;
+
+export const LocalUsageSessionsSchema = z
+  .object({
+    active: SafeNonnegativeIntegerSchema,
+    today: SafeNonnegativeIntegerSchema,
+    recent: z.array(LocalUsageSessionSchema).max(MAXIMUM_USAGE_SESSIONS_RECENT),
+  })
+  .strict()
+  .superRefine((sessions, context) => {
+    for (let index = 1; index < sessions.recent.length; index += 1) {
+      const previous = sessions.recent[index - 1];
+      const current = sessions.recent[index];
+      if (
+        previous !== undefined &&
+        current !== undefined &&
+        Date.parse(current.last_activity_at) > Date.parse(previous.last_activity_at)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["recent", index, "last_activity_at"],
+          message: "recent sessions must be ordered by last_activity_at descending.",
+        });
+      }
+    }
+  });
+export type LocalUsageSessions = z.infer<typeof LocalUsageSessionsSchema>;
+
 export const LocalUsageReportSchema = z
   .object({
     generated_at: Rfc3339InstantSchema,
@@ -1010,6 +1297,7 @@ export const LocalUsageReportSchema = z
     status: LocalUsageReportStatusSchema,
     model_catalog_revision: OpaqueIdSchema.nullable(),
     coverage: z.array(LocalUsageCoverageSchema).max(MAXIMUM_USAGE_COVERAGE_ITEMS),
+    sessions: LocalUsageSessionsSchema,
   })
   .strict()
   .superRefine((report, context) => {
@@ -1029,6 +1317,18 @@ export const LocalUsageReportSchema = z
         code: "custom",
         path: ["coverage"],
         message: "Unavailable local Usage cannot contain coverage.",
+      });
+    }
+    if (
+      unavailable &&
+      (report.sessions.active !== 0 ||
+        report.sessions.today !== 0 ||
+        report.sessions.recent.length > 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sessions"],
+        message: "Unavailable local Usage cannot contain sessions.",
       });
     }
     if (!unavailable) {
@@ -1067,13 +1367,14 @@ const UsageAgentUsageSchema = z
 export type UsageAgentUsage = z.infer<typeof UsageAgentUsageSchema>;
 
 /**
- * One period of Usage: its totals, its cost, whether any hour behind it was scanned
- * incompletely, and the agent tree that makes up the difference.
+ * One period of Usage: its totals, its cost, what its cache reads saved, whether any hour
+ * behind it was scanned incompletely, and the agent tree that makes up the difference.
  */
 export const UsagePeriodSchema = z
   .object({
     totals: UsageSummaryTotalsSchema,
     cost: UsageCostOutcomeSchema,
+    cache_saved: UsageCacheSavedSchema,
     partial: z.boolean(),
     agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length),
   })
@@ -1135,6 +1436,8 @@ export const AccountSummarySchema = z
     usage: AccountUsageSchema,
     pricing_revision: OpaqueIdSchema,
     model_catalog_revision: OpaqueIdSchema,
+    entitlement: EntitlementSchema,
+    purchase: PurchaseSchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
@@ -1162,6 +1465,221 @@ export const AccountUsageActivityResponseSchema = z
     days: z.array(UsageActivityDaySchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
   })
   .strict();
+
+/**
+ * The handle a public profile is published under, which is the whole address of that page.
+ *
+ * Lowercase because the page is reached by URL and a URL that differs only in case is the same
+ * page to a reader and a different one to a database; the pattern is the one rule both the
+ * Settings form and Relay answer, so a handle the browser accepted is never refused on write.
+ */
+export const PUBLIC_PROFILE_HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]{2,29}$/;
+
+/**
+ * Handles the site itself needs, or would be read as Quota speaking rather than a person.
+ *
+ * A public profile shares one namespace with nothing — the pages live under `/u/` — but a
+ * handle is also printed as a name beside Quota's own, so the ones that would impersonate the
+ * product or one of its routes are refused before they are stored.
+ */
+export const RESERVED_PUBLIC_PROFILE_HANDLES = [
+  "about",
+  "account",
+  "admin",
+  "api",
+  "app",
+  "auth",
+  "blog",
+  "docs",
+  "download",
+  "healthz",
+  "help",
+  "login",
+  "logout",
+  "my",
+  "oauth",
+  "privacy",
+  "providers",
+  "quota",
+  "quotabar",
+  "quotarelay",
+  "readyz",
+  "root",
+  "schema",
+  "security",
+  "settings",
+  "signin",
+  "signup",
+  "status",
+  "support",
+  "terms",
+  "u",
+  "usage",
+  "www",
+] as const;
+
+const reservedPublicProfileHandles: ReadonlySet<string> = new Set(RESERVED_PUBLIC_PROFILE_HANDLES);
+
+export function isReservedPublicProfileHandle(handle: string): boolean {
+  return reservedPublicProfileHandles.has(handle);
+}
+
+export const PublicProfileHandleSchema = z
+  .string()
+  .regex(PUBLIC_PROFILE_HANDLE_PATTERN)
+  .refine((handle) => !isReservedPublicProfileHandle(handle), "This handle is reserved.");
+
+/**
+ * What the owner of an Account may say about their public page.
+ *
+ * The two switches are subtractive: a page always carries token and message totals and the
+ * provider split, and each switch adds one thing to it. `handle` is null until one is chosen,
+ * and a page cannot be enabled without one, because the handle is the only address it has.
+ */
+const PublicProfileSchema = z
+  .object({
+    handle: PublicProfileHandleSchema.nullable(),
+    enabled: z.boolean(),
+    show_models: z.boolean(),
+    show_cost: z.boolean(),
+  })
+  .strict()
+  .superRefine((profile, context) => {
+    if (profile.enabled && profile.handle === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["handle"],
+        message: "An enabled public profile must name a handle.",
+      });
+    }
+  });
+export type PublicProfile = z.infer<typeof PublicProfileSchema>;
+
+/**
+ * What a write states, which is a page with an address.
+ *
+ * `handle` is not nullable here: taking a page down is `enabled: false`, and there is no way to
+ * say "publish nothing under no name". Releasing a handle would strand every link already
+ * shared, so the write cannot ask for it.
+ */
+const PublicProfileUpdateSchema = z
+  .object({
+    handle: PublicProfileHandleSchema,
+    enabled: z.boolean(),
+    show_models: z.boolean(),
+    show_cost: z.boolean(),
+  })
+  .strict();
+export type PublicProfileUpdate = z.infer<typeof PublicProfileUpdateSchema>;
+
+export const PublicProfileUpdateRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    profile: PublicProfileUpdateSchema,
+  })
+  .strict();
+export type PublicProfileUpdateRequest = z.infer<typeof PublicProfileUpdateRequestSchema>;
+
+export const PublicProfileResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    profile: PublicProfileSchema,
+  })
+  .strict();
+export type PublicProfileResponse = z.infer<typeof PublicProfileResponseSchema>;
+
+/** A public page names at most this many models in a period, largest first. */
+export const MAXIMUM_PUBLIC_USAGE_MODELS = 12;
+/** The public heatmap covers a year. */
+export const PUBLIC_ACTIVITY_DAYS = 365;
+/** The intensity levels a public heatmap cell can carry: none, then four bands. */
+export const PUBLIC_ACTIVITY_MAXIMUM_LEVEL = 4;
+
+/**
+ * What a public page says about a period, and nothing else.
+ *
+ * This is a separate statement from {@link UsagePeriodSchema} rather than a narrowing of it,
+ * because a narrowing is a field list someone can widen by accident. Everything an anonymous
+ * reader may see is written here once: totals, an optional cost, and shares. There is no agent,
+ * no device, no account label, and no quota in this shape at all
+ * ([ADR 0037](../../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+ */
+const PublicUsageTotalsSchema = z
+  .object({
+    total_tokens: SafeNonnegativeIntegerSchema,
+    input_tokens: SafeNonnegativeIntegerSchema,
+    output_tokens: SafeNonnegativeIntegerSchema,
+    messages: SafeNonnegativeIntegerSchema,
+  })
+  .strict();
+export type PublicUsageTotals = z.infer<typeof PublicUsageTotalsSchema>;
+
+/** The priced part of a period, present only while the owner has `show_cost` on. */
+const PublicUsageCostSchema = z
+  .object({
+    amount_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+    status: UsageCostStatusSchema,
+  })
+  .strict();
+export type PublicUsageCost = z.infer<typeof PublicUsageCostSchema>;
+
+/** One inference provider's share of a period, in tokens and in thousandths of the period. */
+const PublicUsageProviderShareSchema = z
+  .object({
+    provider: InferenceProviderSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    share_permille: z.number().int().min(0).max(1_000),
+  })
+  .strict();
+export type PublicUsageProviderShare = z.infer<typeof PublicUsageProviderShareSchema>;
+
+/** One model's share, present only while the owner has `show_models` on. */
+const PublicUsageModelShareSchema = z
+  .object({
+    provider: InferenceProviderSchema,
+    model: ModelSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    share_permille: z.number().int().min(0).max(1_000),
+  })
+  .strict();
+export type PublicUsageModelShare = z.infer<typeof PublicUsageModelShareSchema>;
+
+const PublicUsagePeriodSchema = z
+  .object({
+    totals: PublicUsageTotalsSchema,
+    cost: PublicUsageCostSchema.optional(),
+    providers: z.array(PublicUsageProviderShareSchema).max(InferenceProviderSchema.options.length),
+    models: z.array(PublicUsageModelShareSchema).max(MAXIMUM_PUBLIC_USAGE_MODELS).optional(),
+  })
+  .strict();
+export type PublicUsagePeriod = z.infer<typeof PublicUsagePeriodSchema>;
+
+/**
+ * One day of the public heatmap: how busy it was, never how much it was.
+ *
+ * A public cell carries a band rather than a token count, so the page shows a rhythm without
+ * publishing a day-by-day series anyone could difference back into the numbers behind it.
+ */
+const PublicActivityDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    level: z.number().int().min(0).max(PUBLIC_ACTIVITY_MAXIMUM_LEVEL),
+  })
+  .strict();
+export type PublicActivityDay = z.infer<typeof PublicActivityDaySchema>;
+
+export const PublicUsageResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    handle: PublicProfileHandleSchema,
+    published_at: Rfc3339InstantSchema,
+    generated_at: Rfc3339InstantSchema,
+    last_30_days: PublicUsagePeriodSchema,
+    all: PublicUsagePeriodSchema,
+    activity: z.array(PublicActivityDaySchema).max(PUBLIC_ACTIVITY_DAYS),
+  })
+  .strict();
+export type PublicUsageResponse = z.infer<typeof PublicUsageResponseSchema>;
 
 /**
  * What a client takes from a managed read.
@@ -1199,12 +1717,12 @@ const AccountDeviceReadSchema = z.looseObject({
 });
 export type AccountDeviceRead = z.infer<typeof AccountDeviceReadSchema>;
 
-const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
+export const UsageUnpricedItemReadSchema = UsageUnpricedItemSchema.extend({
   billing_channel: ReadEnumSchema,
   reason: ReadEnumSchema,
 }).loose();
 
-const UsageCostOutcomeReadSchema = z
+export const UsageCostOutcomeReadSchema = z
   .looseObject({
     ...UsageCostOutcomeSchema.shape,
     assumptions: z.array(ReadEnumSchema).max(16),
@@ -1212,7 +1730,7 @@ const UsageCostOutcomeReadSchema = z
   })
   .superRefine(validateCostOutcome);
 
-const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
+export const UsageSummaryTotalsReadSchema = UsageSummaryTotalsSchema.loose();
 
 const UsageModelUsageReadSchema = UsageModelUsageSchema.extend({
   totals: UsageSummaryTotalsReadSchema,
@@ -1229,9 +1747,14 @@ const UsageAgentUsageReadSchema = UsageAgentUsageSchema.extend({
   providers: z.array(UsageProviderUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
 
-const UsagePeriodReadSchema = UsagePeriodSchema.extend({
+const UsageCacheSavedReadSchema = z
+  .looseObject({ ...UsageCacheSavedSchema.shape })
+  .superRefine(validateCacheSaved);
+
+export const UsagePeriodReadSchema = UsagePeriodSchema.extend({
   totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
+  cache_saved: UsageCacheSavedReadSchema,
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES),
 }).loose();
 export type UsagePeriodRead = z.infer<typeof UsagePeriodReadSchema>;
@@ -1254,6 +1777,8 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   devices: z.array(AccountDeviceReadSchema).max(256),
   subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
   usage: AccountUsageReadSchema,
+  entitlement: EntitlementReadSchema,
+  purchase: PurchaseSchema.loose(),
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
@@ -1263,6 +1788,13 @@ const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
 }).loose();
 export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
+
+export const PublicProfileResponseReadSchema = PublicProfileResponseSchema.loose();
+export type PublicProfileResponseRead = z.infer<typeof PublicProfileResponseReadSchema>;
+
+export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
+export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
+export type UsageSummaryTotalsRead = z.infer<typeof UsageSummaryTotalsReadSchema>;
 
 export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
   days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
@@ -1391,6 +1923,7 @@ const RelayErrorCodeSchema = z.enum([
   "device_deleted",
   "client_upgrade_required",
   "conflict",
+  "subscription_required",
   "internal_error",
 ]);
 export type RelayErrorCode = z.infer<typeof RelayErrorCodeSchema>;
@@ -1546,6 +2079,27 @@ function validateUsageCounts(
       code: "custom",
       path: ["source_cost_microusd"],
       message: "Source cost is present exactly when it covers at least one request.",
+    });
+  }
+}
+
+/** A saving says how much of what it describes it could price, the way a cost outcome does. */
+function validateCacheSaved(
+  saved: { amount_microusd: string | null; status: string; unpriced_rows: number },
+  context: z.RefinementCtx,
+) {
+  if ((saved.status === "unavailable") !== (saved.amount_microusd === null)) {
+    context.addIssue({
+      code: "custom",
+      path: ["amount_microusd"],
+      message: "An unavailable saving states no amount, and every other one states an amount.",
+    });
+  }
+  if ((saved.status === "complete") !== (saved.unpriced_rows === 0)) {
+    context.addIssue({
+      code: "custom",
+      path: ["unpriced_rows"],
+      message: "A saving is complete exactly when it priced every row that read from a cache.",
     });
   }
 }

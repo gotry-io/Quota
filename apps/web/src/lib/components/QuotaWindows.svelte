@@ -1,7 +1,18 @@
 <script lang="ts">
-import { isBalanceOnly, remainingPercent, showsPercentMeter } from "@gotry-io/quota-model";
+import {
+  formatWindowTitle,
+  quotaPace,
+  remainingPercent,
+  showsPercentMeter,
+} from "@gotry-io/quota-model";
 import { meterTone } from "$lib/account-overview";
-import { formatQuotaRemaining, NO_RESET_TIME_COPY, resetCopy, showsNoResetTime } from "$lib/format";
+import {
+  formatQuotaRemaining,
+  NO_RESET_TIME_COPY,
+  paceCopy,
+  resetCopy,
+  showsNoResetTime,
+} from "$lib/format";
 
 type WindowItem = {
   id: string;
@@ -11,6 +22,7 @@ type WindowItem = {
   limit_value?: number | undefined;
   value_unit?: string | undefined;
   resets_at?: string | undefined;
+  duration_seconds?: number | undefined;
 };
 
 let {
@@ -29,13 +41,14 @@ let {
     <p class="empty-state">No quota windows reported.</p>
   {:else}
     {#each windows as window (window.id)}
-      {@const balanceOnly = isBalanceOnly(window)}
       {@const remaining = remainingPercent(window.used_percent)}
       {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}
       {@const tone = meterTone(remaining)}
+      {@const pace = quotaPace(window, now ?? new Date())}
+      {@const paceLine = paceCopy(pace, window.resets_at)}
       <div class="quota-window-card">
         <div class="quota-window-heading">
-          <span>{balanceOnly ? "Balance" : window.title}</span>
+          <span>{formatWindowTitle(window.title, window)}</span>
           {#if showsPercentMeter(window)}
             <div class="quota-track meter-{tone}">
               <span style:width={`${remaining}%`} aria-hidden="true"></span>
@@ -47,6 +60,11 @@ let {
           <p class="quota-window-meta">{reset}</p>
         {:else if !window.resets_at && showsNoResetTime(window)}
           <p class="quota-window-meta">{NO_RESET_TIME_COPY}</p>
+        {/if}
+        {#if paceLine}
+          <p class="quota-window-meta" class:quota-window-pace-warn={pace.kind === "runs_out"}>
+            {paceLine}
+          </p>
         {/if}
       </div>
     {/each}
