@@ -3,6 +3,7 @@ import SwiftUI
 
 struct OverviewView: View {
   @Bindable var model: AppModel
+  @State private var showsPaywall = false
 
   var body: some View {
     List {
@@ -10,6 +11,24 @@ struct OverviewView: View {
         Section {
           StatusMessage(symbolName: status.symbolName, text: status.text)
             .accessibilityIdentifier("overview.status")
+        }
+      }
+
+      if let sync = model.syncBanner {
+        Section {
+          Button {
+            showsPaywall = true
+          } label: {
+            HStack(spacing: 12) {
+              StatusMessage(symbolName: "arrow.trianglehead.2.clockwise.rotate.90", text: sync)
+              Image(systemName: "chevron.forward")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            }
+          }
+          .accessibilityHint("Opens Sync across devices")
+          .accessibilityIdentifier("overview.sync-off")
         }
       }
 
@@ -34,6 +53,16 @@ struct OverviewView: View {
     }
     .navigationTitle(model.accountLabel)
     .navigationBarTitleDisplayMode(.large)
+    .sheet(isPresented: $showsPaywall) {
+      NavigationStack {
+        PaywallView(model: model)
+          .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+              Button("Done") { showsPaywall = false }
+            }
+          }
+      }
+    }
   }
 
   /// An expired session is the reason to sign in again, so it outranks a refresh failure.

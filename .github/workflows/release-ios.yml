@@ -64,6 +64,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          REVENUECAT_IOS_API_KEY: ${{ secrets.REVENUECAT_IOS_API_KEY }}
         run: |
           set -euo pipefail
           missing=0
@@ -82,6 +83,7 @@ jobs:
           check ASC_KEY_ID "$ASC_KEY_ID"
           check ASC_ISSUER_ID "$ASC_ISSUER_ID"
           check ASC_KEY_P8 "$ASC_KEY_P8"
+          check REVENUECAT_IOS_API_KEY "$REVENUECAT_IOS_API_KEY"
           if [ "$missing" -ne 0 ]; then
             echo "Configure the iOS release secrets listed in apps/ios/README.md." >&2
             echo "The job stops before export when they are unset." >&2
@@ -95,6 +97,7 @@ jobs:
           P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
           IOS_PROFILE_APP: ${{ secrets.IOS_PROFILE_APP }}
           IOS_PROFILE_WIDGETS: ${{ secrets.IOS_PROFILE_WIDGETS }}
+          REVENUECAT_IOS_API_KEY: ${{ secrets.REVENUECAT_IOS_API_KEY }}
         run: |
           set -euo pipefail
           P12_PATH="$RUNNER_TEMP/quota-ios-distribution.p12"
@@ -161,6 +164,7 @@ jobs:
             echo "CODE_SIGN_IDENTITY = Apple Distribution"
             echo "QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER = ${APP_NAME}"
             echo "QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER = ${WIDGETS_NAME}"
+            echo "REVENUECAT_IOS_API_KEY = ${REVENUECAT_IOS_API_KEY}"
           } > apps/ios/Local.xcconfig
 
           {

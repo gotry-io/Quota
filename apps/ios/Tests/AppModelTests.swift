@@ -1020,7 +1020,28 @@ enum Fixtures {
     return formatter.date(from: value)!
   }
 
-  static func accountSummaryJSON(accountID: String = "account_01") throws -> Data {
+  /// The paid-sync entitlement a summary carries. Defaults to active so the tests that are not
+  /// about sync keep reading a signed-in Account with sync on.
+  static func entitlement(
+    status: String = "active",
+    expiresAt: String? = "2026-09-14T12:00:00Z",
+    willRenew: Bool = true
+  ) -> [String: Any] {
+    [
+      "status": status,
+      "expires_at": expiresAt as Any? ?? NSNull(),
+      "will_renew": willRenew,
+      "product_id": "quota_sync_monthly",
+      "store": "app_store",
+      "stale": false,
+    ]
+  }
+
+  static func accountSummaryJSON(
+    accountID: String = "account_01",
+    entitlement: [String: Any]? = nil
+  ) throws -> Data {
+    let entitlement = entitlement ?? Self.entitlement()
     let period: [String: Any] = [
       "totals": [
         "total_tokens": 1200,
@@ -1069,6 +1090,7 @@ enum Fixtures {
         ],
         "pricing_revision": "pricing_1",
         "model_catalog_revision": "models_1",
+        "entitlement": entitlement,
       ] as [String: Any]
     )
   }

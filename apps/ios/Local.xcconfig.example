@@ -17,3 +17,8 @@ QUOTA_APP_PROVISIONING_PROFILE_SPECIFIER = YOUR_APP_PROFILE_NAME
 
 // QuotaWidgets extension (io.gotry.quota.widgets). Mapped the same way.
 QUOTA_WIDGETS_PROVISIONING_PROFILE_SPECIFIER = YOUR_WIDGETS_PROFILE_NAME
+
+// RevenueCat public iOS SDK key (appl_...). Reaches the app as the Info.plist key
+// REVENUECAT_IOS_API_KEY. Leaving it unset builds an app whose Sync UI says
+// "Purchases unavailable in this build."; the release workflow writes it from a secret.
+REVENUECAT_IOS_API_KEY =

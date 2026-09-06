@@ -15,7 +15,9 @@ links to it rather than restating it.
   registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
   two are merged into one row per subscription by the rule below. Either way it publishes the
   non-secret App Group snapshot its widgets render. It is still not a collection Device: it
-  registers no Device and writes nothing to Relay, so a reading taken here reaches no other client.
+  registers no Device and writes nothing to Relay, so a reading taken here reaches no other client. It is also where paid sync is bought:
+  the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
+  to an Account is read from the Relay `entitlement` rather than from the store on the device.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
   owns views, UI preferences, accessibility, Launch at Login, and wire decoding only.
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized

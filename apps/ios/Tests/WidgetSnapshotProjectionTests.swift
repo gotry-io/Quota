@@ -454,6 +454,7 @@ struct WidgetSnapshotProjectionTests {
     accountID: String,
     subscriptions: [[String: Any]]
   ) throws -> Data {
+    let entitlement = Fixtures.entitlement()
     let period: [String: Any] = [
       "totals": [
         "total_tokens": 1200,
@@ -502,6 +503,7 @@ struct WidgetSnapshotProjectionTests {
         ],
         "pricing_revision": "pricing_1",
         "model_catalog_revision": "models_1",
+        "entitlement": entitlement,
       ] as [String: Any]
     )
   }
