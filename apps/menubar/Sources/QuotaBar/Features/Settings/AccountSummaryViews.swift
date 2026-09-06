@@ -125,6 +125,7 @@ struct AccountUsageView: View {
   @Bindable var model: MenuBarViewModel
   @Binding var source: UsageSource
   @Binding var period: UsagePeriod
+  let now: Date
 
   var body: some View {
     QuotaNavigationStableContent(state: pageState) { state in
@@ -139,6 +140,7 @@ struct AccountUsageView: View {
       accountWarning: presentedSource == .account ? model.accountErrorMessage : nil,
       statusWarning: usageStatusWarning(source: presentedSource),
       usage: presentedUsage(source: presentedSource),
+      sessions: model.localUsage?.sessions,
       isPreparing: model.isPreparingUsage(source: presentedSource)
     )
   }
@@ -213,6 +215,10 @@ struct AccountUsageView: View {
                 : .empty(message: "No Usage is available for this period.")
             )
           }
+        }
+
+        if let sessions = state.sessions {
+          sessionsSection(sessions)
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -624,6 +630,78 @@ struct AccountUsageView: View {
     }
   }
 
+  private func sessionsSection(_ sessions: LocalUsageSessions) -> some View {
+    SettingsSection(
+      title: "Sessions",
+      trailing: {
+        Text("\(sessions.active) active · \(sessions.today) today")
+          .quotaMetaStyle()
+          .accessibilityLabel("\(sessions.active) active, \(sessions.today) today")
+      },
+      content: {
+        if sessions.recent.isEmpty {
+          QuotaSectionStateView(
+            presentation: .empty(message: "No sessions in the last 90 days.")
+          )
+        } else {
+          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+            ForEach(sessions.recent) { session in
+              sessionRow(session, now: now)
+            }
+          }
+          .padding(.vertical, QuotaDesign.Spacing.sm)
+        }
+      }
+    )
+  }
+
+  private func sessionRow(_ session: LocalUsageSession, now: Date) -> some View {
+    let summary = UsageValueFormatter.tokensAndCost(session.tokens, session.cost)
+    let age = FreshnessCopy.age(since: session.lastActivityAt, now: now)
+    let active = session.isActive
+    return HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
+      ZStack(alignment: .topTrailing) {
+        UsageAgentIcon(agent: session.agent, size: QuotaDesign.Layout.usageProviderIconSize)
+          .frame(width: QuotaDesign.Layout.settingsIconColumnWidth)
+        if active {
+          Circle()
+            .fill(QuotaPalette.accent)
+            .frame(width: 6, height: 6)
+            .offset(x: 2, y: -2)
+            .accessibilityHidden(true)
+        }
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        Text(session.projectKey)
+          .quotaFont(.listSecondary)
+          .foregroundStyle(QuotaPalette.ink)
+          .lineLimit(1)
+        Text(age)
+          .quotaMetaStyle()
+          .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+      Text(summary)
+        .quotaMonoListValueStyle()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(sessionAccessibilityLabel(session, age: age, summary: summary, active: active))
+  }
+
+  private func sessionAccessibilityLabel(
+    _ session: LocalUsageSession,
+    age: String,
+    summary: String,
+    active: Bool
+  ) -> String {
+    var parts = [UsageValueFormatter.agent(session.agent), session.projectKey, age, summary]
+    if active { parts.insert("Active", at: 0) }
+    return parts.joined(separator: ", ")
+  }
+
   private func modelMetric(_ label: String, _ value: Int) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.meta) {
       Text(label).quotaMetaStyle()
@@ -696,6 +774,7 @@ private struct AccountUsagePageState: Equatable {
   let accountWarning: String?
   let statusWarning: String?
   let usage: PresentedUsage?
+  let sessions: LocalUsageSessions?
   let isPreparing: Bool
 }
 
@@ -771,6 +850,23 @@ private struct PresentedUsageModel: Equatable {
   }
 }
 
+private struct UsageAgentIcon: View {
+  let agent: BillingAgent
+  var size = QuotaDesign.Layout.settingsIconColumnWidth
+
+  var body: some View {
+    if let assetName = agent.brandAssetName {
+      BrandAssetIcon(assetName: assetName, size: size)
+    } else {
+      Image(systemName: "questionmark.square.dashed")
+        .quotaFont(.secondary)
+        .foregroundStyle(QuotaPalette.body)
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+  }
+}
+
 private struct UsageProviderIcon: View {
   let provider: InferenceProvider?
   var size = QuotaDesign.Layout.settingsIconColumnWidth
@@ -790,6 +886,22 @@ private struct UsageProviderIcon: View {
           height: size
         )
         .accessibilityHidden(true)
+    }
+  }
+}
+
+extension BillingAgent {
+  fileprivate var brandAssetName: String? {
+    switch self {
+    case .codex: "openai"
+    case .claudeCode: "claude"
+    case .grok: "grok"
+    case .opencode: "opencode"
+    case .pi: "pi"
+    case .cursor: "cursor"
+    case .gemini: "gemini"
+    case .copilot: "copilot"
+    case .unknown: nil
     }
   }
 }

@@ -5,7 +5,7 @@ use super::{
     NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions,
     aggregate_hour_rows, build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other,
     fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage,
-    scan_local_usage, scan_opencode_usage, scan_pi_usage,
+    scan_local_usage, scan_opencode_usage, scan_pi_usage, session_project_key,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -2264,6 +2264,33 @@ fn pricing_rates() -> PricingRates {
         web_search_per_request: None,
         web_fetch_per_request: None,
     }
+}
+
+#[test]
+fn session_project_key_is_a_basename_never_a_path() {
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.claude/projects/-Users-kyle-Code-Quota/abc.jsonl"
+        )),
+        "Quota"
+    );
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.grok/sessions/sess_123/updates.jsonl"
+        )),
+        "sess_123"
+    );
+    assert_eq!(
+        session_project_key(Path::new(
+            "/Users/kyle/.codex/sessions/2026/08/02/rollout-abc.jsonl"
+        )),
+        "rollout-abc"
+    );
+    assert_eq!(
+        session_project_key(Path::new("/Users/kyle/.local/share/opencode/opencode.db")),
+        "opencode"
+    );
+    assert!(!session_project_key(Path::new("a/b/c.jsonl")).contains('/'));
 }
 
 fn pricing_entry(entry_id: &str) -> PricingCatalogEntry {

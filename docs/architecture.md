@@ -157,13 +157,14 @@ Operational state has one owner and two files
 ([ADR 0021](decisions/0021-identity-store-and-disposable-cache.md)). `identity.sqlite` stores what
 this device cannot regenerate: installation, session, upload identity, the outbox of hours it still
 owes an Account, the monotonic scan revision those hours carry, stored provider browser sessions, and
-preferences including the Usage upload setting and whether This Mac groups Usage by project. The outbox is in that file because losing it would
-lose hours already recomputed, not because it could not be rebuilt. `cache.sqlite` stores what it can: component
-last-good values, the Usage file index and its normalized records, the hourly facts folded from them
-(including a local-only `project_key` basename that upload rows never carry,
-[ADR 0039](decisions/0039-project-attribution-stays-local.md)),
-the fixed-period presentation cache, pricing and model catalog state, cached Account reads, the
-last-completed diagnostic snapshot, and the bounded attempt journal. Both start at schema v1 with
+preferences including the Usage upload setting and whether This Mac groups Usage by project. The
+outbox is in that file because losing it would lose hours already recomputed, not because it could
+not be rebuilt. `cache.sqlite` stores what it can: component last-good values, the Usage file index
+and its normalized records, the hourly facts folded from them (including a local-only `project_key`
+basename that upload rows never carry,
+[ADR 0039](decisions/0039-project-attribution-stays-local.md)), the session rows folded from those
+files, the fixed-period presentation cache, pricing and model catalog state, cached Account reads,
+the last-completed diagnostic snapshot, and the bounded attempt journal. Both start at schema v1 with
 explicit append-only migrations. A released single-file `state.sqlite` hands its identity rows over
 once at startup and is then removed. Nothing derived crosses, because the first refresh rebuilds
 it — and neither does its outbox: those were requests in a contract this build no longer speaks,
@@ -206,13 +207,16 @@ no version of its own and moves with `ipc_version`. State snapshots separately c
 detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
 ([ADR 0039](decisions/0039-project-attribution-stays-local.md)). `total_tokens` is input plus output; cache-read and cache-write tokens are named input
 subsets; reasoning is an output subset; `messages` sums normalized usage-bearing model output facts
-and is not a session count, because sessions are not collected. Each summary also carries
+and is not a session count. Each summary also carries
 `cache_saved` — what its cache reads saved against the uncached input price — and, for the three
 periods bounded by two local midnights, `days[]` on local dates and `hours_of_day[24]` on the local
 clock; `all` carries neither, because the per-day shape of every retained day is what the activity
 chart answers ([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
 carried at all: every reader derives it from the two counts it already holds, by the one rule that
-ADR states. The Rust report groups facts by the
+ADR states. Sessions are a separate local view of source files
+([ADR 0038](decisions/0038-sessions-are-a-local-view-of-files.md)): the report carries
+`sessions: { active, today, recent }` derived from `usage_sessions` in `cache.sqlite`, keyed by the
+file-index hash, retained 90 days, and never uploaded. The Rust report groups facts by the
 agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
 model's name by the model catalog's family rules — the agent and the billing channel never choose
 that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).

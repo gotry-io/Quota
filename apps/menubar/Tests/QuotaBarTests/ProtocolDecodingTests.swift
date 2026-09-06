@@ -723,8 +723,9 @@ func decodesLocalUsageReportShape() throws {
   )
   let data = try QuotaWireCodec.makeEncoder().encode(report)
   let encodedText = String(decoding: data, as: UTF8.self)
-  #expect(!encodedText.contains("\"today\""))
+  #expect(encodedText.contains("\"sessions\""))
   #expect(!encodedText.contains("\"usage\""))
+  #expect(!encodedText.contains("\"last_7_days\""))
   let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
   #expect(decoded.status == .unavailable)
 
@@ -744,6 +745,90 @@ func decodesLocalUsageReportShape() throws {
   let retiredMarker = try JSONSerialization.data(withJSONObject: retiredMarkerObject)
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: retiredMarker)
+  }
+}
+
+@Test
+func decodesLocalUsageSessions() throws {
+  let now = Date(timeIntervalSince1970: 1_754_080_000)
+  let cost = UsageCostOutcome(
+    mode: .auto,
+    basis: .reported,
+    status: .complete,
+    amountMicrousd: "12",
+    catalogRevision: nil,
+    calculatedRows: 0,
+    reportedRows: 1,
+    unpricedRows: 0,
+    assumptions: [.sourceReported],
+    unpriced: []
+  )
+  let report = LocalUsageReport(
+    generatedAt: now,
+    aggregationTimezone: "UTC",
+    range: UsageDateRange(from: "2026-08-01", to: "2026-08-02"),
+    status: .complete,
+    modelCatalogRevision: nil,
+    coverage: [
+      LocalUsageCoverage(
+        agent: .codex,
+        startAt: "2026-08-01T00:00:00Z",
+        endAt: "2026-08-03T00:00:00Z",
+        status: .complete
+      )
+    ],
+    sessions: LocalUsageSessions(
+      active: 1,
+      today: 1,
+      recent: [
+        LocalUsageSession(
+          agent: .codex,
+          projectKey: "Quota",
+          startedAt: now.addingTimeInterval(-600),
+          lastActivityAt: now.addingTimeInterval(-30),
+          messages: 4,
+          tokens: 1300,
+          cost: cost,
+          topModel: "gpt-5",
+          isActive: true
+        )
+      ]
+    )
+  )
+  let data = try QuotaWireCodec.makeEncoder().encode(report)
+  let encodedText = String(decoding: data, as: UTF8.self)
+  #expect(encodedText.contains("\"sessions\""))
+  #expect(!encodedText.contains("source_file_id"))
+  let decoded = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: data)
+  #expect(decoded.sessions.active == 1)
+  #expect(decoded.sessions.recent[0].projectKey == "Quota")
+
+  func mutateRecent(_ mutate: (inout [[String: Any]]) throws -> Void) throws -> Data {
+    var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    var sessions = try #require(object["sessions"] as? [String: Any])
+    var recent = try #require(sessions["recent"] as? [[String: Any]])
+    try mutate(&recent)
+    sessions["recent"] = recent
+    object["sessions"] = sessions
+    return try JSONSerialization.data(withJSONObject: object)
+  }
+
+  let pathData = try mutateRecent { $0[0]["project_key"] = "src/app" }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: pathData)
+  }
+
+  let fileData = try mutateRecent { $0[0]["source_file_id"] = "abc" }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: fileData)
+  }
+
+  let tooManyData = try mutateRecent { recent in
+    let row = try #require(recent.first)
+    recent = Array(repeating: row, count: 21)
+  }
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsageReport.self, from: tooManyData)
   }
 }
 

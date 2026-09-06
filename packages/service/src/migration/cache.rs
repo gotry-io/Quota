@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 4;
+const CURRENT_SCHEMA: i64 = 5;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -37,6 +37,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
             2 => migration_v2(&tx)?,
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
+            5 => migration_v5(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -373,6 +374,28 @@ fn migration_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// A session is one source file. The row hangs off the file index and is rebuilt from the
+/// records that index already holds.
+fn migration_v5(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE usage_sessions (
+            source_file_id TEXT PRIMARY KEY NOT NULL,
+            agent TEXT NOT NULL,
+            project_key TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            last_activity_at TEXT NOT NULL,
+            messages INTEGER NOT NULL,
+            tokens_in INTEGER NOT NULL,
+            tokens_out INTEGER NOT NULL,
+            cost_micros INTEGER,
+            top_model TEXT
+         );
+         CREATE INDEX usage_sessions_last_activity
+            ON usage_sessions(last_activity_at DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,6 +526,41 @@ mod tests {
             })
             .expect("count");
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_cache_below_v5_gains_the_sessions_table() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        migration_v2(&tx).expect("v2");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');
+             INSERT INTO schema_migrations(version, applied_at) VALUES (2, '2026-08-31T00:00:00Z');",
+        )
+        .expect("v2 marker");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+        conn.execute(
+            "INSERT INTO usage_sessions(
+                source_file_id, agent, project_key, started_at, last_activity_at,
+                messages, tokens_in, tokens_out, cost_micros, top_model
+             ) VALUES (
+                'file-1', 'codex', 'Quota', '2026-08-31T00:00:00Z', '2026-08-31T01:00:00Z',
+                2, 10, 4, 12, 'gpt-5'
+             )",
+            [],
+        )
+        .expect("session row");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_sessions", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 1);
     }
 
     #[test]

@@ -448,7 +448,61 @@
           endAt: "2026-08-03T00:00:00Z",
           status: partial ? .partial : .complete
         )
-      ]
+      ],
+      sessions: LocalUsageSessions(
+        active: 2,
+        today: 14,
+        recent: [
+          LocalUsageSession(
+            agent: .codex,
+            projectKey: "Quota",
+            startedAt: date.addingTimeInterval(-3_600),
+            lastActivityAt: date.addingTimeInterval(-45),
+            messages: 18,
+            tokens: 128_400,
+            cost: visualSessionCost("1840000"),
+            topModel: "gpt-5",
+            isActive: true
+          ),
+          LocalUsageSession(
+            agent: .claudeCode,
+            projectKey: "Quota",
+            startedAt: date.addingTimeInterval(-8_400),
+            lastActivityAt: date.addingTimeInterval(-120),
+            messages: 11,
+            tokens: 64_200,
+            cost: visualSessionCost("960000"),
+            topModel: "claude-sonnet-4",
+            isActive: true
+          ),
+          LocalUsageSession(
+            agent: .cursor,
+            projectKey: "menubar",
+            startedAt: date.addingTimeInterval(-86_400),
+            lastActivityAt: date.addingTimeInterval(-3_600),
+            messages: 6,
+            tokens: 21_000,
+            cost: visualSessionCost("410000"),
+            topModel: "gpt-5",
+            isActive: false
+          ),
+        ]
+      )
+    )
+  }
+
+  private func visualSessionCost(_ amountMicrousd: String) -> UsageCostOutcome {
+    UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .complete,
+      amountMicrousd: amountMicrousd,
+      catalogRevision: "pricing_2026_08_01",
+      calculatedRows: 1,
+      reportedRows: 0,
+      unpricedRows: 0,
+      assumptions: [],
+      unpriced: []
     )
   }
 

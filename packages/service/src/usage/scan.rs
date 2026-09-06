@@ -82,6 +82,8 @@ pub(crate) struct ScanParts {
     pub unchanged_source_file_ids: Vec<String>,
     pub deleted_source_file_ids: Vec<String>,
     pub sources: Vec<UsageSourceScan>,
+    /// Basename labels for every discovered file this pass saw, including unchanged ones.
+    pub project_keys: HashMap<String, String>,
 }
 
 pub(crate) trait UsageParser {
@@ -343,6 +345,7 @@ where
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut records_seen = 0usize;
     let mut stopped = false;
 
@@ -354,6 +357,7 @@ where
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -580,6 +584,7 @@ where
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     ))
 }
@@ -652,6 +657,7 @@ pub(crate) fn finish_scan(
         unchanged_source_file_ids: parts.unchanged_source_file_ids,
         deleted_source_file_ids: parts.deleted_source_file_ids,
         sources: parts.sources,
+        project_keys: parts.project_keys,
     }
 }
 
@@ -671,6 +677,59 @@ pub(crate) fn source_coverage(
         },
         reasons: reasons.into_iter().take(MAX_COVERAGE_REASONS).collect(),
     }
+}
+
+/// The Usage page's project column is a basename, never a path.
+///
+/// A path under a `projects/` folder — Claude Code, and Cursor's project transcripts — encodes
+/// the workspace, so it resolves through the same rule the Projects fold uses
+/// ([`super::project_key_from_source_path`]) and the two sections name a repository the same way.
+/// Failing that, a generic log (`updates.jsonl`, `opencode.db`, `state.vscdb`, `store.db`) takes
+/// its parent directory and everything else its file stem, which is all an opaque session file
+/// offers.
+pub fn session_project_key(path: &Path) -> String {
+    if let Some(key) = super::project_key_from_source_path(path) {
+        return key;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    let raw = if matches!(
+        file_name,
+        "updates.jsonl" | "opencode.db" | "state.vscdb" | "store.db"
+    ) {
+        path.parent()
+            .and_then(|value| value.file_name())
+            .and_then(|value| value.to_str())
+            .unwrap_or(stem)
+    } else {
+        stem
+    };
+    bound_project_key(raw)
+}
+
+pub(crate) fn remember_project_key(keys: &mut HashMap<String, String>, file: &LocalUsageFile) {
+    keys.insert(file.source_file_id.clone(), session_project_key(&file.path));
+}
+
+fn bound_project_key(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|character| *character != '/' && *character != '\\' && !character.is_control())
+        .collect();
+    if cleaned.is_empty() {
+        return "session".to_owned();
+    }
+    if cleaned.chars().count() <= 128 {
+        return cleaned;
+    }
+    let tail: String = cleaned.chars().rev().take(128).collect();
+    tail.chars().rev().collect()
 }
 
 pub(crate) fn file_index(file: &LocalUsageFile, parser_revision: &str) -> UsageFileIndex {

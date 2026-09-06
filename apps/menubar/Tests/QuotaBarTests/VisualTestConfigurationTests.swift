@@ -92,6 +92,11 @@
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
     #expect(model.accountSummary?.usage.today.cost.status == .partial)
     #expect(model.accountSummary?.usage.today.partial == true)
+    #expect(model.localUsage?.sessions.active == 2)
+    #expect(model.localUsage?.sessions.today == 14)
+    #expect(model.localUsage?.sessions.recent.count == 3)
+    #expect(model.localUsage?.sessions.recent.map(\.isActive) == [true, true, false])
+    #expect(model.localUsage?.sessions.recent.map(\.projectKey) == ["Quota", "Quota", "menubar"])
     #expect(
       model.accountSummary?.usage.today.agents.flatMap { agent in
         agent.providers.flatMap { $0.models.map(\.model) }

@@ -1,6 +1,7 @@
 use super::scan::{
     UsageParser, discover_usage_files_at, file_index, finish_scan, is_cancelled,
-    matching_file_info, parse_range, push_reason, roots_for, scan_jsonl_files, source_coverage,
+    matching_file_info, parse_range, push_reason, remember_project_key, roots_for,
+    scan_jsonl_files, source_coverage,
 };
 use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
@@ -10,7 +11,7 @@ use super::{
 };
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Map, Number, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const MAXIMUM_OPENCODE_ROWS: usize = 2_000_000;
@@ -164,6 +165,7 @@ fn scan_databases(
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     let mut rows_seen = 0usize;
     let mut stopped = false;
     for file in discovery_files {
@@ -174,6 +176,7 @@ fn scan_databases(
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -361,6 +364,7 @@ fn scan_databases(
             unchanged_source_file_ids,
             deleted_source_file_ids,
             sources,
+            project_keys,
         },
     ))
 }

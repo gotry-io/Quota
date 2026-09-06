@@ -1,7 +1,7 @@
 use super::scan::{
     UsageParser, discover_usage_files_at, file_index, finish_scan, is_cancelled,
-    matching_file_info, parse_range, push_reason, reason_for_io, roots_for, scan_jsonl_files,
-    source_coverage,
+    matching_file_info, parse_range, push_reason, reason_for_io, remember_project_key, roots_for,
+    scan_jsonl_files, source_coverage,
 };
 use super::{
     BillableTools, BillingChannel, ChannelSource, CoverageReason, CoverageReasonCode,
@@ -12,7 +12,7 @@ use super::{
 };
 use serde_json::{Map, Value};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -72,11 +72,13 @@ fn scan_json_conversations(
     let mut ignored_empty_records = 0u64;
     let mut unchanged_source_file_ids = Vec::new();
     let mut sources = Vec::new();
+    let mut project_keys = HashMap::new();
     for file in discovery.files {
         if is_cancelled(options) {
             push_reason(&mut reasons, CoverageReasonCode::ScanCancelled);
             break;
         }
+        remember_project_key(&mut project_keys, &file);
         let current = match matching_file_info(&file, &mut reasons) {
             Some(value) => value,
             None => {
@@ -184,6 +186,7 @@ fn scan_json_conversations(
                 .cloned()
                 .collect(),
             sources,
+            project_keys,
         },
     ))
 }
@@ -242,6 +245,7 @@ fn merge_scans(
         .cloned()
         .collect();
     jsonl.deleted_source_file_ids.sort();
+    jsonl.project_keys.extend(json.project_keys);
     jsonl
 }
 
