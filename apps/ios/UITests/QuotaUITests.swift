@@ -70,7 +70,8 @@ final class QuotaUITests: XCTestCase {
     // Daily sits above Activity, so the heatmap and its selected day are a scroll away rather
     // than on the first screen. Once the heatmap is on screen a middle-of-the-list drag lands on
     // it and scrolls it sideways, so the drag is anchored on the section header beside it.
-    for _ in 0..<8 where !app.buttons["View day"].exists {
+    // Daily, Models, and Rhythm sit above Activity now, so the heatmap can be several screens down.
+    for _ in 0..<20 where !app.buttons["View day"].exists {
       let header = app.staticTexts["Activity"]
       if header.exists {
         header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -952,6 +953,9 @@ final class QuotaUITests: XCTestCase {
             "usage.activity.retry",
             "usage.activity.view-day",
             "usage.day.retry",
+            "usage.day.empty",
+            "usage.day.failed",
+            "\"Couldn't load this day's usage.\" StaticText",
             "usage.show-more",
             "usage.show-fewer",
             "usage.headline",

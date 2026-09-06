@@ -32,6 +32,7 @@ test("reads the Account purchase URL", async () => {
   const payload = {
     protocol_version: 2,
     account: summary.account,
+    identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
     entitlement: summary.entitlement,
     purchase: { web_url: "https://pay.rev.cat/token/account_1" },
   };
