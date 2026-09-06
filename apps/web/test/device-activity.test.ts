@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deviceActivity,
+  PAUSED_NO_SUBSCRIPTION_COPY,
   platformIconKind,
   sortDevicesByLastSeen,
 } from "../src/lib/device-activity.ts";
@@ -34,6 +35,25 @@ test("a quiet day is idle and a longer silence stops reporting", () => {
   assert.equal(deviceActivity(device("2026-08-15T02:00:00Z"), now).label, "Idle");
   assert.equal(deviceActivity(device("2026-08-10T02:00:00Z"), now).label, "Not reporting");
   assert.equal(deviceActivity(device(null), now).label, "Not reporting");
+});
+
+test("an unsubscribed quiet device is paused rather than not reporting", () => {
+  assert.equal(
+    deviceActivity(device("2026-08-10T02:00:00Z"), now, { subscribed: false }).label,
+    PAUSED_NO_SUBSCRIPTION_COPY,
+  );
+  assert.equal(
+    deviceActivity(device(null), now, { subscribed: false }).label,
+    PAUSED_NO_SUBSCRIPTION_COPY,
+  );
+  assert.equal(
+    deviceActivity(device("2026-08-15T08:05:00Z"), now, { subscribed: false }).label,
+    "Active",
+  );
+  assert.equal(
+    deviceActivity(device("2026-08-15T02:00:00Z"), now, { subscribed: false }).label,
+    "Idle",
+  );
 });
 
 test("sorts devices by last-seen, newest first, and never-seen last", () => {

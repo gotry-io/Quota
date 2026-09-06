@@ -3,6 +3,7 @@ import type { AccountDeviceRead } from "@gotry-io/quota-protocol";
 import { page } from "$app/state";
 import { deleteDevice } from "$lib/account-client";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
+import { isPaidSyncStatus } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import PlatformIcon from "$lib/components/PlatformIcon.svelte";
@@ -13,6 +14,9 @@ import { relativeAge } from "$lib/format";
 const store = getAccountStore();
 const now = $derived(store.now);
 const devices = $derived(store.summary ? sortDevicesByLastSeen(store.summary.devices) : []);
+const subscribed = $derived(
+  store.summary ? isPaidSyncStatus(store.summary.entitlement.status) : true,
+);
 
 function instantCopy(value: string | null): string {
   return value ? relativeAge(value, now) : "—";
@@ -70,7 +74,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
             </thead>
             <tbody>
               {#each devices as device (device.id)}
-                {@const activity = deviceActivity(device, now)}
+                {@const activity = deviceActivity(device, now, { subscribed })}
                 <tr>
                   <th scope="row">{device.display_name}</th>
                   <td><PlatformIcon platform={device.platform} /></td>
@@ -91,7 +95,7 @@ async function onDeleteDevice(device: AccountDeviceRead, event: Event): Promise<
         </div>
         <ul class="device-card-list">
           {#each devices as device (device.id)}
-            {@const activity = deviceActivity(device, now)}
+            {@const activity = deviceActivity(device, now, { subscribed })}
             <li class="device-card">
               <div class="device-card-head">
                 <strong>{device.display_name}</strong>
