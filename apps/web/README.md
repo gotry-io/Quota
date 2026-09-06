@@ -50,11 +50,12 @@ quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today st
 `/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
 same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
 Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
-below 620 px. Settings groups Appearance, Account, and Legal. The header **Sign in** is a link to `/sign-in`.
-That page offers **Continue with GitHub** as a navigation to Relay and **Send sign-in link** as a
-fetch to `POST /api/auth/email/start`. Sign-out posts to `/api/auth/logout` and Delete Account
-is `DELETE /api/v2/account`. Those routes and Device deletion all require an exact same-origin
-request, and the destructive ones a session authenticated within ten minutes.
+below 620 px. Settings groups Appearance, Sync, Sign-in methods, Account, Public profile, and Legal.
+The header **Sign in** is a link to `/sign-in`. That page offers **Continue with Apple**, **Continue
+with GitHub**, and **Send sign-in link** (`POST /api/auth/email/start`) in that order. Sign-out posts
+to `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes, Device deletion,
+and unbinding an identity all require an exact same-origin request, and the destructive ones a
+session authenticated within ten minutes.
 
 The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
 bounded by the caller's calendar — a local day begins at local midnight, which is what decides where

@@ -6,10 +6,10 @@ import {
   HANDOFF_COOKIE,
   type IdentityBegin,
   type IdentityCallbackDelivery,
-  identitySubjectHash,
   type IdentityProof,
   type IdentityProvider,
   type IdentityRefusalReason,
+  identitySubjectHash,
   isIdentityRefusal,
   readCookie,
   type SignInHandoff,
@@ -41,8 +41,13 @@ export type WebSignInResult =
   | { outcome: "signed_in"; session: string; handoff: string; return_to: string }
   /** A channel was bound to the Account that asked for it. The browser keeps the session it had. */
   | { outcome: "linked"; handoff: string; return_to: string }
+  /**
+   * The channel already reaches another Account. The browser that asked to link is sent back
+   * to `return_to` so Settings can say so; a JSON client still sees the 409.
+   */
+  | { outcome: "rejected"; reason: "identity_taken"; return_to: string }
   /** Nothing about this callback proves it belongs to a sign-in this browser started. */
-  | { outcome: "rejected"; reason: WebSignInRejection };
+  | { outcome: "rejected"; reason: Exclude<WebSignInRejection, "identity_taken"> };
 
 /** Why a callback was refused — a category for the log line, never a secret or a value. */
 export type WebSignInRejection =
@@ -201,7 +206,7 @@ export class WebSessions implements WebSessionPort {
         now: now.toISOString(),
       });
       if (outcome === "identity_taken") {
-        return { outcome: "rejected", reason: "identity_taken" };
+        return { outcome: "rejected", reason: "identity_taken", return_to: returnTo };
       }
       return {
         outcome: "linked",
@@ -291,6 +296,17 @@ export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessio
  * redirect takes, so only an absolute path on this origin is accepted — never a host, a scheme, or
  * a protocol-relative `//elsewhere`.
  */
+/**
+ * Where a browser that asked to link a taken channel is sent: the path it named, with
+ * `linked=taken` so Settings can show the one sentence and then drop the query.
+ */
+export function linkedTakenReturnPath(returnTo: string, origin = CANONICAL_ORIGIN): string {
+  const safe = safeReturnPath(returnTo, origin) ?? DEFAULT_RETURN_PATH;
+  const url = new URL(safe, origin);
+  url.searchParams.set("linked", "taken");
+  return `${url.pathname}${url.search}`;
+}
+
 export function safeReturnPath(value: string, origin = CANONICAL_ORIGIN): string | null {
   if (
     value.length > maximumReturnPathLength ||

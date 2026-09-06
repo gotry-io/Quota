@@ -279,7 +279,7 @@ test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
   expect(stacked).toBe(true);
 });
 
-test("Settings groups Appearance, Sync, Account, and Legal", async ({ page }) => {
+test("Settings groups Appearance, Sync, Sign-in methods, Account, and Legal", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my/settings");
   await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
@@ -294,6 +294,7 @@ test("Settings groups Appearance, Sync, Account, and Legal", async ({ page }) =>
     "noopener",
   );
   await expect(page.getByRole("heading", { name: "Notifications" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sign-in methods" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Legal" })).toBeVisible();
   await expect(
@@ -306,6 +307,133 @@ test("Settings groups Appearance, Sync, Account, and Legal", async ({ page }) =>
     page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
   ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
+});
+
+function accountReadWithIdentities(
+  identities: { provider: string; label: string; linked_at: string }[],
+): ReturnType<typeof accountReadFromSummary> {
+  return { ...accountReadFromSummary(), identities };
+}
+
+async function mockAccountIdentities(
+  page: Page,
+  identities: { provider: string; label: string; linked_at: string }[],
+): Promise<void> {
+  await mockV6(page);
+  await page.route(
+    (url) => new URL(url).pathname === "/api/v2/account",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(accountReadWithIdentities(identities)),
+      });
+    },
+  );
+}
+
+test("Settings Sign-in methods: last channel cannot be unlinked", async ({ page }) => {
+  await mockAccountIdentities(page, [
+    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+  ]);
+  await page.goto("/my/settings");
+  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
+  await expect(group.getByText("Apple", { exact: true })).toBeVisible();
+  await expect(group.getByText("GitHub", { exact: true })).toBeVisible();
+  await expect(group.getByText("Email", { exact: true })).toBeVisible();
+  await expect(group.getByText("octocat")).toBeVisible();
+  await expect(group.getByRole("button", { name: "Unlink" })).toBeDisabled();
+  await expect(group.getByText("Keep at least one way to sign in")).toBeVisible();
+  await expect(group.getByRole("link", { name: "Link", exact: true })).toHaveAttribute(
+    "href",
+    "/api/auth/apple/start?intent=link&return_to=%2Fmy%2Fsettings",
+  );
+  await expect(group.getByRole("button", { name: "Link", exact: true })).toBeVisible();
+});
+
+test("Settings Sign-in methods: mixed bound channels can be unlinked", async ({ page }) => {
+  await mockAccountIdentities(page, [
+    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+    {
+      provider: "apple",
+      label: "kyle@privaterelay.appleid.com",
+      linked_at: "2026-02-01T12:00:00Z",
+    },
+  ]);
+  await page.goto("/my/settings");
+  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
+  await expect(group.getByText("kyle@privaterelay.appleid.com")).toBeVisible();
+  await expect(group.getByText("octocat")).toBeVisible();
+  const unlinks = group.getByRole("button", { name: "Unlink" });
+  await expect(unlinks).toHaveCount(2);
+  await expect(unlinks.first()).toBeEnabled();
+  await expect(group.getByText("Keep at least one way to sign in")).toHaveCount(0);
+  await expect(group.getByRole("button", { name: "Link", exact: true })).toBeVisible();
+  await expect(group.getByRole("link", { name: "Link", exact: true })).toHaveCount(0);
+});
+
+test("Settings Sign-in methods: Email Link sends a link and shows Check your email", async ({
+  page,
+}) => {
+  await mockAccountIdentities(page, [
+    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+  ]);
+  await page.route("**/api/auth/email/start", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(JSON.parse(route.request().postData() ?? "{}")).toEqual({
+      email: "person@example.test",
+      return_to: "/my/settings",
+      intent: "link",
+    });
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "accepted" }),
+    });
+  });
+  await page.goto("/my/settings");
+  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
+  await group.getByRole("button", { name: "Link", exact: true }).click();
+  await group.getByLabel("Email").fill("person@example.test");
+  await group.getByRole("button", { name: "Send sign-in link" }).click();
+  await expect(group.getByRole("status")).toContainText("Check your email");
+});
+
+test("Settings shows a one-time notice when a link was already taken", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my/settings?linked=taken");
+  await expect(
+    page.getByRole("alert").filter({
+      hasText: "That account is already linked to another Quota account.",
+    }),
+  ).toBeVisible();
+  await expect(page).not.toHaveURL(/linked=taken/);
+});
+
+test("sign-in asks to continue as the signed-in Account", async ({ page }) => {
+  await page.goto("/sign-in");
+  await expect(page.getByRole("heading", { name: "You're signed in" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue as octocat" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use a different account" })).toBeVisible();
+});
+
+test("sign-in for Delete Account asks to sign in again", async ({ page }) => {
+  await page.goto(`/sign-in?return_to=${encodeURIComponent("/my/settings?delete=account")}`);
+  await expect(
+    page.getByRole("heading", { name: "Sign in again to delete your account" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue as octocat" })).toHaveCount(0);
+  const apple = page.getByRole("link", { name: "Continue with Apple" });
+  const github = page.getByRole("link", { name: "Continue with GitHub" });
+  await expect(apple).toBeVisible();
+  await expect(github).toBeVisible();
+  expect(await apple.evaluate((node) => node.getBoundingClientRect().top)).toBeLessThan(
+    await github.evaluate((node) => node.getBoundingClientRect().top),
+  );
 });
 
 function unsubscribedSummary(): unknown {

@@ -1,6 +1,7 @@
-import { AccountSummaryReadSchema } from "@gotry-io/quota-protocol";
+import { AccountSummaryReadSchema, type IdentityProvider } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
+  ACTIVITY_DAYS,
   type AccountActivityResult,
   type AccountResult,
   type AccountSummaryResult,
@@ -8,7 +9,6 @@ import {
   accountActivityRange,
   accountPath,
   accountSummaryPath,
-  ACTIVITY_DAYS,
   browserTimezone,
   parseAccountActivityResponse,
   parseAccountResponse,
@@ -16,15 +16,15 @@ import {
   storedSummaryETag,
   storeSummary,
 } from "./account-reads.ts";
-import { DASHBOARD_PATH, signInHref } from "./routes.ts";
+import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
 
 export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
 export {
+  ACTIVITY_DAYS,
   accountActivityPath,
   accountActivityRange,
   accountPath,
   accountSummaryPath,
-  ACTIVITY_DAYS,
   browserTimezone,
 };
 
@@ -144,6 +144,28 @@ export async function deleteDevice(
       ...jsonRequest,
     });
     if (response.ok) return "ok";
+    return classifyAccountError(response, { destructive: true, currentPath });
+  } catch {
+    return classifyAccountError(null, { currentPath });
+  }
+}
+
+/**
+ * Unbind one channel. The last one is a conflict: an Account keeps at least one way in.
+ *
+ * Same ten-minute freshness as Delete Account. A stale session is recent-auth, not a forbid.
+ */
+export async function unlinkIdentity(
+  provider: IdentityProvider,
+  currentPath: string = SETTINGS_PATH,
+): Promise<"ok" | "last_identity" | AccountError> {
+  try {
+    const response = await fetch(`/api/v2/account/identities/${encodeURIComponent(provider)}`, {
+      method: "DELETE",
+      ...jsonRequest,
+    });
+    if (response.ok) return "ok";
+    if (response.status === 409) return "last_identity";
     return classifyAccountError(response, { destructive: true, currentPath });
   } catch {
     return classifyAccountError(null, { currentPath });

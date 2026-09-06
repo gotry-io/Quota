@@ -1,13 +1,15 @@
 <script lang="ts">
 import { signOut } from "$lib/account-client";
+import { DELETE_ACCOUNT_SIGN_IN_COPY } from "$lib/account-errors";
 import SignInMethods from "$lib/components/SignInMethods.svelte";
-import { SIGN_IN_PATH } from "$lib/routes";
+import { isDeleteAccountReturn, SIGN_IN_PATH } from "$lib/routes";
 import type { WebDocumentViewer } from "$lib/server/document-port";
 import type { PageData } from "./$types";
 
 let { data }: { data: PageData & { viewer: WebDocumentViewer | null } } = $props();
 
 const viewer = $derived(data.viewer);
+const deletingAccount = $derived(isDeleteAccountReturn(data.returnTo));
 let error = $state<string | null>(null);
 
 /** Signing out here lands back here, as nobody, with the same return target. */
@@ -27,7 +29,13 @@ async function onUseAnotherAccount(event: SubmitEvent): Promise<void> {
 </svelte:head>
 
 <section class="sign-in-page" aria-labelledby="page-title">
-  {#if viewer}
+  {#if deletingAccount}
+    <h1 id="page-title">{DELETE_ACCOUNT_SIGN_IN_COPY}</h1>
+    <p class="hero-summary">
+      Quota needs a recent sign-in before it can delete this Account and its data.
+    </p>
+    <SignInMethods returnTo={data.returnTo} />
+  {:else if viewer}
     <h1 id="page-title">You're signed in</h1>
     <p class="hero-summary">Continue as this Account, or sign in as a different one.</p>
     <div class="sign-in-actions">
