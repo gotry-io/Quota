@@ -279,11 +279,13 @@ test("activity grid is one tab stop and Enter opens the day tree", async ({ page
 
   const rover = page.locator("button.usage-activity-cell[tabindex='0']");
   await rover.focus();
-  await page.keyboard.press("Home");
+  // End lands on today, the last cell; the day before it always exists in a 365-day grid,
+  // whereas the cell after Home does not on the first day of a row.
+  await page.keyboard.press("End");
   const start = await page
     .locator("button.usage-activity-cell[tabindex='0']")
     .getAttribute("data-date");
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
   const moved = page.locator("button.usage-activity-cell[tabindex='0']");
   await expect(moved).not.toHaveAttribute("data-date", start ?? "");
   await page.keyboard.press("Enter");
