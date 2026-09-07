@@ -5,6 +5,7 @@ import {
   type AccountActivityResult,
   type AccountResult,
   type AccountSummaryResult,
+  type RedeemResult,
   accountActivityPath,
   accountActivityRange,
   accountPath,
@@ -12,13 +13,21 @@ import {
   browserTimezone,
   parseAccountActivityResponse,
   parseAccountResponse,
+  parseRedeemResponse,
+  redeemCodePath,
   storedSummary,
   storedSummaryETag,
   storeSummary,
 } from "./account-reads.ts";
 import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
 
-export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
+export type {
+  AccountActivityResult,
+  AccountError,
+  AccountResult,
+  AccountSummaryResult,
+  RedeemResult,
+};
 export {
   ACTIVITY_DAYS,
   accountActivityPath,
@@ -26,6 +35,7 @@ export {
   accountPath,
   accountSummaryPath,
   browserTimezone,
+  redeemCodePath,
 };
 
 const jsonRequest = {
@@ -185,5 +195,24 @@ export async function deleteAccount(
     return classifyAccountError(response, { destructive: true, currentPath });
   } catch {
     return classifyAccountError(null, { currentPath });
+  }
+}
+
+export async function redeemCode(code: string): Promise<RedeemResult | AccountError> {
+  try {
+    const response = await fetch(redeemCodePath(), {
+      method: "POST",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    return (
+      parseRedeemResponse(response.status, body) ??
+      classifyAccountError(response, { currentPath: SETTINGS_PATH })
+    );
+  } catch {
+    return classifyAccountError(null, { currentPath: SETTINGS_PATH });
   }
 }

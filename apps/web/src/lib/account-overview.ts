@@ -2,8 +2,10 @@ import { remainingPercent } from "@gotry-io/quota-model";
 import type {
   AccountDeviceRead,
   AccountSummaryRead,
+  RedemptionGrantDuration,
   UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
+import type { RedeemErrorCode } from "./account-reads.ts";
 import { deviceActivity } from "./device-activity.ts";
 import { relativeAge, usageModelDisplayName, WEB_LOCALE } from "./format.ts";
 
@@ -72,15 +74,38 @@ function newestSubscriptionObservedAt(summary: AccountSummaryRead): string | nul
   return newest;
 }
 
-export const SYNC_OFF_COPY = "Sync is off. Your Macs stop uploading until you subscribe.";
+export const SYNC_OFF_COPY = "Sync is off. Your Macs stop uploading until you get Quota Pro.";
 
 /** Paid sync is the write gate: `active` and `grace` may upload; anything else may not. */
 export function isPaidSyncStatus(status: string): boolean {
   return status === "active" || status === "grace";
 }
 
-export function subscribeActionLabel(status: string): "Subscribe" | "Manage subscription" {
-  return isPaidSyncStatus(status) ? "Manage subscription" : "Subscribe";
+export function subscribeActionLabel(status: string): "Get Quota Pro" | "Manage Quota Pro" {
+  return isPaidSyncStatus(status) ? "Manage Quota Pro" : "Get Quota Pro";
+}
+
+export const REDEEM_DURATION_COPY: Record<RedemptionGrantDuration, string> = {
+  weekly: "one week",
+  monthly: "one month",
+  two_month: "two months",
+  three_month: "three months",
+  six_month: "six months",
+  yearly: "one year",
+  lifetime: "lifetime",
+};
+
+export const REDEEM_ERROR_COPY: Record<RedeemErrorCode, string> = {
+  code_invalid: "That code isn't valid.",
+  code_expired: "That code has expired.",
+  code_already_redeemed: "You've already used this code.",
+  code_exhausted: "That code has been fully used.",
+  billing_unavailable: "Couldn't reach billing. Try again in a minute.",
+  rate_limited: "Too many attempts. Try again later.",
+};
+
+export function redeemGrantedCopy(duration: RedemptionGrantDuration, campaign: string): string {
+  return `Quota Pro is on: ${REDEEM_DURATION_COPY[duration]} from ${campaign}`;
 }
 
 type EntitlementView = {
@@ -110,7 +135,7 @@ function entitlementCheckedAt(entitlement: EntitlementView): string | null {
     : null;
 }
 
-/** Settings Sync status. Stale appends last-checked only when `updated_at` is a readable instant. */
+/** Settings Quota Pro status. Stale appends last-checked only when `updated_at` is a readable instant. */
 export function entitlementStatusLine(
   entitlement: EntitlementView,
   now: Date = new Date(),
@@ -121,12 +146,14 @@ export function entitlementStatusLine(
       ? formatEntitlementDay(entitlement.expires_at, timeZone)
       : null;
   let line: string;
-  if (entitlement.status === "active") {
+  if (entitlement.status === "active" && entitlement.expires_at === null) {
+    line = "Quota Pro · Lifetime";
+  } else if (entitlement.status === "active") {
     line = day ? `Active · ${entitlement.will_renew ? "renews" : "ends"} ${day}` : "Active";
   } else if (entitlement.status === "grace") {
     line = "Grace period · update your payment";
   } else {
-    line = "Not subscribed";
+    line = "No Quota Pro";
   }
   if (!entitlement.stale) return line;
   const checkedAt = entitlementCheckedAt(entitlement);
