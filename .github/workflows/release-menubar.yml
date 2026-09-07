@@ -155,7 +155,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --verbose=4 "$APP" 2>&1 | grep -q 'TeamIdentifier=86Y537ZF24'
           codesign -d --entitlements - --xml "$APP" 2>/dev/null | \
-            plutil -extract com.apple.security.application-groups.0 raw - | \
+            plutil -extract 'com\.apple\.security\.application-groups.0' raw - | \
             grep -q '^86Y537ZF24.group.io.gotry.quota$'
 
       - name: Notarize and staple
