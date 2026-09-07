@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub const IPC_VERSION: u32 = 2;
+pub const IPC_VERSION: u32 = 3;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 /// Allowed Quota collection intervals, in seconds. The default is five minutes.

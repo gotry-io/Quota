@@ -10,12 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use chrono::{
-    DateTime, Days, Duration, LocalResult, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc,
+    DateTime, Days, Duration, LocalResult, NaiveDate, Offset, SecondsFormat, TimeZone, Timelike,
+    Utc,
 };
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 
 use crate::catalog::ProviderId;
+use crate::history::snapshot_with_history;
 use crate::observation::snapshot_is_current;
 use crate::pace::snapshot_with_pace;
 use crate::pricing;
@@ -39,8 +41,8 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateStore, StoredUsageSession,
-    UsageOutboxEntry, now_rfc3339,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, QuotaSamplesByProvider, StateStore,
+    StoredUsageSession, UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
     self, CoverageReasonCode, CoverageStatus, DatedUsageRow, MAX_USAGE_SESSIONS_RECENT,
@@ -2520,7 +2522,19 @@ impl NativeBackend {
             let range = span
                 .map(|span| span.dates)
                 .unwrap_or_else(|| (today.clone(), today.clone()));
-            if let Ok(detail) = account_usage_detail(value, &range) {
+            if let Ok(mut detail) = account_usage_detail(value, &range) {
+                if period != UsagePeriod::All
+                    && let Ok(activity) = self.account.account_usage_hours(
+                        &range.0,
+                        &range.1,
+                        &timezone,
+                        &AtomicBool::new(false),
+                    )
+                    && let Some(hours) = activity.get("hours_of_day").cloned()
+                    && let Some(usage) = detail.get_mut("usage")
+                {
+                    usage["hours_of_day"] = hours;
+                }
                 periods.push((period, detail));
             }
         }
@@ -2606,6 +2620,37 @@ impl NativeBackend {
         Some(value)
     }
 
+    /// Every window of every reading this Mac just took becomes a sample of its own curve.
+    ///
+    /// The rows stay in `cache.sqlite` and are never uploaded: what a device saw of itself over
+    /// time is local state, not a managed contract (ADR 0042).
+    fn record_quota_samples(&self, quota: &Value, now: DateTime<Utc>) {
+        for snapshot in quota
+            .get("results")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|result| result.get("snapshots").and_then(Value::as_array))
+            .flatten()
+        {
+            let (Some(provider), Some(observed_at), Some(windows)) = (
+                snapshot.get("provider").and_then(Value::as_str),
+                snapshot.get("observed_at").and_then(Value::as_str),
+                snapshot.get("windows").and_then(Value::as_array),
+            ) else {
+                continue;
+            };
+            let _ = self
+                .state
+                .record_quota_samples(provider, observed_at, windows, now);
+        }
+    }
+
+    /// The samples this Mac has stored, in the shape Overview restates its own rows with.
+    fn local_quota_history(&self, now: DateTime<Utc>) -> LocalQuotaHistory {
+        LocalQuotaHistory::new(self.state.quota_samples().unwrap_or_default(), now)
+    }
+
     /// Two readings of one subscription: this device's, and the one Relay resolved.
     ///
     /// Relay resolves the account's observations once, on the read, so there is no N-way merge
@@ -2615,7 +2660,10 @@ impl NativeBackend {
     fn build_overview(&self, quota: &Value, account: Option<&Value>) -> Vec<QuotaOverviewItem> {
         let previous = self.state.overview().unwrap_or_default();
         let pins = self.state.overview_source_pins().unwrap_or_default();
-        let (items, kept) = overview_items_and_pins(quota, account, &previous, &pins, Utc::now());
+        let now = Utc::now();
+        let history = self.local_quota_history(now);
+        let (items, kept) =
+            overview_items_and_pins(quota, account, &previous, &pins, &history, now);
         if kept != pins {
             let _ = self.state.replace_overview_source_pins(&kept);
         }
@@ -2632,7 +2680,14 @@ fn overview_items(
     previous: &[QuotaOverviewItem],
     now: DateTime<Utc>,
 ) -> Vec<QuotaOverviewItem> {
-    overview_items_with_pins(quota, account, previous, &HashMap::new(), now)
+    overview_items_with_pins(
+        quota,
+        account,
+        previous,
+        &HashMap::new(),
+        &LocalQuotaHistory::default(),
+        now,
+    )
 }
 
 #[cfg(test)]
@@ -2641,9 +2696,10 @@ pub(crate) fn overview_items_with_pins(
     account: Option<&Value>,
     previous: &[QuotaOverviewItem],
     pins: &HashMap<String, String>,
+    history: &LocalQuotaHistory,
     now: DateTime<Utc>,
 ) -> Vec<QuotaOverviewItem> {
-    overview_items_and_pins(quota, account, previous, pins, now).0
+    overview_items_and_pins(quota, account, previous, pins, history, now).0
 }
 
 pub(crate) fn overview_items_and_pins(
@@ -2651,6 +2707,7 @@ pub(crate) fn overview_items_and_pins(
     account: Option<&Value>,
     previous: &[QuotaOverviewItem],
     pins: &HashMap<String, String>,
+    history: &LocalQuotaHistory,
     now: DateTime<Utc>,
 ) -> (Vec<QuotaOverviewItem>, HashMap<String, String>) {
     let mut items = Vec::new();
@@ -2668,9 +2725,14 @@ pub(crate) fn overview_items_and_pins(
                 .into_iter()
                 .flatten()
             {
-                if let Some(item) =
-                    overview_item(snapshot, "local", LOCAL_SOURCE_DISPLAY_NAME, None, now)
-                {
+                if let Some(item) = overview_item(
+                    snapshot,
+                    "local",
+                    LOCAL_SOURCE_DISPLAY_NAME,
+                    None,
+                    Some(history),
+                    now,
+                ) {
                     merge_overview_item(&mut items, item);
                 }
             }
@@ -2744,6 +2806,7 @@ pub(crate) fn overview_items_and_pins(
                         &format!("device:{device_id}"),
                         display_name,
                         Some(device_id),
+                        None,
                         now,
                     ) else {
                         continue;
@@ -2789,6 +2852,7 @@ pub(crate) fn overview_items_and_pins(
                     &format!("device:{device_id}"),
                     display_name,
                     Some(device_id),
+                    None,
                     now,
                 ) else {
                     continue;
@@ -2997,6 +3061,7 @@ fn retain_previous_local_overview(
             &item.snapshot,
             "local",
             LOCAL_SOURCE_DISPLAY_NAME,
+            None,
             None,
             now,
         ) {
@@ -3622,6 +3687,9 @@ impl LocalBackend for NativeBackend {
             .flatten()
             .and_then(|component| component.value);
         let quota = self.collect_quota(cancel.clone());
+        if let Ok(payload) = &quota {
+            self.record_quota_samples(payload, Utc::now());
+        }
         updates.quota(match &quota {
             Ok(value) => Ok(value.clone()),
             Err(error) => Err(error.clone()),
@@ -4409,11 +4477,47 @@ fn floor_utc_hour(value: &DateTime<Utc>) -> String {
 
 const LOCAL_SOURCE_DISPLAY_NAME: &str = "This Mac";
 
+/// What this Mac has read of its own quota, and the offset that places those readings in the
+/// reader's day.
+///
+/// Only a locally collected snapshot has samples behind it, so only a local Overview row is
+/// restated with one; a device's reading arrives from Relay with no history and takes none
+/// (ADR 0042).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct LocalQuotaHistory {
+    samples: QuotaSamplesByProvider,
+    utc_offset_seconds: i32,
+}
+
+impl LocalQuotaHistory {
+    pub(crate) fn new(samples: QuotaSamplesByProvider, now: DateTime<Utc>) -> Self {
+        let timezone = iana_time_zone::get_timezone()
+            .ok()
+            .and_then(|name| Tz::from_str(&name).ok())
+            .unwrap_or(Tz::UTC);
+        Self {
+            samples,
+            utc_offset_seconds: timezone
+                .offset_from_utc_datetime(&now.naive_utc())
+                .fix()
+                .local_minus_utc(),
+        }
+    }
+
+    fn restate(&self, snapshot: &Value, provider: &str, now: DateTime<Utc>) -> Value {
+        let Some(samples) = self.samples.get(provider) else {
+            return snapshot.clone();
+        };
+        snapshot_with_history(snapshot, samples, now, self.utc_offset_seconds)
+    }
+}
+
 fn overview_item(
     snapshot: &Value,
     source_id: &str,
     display_name: &str,
     device_id: Option<&str>,
+    history: Option<&LocalQuotaHistory>,
     now: DateTime<Utc>,
 ) -> Option<QuotaOverviewItem> {
     let provider = snapshot.get("provider")?.as_str()?.to_owned();
@@ -4424,7 +4528,10 @@ fn overview_item(
     let stale = !snapshot_is_current(snapshot, now);
     // Pace is derived from the reading, and this service is the one runtime that derives it
     // for QuotaBar: the app prints the answer it is handed rather than keeping a second rule.
-    let paced = snapshot_with_pace(snapshot, now);
+    let paced = match history {
+        Some(history) => history.restate(&snapshot_with_pace(snapshot, now), &provider, now),
+        None => snapshot_with_pace(snapshot, now),
+    };
     Some(QuotaOverviewItem {
         identity: QuotaOverviewIdentity {
             provider,
@@ -4606,8 +4713,14 @@ mod tests {
                             .expect("relay timeout");
                         let mut request = [0_u8; 8_192];
                         let read = stream.read(&mut request).unwrap_or(0);
-                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
-                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                        let head = String::from_utf8_lossy(&request[..read]).into_owned();
+                        recorded.push(head.clone());
+                        let body = if head.contains("/api/v6/account/usage/activity") {
+                            activity_hours_response()
+                        } else {
+                            responses.next().unwrap_or_default()
+                        };
+                        let _ = stream.write_all(body.as_bytes());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(2))
@@ -4648,14 +4761,20 @@ mod tests {
                             .expect("relay timeout");
                         let mut request = [0_u8; 8_192];
                         let read = stream.read(&mut request).unwrap_or(0);
-                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        let head = String::from_utf8_lossy(&request[..read]).into_owned();
+                        recorded.push(head.clone());
                         {
                             let (lock, cond) = arrived.as_ref();
                             *lock.lock().expect("gate") = true;
                             cond.notify_all();
                         }
                         std::thread::sleep(delay);
-                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                        let body = if head.contains("/api/v6/account/usage/activity") {
+                            activity_hours_response()
+                        } else {
+                            responses.next().unwrap_or_default()
+                        };
+                        let _ = stream.write_all(body.as_bytes());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(2))
@@ -4713,6 +4832,25 @@ mod tests {
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
         );
         session
+    }
+
+    fn activity_hours_response() -> String {
+        let hours: Vec<Value> = (0..24)
+            .map(|hour| {
+                json!({
+                    "hour": hour,
+                    "total_tokens": 0,
+                    "cost_microusd": null
+                })
+            })
+            .collect();
+        let weekday = vec![vec![0u64; 24]; 7];
+        relay_json(&json!({
+            "protocol_version": 6,
+            "days": [],
+            "hours_of_day": hours,
+            "weekday_hours": weekday
+        }))
     }
 
     fn summary_requests(sent: &[String]) -> usize {
@@ -4976,7 +5114,11 @@ mod tests {
         assert_eq!(updates.published(), vec![account.clone()]);
 
         let sent = relay_server.finish();
-        assert_eq!(sent.len(), 4, "{sent:?}");
+        let accounted: Vec<_> = sent
+            .iter()
+            .filter(|head| !head.contains("/api/v6/account/usage/activity"))
+            .collect();
+        assert_eq!(accounted.len(), 4, "{sent:?}");
         assert!(
             sent[3].starts_with("GET /api/v6/account/summary"),
             "{}",
@@ -6899,6 +7041,7 @@ mod tests {
                 "local",
                 LOCAL_SOURCE_DISPLAY_NAME,
                 None,
+                None,
                 now,
             )
             .expect("previous local item"),
@@ -7322,6 +7465,7 @@ mod tests {
                     &source_id(device_id),
                     device_id,
                     Some(device_id),
+                    None,
                     now,
                 )
                 .expect("overview item");
@@ -7472,7 +7616,14 @@ mod tests {
 
         let mut pins = HashMap::new();
         pins.insert("codex|fp|global|".into(), "local".into());
-        let pinned = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        let pinned = overview_items_with_pins(
+            &quota,
+            Some(&account),
+            &[],
+            &pins,
+            &LocalQuotaHistory::default(),
+            now,
+        );
         assert_eq!(pinned[0].selected_source_id, "local");
         assert_eq!(pinned[0].source_pin.as_deref(), Some("local"));
         assert_eq!(pinned[0].automatic_source_id, "device:device_remote");
@@ -7480,7 +7631,14 @@ mod tests {
         assert_eq!(pinned[0].snapshot["windows"][0]["used_percent"], 10.0);
 
         pins.insert("codex|fp|global|".into(), "missing".into());
-        let missing = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        let missing = overview_items_with_pins(
+            &quota,
+            Some(&account),
+            &[],
+            &pins,
+            &LocalQuotaHistory::default(),
+            now,
+        );
         assert_eq!(missing[0].selected_source_id, "device:device_remote");
         assert_eq!(missing[0].automatic_source_id, "device:device_remote");
         assert!(missing[0].source_pin.is_none());
@@ -7726,7 +7884,14 @@ mod tests {
                 }]
             }
         });
-        let items = overview_items_with_pins(&quota, Some(&account), &[], &pins, now);
+        let items = overview_items_with_pins(
+            &quota,
+            Some(&account),
+            &[],
+            &pins,
+            &LocalQuotaHistory::default(),
+            now,
+        );
         assert_eq!(items[0].selected_source_id, "local");
         assert_eq!(items[0].source_pin.as_deref(), Some("local"));
         drop(state);

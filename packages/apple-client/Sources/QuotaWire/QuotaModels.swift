@@ -92,6 +92,12 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   /// rule is answered once per runtime and Rust is QuotaBar's. A managed read carries no
   /// pace: the client that reads it derives its own with ``QuotaPace``. See ADR 0035.
   public let pace: QuotaPace?
+  /// What this window's own samples say about it, as the device holding them folded it.
+  ///
+  /// QuotaBar's service states it on the windows of a reading this Mac took itself; a reading
+  /// that arrived from Relay has no samples behind it and carries none. Quota iOS folds its own
+  /// with ``QuotaHistory``. Samples never travel. See ADR 0042.
+  public let history: QuotaHistory?
 
   public init(
     id: String,
@@ -103,7 +109,8 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     limitValue: Double? = nil,
     valueUnit: QuotaValueUnit? = nil,
     primaryCadence: PrimaryCadence? = nil,
-    pace: QuotaPace? = nil
+    pace: QuotaPace? = nil,
+    history: QuotaHistory? = nil
   ) {
     self.id = id
     self.title = title
@@ -115,6 +122,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     self.limitValue = limitValue
     self.valueUnit = valueUnit
     self.pace = pace
+    self.history = history
   }
 
   public init(from decoder: Decoder) throws {
@@ -129,6 +137,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     valueUnit = try container.decodeIfPresent(QuotaValueUnit.self, forKey: .valueUnit)
     pace = try container.decodeIfPresent(QuotaPace.self, forKey: .pace)
+    history = try container.decodeIfPresent(QuotaHistory.self, forKey: .history)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .id,
@@ -159,6 +168,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     case limitValue
     case valueUnit
     case pace
+    case history
   }
 }
 

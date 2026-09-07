@@ -14,9 +14,11 @@ public enum RelayClientError: Error, Equatable, Sendable {
   case invalidOrigin
 }
 
-/// The only extra query the activity read may name: `detail=agents`.
+/// Extra query the activity read may name: `detail=agents` on a single day, or `detail=hours`
+/// on any range.
 public enum ActivityDetail: String, Sendable {
   case agents
+  case hours
 }
 
 public enum RelayRoute: CaseIterable, Sendable {
@@ -25,7 +27,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   case revoke
   case accountIdentities
   case accountSummary
-  case accountUsageActivity(from: String, to: String, detail: ActivityDetail?)
+  case accountUsageActivity(from: String, to: String, detail: ActivityDetail?, timeZone: String?)
   case deviceSync
   case deviceSnapshots
 
@@ -36,7 +38,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       .revoke,
       .accountIdentities,
       .accountSummary,
-      .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil),
+      .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil, timeZone: nil),
       .deviceSync,
       .deviceSnapshots,
     ]
@@ -64,13 +66,16 @@ public enum RelayRoute: CaseIterable, Sendable {
   }
 
   /// Query keys the route itself names. Extra items such as summary `tz` are still passed to
-  /// `perform`. Activity lists only `from`, `to`, and optionally `detail=agents`.
+  /// `perform`. Activity lists `from`, `to`, optionally `detail`, and `tz` when asking for hours.
   public var query: [(String, String)] {
     switch self {
-    case .accountUsageActivity(let from, let to, let detail):
+    case .accountUsageActivity(let from, let to, let detail, let timeZone):
       var items = [("from", from), ("to", to)]
       if let detail {
         items.append(("detail", detail.rawValue))
+      }
+      if let timeZone {
+        items.append(("tz", timeZone))
       }
       return items
     case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .deviceSync,
@@ -265,7 +270,8 @@ public struct RelayClient: Sendable {
     accessToken: String,
     from: String,
     to: String,
-    detail: ActivityDetail? = nil
+    detail: ActivityDetail? = nil,
+    timeZone: String? = nil
   ) async throws -> AccountUsageActivityResponse {
     guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to) else {
       throw RelayClientError.invalidQuery
@@ -274,7 +280,7 @@ public struct RelayClient: Sendable {
       throw RelayClientError.unauthorized
     }
     return try await send(
-      route: .accountUsageActivity(from: from, to: to, detail: detail),
+      route: .accountUsageActivity(from: from, to: to, detail: detail, timeZone: timeZone),
       query: [],
       body: nil,
       bearer: accessToken,

@@ -48,6 +48,11 @@ shape of a released contract still moves its version.
   reset, and the one line every surface prints for it. `packages/quota-model`, `packages/service`,
   and `packages/apple-shared` each answer the rule; `apps/web/src/lib/format.ts` and `QuotaPaceCopy`
   answer the copy ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
+- `fixtures/quota-history-conformance.json` states how a window's own local samples fold into the
+  curve behind the reader, the dashed projection to its reset, and the windows the reader's day
+  holds. `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer it;
+  no sample is a wire field, so no other runtime does
+  ([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)).
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge

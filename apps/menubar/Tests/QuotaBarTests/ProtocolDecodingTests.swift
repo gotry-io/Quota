@@ -234,7 +234,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
     {
-      "ipc_version": 2,
+      "ipc_version": 3,
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,
@@ -911,12 +911,24 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.hoursOfDay?.count == 24)
   #expect(decoded.hoursOfDay?[12].totalTokens == 1)
 
-  // A bounded period carries both local folds; a period that carries one of them is not one.
-  var oneFoldObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  oneFoldObject.removeValue(forKey: "hours_of_day")
-  let oneFold = try JSONSerialization.data(withJSONObject: oneFoldObject)
+  // An Account period may carry hours without the per-day table.
+  var hoursOnlyObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  hoursOnlyObject.removeValue(forKey: "days")
+  let hoursOnly = try JSONSerialization.data(withJSONObject: hoursOnlyObject)
+  let decodedHoursOnly = try QuotaWireCodec.makeDecoder().decode(
+    LocalUsagePeriodSummary.self, from: hoursOnly)
+  #expect(decodedHoursOnly.days == nil)
+  #expect(decodedHoursOnly.hoursOfDay?.count == 24)
+
+  var shortHours = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  shortHours["hours_of_day"] = (0..<23).map {
+    ["hour": $0, "total_tokens": 0, "cost_microusd": NSNull()]
+  }
   #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(LocalUsagePeriodSummary.self, from: oneFold)
+    _ = try QuotaWireCodec.makeDecoder().decode(
+      LocalUsagePeriodSummary.self,
+      from: try JSONSerialization.data(withJSONObject: shortHours)
+    )
   }
 
   var modelObject = try #require(

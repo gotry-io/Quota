@@ -1,7 +1,11 @@
 import { getContext, setContext } from "svelte";
-import type { AccountSummaryRead, UsageActivityDayRead } from "@gotry-io/quota-protocol";
+import type {
+  AccountSummaryRead,
+  UsageActivityDayRead,
+  UsageHourOfDay,
+} from "@gotry-io/quota-protocol";
 import { type AccountError, fetchAccountActivity, fetchAccountSummary } from "./account-client.ts";
-import { accountActivityRange } from "./account-reads.ts";
+import { accountActivityRange, browserTimezone } from "./account-reads.ts";
 import { hashSelectorPreimage } from "./subscription-selector.ts";
 
 /**
@@ -27,6 +31,11 @@ export function activityRangeKey(range: { from: string; to: string }): string {
   return `${range.from}|${range.to}`;
 }
 
+export type UsageRhythmRead = {
+  hours_of_day: UsageHourOfDay[];
+  weekday_hours: number[][];
+};
+
 function emptyResource<T>(): AccountLoadResource<T> {
   return { data: null, status: "idle", fetchedAt: null, error: null };
 }
@@ -46,11 +55,13 @@ export function createAccountStore() {
   let subscriptionSelectors = $state<Record<string, string>>({});
   let activity = $state<Record<string, AccountLoadResource<UsageActivityDayRead[]>>>({});
   let dayDetail = $state<Record<string, AccountLoadResource<UsageActivityDayRead>>>({});
+  let rhythm = $state<Record<string, AccountLoadResource<UsageRhythmRead>>>({});
   const selectorCache = new Map<string, string>();
 
   let summaryInflight: Promise<void> | null = null;
   const activityInflight = new Map<string, Promise<void>>();
   const dayInflight = new Map<string, Promise<void>>();
+  const rhythmInflight = new Map<string, Promise<void>>();
 
   async function hashSelectors(next: AccountSummaryRead): Promise<Record<string, string>> {
     const keys = next.subscriptions.map((item) => item.key);
@@ -191,6 +202,61 @@ export function createAccountStore() {
     return pull;
   }
 
+  function pullRhythm(range: { from: string; to: string }): Promise<void> {
+    const key = activityRangeKey(range);
+    const existing = rhythmInflight.get(key);
+    if (existing) return existing;
+    const current = rhythm[key] ?? emptyResource<UsageRhythmRead>();
+    if (current.data === null) {
+      rhythm = { ...rhythm, [key]: { ...current, status: "loading" } };
+    }
+    const pull = (async () => {
+      const result = await fetchAccountActivity(range, "hours", browserTimezone());
+      if (result.status === "ok" && result.activity.hours_of_day && result.activity.weekday_hours) {
+        rhythm = {
+          ...rhythm,
+          [key]: {
+            data: {
+              hours_of_day: result.activity.hours_of_day,
+              weekday_hours: result.activity.weekday_hours,
+            },
+            status: "ready",
+            fetchedAt: Date.now(),
+            error: null,
+          },
+        };
+        return;
+      }
+      const previous = rhythm[key] ?? current;
+      rhythm = {
+        ...rhythm,
+        [key]: {
+          ...previous,
+          status: result.status === "ok" ? "ready" : "error",
+          error: result.status === "ok" ? null : result,
+          data: result.status === "ok" ? null : previous.data,
+        },
+      };
+    })().finally(() => {
+      rhythmInflight.delete(key);
+    });
+    rhythmInflight.set(key, pull);
+    return pull;
+  }
+
+  function ensureRhythm(
+    range: { from: string; to: string },
+    { maxAgeMs = SUMMARY_MAX_AGE_MS } = {},
+  ): Promise<void> {
+    const entry = rhythm[activityRangeKey(range)];
+    if (entry !== undefined && entry.data !== null && isFresh(entry.fetchedAt, maxAgeMs)) {
+      return Promise.resolve();
+    }
+    const pull = pullRhythm(range);
+    if (entry?.data !== null && entry?.data !== undefined) return Promise.resolve();
+    return pull;
+  }
+
   function setError(error: AccountError): void {
     loadError = error;
     summaryStatus = "error";
@@ -239,9 +305,13 @@ export function createAccountStore() {
     get dayDetail() {
       return dayDetail;
     },
+    get rhythm() {
+      return rhythm;
+    },
     ensureSummary,
     ensureActivity,
     ensureDay,
+    ensureRhythm,
     refresh,
     setError,
     startClock,

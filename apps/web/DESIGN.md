@@ -365,7 +365,13 @@ Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input,
 add up to the day's total, using the three darkest activity steps; a day with nothing in it is drawn
 in `--activity-0` rather than left out. The panel is labelled **UTC**, the calendar the activity
 read answers. **Up to 2 years** has no Daily panel: its per-day shape is the Activity graph beside
-it. No period has a Rhythm — Relay stores hours on UTC keys and does not fold a local clock.
+it.
+
+Under Daily, for every period but **Up to 2 years**, a **Rhythm** panel: a Sunday-first weekday ×
+hour heatmap using the same `--activity-0`…`--activity-4` steps as the Activity graph, then 24 bars
+for the hour-of-day totals. The period's URL parameters select the range; the read is
+`GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this browser's zone. Omit the
+panel when every hour is empty. The public page `/u/<handle>` has no Rhythm.
 
 Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens /
 Share / Cost column headers, and one `<tbody>` per agent. Above it sit the three largest models as

@@ -6,6 +6,22 @@ struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
   let now: Date
   let onOpenProvider: () -> Void
+  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
+    PaceLinePreference.fallback
+
+  /// The day of the window this provider is read by: its primary-cadence window, the same one
+  /// Quota iOS names its Today section after, so both surfaces answer for the same window.
+  ///
+  /// A provider whose reading came from Relay has no samples behind it and takes no row.
+  private var windowsToday: [QuotaHistoryWindow] {
+    presentation.accounts
+      .compactMap { account in
+        let snapshot = account.snapshot
+        return (snapshot.primaryCadenceWindows.first ?? snapshot.windows.first)?.history
+      }
+      .first { !$0.windowsToday.isEmpty }?
+      .windowsToday ?? []
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
@@ -39,6 +55,10 @@ struct ProviderQuotaView: View {
             .opacity(0.45)
             .padding(.vertical, 2)
         }
+      }
+
+      if showsPaceLines {
+        TodayWindowsRow(windows: windowsToday)
       }
     }
     .padding(.vertical, QuotaDesign.Layout.providerRowVerticalPadding)
@@ -169,6 +189,8 @@ struct QuotaWindowRow: View {
   let now: Date
   @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
     ResetCopyStylePreference.fallback
+  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
+    PaceLinePreference.fallback
 
   private var remainingLabel: String {
     window.overviewRemainingDisplayLabel(provider: provider)
@@ -212,6 +234,10 @@ struct QuotaWindowRow: View {
 
       if window.showsPercentMeter {
         QuotaProgressBar(value: window.remainingPercent, fill: meterColor)
+      }
+
+      if showsPaceLines, let history = window.history, !history.points.isEmpty {
+        QuotaPaceLineView(history: history, tint: meterColor)
       }
 
       if let resetsAt = window.resetsAt,

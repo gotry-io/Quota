@@ -116,7 +116,12 @@ import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
-import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
+import {
+  buildAccountUsage,
+  buildActivityDays,
+  buildActivityRhythm,
+  UsageSummaryLimitError,
+} from "./usage-summary.ts";
 
 /** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
 const SIGN_IN_PATH = "/sign-in";
@@ -245,6 +250,10 @@ function daysBefore(instant: Date, days: number): Date {
 
 function utcDate(instant: Date): string {
   return instant.toISOString().slice(0, 10);
+}
+
+function nextUtcDate(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + dayMilliseconds).toISOString().slice(0, 10);
 }
 
 export function createRelayApp(options: RelayAppOptions): Hono {
@@ -992,7 +1001,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const checkedAt = now();
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    if (!hasOnlyQueryKeys(context, ["from", "to", "detail"])) return invalidRequest(context);
+    if (!hasOnlyQueryKeys(context, ["from", "to", "detail", "tz"])) return invalidRequest(context);
     const range = UsageActivityRangeSchema.safeParse({
       from: context.req.query("from"),
       to: context.req.query("to"),
@@ -1000,9 +1009,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!range.success) return invalidRequest(context);
     const detail = context.req.query("detail");
     const includeAgents = detail === "agents";
-    if (detail !== undefined && (!includeAgents || range.data.from !== range.data.to)) {
+    const includeHours = detail === "hours";
+    if (
+      detail !== undefined &&
+      ((!includeAgents && !includeHours) || (includeAgents && range.data.from !== range.data.to))
+    ) {
       return invalidRequest(context);
     }
+    const timezone = requestedTimezone(context);
+    if (timezone === null) return invalidRequest(context);
     // The stamp is usage-only: a quota snapshot must not move an activity ETag. Retention
     // deletes `usage_daily` without touching that stamp, so a range that reaches the cutoff
     // carries the cutoff date as its rollover — only then does the calendar move the ETag.
@@ -1020,6 +1035,20 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       limit: maximumAccountDailyRows,
     });
     if (daily.truncated) return resultLimit(context);
+    let rhythm: { hours_of_day: unknown; weekday_hours: unknown } | undefined;
+    if (includeHours) {
+      const hourly = await options.usageState.queryHourlyUsage(principal.account_id, {
+        from: `${range.data.from}T00:00:00Z`,
+        to: `${nextUtcDate(range.data.to)}T00:00:00Z`,
+        limit: maximumAccountDailyRows,
+      });
+      if (hourly.truncated) return resultLimit(context);
+      rhythm = buildActivityRhythm({
+        rows: hourly.rows,
+        catalog,
+        timezone,
+      });
+    }
     try {
       return context.json(
         AccountUsageActivityResponseSchema.parse({
@@ -1029,6 +1058,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             catalog,
             ...(includeAgents ? { modelCatalog } : {}),
           }),
+          ...(rhythm === undefined
+            ? {}
+            : { hours_of_day: rhythm.hours_of_day, weekday_hours: rhythm.weekday_hours }),
         }),
       );
     } catch (error) {
