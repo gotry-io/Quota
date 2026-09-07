@@ -1,6 +1,8 @@
 name: release-menubar
 
 # A menubar-v* tag builds one Apple Silicon artifact, signs and notarizes it, and publishes a GitHub Release.
+# The app is built by xcodebuild from apps/menubar/QuotaBar.xcodeproj and carries its widget
+# extension in Contents/PlugIns (docs/decisions/0043-one-widget-view-package-for-both-platforms.md).
 # Stable tags also push the generated Cask to gotry-io/homebrew-tap.
 # Prerelease tags (menubar-v0.0.2-beta.1) create a GitHub prerelease only and skip Homebrew.
 # A manual run may only republish an existing tag; it never builds an untagged main commit.
@@ -90,11 +92,13 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global pnpm@10.23.0
+          brew install xcodegen
           test "$(uname -m)" = arm64
           node --version
           pnpm --version
           cargo --version
           swift --version
+          xcodegen --version
 
       - name: Install and verify
         run: |
@@ -103,15 +107,10 @@ jobs:
           pnpm format:check
           pnpm check
           pnpm test
-
-      - name: Package arm64 app
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          echo "Packaging QuotaBar ${VERSION} with its private Rust service"
-          ./scripts/package-menubar.sh "$VERSION" "${{ github.run_number }}"
-          pnpm test:menubar:helper
+          # The committed QuotaBar.xcodeproj is what the release builds, so it has to match
+          # apps/menubar/project.yml.
+          pnpm generate:menubar
+          git diff --exit-code -- apps/menubar/QuotaBar.xcodeproj
 
       - name: Import Developer ID identity
         env:
@@ -137,22 +136,27 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" | \
             grep -q 'Developer ID Application: DONG HAO (86Y537ZF24)'
 
-      - name: Sign QuotaBar
+      # package-menubar.sh archives and exports through apps/menubar/ExportOptions.plist with this
+      # identity, so the app, its widget extension, and Sparkle are signed and entitled by the
+      # build rather than re-signed afterwards.
+      - name: Package and sign arm64 app
         env:
-          SIGNING_IDENTITY: "Developer ID Application: DONG HAO (86Y537ZF24)"
+          VERSION: ${{ steps.version.outputs.version }}
+          QUOTABAR_SIGNING_IDENTITY: "Developer ID Application: DONG HAO (86Y537ZF24)"
         run: |
           set -euo pipefail
+          echo "Packaging QuotaBar ${VERSION} with its widget extension and private Rust service"
+          ./scripts/package-menubar.sh "$VERSION" "${{ github.run_number }}"
+          pnpm test:menubar:helper
           APP="dist/menubar/QuotaBar.app"
           test "$(lipo -archs "$APP/Contents/MacOS/QuotaBar")" = arm64
           test "$(lipo -archs "$APP/Contents/Helpers/quota-service")" = arm64
-          chmod +x ./scripts/sign-sparkle-framework.sh
-          ./scripts/sign-sparkle-framework.sh "$APP" "$SIGNING_IDENTITY"
-          codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-            "$APP/Contents/Helpers/quota-service"
-          codesign --verify --strict --verbose=2 "$APP/Contents/Helpers/quota-service"
-          codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
+          test -d "$APP/Contents/PlugIns/QuotaBarWidgets.appex"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --verbose=4 "$APP" 2>&1 | grep -q 'TeamIdentifier=86Y537ZF24'
+          codesign -d --entitlements - --xml "$APP" 2>/dev/null | \
+            plutil -extract com.apple.security.application-groups.0 raw - | \
+            grep -q '^86Y537ZF24.group.io.gotry.quota$'
 
       - name: Notarize and staple
         id: artifact

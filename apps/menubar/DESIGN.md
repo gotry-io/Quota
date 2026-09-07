@@ -775,19 +775,42 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 
 ## Desktop widgets
 
-QuotaBar does not embed a WidgetKit extension in this build: SwiftPM plus
-`scripts/package-menubar.sh` cannot produce an `.appex`. When packaging can embed one, the
-widgets read the same non-secret `WidgetSnapshot` as iOS (`group.io.gotry.quota`,
-[ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)). They never talk to Relay
-or the private service.
+QuotaBar embeds `PlugIns/QuotaBarWidgets.appex`. The widgets read the same non-secret
+`WidgetSnapshot` as iOS ([ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)),
+from QuotaBar's own App Group `86Y537ZF24.group.io.gotry.quota`, and never talk to Relay or the
+private service. QuotaBar publishes it after every state update from the Overview rows already on
+screen, and clears it when there is nothing to show.
 
 | Kind | Families | Content |
 | --- | --- | --- |
-| Overview | systemSmall, systemMedium | Remaining quota across the most constrained subscriptions, reset, **Updated** age |
-| Today | systemSmall | Today's tokens and API-equivalent cost |
+| Overview | systemSmall, systemMedium, systemLarge | Remaining quota across the most constrained subscriptions, reset, **Updated** age, and Today's tokens and API-equivalent cost |
 
-Home Screen remaining figures follow the same information order as iOS widgets. A carried
-`pace` of `runs_out` uses the existing warning color; no pace means no extra color.
+The views are the phone's: one `QuotaWidgetViews` package draws both platforms
+([ADR 0043](../../docs/decisions/0043-one-widget-view-package-for-both-platforms.md)), so Home
+Screen remaining figures follow the same information order, the same ranking, and the same **Updated**
+phrase as iOS. A carried `pace` of `runs_out` uses the existing warning color; no pace means no
+extra color.
+
+Links follow the iPhone's rule. QuotaBar registers the `quotabar:` scheme and answers
+`quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`; either opens the panel from the
+first status item, and a subscription scrolls Overview to that provider. A link whose
+`selection_id` this installation never published — an older salt, a provider since removed —
+lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
+subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
+several.
+
+The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
+extension has no app to borrow a tint from.
+
+Two things differ from the phone, and only these two:
+
+- **No Lock Screen.** The desktop offers small, medium, and large; the accessory families stay iPhone's.
+- **The meter is drawn with SwiftUI shapes**, not `Gauge`, which on macOS is an AppKit-backed
+  control a widget's archived view tree cannot draw.
+
+An ad-hoc signed local package is not entitled to the App Group, so it publishes nothing. That is
+not a failure the panel reports: Diagnostics' **Data** section carries a **Desktop Widgets** row
+whose sentence says whether a snapshot was published, cleared, refused, or is simply off.
 
 ## Shared components
 

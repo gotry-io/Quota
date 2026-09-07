@@ -1,6 +1,8 @@
 import Foundation
 import QuotaPresentation
 import QuotaWidgetData
+import QuotaWidgetProjection
+import QuotaWidgetViews
 import QuotaWire
 import Testing
 

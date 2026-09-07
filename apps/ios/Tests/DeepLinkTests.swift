@@ -1,4 +1,5 @@
 import Foundation
+import QuotaWidgetProjection
 import Testing
 
 @testable import Quota

@@ -39,7 +39,6 @@ targets:
           - Info.plist
           - Quota.entitlements
       - path: Resources
-      - path: WidgetSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quota
@@ -61,6 +60,8 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaWidgetProjection
       - package: QuotaAppleClient
         product: QuotaKeychain
       - package: QuotaAppleClient
@@ -96,7 +97,6 @@ targets:
         excludes:
           - Info.plist
           - QuotaWidgets.entitlements
-      - path: WidgetSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quota.widgets
@@ -104,6 +104,8 @@ targets:
         INFOPLIST_FILE: Widgets/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: Widgets/QuotaWidgets.entitlements
+        # The extension has no app to borrow a tint from, so it carries the product accent itself.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
@@ -112,6 +114,8 @@ targets:
     dependencies:
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaWidgetViews
       - package: QuotaAppleShared
         product: QuotaPresentation
       - sdk: WidgetKit.framework
@@ -141,6 +145,10 @@ targets:
         product: QuotaAccount
       - package: QuotaAppleClient
         product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaWidgetProjection
+      - package: QuotaAppleClient
+        product: QuotaWidgetViews
       - package: QuotaAppleClient
         product: QuotaKeychain
       - package: QuotaAppleClient

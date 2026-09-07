@@ -47,6 +47,7 @@ Read the relevant source before changing that area:
 | In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
 | The phone as a Device, and the paid-sync gate on what it uploads | `docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
+| One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
@@ -196,8 +197,10 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Local-state change: cover both stores. A damaged `cache.sqlite` must be rebuilt without touching
   identity; a damaged identity must make the device a new signed-out installation.
 - Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
-  `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
-  apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
+  `pnpm generate:ios`, `pnpm generate:menubar`, `swift test --package-path packages/apple-client`,
+  `swift test --package-path apps/menubar`, and the iOS Simulator build/tests from
+  `apps/ios/README.md`. A change to either app's `project.yml` re-generates and commits its
+  checked-in Xcode project in the same change.
 - Web change: run its type check, existing and component tests, e2e smoke, and production build;
   inspect desktop and mobile rendering when browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets

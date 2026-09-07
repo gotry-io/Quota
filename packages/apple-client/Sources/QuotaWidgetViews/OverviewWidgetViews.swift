@@ -3,13 +3,25 @@ import QuotaWidgetData
 import SwiftUI
 import WidgetKit
 
-struct OverviewEntry: TimelineEntry {
-  let date: Date
-  let snapshot: WidgetSnapshot?
-  let isPlaceholder: Bool
-  let configuredSelectionID: String?
+public struct OverviewEntry: TimelineEntry {
+  public let date: Date
+  public let snapshot: WidgetSnapshot?
+  public let isPlaceholder: Bool
+  public let configuredSelectionID: String?
 
-  var selectedItems: [WidgetQuotaItem] {
+  public init(
+    date: Date,
+    snapshot: WidgetSnapshot?,
+    isPlaceholder: Bool,
+    configuredSelectionID: String?
+  ) {
+    self.date = date
+    self.snapshot = snapshot
+    self.isPlaceholder = isPlaceholder
+    self.configuredSelectionID = configuredSelectionID
+  }
+
+  public var selectedItems: [WidgetQuotaItem] {
     OverviewWidgetContent.select(
       items: snapshot?.items ?? [],
       configuredSelectionID: configuredSelectionID
@@ -18,21 +30,83 @@ struct OverviewEntry: TimelineEntry {
 }
 
 /// Live ticking countdown under 24h; otherwise the shared static reset line; nothing once past.
-func overviewResetText(resetsAt: Date, now: Date) -> Text? {
+public func overviewResetText(resetsAt: Date, now: Date) -> Text? {
   if OverviewWidgetContent.usesLiveResetCountdown(resetsAt: resetsAt, now: now) {
     return Text("Resets ") + Text(timerInterval: now...resetsAt, countsDown: true)
   }
   return FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now).map(Text.init)
 }
 
-func overviewEmphasisColor(for item: WidgetQuotaItem) -> Color {
+public func overviewEmphasisColor(for item: WidgetQuotaItem) -> Color {
   OverviewWidgetContent.paceRunsOut(item) ? Color.orange : Color.primary
 }
 
-struct OverviewSmallView: View {
-  var entry: OverviewEntry
+/// The remaining-quota meter under a row, filled with the product accent each extension carries
+/// in its own asset catalog.
+///
+/// `Gauge` is the phone's, where it also carries the widget's accented rendering. On macOS it is
+/// an AppKit-backed control, which a widget's archived view tree cannot draw — `ImageRenderer`
+/// refuses it too — so the desktop draws the same proportion with plain SwiftUI shapes.
+struct OverviewMeter: View {
+  var remainingPercent: Double
 
   var body: some View {
+    #if os(macOS)
+      GeometryReader { proxy in
+        let fraction = min(max(remainingPercent / 100, 0), 1)
+        ZStack(alignment: .leading) {
+          Capsule().fill(.tint.opacity(0.2))
+          Capsule()
+            .fill(.tint)
+            .frame(width: proxy.size.width * fraction)
+        }
+      }
+      .frame(height: 4)
+      .accessibilityHidden(true)
+    #else
+      // Both fills come from the tint, which is the extension's own AccentColor.
+      Gauge(value: remainingPercent, in: 0...100) { EmptyView() }
+        .gaugeStyle(.linearCapacity)
+        .accessibilityHidden(true)
+    #endif
+  }
+}
+
+extension EnvironmentValues {
+  /// Whether a row draws its `Link`. A widget always does. `ImageRenderer` cannot draw a `Link`
+  /// on macOS — it is AppKit-backed there — so a static capture turns them off and renders the
+  /// row content the widget would show inside them.
+  @Entry public var overviewWidgetRowLinksEnabled: Bool = true
+}
+
+/// One row's deep link, on every platform: each app registers the scheme
+/// `OverviewWidgetContent.urlScheme` names and answers the same two paths.
+struct OverviewRowLink<Content: View>: View {
+  @Environment(\.overviewWidgetRowLinksEnabled) private var linksEnabled
+  var url: URL
+  @ViewBuilder var content: () -> Content
+
+  var body: some View {
+    if linksEnabled {
+      Link(destination: url) {
+        content()
+      }
+      // A Link paints its label with the accent color, and the hierarchical text styles inside
+      // resolve against whatever that leaves. Naming the base foreground keeps rows reading as
+      // text — without taking the accent away from the meter, which `.tint` would.
+      .foregroundStyle(Color.primary)
+    } else {
+      content()
+    }
+  }
+}
+
+public struct OverviewSmallView: View {
+  var entry: OverviewEntry
+
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     let items = OverviewWidgetContent.smallItems(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -136,10 +210,12 @@ struct OverviewSmallView: View {
   }
 }
 
-struct OverviewMediumView: View {
+public struct OverviewMediumView: View {
   var entry: OverviewEntry
 
-  var body: some View {
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     let items = OverviewWidgetContent.mediumItems(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -149,12 +225,9 @@ struct OverviewMediumView: View {
     } else if let snapshot = entry.snapshot, !items.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-          Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+          OverviewRowLink(url: OverviewWidgetContent.subscriptionURL(for: item)) {
             providerRow(item: item)
           }
-          // A Link tints its label with the accent color, which the hierarchical text
-          // styles then resolve against. Rows read as text, not as links.
-          .tint(Color.primary)
         }
         Spacer(minLength: 0)
         footer(snapshot: snapshot)
@@ -185,11 +258,7 @@ struct OverviewMediumView: View {
           .minimumScaleFactor(0.65)
       }
       if OverviewWidgetContent.showsPercentMeter(item) {
-        Gauge(value: item.remainingPercent, in: 0...100) { EmptyView() }
-          .gaugeStyle(.linearCapacity)
-          // The rows carry no tint of their own, so the meter names its own fill.
-          .tint(Color.secondary)
-          .accessibilityHidden(true)
+        OverviewMeter(remainingPercent: item.remainingPercent)
       }
       if let resetsAt = item.resetsAt,
         let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
@@ -262,10 +331,12 @@ struct OverviewMediumView: View {
   }
 }
 
-struct OverviewLargeView: View {
+public struct OverviewLargeView: View {
   var entry: OverviewEntry
 
-  var body: some View {
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     let groups = OverviewWidgetContent.largeProviderGroups(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -293,10 +364,9 @@ struct OverviewLargeView: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
       ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
-        Link(destination: OverviewWidgetContent.subscriptionURL(for: item)) {
+        OverviewRowLink(url: OverviewWidgetContent.subscriptionURL(for: item)) {
           windowRow(item: item)
         }
-        .tint(Color.primary)
       }
     }
   }
@@ -317,11 +387,7 @@ struct OverviewLargeView: View {
           .minimumScaleFactor(0.65)
       }
       if OverviewWidgetContent.showsPercentMeter(item) {
-        Gauge(value: item.remainingPercent, in: 0...100) { EmptyView() }
-          .gaugeStyle(.linearCapacity)
-          // The rows carry no tint of their own, so the meter names its own fill.
-          .tint(Color.secondary)
-          .accessibilityHidden(true)
+        OverviewMeter(remainingPercent: item.remainingPercent)
       }
       if let resetsAt = item.resetsAt,
         let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
@@ -394,10 +460,12 @@ struct OverviewLargeView: View {
   }
 }
 
-struct OverviewCircularView: View {
+public struct OverviewCircularView: View {
   var entry: OverviewEntry
 
-  var body: some View {
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     if let item = OverviewWidgetContent.lockScreenWeeklyItem(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -452,10 +520,12 @@ struct OverviewCircularView: View {
   }
 }
 
-struct OverviewRectangularView: View {
+public struct OverviewRectangularView: View {
   var entry: OverviewEntry
 
-  var body: some View {
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     let weekly = OverviewWidgetContent.lockScreenWeeklyItem(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -539,10 +609,12 @@ struct OverviewRectangularView: View {
   }
 }
 
-struct OverviewInlineView: View {
+public struct OverviewInlineView: View {
   var entry: OverviewEntry
 
-  var body: some View {
+  public init(entry: OverviewEntry) { self.entry = entry }
+
+  public var body: some View {
     if let item = OverviewWidgetContent.lockScreenWeeklyItem(
       from: entry.snapshot,
       configuredSelectionID: entry.configuredSelectionID
@@ -570,10 +642,10 @@ struct OverviewInlineView: View {
   }
 }
 
-enum OverviewWidgetPreviewFixtures {
-  static let now = Date(timeIntervalSince1970: 1_786_723_200)  // 2026-08-14T16:00:00Z
+public enum OverviewWidgetPreviewFixtures {
+  public static let now = Date(timeIntervalSince1970: 1_786_723_200)  // 2026-08-14T16:00:00Z
 
-  static let contentSnapshot = WidgetSnapshot(
+  public static let contentSnapshot = WidgetSnapshot(
     fetchedAt: now.addingTimeInterval(-900),
     items: [
       WidgetQuotaItem(
@@ -643,7 +715,7 @@ enum OverviewWidgetPreviewFixtures {
     )
   )
 
-  static func entry(
+  public static func entry(
     snapshot: WidgetSnapshot?,
     isPlaceholder: Bool = false,
     configuredSelectionID: String? = nil
@@ -657,7 +729,7 @@ enum OverviewWidgetPreviewFixtures {
   }
 }
 
-func lockScreenAccessibility(item: WidgetQuotaItem, now: Date = Date()) -> String {
+public func lockScreenAccessibility(item: WidgetQuotaItem, now: Date = Date()) -> String {
   var parts = [OverviewWidgetContent.usedAccessibility(for: item)]
   if OverviewWidgetContent.paceRunsOut(item) {
     parts.append("runs out")

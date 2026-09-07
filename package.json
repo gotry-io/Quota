@@ -32,6 +32,7 @@
     "test:service": "cargo test --locked --package quota-service --package quota-menubar-helper",
     "test:swift": "./scripts/test-swift.sh",
     "test:menubar:helper": "./scripts/test-menubar-helper.sh",
+    "generate:menubar": "./scripts/generate-menubar.sh",
     "build:menubar:app": "./scripts/package-menubar.sh",
     "build:menubar:visual": "./scripts/package-menubar-visual.sh",
     "generate:ios": "./scripts/generate-ios.sh",

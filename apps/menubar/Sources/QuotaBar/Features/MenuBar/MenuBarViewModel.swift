@@ -3,6 +3,8 @@ import Foundation
 import Observation
 import QuotaAlerts
 import QuotaPresentation
+import QuotaWidgetData
+import QuotaWidgetProjection
 import QuotaWire
 import SweetCookieKit
 import UserNotifications
@@ -323,6 +325,12 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private let resetScheduler: ResetReminderScheduler
 
   @ObservationIgnored
+  private let widgetPublisher: DesktopWidgetPublisher
+
+  /// The Diagnostics sentence about the desktop widgets, republished with the snapshot.
+  private(set) var widgetPublishingStatus: DesktopWidgetPublishingStatus
+
+  @ObservationIgnored
   private let userNotificationSink: UserNotificationSink?
 
   private(set) var notificationRules: AlertRules
@@ -340,9 +348,17 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     notificationCenter: (any NotificationCentering)? = nil,
     notificationDefaults: UserDefaults = .standard,
     budgetStore: UsageBudgetStore? = nil,
+    widgetPublisher: DesktopWidgetPublisher? = nil,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
   ) {
     let injectedClient = client != nil
+    // A test's QuotaBar publishes nowhere: it neither joins the App Group nor asks the Keychain
+    // for the installation salt.
+    let resolvedWidgetPublisher =
+      widgetPublisher ?? (injectedClient ? DesktopWidgetPublisher(publisher: nil)
+        : DesktopWidgetPublisher())
+    self.widgetPublisher = resolvedWidgetPublisher
+    self.widgetPublishingStatus = resolvedWidgetPublisher.status
     let resolvedBudgetStore = budgetStore ?? UsageBudgetStore(defaults: notificationDefaults)
     self.budgetStore = resolvedBudgetStore
     self.budget = resolvedBudgetStore.load()
@@ -411,6 +427,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       loginURLOpener = WorkspaceLoginURLOpener()
       accessProbe = UnrestrictedBrowserAccessProbe()
       relauncher = NoOpQuotaBarRelauncher()
+      widgetPublisher = DesktopWidgetPublisher(publisher: nil)
+      widgetPublishingStatus = .unentitled
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
       notificationStore = InMemoryNotificationStateStore()
@@ -1591,6 +1609,40 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     } else {
       evaluateNotifications(overview: state.overview, now: Date())
     }
+
+    publishWidgetSnapshot()
+  }
+
+  /// What the desktop widgets read is what Overview shows: the same resolved rows, ranked by the
+  /// projection both Apple clients share. Publishing never fails a state update — an
+  /// unentitled or unwritable App Group leaves a sentence on Diagnostics instead.
+  private func publishWidgetSnapshot() {
+    let today = usageDetail(source: effectiveUsageSource(.account), period: .today)
+    widgetPublisher.publish(
+      subscriptions: widgetSubscriptions,
+      today: today.map {
+        WidgetSnapshotProjection.todayUsage(totals: $0.usage.totals, cost: $0.usage.cost)
+      },
+      fetchedAt: overview.map(\.snapshot.observedAt).max() ?? Date()
+    )
+    widgetPublishingStatus = widgetPublisher.status
+  }
+
+  var widgetPublishingMessage: String {
+    widgetPublishingStatus.message()
+  }
+
+  private var widgetSubscriptions: [DesktopWidgetSubscription] {
+    overview.map {
+      DesktopWidgetSubscription(snapshot: $0.snapshot, selector: $0.pinIdentityKey)
+    }
+  }
+
+  /// Which Overview provider a widget's `quotabar:/subscriptions/<selection_id>` names.
+  /// `nil` when no row published under that id, and the panel then opens on Overview.
+  func provider(forWidgetSelectionID selectionID: String) -> ProviderID? {
+    widgetPublisher.subscription(forSelectionID: selectionID, in: widgetSubscriptions)?
+      .snapshot.provider
   }
 
   func notificationSubscriptions() -> [NotificationSettingsSubscription] {
