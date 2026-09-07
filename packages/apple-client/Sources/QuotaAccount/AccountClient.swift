@@ -217,7 +217,8 @@ public actor AccountClient {
   public func fetchUsageActivity(
     from: String,
     to: String,
-    detail: ActivityDetail? = nil
+    detail: ActivityDetail? = nil,
+    timeZone: String? = nil
   ) async -> AccountActivityResult {
     do {
       let activity = try await withAuthorizedSession { session in
@@ -225,7 +226,8 @@ public actor AccountClient {
           accessToken: session.accessToken,
           from: from,
           to: to,
-          detail: detail
+          detail: detail,
+          timeZone: timeZone
         )
       }
       return .activity(activity)

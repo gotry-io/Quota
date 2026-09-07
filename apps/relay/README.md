@@ -38,7 +38,12 @@ The v6 data contract is four routes
   day's `totals` carries `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
   `cache_write_input_tokens`, `reasoning_tokens`, and `messages` beside `total_tokens`, and its
   `cost` is priced the same way a period's is — so a per-day table needs no second read. A
-  single-day read may take `detail=agents` and then carries that day's agent tree.
+  single-day read may take `detail=agents` and then carries that day's agent tree. Any range may
+  take `detail=hours` and optional `tz` (IANA, default UTC) and then carries `hours_of_day[24]`
+  and `weekday_hours[7][24]` of tokens: the asked UTC dates select the stored hours, and `tz`
+  places each `bucket_start_utc` on that clock. An hour nothing reached states no amount. The
+  ETag rule is the same as the days-only read: the query string, including `detail` and `tz`, is
+  part of the validator.
 
 The four periods in a summary are the four every client opens on. Any other period a Usage page
 offers — a week, a month, a range someone picked — is these same days added up by the client, which

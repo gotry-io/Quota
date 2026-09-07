@@ -226,7 +226,9 @@ and is not a session count. Each summary also carries
 `cache_saved` — what its cache reads saved against the uncached input price — and, for the three
 periods bounded by two local midnights, `days[]` on local dates and `hours_of_day[24]` on the local
 clock; `all` carries neither, because the per-day shape of every retained day is what the activity
-chart answers ([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
+chart answers. Account answers the same `hours_of_day[24]` (and `weekday_hours[7][24]` of tokens)
+when the activity read is asked with `detail=hours` and `tz`
+([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
 carried at all: every reader derives it from the two counts it already holds, by the one rule that
 ADR states. Sessions are a separate local view of source files
 ([ADR 0038](decisions/0038-sessions-are-a-local-view-of-files.md)): the report carries
@@ -357,7 +359,9 @@ and model catalog revisions, and — for the summary — the caller's local date
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
 and observation rows the response projects, plus `entitlements.updated_at`; the activity stamp is usage-only (device count, usage
 revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
-keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. The summary's Usage fold is stored keyed by what it depends on
+keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+is the same rule: `tz` is in the query string, so a different clock is a different validator.
+The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a

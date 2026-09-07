@@ -810,24 +810,82 @@ public struct UsageActivityDay: Codable, Equatable, Sendable {
   }
 }
 
-/// The activity chart an Account read answers: up to 400 UTC days of totals, and optionally
-/// one day's agent tree.
+/// One hour of the caller's clock, summed over every day of the asked range that reached it.
+public struct UsageHourOfDay: Codable, Equatable, Sendable {
+  public let hour: Int
+  public let totalTokens: Int
+  public let costMicrousd: String?
+
+  public init(hour: Int, totalTokens: Int, costMicrousd: String?) {
+    self.hour = hour
+    self.totalTokens = totalTokens
+    self.costMicrousd = costMicrousd
+  }
+
+  public var isValid: Bool { (0..<24).contains(hour) && totalTokens >= 0 }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    hour = try container.decode(Int.self, forKey: .hour)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    costMicrousd = try container.decode(String?.self, forKey: .costMicrousd)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .hour,
+        in: container,
+        debugDescription: "Invalid Usage hour of the day."
+      )
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case hour
+    case totalTokens
+    case costMicrousd
+  }
+}
+
+/// The activity chart an Account read answers: up to 400 UTC days of totals, optionally one
+/// day's agent tree, and optionally the 24-hour and weekday×hour rhythm of the asked range.
 public struct AccountUsageActivityResponse: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let days: [UsageActivityDay]
+  public let hoursOfDay: [UsageHourOfDay]?
+  public let weekdayHours: [[Int]]?
 
-  public init(days: [UsageActivityDay]) {
+  public init(
+    days: [UsageActivityDay],
+    hoursOfDay: [UsageHourOfDay]? = nil,
+    weekdayHours: [[Int]]? = nil
+  ) {
     protocolVersion = WireCodec.managedDataProtocolVersion
     self.days = days
+    self.hoursOfDay = hoursOfDay
+    self.weekdayHours = weekdayHours
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     days = try container.decode([UsageActivityDay].self, forKey: .days)
+    hoursOfDay = try container.decodeIfPresent([UsageHourOfDay].self, forKey: .hoursOfDay)
+    weekdayHours = try container.decodeIfPresent([[Int]].self, forKey: .weekdayHours)
+    let hoursValid =
+      hoursOfDay.map { hours in
+        hours.count == 24 && hours.enumerated().allSatisfy { index, hour in
+          hour.hour == index && hour.isValid
+        }
+      } ?? true
+    let weekdaysValid =
+      weekdayHours.map { rows in
+        rows.count == 7 && rows.allSatisfy { row in row.count == 24 && row.allSatisfy { $0 >= 0 } }
+      } ?? true
     guard protocolVersion == WireCodec.managedDataProtocolVersion,
       days.count <= 400,
-      days.allSatisfy(\.isValid)
+      days.allSatisfy(\.isValid),
+      (hoursOfDay == nil) == (weekdayHours == nil),
+      hoursValid,
+      weekdaysValid
     else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
@@ -840,5 +898,7 @@ public struct AccountUsageActivityResponse: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case protocolVersion
     case days
+    case hoursOfDay
+    case weekdayHours
   }
 }

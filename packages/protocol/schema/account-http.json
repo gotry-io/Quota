@@ -188,15 +188,16 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "type": "number",
-          "const": 6
+          "$ref": "#/$defs/__schema44"
         },
         "days": {
-          "maxItems": 400,
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/__schema44"
-          }
+          "$ref": "#/$defs/__schema45"
+        },
+        "hours_of_day": {
+          "$ref": "#/$defs/__schema48"
+        },
+        "weekday_hours": {
+          "$ref": "#/$defs/__schema50"
         }
       },
       "required": ["protocol_version", "days"],
@@ -214,10 +215,10 @@
           "const": "authorization_code"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema46"
+          "$ref": "#/$defs/__schema52"
         },
         "code": {
-          "$ref": "#/$defs/__schema47"
+          "$ref": "#/$defs/__schema53"
         },
         "code_verifier": {
           "type": "string",
@@ -257,22 +258,22 @@
           "type": "object",
           "properties": {
             "protocol_version": {
-              "$ref": "#/$defs/__schema48"
+              "$ref": "#/$defs/__schema54"
             },
             "grant_type": {
-              "$ref": "#/$defs/__schema49"
+              "$ref": "#/$defs/__schema55"
             },
             "client_id": {
               "$ref": "#/$defs/__schema9"
             },
             "code": {
-              "$ref": "#/$defs/__schema47"
+              "$ref": "#/$defs/__schema53"
             },
             "code_verifier": {
-              "$ref": "#/$defs/__schema50"
+              "$ref": "#/$defs/__schema56"
             },
             "redirect_uri": {
-              "$ref": "#/$defs/__schema51"
+              "$ref": "#/$defs/__schema57"
             },
             "installation_id": {
               "$ref": "#/$defs/__schema13"
@@ -301,22 +302,22 @@
           "type": "object",
           "properties": {
             "protocol_version": {
-              "$ref": "#/$defs/__schema48"
+              "$ref": "#/$defs/__schema54"
             },
             "grant_type": {
-              "$ref": "#/$defs/__schema49"
+              "$ref": "#/$defs/__schema55"
             },
             "client_id": {
               "$ref": "#/$defs/__schema9"
             },
             "code": {
-              "$ref": "#/$defs/__schema47"
+              "$ref": "#/$defs/__schema53"
             },
             "code_verifier": {
-              "$ref": "#/$defs/__schema50"
+              "$ref": "#/$defs/__schema56"
             },
             "redirect_uri": {
-              "$ref": "#/$defs/__schema51"
+              "$ref": "#/$defs/__schema57"
             }
           },
           "required": [
@@ -337,10 +338,10 @@
           "type": "object",
           "properties": {
             "protocol_version": {
-              "$ref": "#/$defs/__schema52"
+              "$ref": "#/$defs/__schema58"
             },
             "token_type": {
-              "$ref": "#/$defs/__schema53"
+              "$ref": "#/$defs/__schema59"
             },
             "account_id": {
               "$ref": "#/$defs/__schema1"
@@ -349,7 +350,7 @@
               "$ref": "#/$defs/__schema2"
             },
             "session": {
-              "$ref": "#/$defs/__schema54"
+              "$ref": "#/$defs/__schema60"
             },
             "device_id": {
               "$ref": "#/$defs/__schema1"
@@ -373,10 +374,10 @@
           "type": "object",
           "properties": {
             "protocol_version": {
-              "$ref": "#/$defs/__schema52"
+              "$ref": "#/$defs/__schema58"
             },
             "token_type": {
-              "$ref": "#/$defs/__schema53"
+              "$ref": "#/$defs/__schema59"
             },
             "account_id": {
               "$ref": "#/$defs/__schema1"
@@ -385,7 +386,7 @@
               "$ref": "#/$defs/__schema2"
             },
             "session": {
-              "$ref": "#/$defs/__schema54"
+              "$ref": "#/$defs/__schema60"
             }
           },
           "required": ["protocol_version", "token_type", "account_id", "display_label", "session"],
@@ -408,7 +409,7 @@
           "$ref": "#/$defs/__schema9"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema47"
+          "$ref": "#/$defs/__schema53"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -429,7 +430,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "session": {
-          "$ref": "#/$defs/__schema54"
+          "$ref": "#/$defs/__schema60"
         }
       },
       "required": ["protocol_version", "token_type", "account_id", "session"],
@@ -472,7 +473,7 @@
           "$ref": "#/$defs/__schema22"
         },
         "session": {
-          "$ref": "#/$defs/__schema54"
+          "$ref": "#/$defs/__schema60"
         }
       },
       "required": [
@@ -500,10 +501,10 @@
           "const": "refresh_token"
         },
         "client_id": {
-          "$ref": "#/$defs/__schema46"
+          "$ref": "#/$defs/__schema52"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema47"
+          "$ref": "#/$defs/__schema53"
         }
       },
       "required": ["protocol_version", "grant_type", "client_id", "refresh_token"],
@@ -530,7 +531,7 @@
           "$ref": "#/$defs/__schema37"
         },
         "session": {
-          "$ref": "#/$defs/__schema54"
+          "$ref": "#/$defs/__schema60"
         }
       },
       "required": [
@@ -705,7 +706,7 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema55"
+              "$ref": "#/$defs/__schema61"
             },
             "enabled": {
               "type": "boolean"
@@ -735,16 +736,16 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema56"
+              "$ref": "#/$defs/__schema62"
             },
             "enabled": {
-              "$ref": "#/$defs/__schema57"
+              "$ref": "#/$defs/__schema63"
             },
             "show_models": {
-              "$ref": "#/$defs/__schema58"
+              "$ref": "#/$defs/__schema64"
             },
             "show_cost": {
-              "$ref": "#/$defs/__schema59"
+              "$ref": "#/$defs/__schema65"
             }
           },
           "required": ["handle", "enabled", "show_models", "show_cost"],
@@ -762,7 +763,7 @@
           "const": 6
         },
         "handle": {
-          "$ref": "#/$defs/__schema55"
+          "$ref": "#/$defs/__schema61"
         },
         "published_at": {
           "$ref": "#/$defs/__schema3"
@@ -771,16 +772,16 @@
           "$ref": "#/$defs/__schema3"
         },
         "last_30_days": {
-          "$ref": "#/$defs/__schema60"
+          "$ref": "#/$defs/__schema66"
         },
         "all": {
-          "$ref": "#/$defs/__schema60"
+          "$ref": "#/$defs/__schema66"
         },
         "activity": {
           "maxItems": 365,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema63"
+            "$ref": "#/$defs/__schema69"
           }
         }
       },
@@ -1521,10 +1522,21 @@
       "additionalProperties": false
     },
     "__schema44": {
+      "type": "number",
+      "const": 6
+    },
+    "__schema45": {
+      "maxItems": 400,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema46"
+      }
+    },
+    "__schema46": {
       "type": "object",
       "properties": {
         "date": {
-          "$ref": "#/$defs/__schema45"
+          "$ref": "#/$defs/__schema47"
         },
         "totals": {
           "$ref": "#/$defs/__schema25"
@@ -1546,54 +1558,105 @@
       "required": ["date", "totals", "cost", "partial"],
       "additionalProperties": false
     },
-    "__schema45": {
+    "__schema47": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
-    "__schema46": {
+    "__schema48": {
+      "minItems": 24,
+      "maxItems": 24,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema49"
+      }
+    },
+    "__schema49": {
+      "type": "object",
+      "properties": {
+        "hour": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "cost_microusd": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 32,
+              "pattern": "^(?:0|[1-9]\\d*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["hour", "total_tokens", "cost_microusd"],
+      "additionalProperties": false
+    },
+    "__schema50": {
+      "minItems": 7,
+      "maxItems": 7,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema51"
+      }
+    },
+    "__schema51": {
+      "minItems": 24,
+      "maxItems": 24,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema22"
+      }
+    },
+    "__schema52": {
       "type": "string",
       "const": "quotabar"
     },
-    "__schema47": {
+    "__schema53": {
       "type": "string",
       "minLength": 16,
       "maxLength": 2048
     },
-    "__schema48": {
+    "__schema54": {
       "type": "number",
       "const": 2
     },
-    "__schema49": {
+    "__schema55": {
       "type": "string",
       "const": "authorization_code"
     },
-    "__schema50": {
+    "__schema56": {
       "type": "string",
       "pattern": "^[A-Za-z0-9._~-]{43,128}$"
     },
-    "__schema51": {
+    "__schema57": {
       "type": "string",
       "const": "io.gotry.quota:/oauth/callback"
     },
-    "__schema52": {
+    "__schema58": {
       "type": "number",
       "const": 2
     },
-    "__schema53": {
+    "__schema59": {
       "type": "string",
       "const": "Bearer"
     },
-    "__schema54": {
+    "__schema60": {
       "type": "object",
       "properties": {
         "access_token": {
-          "$ref": "#/$defs/__schema47"
+          "$ref": "#/$defs/__schema53"
         },
         "access_expires_at": {
           "$ref": "#/$defs/__schema3"
         },
         "refresh_token": {
-          "$ref": "#/$defs/__schema47"
+          "$ref": "#/$defs/__schema53"
         },
         "refresh_expires_at": {
           "$ref": "#/$defs/__schema3"
@@ -1602,30 +1665,30 @@
       "required": ["access_token", "access_expires_at", "refresh_token", "refresh_expires_at"],
       "additionalProperties": false
     },
-    "__schema55": {
+    "__schema61": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{2,29}$"
     },
-    "__schema56": {
+    "__schema62": {
       "anyOf": [
         {
-          "$ref": "#/$defs/__schema55"
+          "$ref": "#/$defs/__schema61"
         },
         {
           "type": "null"
         }
       ]
     },
-    "__schema57": {
+    "__schema63": {
       "type": "boolean"
     },
-    "__schema58": {
+    "__schema64": {
       "type": "boolean"
     },
-    "__schema59": {
+    "__schema65": {
       "type": "boolean"
     },
-    "__schema60": {
+    "__schema66": {
       "type": "object",
       "properties": {
         "totals": {
@@ -1673,21 +1736,21 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema61"
+            "$ref": "#/$defs/__schema67"
           }
         },
         "models": {
           "maxItems": 12,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema62"
+            "$ref": "#/$defs/__schema68"
           }
         }
       },
       "required": ["totals", "providers"],
       "additionalProperties": false
     },
-    "__schema61": {
+    "__schema67": {
       "type": "object",
       "properties": {
         "provider": {
@@ -1705,7 +1768,7 @@
       "required": ["provider", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema62": {
+    "__schema68": {
       "type": "object",
       "properties": {
         "provider": {
@@ -1726,11 +1789,11 @@
       "required": ["provider", "model", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema63": {
+    "__schema69": {
       "type": "object",
       "properties": {
         "date": {
-          "$ref": "#/$defs/__schema45"
+          "$ref": "#/$defs/__schema47"
         },
         "level": {
           "type": "integer",
