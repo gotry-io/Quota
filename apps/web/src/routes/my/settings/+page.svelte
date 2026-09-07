@@ -14,6 +14,7 @@ import { entitlementStatusLine, subscribeActionLabel, viewerInitial } from "$lib
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import PublicProfileSettings from "$lib/components/PublicProfileSettings.svelte";
+import RedeemCodeForm from "$lib/components/RedeemCodeForm.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import SignInMethodSettings from "$lib/components/SignInMethodSettings.svelte";
 import ThemeToggle from "$lib/components/ThemeToggle.svelte";
@@ -128,7 +129,7 @@ async function onDeleteAccount(event: Event): Promise<void> {
 </section>
 
 <section class="settings-group" aria-labelledby="sync-title">
-  <h2 id="sync-title">Sync</h2>
+  <h2 id="sync-title">Quota Pro</h2>
   {#if entitlement}
     <div class="settings-row">
       <p>{entitlementStatusLine(entitlement, now)}</p>
@@ -142,8 +143,15 @@ async function onDeleteAccount(event: Event): Promise<void> {
       {/if}
     </div>
   {:else if !store.loadError}
-    <LoadingBlock lines={1} label="Loading subscription" />
+    <LoadingBlock lines={1} label="Loading Quota Pro" />
   {/if}
+  <RedeemCodeForm
+    onGranted={async () => {
+      await loadAccount();
+      await store.refresh();
+    }}
+    onError={(error) => store.setError(error)}
+  />
 </section>
 
 {#if account}

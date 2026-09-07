@@ -9,6 +9,8 @@ import {
   meterTone,
   meterToneForUsedPercent,
   providerMarkHue,
+  REDEEM_ERROR_COPY,
+  redeemGrantedCopy,
   subscribeActionLabel,
   subscriptionCardMeta,
   SYNC_OFF_COPY,
@@ -229,6 +231,31 @@ it("names paid-sync status the way Settings prints it", () => {
   expect(
     entitlementStatusLine(
       {
+        status: "active",
+        expires_at: null,
+        will_renew: false,
+        stale: false,
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Quota Pro · Lifetime");
+  expect(
+    entitlementStatusLine(
+      {
+        status: "active",
+        expires_at: null,
+        will_renew: false,
+        stale: true,
+        updated_at: "2026-09-29T12:00:00Z",
+      },
+      now,
+      zone,
+    ),
+  ).toBe("Quota Pro · Lifetime · last checked 2d ago");
+  expect(
+    entitlementStatusLine(
+      {
         status: "none",
         expires_at: null,
         will_renew: false,
@@ -237,7 +264,7 @@ it("names paid-sync status the way Settings prints it", () => {
       now,
       zone,
     ),
-  ).toBe("Not subscribed");
+  ).toBe("No Quota Pro");
   expect(
     entitlementStatusLine(
       {
@@ -249,7 +276,7 @@ it("names paid-sync status the way Settings prints it", () => {
       now,
       zone,
     ),
-  ).toBe("Not subscribed");
+  ).toBe("No Quota Pro");
   expect(
     entitlementStatusLine(
       {
@@ -274,14 +301,26 @@ it("names paid-sync status the way Settings prints it", () => {
       now,
       zone,
     ),
-  ).toBe("Not subscribed");
+  ).toBe("No Quota Pro");
   expect(isPaidSyncStatus("active")).toBe(true);
   expect(isPaidSyncStatus("grace")).toBe(true);
   expect(isPaidSyncStatus("expired")).toBe(false);
   expect(isPaidSyncStatus("none")).toBe(false);
-  expect(subscribeActionLabel("active")).toBe("Manage subscription");
-  expect(subscribeActionLabel("none")).toBe("Subscribe");
-  expect(SYNC_OFF_COPY).toBe("Sync is off. Your Macs stop uploading until you subscribe.");
+  expect(subscribeActionLabel("active")).toBe("Manage Quota Pro");
+  expect(subscribeActionLabel("none")).toBe("Get Quota Pro");
+  expect(SYNC_OFF_COPY).toBe("Sync is off. Your Macs stop uploading until you get Quota Pro.");
+  expect(redeemGrantedCopy("three_month", "beta")).toBe("Quota Pro is on: three months from beta");
+  expect(redeemGrantedCopy("lifetime", "community")).toBe(
+    "Quota Pro is on: lifetime from community",
+  );
+  expect(REDEEM_ERROR_COPY).toEqual({
+    code_invalid: "That code isn't valid.",
+    code_expired: "That code has expired.",
+    code_already_redeemed: "You've already used this code.",
+    code_exhausted: "That code has been fully used.",
+    billing_unavailable: "Couldn't reach billing. Try again in a minute.",
+    rate_limited: "Too many attempts. Try again later.",
+  });
 });
 
 it("renames a quiet device when the Account is not subscribed", () => {
@@ -291,10 +330,10 @@ it("renames a quiet device when the Account is not subscribed", () => {
   const stale = deviceRow("stale", "Attic Mac", "2026-08-10T09:31:00Z");
   const studio = deviceRow("studio", "Studio Mac", "2026-08-12T09:31:00Z");
   expect(devicesSummaryLine([silent, studio], undefined, { subscribed: false })).toBe(
-    "1 of 2 reporting · Silent Mac · Paused (no subscription)",
+    "1 of 2 reporting · Silent Mac · Paused (no Quota Pro)",
   );
   expect(devicesSummaryLine([stale], undefined, { subscribed: false })).toBe(
-    "0 of 1 reporting · Attic Mac · Paused (no subscription)",
+    "0 of 1 reporting · Attic Mac · Paused (no Quota Pro)",
   );
   expect(devicesSummaryLine([studio], undefined, { subscribed: false })).toBe(
     "1 device · all reporting · Studio Mac · Active",

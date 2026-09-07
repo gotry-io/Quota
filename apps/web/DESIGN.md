@@ -109,7 +109,7 @@ The site has these routes:
    partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
    - `/my` — overview: remaining quota. When the paid-sync entitlement is not `active` or
-     `grace`, a static notice `Sync is off. Your Macs stop uploading until you subscribe.`
+     `grace`, a static notice `Sync is off. Your Macs stop uploading until you get Quota Pro.`
      links to Settings; it is absent while subscribed. A Subscriptions grid (each card a
      link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
      today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
@@ -137,14 +137,18 @@ The site has these routes:
      are absent.
    - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
      (macOS, or a generic device for any other value), Active / Idle / Not reporting (semantic
-     color plus the label; Not reporting reads `Paused (no subscription)` when the Account is
+     color plus the label; Not reporting reads `Paused (no Quota Pro)` when the Account is
      not subscribed), Last contact, and Delete (danger color, existing confirmation).
      Below 620 px each row is a labeled two-column card with Status and Last contact. Empty
      state is the Mac setup card.
-   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Sync
-     (status `Active · renews Oct 5` / `Active · ends Oct 5` / `Grace period · update your
-     payment` / `Not subscribed`, with `· last checked <relative>` when the entitlement is
-     stale; Subscribe or Manage subscription opens `purchase.web_url` in a new tab); Sign-in
+   - `/my/settings` — grouped form: Appearance (the same ThemeToggle as the footer); Quota Pro
+     (heading id `sync-title`; status `Quota Pro · Lifetime` when `active` and `expires_at` is
+     null, otherwise `Active · renews Oct 5` / `Active · ends Oct 5` / `Grace period · update
+     your payment` / `No Quota Pro`, with `· last checked <relative>` when the entitlement is
+     stale; Get Quota Pro or Manage Quota Pro opens `purchase.web_url` in a new tab; a
+     redemption field placeholder `QUOTA-XXXX-XXXX-XXXX-XXXX` and Redeem post `{ code }` to
+     `/api/v2/account/redeem`, then `Quota Pro is on: <duration> from <campaign>` as
+     `role=status` or the mapped refusal as `role=alert`); Sign-in
      methods (Apple, GitHub, Email in that order. A bound channel shows its label and
      **Unlink**; the last one is disabled with **Keep at least one way to sign in**, and unlinking
      uses the same ten-minute freshness as Delete Account. An unbound Apple or GitHub is
@@ -288,7 +292,7 @@ The landing is six blocks, in this order. It does not use slogan sections.
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
 Account nav in the site header. The overview leads with remaining quota: when sync is off, a static
-notice `Sync is off. Your Macs stop uploading until you subscribe.` with a Settings link, then
+notice `Sync is off. Your Macs stop uploading until you get Quota Pro.` with a Settings link, then
 subscription cards (a 6 pt incident dot beside the provider name when official status is minor or
 worse), then a Today strip (tokens, API-equivalent cost, today's top model), then a
 Devices summary line (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's
@@ -366,15 +370,17 @@ no current row reads **This subscription is no longer reported.** **← Overview
 
 The Devices table is sorted by last-seen, newest first. Each row is display name, a macOS platform
 icon (or a generic device for any other value), an **Active** / **Idle** / **Not reporting** pill
-(semantic color plus the label; **Paused (no subscription)** in place of Not reporting when the
+(semantic color plus the label; **Paused (no Quota Pro)** in place of Not reporting when the
 Account is not subscribed), Last contact, and Delete. Below 620 px each row is a labeled
 two-column card. Never a claim that a sleeping or closed app failed, never raw Device IDs, and
 never a request that the viewing browser fix another Device's provider credentials. Deletion copy
 must say that both the Device and its Quota/Usage data are removed. Empty Devices is the Mac setup
-card. Settings is a grouped form: Appearance; Sync (status `Active · renews Oct 5` / `Active ·
-ends Oct 5` / `Grace period · update your payment` / `Not subscribed`, plus `· last checked
-<relative>` when stale; **Subscribe** or **Manage subscription** opens the RevenueCat Web Purchase
-Link in a new tab); Sign-in methods (Apple, GitHub, Email; bound label plus **Unlink**, last
+card. Settings is a grouped form: Appearance; Quota Pro (status `Quota Pro · Lifetime` when
+`active` and `expires_at` is null, otherwise `Active · renews Oct 5` / `Active ·
+ends Oct 5` / `Grace period · update your payment` / `No Quota Pro`, plus `· last checked
+<relative>` when stale; **Get Quota Pro** or **Manage Quota Pro** opens the RevenueCat Web Purchase
+Link in a new tab; Redeem posts `{ code }` to `/api/v2/account/redeem`); Sign-in methods (Apple,
+GitHub, Email; bound label plus **Unlink**, last
 **Unlink** disabled with **Keep at least one way to sign in**; unbound **Link** or the Email
 form); Account (display label and Delete Account, with `?delete=account` focusing the delete
 heading); Legal (Privacy, Terms, Support). Sign out stays in the header account menu.
