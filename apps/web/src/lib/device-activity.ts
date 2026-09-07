@@ -8,7 +8,7 @@ type DeviceActivityPresentation = {
 };
 
 export const NOT_REPORTING_COPY = "Not reporting";
-export const PAUSED_NO_SUBSCRIPTION_COPY = "Paused (no subscription)";
+export const PAUSED_NO_SUBSCRIPTION_COPY = "Paused (no Quota Pro)";
 
 const activeWithinMilliseconds = 30 * 60 * 1000;
 const idleWithinMilliseconds = 24 * 60 * 60 * 1000;
