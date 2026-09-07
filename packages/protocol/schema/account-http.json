@@ -699,7 +699,7 @@
       "type": "object",
       "properties": {
         "providers": {
-          "maxItems": 10,
+          "maxItems": 12,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema61"
