@@ -27,7 +27,7 @@ struct OverviewView: View {
                 .accessibilityHidden(true)
             }
           }
-          .accessibilityHint("Opens Sync across devices")
+          .accessibilityHint("Opens Quota Pro")
           .accessibilityIdentifier("overview.sync-off")
         }
       }

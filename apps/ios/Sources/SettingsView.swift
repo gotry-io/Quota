@@ -331,29 +331,29 @@ struct SettingsView: View {
     Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
   }
 
-  /// Sync is one row: the paywall when the Account has not bought it, the state Relay reports
-  /// plus the system's own management when it has.
+  /// Quota Pro is one row: the paywall when the Account has not bought it, the state Relay
+  /// reports plus the system's own management when it has.
   @ViewBuilder
   private var syncSection: some View {
     Section {
-      if let status = SyncCopy.status(model.entitlement) {
-        LabeledContent(SyncCopy.section, value: status)
+      if let status = ProCopy.status(model.entitlement) {
+        LabeledContent(ProCopy.section, value: status)
           .accessibilityIdentifier("settings.sync.status")
-        Link(SyncCopy.manage, destination: QuotaWebLinks.appleSubscriptions)
+        Link(ProCopy.manage, destination: QuotaWebLinks.appleSubscriptions)
           .accessibilityIdentifier("settings.sync.manage")
       } else {
         NavigationLink {
           PaywallView(model: model)
         } label: {
-          Text(SyncCopy.subscribeRow)
+          Text(ProCopy.subscribeRow)
         }
         .accessibilityIdentifier("settings.sync.subscribe")
       }
     } header: {
-      Text(SyncCopy.section)
+      Text(ProCopy.section)
         .accessibilityIdentifier("section.header.sync")
     } footer: {
-      Text(SyncCopy.sectionFooter)
+      Text(ProCopy.sectionFooter)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("section.footer.sync")
     }

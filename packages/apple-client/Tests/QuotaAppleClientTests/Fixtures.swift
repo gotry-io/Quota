@@ -215,7 +215,7 @@ enum Fixtures {
     status: String = "active",
     expiresAt: String? = "2026-09-14T12:00:00Z",
     willRenew: Bool = true,
-    productID: String? = "quota_sync_monthly",
+    productID: String? = "quota_pro_monthly",
     store: String? = "app_store",
     stale: Bool = false
   ) -> [String: Any] {

@@ -898,7 +898,7 @@ final class QuotaUITests: XCTestCase {
     let row = app.descendants(matching: .any)["overview.sync-off"]
     XCTAssertTrue(row.waitForExistence(timeout: 5), "overview.sync-off")
     XCTAssertTrue(
-      app.staticTexts["Sync is off. Subscribe to see your Macs here."].exists,
+      app.staticTexts["Sync is off: Quota Pro is required."].exists,
       "sync-off copy"
     )
     attachScreenshot(app, name: "overview-sync-off")
@@ -918,6 +918,7 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
     )
+    XCTAssertTrue(app.staticTexts["Quota Pro"].exists, "Quota Pro section")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.sync.status"].waitForExistence(timeout: 5),
       "settings.sync.status"
@@ -931,9 +932,9 @@ final class QuotaUITests: XCTestCase {
       "a paid Account is not offered the paywall"
     )
     XCTAssertTrue(
-      app.staticTexts["Sync is billed through the App Store and managed in your Apple Account."]
+      app.staticTexts["Quota Pro is billed through the App Store and managed in your Apple Account."]
         .exists,
-      "sync footer"
+      "Quota Pro footer"
     )
     attachScreenshot(app, name: "settings-sync-active")
     try audit(app)
@@ -945,6 +946,9 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
     )
+    XCTAssertTrue(app.staticTexts["Quota Pro"].exists, "Quota Pro section")
+    XCTAssertTrue(app.staticTexts["Get Quota Pro"].exists, "Get Quota Pro")
+    attachScreenshot(app, name: "settings-quota-pro")
     openSettingsDestination(app, link: "settings.sync.subscribe", root: "paywall.root")
     XCTAssertTrue(
       app.staticTexts["Every Mac you run QuotaBar on reports into one Account."]
@@ -957,11 +961,16 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["paywall.plan.yearly"].exists,
       "paywall.plan.yearly"
     )
-    XCTAssertTrue(app.staticTexts["7 days free, then $2.99"].exists, "monthly trial detail")
+    XCTAssertTrue(app.staticTexts["7 days free, then $0.99"].exists, "monthly trial detail")
     XCTAssertTrue(
       app.descendants(matching: .any)["paywall.restore"].exists,
       "paywall.restore"
     )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["paywall.redeem-offer-code"].exists,
+      "paywall.redeem-offer-code"
+    )
+    XCTAssertTrue(app.buttons["Redeem Offer Code"].exists, "Redeem Offer Code")
     XCTAssertTrue(app.descendants(matching: .any)["Terms"].exists, "Terms")
     attachScreenshot(app, name: "paywall")
     try audit(app)
@@ -981,6 +990,10 @@ final class QuotaUITests: XCTestCase {
     XCTAssertFalse(
       app.descendants(matching: .any)["paywall.plan.monthly"].exists,
       "no plans without a store"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["paywall.redeem-offer-code"].exists,
+      "no Offer Code row without a store"
     )
     attachScreenshot(app, name: "paywall-unavailable")
     try audit(app)
@@ -1489,6 +1502,8 @@ final class QuotaUITests: XCTestCase {
             "Privacy",
             "Support",
             "\"Terms\" Button",
+            "paywall.redeem-offer-code",
+            "\"Redeem Offer Code\" Button",
             "\"Purchases unavailable in this build.\" StaticText",
             "Manage Devices on Web",
             "Download for Mac",

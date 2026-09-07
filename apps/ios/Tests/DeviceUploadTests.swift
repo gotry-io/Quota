@@ -86,7 +86,7 @@ struct DeviceUploadTests {
     await model.restore()
     #expect(transport.requests.map(\.path) == ["/api/v6/account/summary"])
     #expect(!model.isSyncOn)
-    #expect(model.syncBanner == SyncCopy.offBanner)
+    #expect(model.syncBanner == ProCopy.offBanner)
 
     // An Account whose summary says sync is on, refused at the boundary, says so too, and
     // sends no reading after the refusal.
@@ -97,7 +97,7 @@ struct DeviceUploadTests {
       "/api/v2/device/sync",
     ])
     #expect(!model.isSyncOn)
-    #expect(model.syncBanner == SyncCopy.offBanner)
+    #expect(model.syncBanner == ProCopy.offBanner)
   }
 
   @Test

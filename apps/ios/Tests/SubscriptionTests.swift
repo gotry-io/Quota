@@ -9,20 +9,29 @@ import Testing
 @MainActor
 struct SubscriptionTests {
   @Test
-  func syncStatusIsSpokenFromTheRelayEntitlement() {
+  func proStatusIsSpokenFromTheRelayEntitlement() {
     let expires = Fixtures.date("2026-09-14T12:00:00Z")
     #expect(
-      SyncCopy.status(entitlement(.active, expiresAt: expires, willRenew: true))
-        == "Active · renews \(SyncCopy.date(expires))")
+      ProCopy.status(entitlement(.active, expiresAt: expires, willRenew: true))
+        == "Active · renews \(ProCopy.date(expires))")
     #expect(
-      SyncCopy.status(entitlement(.active, expiresAt: expires, willRenew: false))
-        == "Expires \(SyncCopy.date(expires))")
-    #expect(SyncCopy.status(entitlement(.active, expiresAt: nil, willRenew: true)) == "Active")
-    #expect(SyncCopy.status(entitlement(.grace, expiresAt: expires, willRenew: true)) == "Grace period")
+      ProCopy.status(entitlement(.active, expiresAt: expires, willRenew: false))
+        == "Expires \(ProCopy.date(expires))")
+    #expect(
+      ProCopy.status(entitlement(.active, expiresAt: nil, willRenew: false)) == ProCopy.lifetime)
+    #expect(ProCopy.status(entitlement(.grace, expiresAt: expires, willRenew: true)) == "Grace period")
     // Nothing bought, and a status this build cannot name, both offer the paywall instead.
-    #expect(SyncCopy.status(.unsubscribed) == nil)
-    #expect(SyncCopy.status(entitlement(.expired, expiresAt: expires, willRenew: false)) == nil)
-    #expect(SyncCopy.status(entitlement(.unknown, expiresAt: nil, willRenew: false)) == nil)
+    #expect(ProCopy.status(.unsubscribed) == nil)
+    #expect(ProCopy.status(entitlement(.expired, expiresAt: expires, willRenew: false)) == nil)
+    #expect(ProCopy.status(entitlement(.unknown, expiresAt: nil, willRenew: false)) == nil)
+  }
+
+  @Test
+  func anActiveEntitlementWithoutExpiryIsLifetime() {
+    #expect(
+      ProCopy.status(entitlement(.active, expiresAt: nil, willRenew: false)) == "Lifetime")
+    #expect(
+      ProCopy.status(entitlement(.active, expiresAt: nil, willRenew: true)) == "Lifetime")
   }
 
   @Test
@@ -37,15 +46,16 @@ struct SubscriptionTests {
   @Test
   func offerDetailNamesTheTrialBeforeThePrice() {
     #expect(
-      SyncCopy.offerDetail(offer(.monthly, trialDays: 7)) == "7 days free, then $2.99")
-    #expect(SyncCopy.offerDetail(offer(.monthly, trialDays: nil)) == "$2.99")
+      ProCopy.offerDetail(offer(.monthly, trialDays: 7)) == "7 days free, then $2.99")
+    #expect(ProCopy.offerDetail(offer(.monthly, trialDays: nil)) == "$2.99")
   }
 
   @Test
-  func aSignedInAccountWithoutSyncGetsTheOverviewBanner() async throws {
+  func aSignedInAccountWithoutProGetsTheOverviewBanner() async throws {
     let model = try await signedInModel(status: "none")
     #expect(model.isSyncOn == false)
-    #expect(model.syncBanner == SyncCopy.offBanner)
+    #expect(model.syncBanner == ProCopy.offBanner)
+    #expect(ProCopy.offBanner == "Sync is off: Quota Pro is required.")
   }
 
   @Test
@@ -73,9 +83,9 @@ struct SubscriptionTests {
     await model.loadOffers()
     #expect(model.offers == .loaded([]))
     await model.buy(offer(.monthly, trialDays: 7))
-    #expect(model.purchase == .failed(SyncCopy.unavailable))
+    #expect(model.purchase == .failed(ProCopy.unavailable))
     await model.restore()
-    #expect(model.restoreMessage == SyncCopy.unavailable)
+    #expect(model.restoreMessage == ProCopy.unavailable)
   }
 
   @Test
@@ -98,6 +108,19 @@ struct SubscriptionTests {
   }
 
   @Test
+  func redeemOfferCodeOnlyPresentsTheSheet() async {
+    let store = FakePurchases()
+    let model = SubscriptionModel(purchases: store)
+    var refreshes = 0
+    model.onStoreChange = { refreshes += 1 }
+
+    await model.redeemOfferCode()
+    #expect(store.presentOfferCodeRedemptionCount == 1)
+    #expect(model.purchase == .idle)
+    #expect(refreshes == 0)
+  }
+
+  @Test
   func cancellingLeavesThePaywallAsItWas() async {
     let store = FakePurchases()
     store.outcome = .cancelled
@@ -112,11 +135,11 @@ struct SubscriptionTests {
     store.purchaseFails = true
     let model = SubscriptionModel(purchases: store)
     await model.buy(offer(.monthly, trialDays: 7))
-    #expect(model.purchase == .failed(SyncCopy.purchaseFailed))
+    #expect(model.purchase == .failed(ProCopy.purchaseFailed))
 
     store.restoreFails = true
     await model.restore()
-    #expect(model.restoreMessage == SyncCopy.restoreFailed)
+    #expect(model.restoreMessage == ProCopy.restoreFailed)
     #expect(model.purchase == .idle)
   }
 
@@ -184,7 +207,7 @@ struct SubscriptionTests {
       status: status,
       expiresAt: expiresAt,
       willRenew: willRenew,
-      productID: "quota_sync_monthly",
+      productID: "quota_pro_monthly",
       store: "app_store",
       stale: false
     )
@@ -224,6 +247,7 @@ private final class FakePurchases: PurchasesFacade, @unchecked Sendable {
   var restoreFails = false
   private(set) var loggedIn: [String] = []
   private(set) var logOutCount = 0
+  private(set) var presentOfferCodeRedemptionCount = 0
 
   func logIn(accountID: String) async {
     loggedIn.append(accountID)
@@ -245,6 +269,10 @@ private final class FakePurchases: PurchasesFacade, @unchecked Sendable {
 
   func restorePurchases() async throws {
     if restoreFails { throw SubscriptionError.storeFailure("no") }
+  }
+
+  func presentOfferCodeRedemption() async {
+    presentOfferCodeRedemptionCount += 1
   }
 
   func customerChanges() -> AsyncStream<Void> {

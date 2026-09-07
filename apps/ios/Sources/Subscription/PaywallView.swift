@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The one place Quota sells paid sync.
+/// The one place Quota sells Quota Pro.
 ///
 /// Drawn by the app rather than by a remote template so the copy is reviewed with the rest of
 /// `DESIGN.md`, the offline visual fixtures can render it, and the accessibility audit covers it.
@@ -14,10 +14,10 @@ struct PaywallView: View {
     List {
       Section {
         VStack(alignment: .leading, spacing: 8) {
-          Text(SyncCopy.paywallTitle)
+          Text(ProCopy.paywallTitle)
             .font(.title2.weight(.semibold))
             .accessibilityAddTraits(.isHeader)
-          Text(SyncCopy.paywallSubtitle)
+          Text(ProCopy.paywallSubtitle)
             .font(.subheadline)
             // Full label contrast, not `.secondary`: at subheadline size the secondary label
             // only nearly passes the audit's 4.5:1, and this sentence is what is being sold.
@@ -29,7 +29,7 @@ struct PaywallView: View {
       }
 
       Section {
-        ForEach(Array(SyncCopy.benefits.enumerated()), id: \.offset) { _, benefit in
+        ForEach(Array(ProCopy.benefits.enumerated()), id: \.offset) { _, benefit in
           Label {
             Text(benefit)
               .fixedSize(horizontal: false, vertical: true)
@@ -44,14 +44,20 @@ struct PaywallView: View {
       plansSection
 
       Section {
-        Button(SyncCopy.restore) {
+        Button(ProCopy.restore) {
           Task { await subscription.restore() }
         }
         .accessibilityIdentifier("paywall.restore")
-        Link(SyncCopy.terms, destination: QuotaWebLinks.terms)
-        Link(SyncCopy.privacy, destination: QuotaWebLinks.privacy)
+        if subscription.isAvailable {
+          Button(ProCopy.redeemOfferCode) {
+            Task { await subscription.redeemOfferCode() }
+          }
+          .accessibilityIdentifier("paywall.redeem-offer-code")
+        }
+        Link(ProCopy.terms, destination: QuotaWebLinks.terms)
+        Link(ProCopy.privacy, destination: QuotaWebLinks.privacy)
       } footer: {
-        Text(SyncCopy.sectionFooter)
+        Text(ProCopy.sectionFooter)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("paywall.footer")
       }
@@ -59,7 +65,7 @@ struct PaywallView: View {
     .listStyle(.insetGrouped)
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("paywall.root")
-    .navigationTitle(SyncCopy.paywallTitle)
+    .navigationTitle(ProCopy.paywallTitle)
     .navigationBarTitleDisplayMode(.inline)
     .task { await subscription.loadOffers() }
     .onChange(of: model.isSyncOn) { _, isOn in
@@ -74,7 +80,7 @@ struct PaywallView: View {
   private var plansSection: some View {
     Section {
       if !subscription.isAvailable {
-        StatusMessage(symbolName: "exclamationmark.triangle", text: SyncCopy.unavailable)
+        StatusMessage(symbolName: "exclamationmark.triangle", text: ProCopy.unavailable)
           .accessibilityIdentifier("paywall.unavailable")
       } else {
         switch subscription.offers {
@@ -87,15 +93,15 @@ struct PaywallView: View {
           .accessibilityValue("Loading plans")
           .accessibilityIdentifier("paywall.loading")
         case .failed:
-          StatusMessage(symbolName: "exclamationmark.triangle", text: SyncCopy.offersFailed)
+          StatusMessage(symbolName: "exclamationmark.triangle", text: ProCopy.offersFailed)
             .accessibilityIdentifier("paywall.offers-failed")
-          Button(SyncCopy.retry) {
+          Button(ProCopy.retry) {
             Task { await subscription.loadOffers(force: true) }
           }
           .accessibilityIdentifier("paywall.offers-retry")
         case .loaded(let offers):
           if offers.isEmpty {
-            StatusMessage(symbolName: "exclamationmark.triangle", text: SyncCopy.offersFailed)
+            StatusMessage(symbolName: "exclamationmark.triangle", text: ProCopy.offersFailed)
               .accessibilityIdentifier("paywall.offers-failed")
           } else {
             ForEach(offers) { offer in
@@ -113,7 +119,7 @@ struct PaywallView: View {
       Task { await subscription.buy(offer) }
     } label: {
       LabeledContent {
-        Text(SyncCopy.offerDetail(offer))
+        Text(ProCopy.offerDetail(offer))
           .font(.subheadline.monospacedDigit())
           // The same rule as the headline: the secondary label only nearly passes at this size.
           .foregroundStyle(Color(uiColor: .label))
@@ -124,7 +130,7 @@ struct PaywallView: View {
       }
     }
     .disabled(subscription.purchase == .purchasing)
-    .accessibilityLabel("\(offer.term.title), \(SyncCopy.offerDetail(offer))")
+    .accessibilityLabel("\(offer.term.title), \(ProCopy.offerDetail(offer))")
     .accessibilityIdentifier("paywall.plan.\(offer.term.rawValue)")
   }
 
@@ -145,10 +151,10 @@ struct PaywallView: View {
       .accessibilityValue("Working")
       .accessibilityIdentifier("paywall.working")
     case .confirming:
-      StatusMessage(symbolName: "checkmark.circle", text: SyncCopy.confirming)
+      StatusMessage(symbolName: "checkmark.circle", text: ProCopy.confirming)
         .accessibilityIdentifier("paywall.status")
     case .pending:
-      StatusMessage(symbolName: "clock", text: SyncCopy.pending)
+      StatusMessage(symbolName: "clock", text: ProCopy.pending)
         .accessibilityIdentifier("paywall.status")
     case .failed(let message):
       StatusMessage(symbolName: "exclamationmark.triangle", text: message)
