@@ -412,6 +412,24 @@ func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
   #expect(model.accountDisplayLabel == "Quota account")
 }
 
+@Test @MainActor
+func aSignedInAccountOffersTheWebsiteRedeemLink() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: "octocat")))
+  await model.refreshIfNeeded()
+
+  #expect(model.accountState == .signedIn)
+  #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
+}
+
+@Test @MainActor
+func aSignedOutAccountDoesNotOfferTheWebsiteRedeemLink() async throws {
+  let model = MenuBarViewModel(client: StubLocalService(state: signedOutWithSessionEndedState()))
+  await model.refreshIfNeeded()
+
+  #expect(model.accountState == .signedOut)
+  #expect(model.redeemCodeURL == nil)
+}
+
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,

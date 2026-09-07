@@ -1,24 +1,26 @@
 import Foundation
 import QuotaPresentation
 
-/// Every sentence QuotaBar says about the paid sync subscription.
+/// Every sentence QuotaBar says about Quota Pro.
 ///
-/// Sync is the one capability an account pays for, so the Account page states it where the
+/// Quota Pro is the one thing an account pays for, so the Account page states it where the
 /// account is managed rather than interrupting the panel with a banner. The words are the ones
 /// the website uses for the same entitlement, so a person reading both is told the same thing
 /// twice, not two things once.
-enum SyncStatusCopy {
-  static let title = "Sync"
-  static let notSubscribed = "Not subscribed"
+enum ProStatusCopy {
+  static let title = "Quota Pro"
+  static let notSubscribed = "Not active"
   static let grace = "Grace period · update payment"
   /// Before this Mac has read the account once there is nothing to state yet.
   static let unknown = "Checking…"
-  static let subscribe = "Subscribe…"
+  static let subscribe = "Get Quota Pro…"
   static let manage = "Manage…"
+  static let redeem = "Redeem a code…"
+  static let lifetime = "Lifetime"
   /// Why the Sync Usage switch cannot be turned on.
-  static let uploadNeedsSubscription = "Needs a subscription"
+  static let uploadNeedsSubscription = "Needs Quota Pro"
 
-  /// The status line under **Sync**, which is one line in a 320pt panel.
+  /// The status line under **Quota Pro**, which is one line in a 320pt panel.
   ///
   /// A stale answer says when Relay last managed to check instead of the date it would renew:
   /// the values are that old, so the age is the fact worth the width, and an answer nobody
@@ -32,13 +34,13 @@ enum SyncStatusCopy {
     guard entitlement.stale, let checkedAt = entitlement.checkedAt else {
       return state(entitlement, timeZone: timeZone)
     }
-    return "\(name(entitlement.status)) · checked \(FreshnessCopy.age(since: checkedAt, now: now))"
+    return "\(name(entitlement)) · checked \(FreshnessCopy.age(since: checkedAt, now: now))"
   }
 
   /// The state on its own, for a line that has to spend its width on something else.
-  private static func name(_ status: LocalServiceEntitlementStatus) -> String {
-    switch status {
-    case .active: "Active"
+  private static func name(_ entitlement: LocalServiceEntitlement) -> String {
+    switch entitlement.status {
+    case .active: entitlement.expiresAt == nil ? lifetime : "Active"
     case .grace: "Grace period"
     case .expired, .none, .unknown: notSubscribed
     }
@@ -54,7 +56,7 @@ enum SyncStatusCopy {
     case .grace:
       return grace
     case .active:
-      guard let expiresAt = entitlement.expiresAt else { return "Active" }
+      guard let expiresAt = entitlement.expiresAt else { return lifetime }
       let verb = entitlement.willRenew ? "renews" : "ends"
       return "Active · \(verb) \(date(expiresAt, timeZone: timeZone))"
     case .expired, .none, .unknown:

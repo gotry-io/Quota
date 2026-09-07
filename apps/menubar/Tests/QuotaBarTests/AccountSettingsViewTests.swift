@@ -137,10 +137,10 @@ struct AccountSettingsPageTests {
   }
 }
 
-/// What the Account page says about the subscription sync is paid for.
+/// What the Account page says about Quota Pro.
 ///
-/// Three states, one line each, and the words the website uses for the same entitlement.
-struct SyncStatusCopyTests {
+/// The paid states, one line each, and the words the website uses for the same entitlement.
+struct ProStatusCopyTests {
   private let utc = TimeZone(identifier: "UTC")!
   private let expiresAt = Date(timeIntervalSince1970: 1_791_158_400)  // 2026-10-05T00:00:00Z
   private let checkedAt = Date(timeIntervalSince1970: 1_788_602_400)  // 2026-09-05T10:00:00Z
@@ -164,34 +164,53 @@ struct SyncStatusCopyTests {
   @Test
   func aPaidAccountSaysWhenItRenewsOrEnds() {
     #expect(
-      SyncStatusCopy.status(entitlement(.active), now: now, timeZone: utc)
+      ProStatusCopy.status(entitlement(.active), now: now, timeZone: utc)
         == "Active · renews Oct 5"
     )
     #expect(
-      SyncStatusCopy.status(entitlement(.active, willRenew: false), now: now, timeZone: utc)
+      ProStatusCopy.status(entitlement(.active, willRenew: false), now: now, timeZone: utc)
         == "Active · ends Oct 5"
     )
-    #expect(SyncStatusCopy.action(entitlement(.active)) == "Manage…")
+    #expect(ProStatusCopy.action(entitlement(.active)) == "Manage…")
+  }
+
+  @Test
+  func anActiveAccountWithNoExpiryIsLifetime() {
+    #expect(
+      ProStatusCopy.status(
+        entitlement(.active, willRenew: false, expires: false),
+        now: now,
+        timeZone: utc
+      ) == "Lifetime"
+    )
+    #expect(
+      ProStatusCopy.status(
+        entitlement(.active, willRenew: false, stale: true, expires: false),
+        now: now,
+        timeZone: utc
+      ) == "Lifetime · checked 2h ago"
+    )
+    #expect(ProStatusCopy.action(entitlement(.active, willRenew: false, expires: false)) == "Manage…")
   }
 
   @Test
   func aBillingProblemIsSaidAsOneAndStillSyncs() {
     let grace = entitlement(.grace)
     #expect(
-      SyncStatusCopy.status(grace, now: now, timeZone: utc)
+      ProStatusCopy.status(grace, now: now, timeZone: utc)
         == "Grace period · update payment"
     )
     #expect(grace.allowsSync)
-    #expect(SyncStatusCopy.action(grace) == "Manage…")
+    #expect(ProStatusCopy.action(grace) == "Manage…")
   }
 
   @Test
   func anAccountThatDoesNotPaySaysSoAndIsOfferedTheWayToStart() {
     for status in [LocalServiceEntitlementStatus.expired, .none, .unknown] {
       let value = entitlement(status, willRenew: false)
-      #expect(SyncStatusCopy.status(value, now: now, timeZone: utc) == "Not subscribed")
+      #expect(ProStatusCopy.status(value, now: now, timeZone: utc) == "Not active")
       #expect(!value.allowsSync)
-      #expect(SyncStatusCopy.action(value) == "Subscribe…")
+      #expect(ProStatusCopy.action(value) == "Get Quota Pro…")
     }
   }
 
@@ -200,15 +219,22 @@ struct SyncStatusCopyTests {
   @Test
   func aStaleAnswerNamesWhenItWasLastCheckedInsteadOfWhenItRenews() {
     #expect(
-      SyncStatusCopy.status(entitlement(.active, stale: true), now: now, timeZone: utc)
+      ProStatusCopy.status(entitlement(.active, stale: true), now: now, timeZone: utc)
         == "Active · checked 2h ago"
     )
     #expect(
-      SyncStatusCopy.status(entitlement(.grace, stale: true), now: now, timeZone: utc)
+      ProStatusCopy.status(entitlement(.grace, stale: true), now: now, timeZone: utc)
         == "Grace period · checked 2h ago"
     )
     // Nothing read yet is not the same as nothing bought.
-    #expect(SyncStatusCopy.status(nil, now: now, timeZone: utc) == "Checking…")
+    #expect(ProStatusCopy.status(nil, now: now, timeZone: utc) == "Checking…")
+  }
+
+  @Test
+  func quotaProCopyNamesTheProductAndTheRedeemEntry() {
+    #expect(ProStatusCopy.title == "Quota Pro")
+    #expect(ProStatusCopy.redeem == "Redeem a code…")
+    #expect(ProStatusCopy.uploadNeedsSubscription == "Needs Quota Pro")
   }
 }
 
@@ -242,6 +268,7 @@ struct SyncAccountStateTests {
     #expect(model.syncIsPaid)
     #expect(model.syncActionLabel == "Manage…")
     #expect(model.syncActionURL == AppMetadata.manageSubscriptionURL)
+    #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
     #expect(model.syncUsageDisabledReason == nil)
   }
 
@@ -254,10 +281,26 @@ struct SyncAccountStateTests {
     )
 
     #expect(!model.syncIsPaid)
-    #expect(model.syncStatusLabel == "Not subscribed")
-    #expect(model.syncActionLabel == "Subscribe…")
+    #expect(model.syncStatusLabel == "Not active")
+    #expect(model.syncActionLabel == "Get Quota Pro…")
     #expect(model.syncActionURL == purchaseURL)
-    #expect(model.syncUsageDisabledReason == "Needs a subscription")
+    #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
+    #expect(model.syncUsageDisabledReason == "Needs Quota Pro")
+  }
+
+  @Test
+  func aLifetimeAccountSaysSoAndStillManages() async {
+    let model = await model(
+      LocalServiceEntitlement(
+        status: .active, expiresAt: nil, willRenew: false, stale: false, checkedAt: nil
+      )
+    )
+
+    #expect(model.syncIsPaid)
+    #expect(model.syncStatusLabel == "Lifetime")
+    #expect(model.syncActionLabel == "Manage…")
+    #expect(model.syncActionURL == AppMetadata.manageSubscriptionURL)
+    #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
   }
 
   /// Before the first account read there is no entitlement to state, and Sync Usage is not
@@ -269,5 +312,18 @@ struct SyncAccountStateTests {
     #expect(!model.syncIsPaid)
     #expect(model.syncStatusLabel == "Checking…")
     #expect(model.syncUsageDisabledReason == nil)
+    #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
+  }
+
+  @Test
+  func aSignedOutAccountDoesNotOfferRedeem() async {
+    let model = MenuBarViewModel(
+      client: StubLocalService(state: signedOutWithSessionEndedState())
+    )
+    await model.refreshIfNeeded()
+
+    #expect(model.accountState != .signedIn)
+    #expect(model.redeemCodeURL == nil)
+    #expect(AccountSettingsItem.items(for: model.accountState).isEmpty)
   }
 }

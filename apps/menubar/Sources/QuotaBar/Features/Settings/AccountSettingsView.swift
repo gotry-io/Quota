@@ -63,22 +63,14 @@ struct AccountSettingsView: View {
 
     case .sync:
       SettingsListRow(
-        title: SyncStatusCopy.title,
+        title: ProStatusCopy.title,
         subtitle: model.syncStatusLabel,
         systemImage: "checkmark.seal"
       ) {
-        // Nothing is offered until the account read has said where to buy it; that state is
-        // the one the status line calls "Checking…".
-        if let url = model.syncActionURL {
-          Button(model.syncActionLabel) {
-            NSWorkspace.shared.open(url)
-          }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-        }
+        proRowActions
       }
       .accessibilityElement(children: .contain)
-      .accessibilityLabel("\(SyncStatusCopy.title): \(model.syncStatusLabel)")
+      .accessibilityLabel("\(ProStatusCopy.title): \(model.syncStatusLabel)")
 
     case .syncUsage:
       SettingsListRow(
@@ -130,6 +122,41 @@ struct AccountSettingsView: View {
 
     case .signOut:
       EmptyView()
+    }
+  }
+
+  /// The row's one control: Get/Manage as a split button whose menu holds "Redeem a code…".
+  ///
+  /// Nothing is offered until the account read has said where to buy it; that state is the one
+  /// the status line calls "Checking…". The 320pt row cannot hold two full labels, and the
+  /// purchase is the action a reader came for, so it keeps the button face and the code moves
+  /// behind its chevron.
+  @ViewBuilder
+  private var proRowActions: some View {
+    if let actionURL = model.syncActionURL {
+      if let redeemURL = model.redeemCodeURL {
+        Menu {
+          Button(ProStatusCopy.redeem) {
+            NSWorkspace.shared.open(redeemURL)
+          }
+          .accessibilityLabel("Redeem a code")
+        } label: {
+          Text(model.syncActionLabel)
+        } primaryAction: {
+          NSWorkspace.shared.open(actionURL)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize()
+        .accessibilityLabel(model.syncActionLabel)
+      } else {
+        Button(model.syncActionLabel) {
+          NSWorkspace.shared.open(actionURL)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+      }
     }
   }
 
