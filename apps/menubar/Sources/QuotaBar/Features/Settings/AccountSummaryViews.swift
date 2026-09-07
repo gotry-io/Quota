@@ -221,9 +221,9 @@ struct AccountUsageView: View {
             }
           }
 
-          if !usage.projects.isEmpty {
+          if let projects = usage.projects, !projects.isEmpty {
             SettingsSection(title: "Projects") {
-              projectUsage(usage.projects)
+              projectUsage(projects)
             }
           }
 
@@ -405,7 +405,7 @@ struct AccountUsageView: View {
       days: usage.days,
       hoursOfDay: usage.hoursOfDay,
       models: localModels,
-      projects: source == .local && model.groupUsageByProject ? usage.projects : []
+      projects: source == .local && model.groupUsageByProject ? usage.projects : nil
     )
   }
 
@@ -883,7 +883,9 @@ private struct PresentedUsage: Equatable {
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
   let models: [PresentedUsageModel]
-  let projects: [LocalUsageProjectSummary]
+  /// This Mac's attribution, when the source is this Mac and grouping is on; the Account
+  /// source has none.
+  let projects: [LocalUsageProjectSummary]?
 }
 
 private struct PresentedUsageProvider: Identifiable {
