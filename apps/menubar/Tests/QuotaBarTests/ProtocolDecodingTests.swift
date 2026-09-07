@@ -905,8 +905,8 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
   #expect(decoded.agents.first?.providers.first?.models.first?.model == "gpt-5.5")
   #expect(decoded.agents.first?.providers.first?.models.first?.totals.messages == 1)
   #expect(decoded.cacheSaved.status == .complete)
-  #expect(decoded.projects.map(\.projectKey) == ["Quota", "other"])
-  #expect(decoded.projects.map(\.displayName) == ["Quota", "Other"])
+  #expect(decoded.projects?.map(\.projectKey) == ["Quota", "other"])
+  #expect(decoded.projects?.map(\.displayName) == ["Quota", "Other"])
   #expect(decoded.days?.map(\.date) == ["2026-08-10"])
   #expect(decoded.hoursOfDay?.count == 24)
   #expect(decoded.hoursOfDay?[12].totalTokens == 1)
@@ -1204,4 +1204,28 @@ func decodesVersionedPricingCatalogWithoutRequiringBuiltInEntries() throws {
   let catalog = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: data)
   #expect(catalog.entries.first?.rates.uncachedInputPerMillion == "1.25")
   #expect(catalog.entries.first?.sourceURL.scheme == "https")
+}
+
+/// The Account read answers a period without `projects`: attribution stays on the Mac that made
+/// it (ADR 0039), so the key is absent rather than empty, and the state that carries such a
+/// period still decodes — a signed-in QuotaBar reads one on every refresh.
+@Test
+func anAccountPeriodWithoutProjectsDecodes() throws {
+  let json = """
+    {
+      "totals": {"total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_tokens": 0,
+        "messages": 0},
+      "cost": {"amount_microusd": null, "basis": "none", "mode": "auto", "status": "complete",
+        "catalog_revision": "official-2026-09-06-1", "calculated_rows": 0, "reported_rows": 0,
+        "unpriced_rows": 0, "unpriced": [], "assumptions": []},
+      "cache_saved": {"amount_microusd": "0", "status": "complete", "unpriced_rows": 0},
+      "agents": []
+    }
+    """
+  let decoded = try QuotaWireCodec.makeDecoder().decode(
+    LocalUsagePeriodSummary.self, from: Data(json.utf8))
+  #expect(decoded.projects == nil)
+  #expect(decoded.days == nil)
+  #expect(decoded.isValid)
 }

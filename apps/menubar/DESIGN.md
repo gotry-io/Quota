@@ -628,7 +628,8 @@ The default page contains:
   a whole-percent share. Omit the section when every hour is empty. Account hours come from
   `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-- Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
+- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
+  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
   repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
   as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
   Account Usage has no such section.

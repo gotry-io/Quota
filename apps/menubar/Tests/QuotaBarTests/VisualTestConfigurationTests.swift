@@ -84,9 +84,9 @@
     #expect(configuration.textSize == .accessibility)
     #expect(model.groupUsageByProject)
     #expect(
-      model.usagePeriods?.local.today?.usage.projects.map(\.projectKey) == ["Quota", "other"])
+      model.usagePeriods?.local.today?.usage.projects?.map(\.projectKey) == ["Quota", "other"])
     #expect(
-      model.usagePeriods?.local.today?.usage.projects.map(\.displayName) == ["Quota", "Other"])
+      model.usagePeriods?.local.today?.usage.projects?.map(\.displayName) == ["Quota", "Other"])
     #expect(model.accountState == .signedIn)
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])

@@ -316,16 +316,18 @@ struct LocalUsageHourOfDay: Codable, Equatable, Sendable {
   }
 }
 
-/// One period of this Mac's own Usage.
+/// One period of Usage, from this Mac or from the Account.
 ///
 /// `days` and `hoursOfDay` describe a period bounded by two local midnights, so the three
-/// trailing periods carry them and `all` — every retained day — does not.
+/// trailing periods carry them and `all` — every retained day — does not. `projects` is this
+/// Mac's attribution and stays on this Mac (ADR 0039): a period the Account read answers has no
+/// such key, which is different from a period this Mac attributed to no project.
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
   let cacheSaved: UsageCacheSaved
   let agents: [LocalUsageAgentSummary]
-  let projects: [LocalUsageProjectSummary]
+  let projects: [LocalUsageProjectSummary]?
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
   let modelsTruncated: Bool?
@@ -345,8 +347,8 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     totals.isValid && cost.isValid && cacheSaved.isValid
       && agents.count <= BillingAgent.allCases.count
       && agents.allSatisfy(\.isValid)
-      && projects.count <= 50
-      && projects.allSatisfy(\.isValid)
+      && (projects?.count ?? 0) <= 50
+      && (projects?.allSatisfy(\.isValid) ?? true)
       && (days?.count ?? 0) <= 31
       && (days?.allSatisfy(\.isValid) ?? true)
       && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
@@ -367,7 +369,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     cost: UsageCostOutcome,
     cacheSaved: UsageCacheSaved,
     agents: [LocalUsageAgentSummary],
-    projects: [LocalUsageProjectSummary] = [],
+    projects: [LocalUsageProjectSummary]? = nil,
     days: [LocalUsageDay]? = nil,
     hoursOfDay: [LocalUsageHourOfDay]? = nil,
     modelsTruncated: Bool? = nil
@@ -392,7 +394,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
     cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
     agents = try container.decode([LocalUsageAgentSummary].self, forKey: .agents)
-    projects = try container.decode([LocalUsageProjectSummary].self, forKey: .projects)
+    projects = try container.decodeIfPresent([LocalUsageProjectSummary].self, forKey: .projects)
     days = try container.decodeIfPresent([LocalUsageDay].self, forKey: .days)
     hoursOfDay = try container.decodeIfPresent([LocalUsageHourOfDay].self, forKey: .hoursOfDay)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
