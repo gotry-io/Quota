@@ -475,8 +475,8 @@ test("screenshot account fixture matches AccountResponse", () => {
 test("landing provider marks resolve to files", async ({ page }) => {
   await page.goto("/");
   const providers = page.locator(".catalog-grid .name-list").first();
-  await expect(providers.locator("li")).toHaveCount(10);
-  await expect(providers.locator("img.provider-mark")).toHaveCount(10);
+  await expect(providers.locator("li")).toHaveCount(12);
+  await expect(providers.locator("img.provider-mark")).toHaveCount(12);
   for (const img of await providers.locator("img.provider-mark").all()) {
     expect(await img.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(
       0,

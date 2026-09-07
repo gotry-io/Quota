@@ -15,8 +15,9 @@ subscription quota and privacy-preserving Usage together across a user's devices
   `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
-Cursor, Gemini CLI, and GitHub Copilot; local Usage analytics supports Codex, Claude Code, Grok,
-OpenCode, Pi, Cursor, Gemini CLI, and GitHub Copilot logs.
+Cursor, Gemini CLI, GitHub Copilot, Antigravity, and OpenCode Go; local Usage analytics supports
+Codex, Claude Code, Grok, OpenCode, Pi, Cursor, Gemini CLI, GitHub Copilot, Kilo, and Antigravity
+logs.
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
 never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
 session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see

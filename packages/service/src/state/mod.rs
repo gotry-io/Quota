@@ -3246,6 +3246,8 @@ fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
         "cursor" => UsageAgent::Cursor,
         "gemini" => UsageAgent::Gemini,
         "copilot" => UsageAgent::Copilot,
+        "kilo" => UsageAgent::Kilo,
+        "antigravity" => UsageAgent::Antigravity,
         _ => return None,
     })
 }

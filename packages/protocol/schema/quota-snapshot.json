@@ -44,7 +44,9 @@
             "litellm",
             "cursor",
             "gemini",
-            "copilot"
+            "copilot",
+            "antigravity",
+            "opencode_go"
           ]
         },
         "account": {

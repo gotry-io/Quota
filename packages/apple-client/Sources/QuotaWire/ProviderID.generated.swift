@@ -21,6 +21,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
   case `cursor`
   case `gemini`
   case `copilot`
+  case `antigravity`
+  case `opencode_go`
   case unknown(String)
 
   /// Every provider this build knows. An unknown id is not one of them.
@@ -35,6 +37,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     .`cursor`,
     .`gemini`,
     .`copilot`,
+    .`antigravity`,
+    .`opencode_go`,
   ]
 
   public init?(rawValue: String) {
@@ -64,6 +68,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`cursor`: "cursor"
     case .`gemini`: "gemini"
     case .`copilot`: "copilot"
+    case .`antigravity`: "antigravity"
+    case .`opencode_go`: "opencode_go"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -84,6 +90,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`cursor`: "Cursor"
     case .`gemini`: "Gemini CLI"
     case .`copilot`: "GitHub Copilot"
+    case .`antigravity`: "Antigravity"
+    case .`opencode_go`: "OpenCode Go"
     case .unknown: "Unknown provider"
     }
   }
@@ -100,6 +108,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     case .`cursor`: 7
     case .`gemini`: 8
     case .`copilot`: 9
+    case .`antigravity`: 10
+    case .`opencode_go`: 11
     case .unknown: Int.max
     }
   }
@@ -144,6 +154,8 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
       exclusive: true)
     case .`gemini`: nil
     case .`copilot`: nil
+    case .`antigravity`: nil
+    case .`opencode_go`: nil
     case .unknown: nil
     }
   }

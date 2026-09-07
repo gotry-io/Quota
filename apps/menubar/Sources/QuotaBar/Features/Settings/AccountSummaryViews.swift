@@ -997,6 +997,8 @@ extension BillingAgent {
     case .cursor: "cursor"
     case .gemini: "gemini"
     case .copilot: "copilot"
+    case .kilo: "kilo"
+    case .antigravity: "antigravity"
     case .unknown: nil
     }
   }

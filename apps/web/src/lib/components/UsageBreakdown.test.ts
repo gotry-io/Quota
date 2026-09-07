@@ -62,6 +62,8 @@ it("maps agent ids to their display names", () => {
     "cursor",
     "gemini",
     "copilot",
+    "kilo",
+    "antigravity",
   ] as const;
   render(UsageBreakdown, {
     period: period({

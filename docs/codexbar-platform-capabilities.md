@@ -293,6 +293,8 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 | DeepSeek | 有 key→API（可叠加 Chrome localStorage `userToken` 取月度明细）；无 key→Platform Web（同一 token） | **有意差异**：仅 API balance。Platform 路径的 token 来源是浏览器 localStorage（安全基线排除）或 `DEEPSEEK_PLATFORM_TOKEN` 手工粘贴；其增量是月度花费明细（cost，不是 quota），余额与 API key 路径相同 |
 | OpenRouter | `/credits` + `/key` 额度；`/activity` 花费历史 | 额度已对齐；`/activity` 属 cost，不在 quota 范围 |
 | LiteLLM | `key/info` → `user/info` / `team/info`，含 `budget_reset_at` | 已对齐 |
+| Antigravity Auto | app LSP → `agy` CLI HTTPS → IDE LSP → OAuth（有 oauth 凭证时） | **有意差异**：不 attach language_server、不 spawn `agy`。只读官方 CLI 文件 `~/.gemini/antigravity-cli/antigravity-oauth-token`，打 Cloud Code Assist `loadCodeAssist` + `retrieveUserQuotaSummary` / `retrieveUserQuota`。不读 CodexBar 的 `~/.codexbar/antigravity/oauth_creds.json`，不从 Antigravity.app 二进制抠 OAuth client；过期且文件里没有 client 就 `auth_required`。macOS Keychain 不读。 |
+| OpenCode Go Auto | unscoped: local → api → web | 已对齐 unscoped 的 local（`opencode.db` + 文档 $12/$30/$60 限额）→ API `GET /zen/go/v1/usage`。**有意差异**：不做 web——`opencode.ai/_server` 不是公开额度 API。 |
 | Usage & Spend 集合 | 11 个 supportsTokenCost | Quota Usage 为本机 agent 扫描集 |
 | 采集阶梯总则 | 各 provider 允许 CLI / PTY / cookie 阶梯 | **有意差异**：定时刷新路径不 spawn 任何 provider CLI 取额度，`browser_session` 声明给 Codex、Claude、Grok、Kimi、Cursor 五家（只有 Cursor 是 `exclusive`）。凭据过期一律报 `auth_required`，恢复文案指向拥有该 grant 的程序。CLI 子进程只有两类，都跑在采集之前的 refresh worker 上、都不读额度：上面几行的 `--version`（按二进制指纹缓存，同一 binary 至多跑一次），以及 Claude Code / Codex / Grok 过期时各一次的续期（`claude mcp list` / `codex -s read-only -a never app-server` / `grok agent stdio`，定时刷新每 provider 每小时至多一次，Recheck 或手动刷新跳过该小时，共用 `cache.sqlite` 里同一条记录）|
 

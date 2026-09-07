@@ -97,9 +97,9 @@ test("works-with names come from the catalog and billing agents", () => {
     .slice()
     .sort((left, right) => left.order - right.order)
     .map((provider) => provider.display_name);
-  assert.equal(catalogNames.length, 10);
+  assert.equal(catalogNames.length, 12);
   assert.deepEqual(PROVIDER_DISPLAY_NAMES, catalogNames);
-  assert.equal(AGENT_DISPLAY_NAMES.length, 8);
+  assert.equal(AGENT_DISPLAY_NAMES.length, 10);
   assert.deepEqual(
     AGENT_DISPLAY_NAMES,
     BILLING_AGENTS.map((agent) => agentDisplayName(agent)),
@@ -113,7 +113,7 @@ test("works-with names come from the catalog and billing agents", () => {
 });
 
 test("every catalog provider mark resolves to a file", () => {
-  assert.equal(catalog.providers.length, 10);
+  assert.equal(catalog.providers.length, 12);
   for (const provider of catalog.providers) {
     const asset = join(root, `../static/providers/${provider.brand_icon_asset}.svg`);
     assert.equal(existsSync(asset), true, provider.brand_icon_asset);
