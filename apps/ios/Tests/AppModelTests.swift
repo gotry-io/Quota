@@ -5,6 +5,7 @@ import QuotaProviderSessions
 import QuotaPresentation
 import QuotaProviderStatus
 import QuotaRelay
+import QuotaWidgetData
 import QuotaWire
 import Testing
 

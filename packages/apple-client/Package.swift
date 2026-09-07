@@ -14,6 +14,8 @@ let package = Package(
     .library(name: "QuotaRelay", targets: ["QuotaRelay"]),
     .library(name: "QuotaAccount", targets: ["QuotaAccount"]),
     .library(name: "QuotaWidgetData", targets: ["QuotaWidgetData"]),
+    .library(name: "QuotaWidgetViews", targets: ["QuotaWidgetViews"]),
+    .library(name: "QuotaWidgetProjection", targets: ["QuotaWidgetProjection"]),
     .library(name: "QuotaProviderWeb", targets: ["QuotaProviderWeb"]),
     .library(name: "QuotaProviderSessions", targets: ["QuotaProviderSessions"]),
     .library(name: "QuotaProviderStatus", targets: ["QuotaProviderStatus"]),
@@ -52,6 +54,24 @@ let package = Package(
       name: "QuotaWidgetData",
       dependencies: [.product(name: "QuotaPresentation", package: "QuotaAppleShared")]
     ),
+    // The widget extensions link this and nothing else that speaks to Relay: no QuotaWire, no
+    // Keychain, no URLSession (docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
+    .target(
+      name: "QuotaWidgetViews",
+      dependencies: [
+        "QuotaWidgetData",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
+    ),
+    // The publishing side, which speaks QuotaWire. Both apps use it; neither extension does.
+    .target(
+      name: "QuotaWidgetProjection",
+      dependencies: [
+        "QuotaWidgetData",
+        "QuotaWire",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
+    ),
     .target(
       name: "QuotaProviderStatus",
       dependencies: [
@@ -64,6 +84,10 @@ let package = Package(
       dependencies: [
         "QuotaWire", "QuotaRelay", "QuotaAccount", "QuotaWidgetData", "QuotaKeychain",
       ]
+    ),
+    .testTarget(
+      name: "QuotaWidgetViewsTests",
+      dependencies: ["QuotaWidgetViews", "QuotaWidgetProjection", "QuotaWire"]
     ),
     .testTarget(
       name: "QuotaProviderWebTests",

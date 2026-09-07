@@ -1,6 +1,7 @@
 import Foundation
 import QuotaPresentation
 import QuotaWidgetData
+import QuotaWidgetViews
 import Testing
 
 @testable import Quota

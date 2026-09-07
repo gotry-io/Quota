@@ -1,0 +1,4 @@
+module QuotaBarKeychainShim {
+  header "QuotaBarKeychainShim.h"
+  export *
+}

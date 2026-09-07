@@ -6,6 +6,11 @@
 - Updated 2026-09-04: locally salted `selection_id`; unpublished v2 shape changes in place
 - Updated 2026-09-06: the same snapshot is the widget file for every Apple WidgetKit
   surface; optional per-item `pace` joins version 2 in place
+- Updated 2026-09-07: QuotaBar now embeds that extension, so "when an extension can be embedded"
+  is no longer a condition. Its App Group is `86Y537ZF24.group.io.gotry.quota` — a Developer ID Mac
+  app may only join a team-prefixed group — and the views, selection rules, and publishing
+  projection are shared packages
+  ([ADR 0043](./0043-one-widget-view-package-for-both-platforms.md))
 
 ## Context
 
@@ -19,8 +24,8 @@ last published projection.
 
 Publish a non-secret, versioned `WidgetSnapshot` from the app process into the App Group
 `group.io.gotry.quota`. The WidgetKit extension reads only that protected file and never talks to
-Relay. macOS widgets, when an extension can be embedded in QuotaBar, read the same file format
-from the same App Group identifier on that platform. They do not get a second snapshot type.
+Relay. QuotaBar publishes the same file format into its own App Group on macOS,
+`86Y537ZF24.group.io.gotry.quota`. They do not get a second snapshot type.
 
 - The app is the only process that performs OAuth, holds the Keychain account session, calls Relay,
   and projects Account summary data into `WidgetSnapshot`.
@@ -33,9 +38,11 @@ from the same App Group identifier on that platform. They do not get a second sn
   configuration is not stored in the snapshot. The snapshot stores remaining quota; Lock Screen
   families may show the complement as used percent. Pace is carried, never computed, inside the
   extension.
-- The extension target `QuotaWidgets` (`io.gotry.quota.widgets`) embeds in Quota, uses the same App
-  Group, and depends only on `QuotaWidgetData` and `QuotaPresentation`. It must not import or link
-  `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain.
+- The extension targets `QuotaWidgets` (`io.gotry.quota.widgets`, in Quota) and `QuotaBarWidgets`
+  (`io.gotry.quotabar.widgets`, in QuotaBar) embed in their app, use its App Group, and depend only
+  on `QuotaWidgetData`, `QuotaWidgetViews`, and `QuotaPresentation`. They must not import or link
+  `QuotaWire`, `QuotaRelay`, `QuotaAccount`, Security, or use `URLSession`/Keychain — which is why
+  the publishing projection is a separate package neither of them links.
 - Timeline policy inside the extension is local only: a placeholder plus a modest fifteen-minute
   refresh so reset and updated ages advance. The extension never fetches. What it draws is
   republished by the app process, on a foreground refresh and on a `BGAppRefreshTask`
@@ -44,7 +51,8 @@ from the same App Group identifier on that platform. They do not get a second sn
   available and when it stops describing current quota — rather than a verdict. The extension
   re-draws on its own timeline and applies the shared rule at the instant it renders, exactly as the
   app does; a published verdict would freeze at publish time and keep claiming a sleeping device's
-  counters are current. That shape is snapshot version 2, and a version 1 file is rejected by the
+  counters are current. QuotaBar publishes on every state update instead of on a background task,
+  because its private service is already awake and holds the readings. That shape is snapshot version 2, and a version 1 file is rejected by the
   version gate so the app republishes. iOS has not shipped, so `selection_id` joins version 2 in
   place rather than as a new version; a file missing it is rejected and the app republishes.
 - Each item's `selection_id` is the first twelve lowercase hex characters of

@@ -1,7 +1,7 @@
-import CryptoKit
 import Foundation
 import QuotaAccount
 import QuotaKeychain
+import QuotaPresentation
 import Security
 
 /// The 32-byte installation salt mixed into every widget `selection_id`.
@@ -17,18 +17,6 @@ protocol SelectionSaltStore: Sendable {
 enum SelectionSaltStoreError: Error, Equatable, Sendable {
   case unreadable
   case unwritable
-}
-
-enum SelectionIDs {
-  /// `SHA-256(selector ‖ "|" ‖ salt)` truncated to twelve lowercase hex characters.
-  static func make(selector: String, salt: Data) -> String {
-    var preimage = Data(selector.utf8)
-    preimage.append(contentsOf: Data("|".utf8))
-    preimage.append(salt)
-    let digest = SHA256.hash(data: preimage)
-    let hex = digest.map { String(format: "%02x", $0) }.joined()
-    return String(hex.prefix(12))
-  }
 }
 
 final class InMemorySelectionSaltStore: SelectionSaltStore, @unchecked Sendable {

@@ -3,30 +3,40 @@ import QuotaPresentation
 import QuotaWidgetData
 import QuotaWire
 
-enum WidgetSnapshotProjection {
+/// One subscription a client is willing to publish, already named by its locally salted
+/// `selection_id`. `sourceKey` never leaves this file: it only breaks ranking ties.
+public struct WidgetProjectionSubscription: Sendable {
+  public var snapshot: QuotaSnapshot
+  public var selectionID: String
+  public var sourceKey: String
+
+  public init(snapshot: QuotaSnapshot, selectionID: String, sourceKey: String) {
+    self.snapshot = snapshot
+    self.selectionID = selectionID
+    self.sourceKey = sourceKey
+  }
+}
+
+/// The one rule that turns resolved subscriptions into the App Group `WidgetSnapshot`, shared by
+/// Quota on iOS and QuotaBar on macOS so both platforms rank and word the same readings the same
+/// way. It lives beside the wire types rather than in `QuotaWidgetData` because it speaks
+/// `QuotaSnapshot`, and the widget extensions must not link `QuotaWire`
+/// ([ADR 0014](../../../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)).
+public enum WidgetSnapshotProjection {
   /// The widget draws the merged readings, without distinguishing which device took them: a
   /// subscription this iPhone read for itself ranks beside one a Mac reported.
   ///
-  /// Today Usage is the Account's, so a phone with no account has none — the widget then shows
-  /// no usage rather than a zero it did not measure.
-  static func make(
-    subscriptions: [QuotaSubscription],
-    today: UsagePeriod?,
-    fetchedAt: Date,
-    salt: Data
+  /// Today Usage is what the publishing client can account for, so a client with none shows no
+  /// usage rather than a zero it did not measure.
+  public static func make(
+    subscriptions: [WidgetProjectionSubscription],
+    today: WidgetTodayUsage?,
+    fetchedAt: Date
   ) -> WidgetSnapshot {
-    let items = projectItems(from: subscriptions, salt: salt, now: fetchedAt)
-    let usage = today.map {
-      WidgetTodayUsage(
-        inputTokens: $0.totals.inputTokens,
-        outputTokens: $0.totals.outputTokens,
-        cost: mapCost($0.cost)
-      )
-    }
-    return WidgetSnapshot(
+    WidgetSnapshot(
       fetchedAt: fetchedAt,
-      items: items,
-      today: usage
+      items: projectItems(from: subscriptions, now: fetchedAt),
+      today: today
         ?? WidgetTodayUsage(
           inputTokens: 0,
           outputTokens: 0,
@@ -35,28 +45,26 @@ enum WidgetSnapshotProjection {
     )
   }
 
-  /// Every subscription reaches the widget as one row with its readings already resolved, so the
-  /// widget ranks those rows rather than one card per reporting device.
+  /// Every subscription reaches the widget as one row per window with its readings already
+  /// resolved, so the widget ranks those rows rather than one card per reporting device.
   ///
   /// `now` is the instant the readings were fetched: pace is a rate read against the window
   /// elapsed at that moment, so the snapshot states the pace of what it carries rather than one
   /// the widget would have to recompute against its own clock.
-  static func projectItems(
-    from subscriptions: [QuotaSubscription],
-    salt: Data,
+  public static func projectItems(
+    from subscriptions: [WidgetProjectionSubscription],
     now: Date
   ) -> [WidgetQuotaItem] {
     let candidates = subscriptions.flatMap { subscription in
-      let selectionID = selectionID(for: subscription, salt: salt)
-      return subscription.snapshot.windows.map { window in
+      subscription.snapshot.windows.map { window in
         WidgetSnapshotCandidate(
           snapshot: subscription.snapshot,
           window: window,
           providerID: subscription.snapshot.provider.rawValue,
           fingerprint: subscription.snapshot.account.fingerprint,
-          sourceID: subscription.key,
+          sourceID: subscription.sourceKey,
           windowID: window.id,
-          selectionID: selectionID,
+          selectionID: subscription.selectionID,
           now: now
         )
       }
@@ -67,6 +75,18 @@ enum WidgetSnapshotProjection {
     return Array((percentage + balanceOnly).prefix(WidgetSnapshot.maximumItemCount)).map(\.item)
   }
 
+  /// The Today fold both clients publish, from the totals and cost they already hold.
+  public static func todayUsage(
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome
+  ) -> WidgetTodayUsage {
+    WidgetTodayUsage(
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      cost: mapCost(cost)
+    )
+  }
+
   private static func percentageSort(
     _ lhs: WidgetSnapshotCandidate,
     _ rhs: WidgetSnapshotCandidate
@@ -74,27 +94,17 @@ enum WidgetSnapshotProjection {
     if lhs.remainingPercent != rhs.remainingPercent {
       return lhs.remainingPercent < rhs.remainingPercent
     }
-    let leftOrder = providerSortOrder(lhs.providerID)
-    let rightOrder = providerSortOrder(rhs.providerID)
-    if leftOrder != rightOrder {
-      return leftOrder < rightOrder
-    }
-    if lhs.windowTitle != rhs.windowTitle {
-      return lhs.windowTitle < rhs.windowTitle
-    }
-    if lhs.providerID != rhs.providerID {
-      return lhs.providerID < rhs.providerID
-    }
-    if lhs.fingerprint != rhs.fingerprint {
-      return lhs.fingerprint < rhs.fingerprint
-    }
-    if lhs.sourceID != rhs.sourceID {
-      return lhs.sourceID < rhs.sourceID
-    }
-    return lhs.windowID < rhs.windowID
+    return tieBreak(lhs, rhs)
   }
 
   private static func balanceOnlySort(
+    _ lhs: WidgetSnapshotCandidate,
+    _ rhs: WidgetSnapshotCandidate
+  ) -> Bool {
+    tieBreak(lhs, rhs)
+  }
+
+  private static func tieBreak(
     _ lhs: WidgetSnapshotCandidate,
     _ rhs: WidgetSnapshotCandidate
   ) -> Bool {
@@ -120,34 +130,6 @@ enum WidgetSnapshotProjection {
 
   private static func providerSortOrder(_ providerID: String) -> Int {
     ProviderID(rawValue: providerID)?.sortOrder ?? Int.max
-  }
-
-  /// `SHA-256(selector ‖ "|" ‖ salt)` truncated to twelve lowercase hex characters.
-  static func selectionID(for subscription: QuotaSubscription, salt: Data) -> String {
-    SelectionIDs.make(selector: selector(for: subscription), salt: salt)
-  }
-
-  static func selector(for subscription: QuotaSubscription) -> String {
-    SubscriptionSelector.make(
-      provider: subscription.snapshot.provider.rawValue,
-      fingerprint: subscription.snapshot.account.fingerprint,
-      fingerprintScope: subscription.snapshot.account.fingerprintScope.rawValue,
-      sourceID: selectorSourceID(from: subscription)
-    )
-  }
-
-  /// The resolved key is `provider|fingerprint|scope|source_id`; none of the four parts
-  /// contain `|`. Global subscriptions carry an empty source id.
-  private static func selectorSourceID(from subscription: QuotaSubscription) -> String? {
-    guard subscription.snapshot.account.fingerprintScope == .source else { return nil }
-    let parts = subscription.key.split(
-      separator: "|",
-      maxSplits: 3,
-      omittingEmptySubsequences: false
-    )
-    guard parts.count == 4 else { return nil }
-    let value = String(parts[3])
-    return value.isEmpty ? nil : value
   }
 
   private static func mapCost(_ cost: UsageCostOutcome) -> WidgetCost {

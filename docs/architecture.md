@@ -21,10 +21,13 @@ links to it rather than restating it.
   ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). It is also where paid sync is bought:
   the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
   to an Account is read from the Relay `entitlement` rather than from the store on the device.
-- **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
-  owns views, UI preferences, accessibility, Launch at Login, and wire decoding only. Desktop
-  WidgetKit extensions, when packaging can embed one, read the same non-secret `WidgetSnapshot`
-  as iOS ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)).
+- **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
+  one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
+  wire decoding only. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
+  ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
+  Overview rows it has already resolved, through the projection both Apple clients share, and
+  answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
+  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
@@ -353,8 +356,10 @@ and network authority — on screen and under the `io.gotry.quota.refresh` backg
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
 `group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may
 carry a locally salted `selection_id`; the salt stays in the app-private Keychain and is never
-written to the App Group. The same snapshot shape is what a QuotaBar widget extension would read
-from the macOS App Group; this build does not embed that extension.
+written to the App Group. QuotaBar reads the same shape from its own App Group container —
+`86Y537ZF24.group.io.gotry.quota`, because a Developer ID Mac app may only join a team-prefixed
+group — and publishes it after every state update from the Overview rows the private service
+resolved, clearing it when there is nothing to show.
 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
@@ -421,6 +426,9 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   files or provider-owned credentials. It depends on `packages/apple-shared` for presentation
   semantics and on QuotaWire for the managed wire types and `ProviderID`, and must not depend on
   QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this product.
+  Its Xcode project is generated from `apps/menubar/project.yml` by `pnpm generate:menubar` and
+  committed, the way Quota iOS's is; `apps/menubar/Package.swift` stays the library and `swift test`
+  view of the same sources.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
   quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
@@ -450,9 +458,17 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   `QuotaProviderStatus`, which polls catalog Statuspage v2 URLs on the device. `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
   non-persistent data store, the local collection pass over its stored provider sessions and the
-  app-container file holding its result, App Group snapshot publish/clear, the app-private
-  selection-salt Keychain item, and the WidgetKit extension; its views do not call `URLSession` or
-  Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
+  app-container file holding its result, the app-private selection-salt Keychain item, and the
+  WidgetKit extension; its views do not call `URLSession` or Security or decode JSON.
+  `QuotaWidgetViews` holds the widget's SwiftUI views, its selection rules, and its configuration
+  Intent; only an extension links it — an app that links it takes on the extension's WidgetKit and
+  AppIntents environment and renders its own views differently. `QuotaWidgetData` holds the
+  snapshot types, the App Group name, the protected file store, and the publisher both apps write
+  through; `QuotaWidgetProjection` turns resolved
+  `QuotaSnapshot` readings into that snapshot and is the publishing side, so it speaks `QuotaWire`
+  and neither extension links it
+  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)). `QuotaWidgets` and
+  `QuotaBarWidgets` depend only on `QuotaWidgetViews`, `QuotaWidgetData`, and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`, or Security,
   or use `URLSession` or Keychain. Relay does not forward provider status pages.
 - `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie

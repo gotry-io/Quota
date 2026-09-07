@@ -1,0 +1,134 @@
+name: QuotaBar
+options:
+  bundleIdPrefix: io.gotry
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: false
+  generateEmptyDirectories: true
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.2"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
+    # The Rust service is built by scripts/package-menubar.sh, not by a run-script phase, so
+    # nothing in this project needs to escape the script sandbox.
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    DEVELOPMENT_TEAM: $(QUOTABAR_DEVELOPMENT_TEAM)
+    CODE_SIGN_STYLE: Manual
+packages:
+  QuotaAppleClient:
+    path: ../../packages/apple-client
+  QuotaAppleShared:
+    path: ../../packages/apple-shared
+  SweetCookieKit:
+    url: https://github.com/steipete/SweetCookieKit.git
+    exactVersion: 0.5.2
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.5
+targets:
+  # The Chrome Safe Storage probe has to ask the Keychain without letting it put a dialog on
+  # screen, and only the deprecated C `SecKeychainSetUserInteractionAllowed` does that.
+  QuotaBarKeychainShim:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/QuotaBarKeychainShim/QuotaBarKeychainShim.c
+      - path: Sources/QuotaBarKeychainShim/include/QuotaBarKeychainShim.h
+        headerVisibility: public
+      - path: Sources/QuotaBarKeychainShim/include/module.modulemap
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        PRODUCT_MODULE_NAME: QuotaBarKeychainShim
+        SKIP_INSTALL: YES
+        ENABLE_HARDENED_RUNTIME: NO
+  QuotaBar:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/QuotaBar
+        excludes:
+          - Resources
+      - path: Sources/QuotaBar/Resources/BrandIcons
+        type: folder
+        buildPhase: resources
+      - path: Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md
+        buildPhase: resources
+      - path: Support/QuotaBar.icns
+        buildPhase: resources
+      - path: ../../LICENSE
+        buildPhase: resources
+        # Placed under Support explicitly: xcodegen would otherwise name the parent group after
+        # the checkout directory, and the committed project must not depend on that.
+        group: Support
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quotabar
+        PRODUCT_NAME: QuotaBar
+        INFOPLIST_FILE: Support/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Support/QuotaBar.entitlements
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        OTHER_LDFLAGS: "$(inherited) -framework UserNotifications"
+        # The one C module in QuotaBar. SwiftPM reads this same module map out of the target's
+        # include directory; Xcode has to be pointed at it.
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/Sources/QuotaBarKeychainShim/include"
+        OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/Sources/QuotaBarKeychainShim/include/module.modulemap"
+    dependencies:
+      - target: QuotaBarKeychainShim
+        link: true
+      - package: QuotaAppleClient
+        product: QuotaWire
+      - package: QuotaAppleClient
+        product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaWidgetProjection
+      - package: QuotaAppleShared
+        product: QuotaPresentation
+      - package: QuotaAppleShared
+        product: QuotaAlerts
+      - package: SweetCookieKit
+        product: SweetCookieKit
+      - package: Sparkle
+        product: Sparkle
+      - sdk: WidgetKit.framework
+      - target: QuotaBarWidgets
+        embed: true
+    # A shared scheme, so a release build never depends on Xcode autocreating one.
+    scheme:
+      buildImplicitDependencies: true
+  QuotaBarWidgets:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Widgets
+        excludes:
+          - Info.plist
+          - QuotaBarWidgets.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quotabar.widgets
+        PRODUCT_NAME: QuotaBarWidgets
+        INFOPLIST_FILE: Widgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Widgets/QuotaBarWidgets.entitlements
+        # The extension has no app to borrow a tint from, so it carries the product accent itself.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        APPLICATION_EXTENSION_API_ONLY: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../../../Frameworks"
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: QuotaAppleClient
+        product: QuotaWidgetData
+      - package: QuotaAppleClient
+        product: QuotaWidgetViews
+      - package: QuotaAppleShared
+        product: QuotaPresentation
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: AppIntents.framework

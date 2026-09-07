@@ -9,6 +9,7 @@ import QuotaProviderSessions
 import QuotaProviderStatus
 import QuotaRelay
 import QuotaWidgetData
+import QuotaWidgetProjection
 import QuotaWire
 
 @MainActor

@@ -5,6 +5,7 @@ import QuotaPresentation
 import QuotaProviderSessions
 import QuotaProviderStatus
 import QuotaRelay
+import QuotaWidgetData
 import QuotaWire
 
 /// Launch-argument visual fixtures for deterministic simulator screenshots.

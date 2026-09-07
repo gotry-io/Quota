@@ -290,7 +290,8 @@ Shared rules:
   `CompactAgeFormat`, and `FreshnessCopy`. Digits are monospaced. Semantic text styles and colors
   only.
 - Mark the strongest remaining value with `widgetAccentable()`.
-- A meter is a `linearCapacity` Gauge over the remaining percent, tinted `.secondary`. A row is
+- A meter is a `linearCapacity` Gauge over the remaining percent, tinted with the accent the
+  extension carries in its own `AccentColor` asset catalog. A row is
   text, not a link: a medium or large row's `Link` is tinted `.primary` so the hierarchical text
   styles inside it do not resolve against the accent color.
 - The Lock Screen families are narrow. Neither the circular ring's window title nor a second

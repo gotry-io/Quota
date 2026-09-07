@@ -87,6 +87,10 @@ final class MenuBarPanelController: NSObject {
     }
   }
 
+  func reveal(provider: ProviderID) {
+    session.reveal(provider: provider)
+  }
+
   func open(relativeTo button: NSStatusBarButton, id: MenuBarStatusItemID) {
     if isOpen, anchorButton === button {
       anchorID = id

@@ -117,6 +117,7 @@ so and exits 1. It is not a way to collect: only QuotaBar's own child does that.
 From the repository root:
 
 ```bash
+pnpm generate:menubar
 swift test --package-path apps/menubar
 cargo test --locked --package quota-menubar-helper
 pnpm build:menubar:app
@@ -124,14 +125,23 @@ pnpm test:menubar:helper
 open dist/menubar/QuotaBar.app
 ```
 
+QuotaBar has two build descriptions of the same sources. `project.yml` generates the committed
+`QuotaBar.xcodeproj` that ships — it is what carries `PlugIns/QuotaBarWidgets.appex`, Sparkle, and
+the app's entitlements — and `Package.swift` is the library and `swift test` view of the same
+sources. Add a source file to one and add it to the other; re-run `pnpm generate:menubar` and commit
+the project whenever `project.yml` changes.
+
 `swift run` does not assemble an app bundle and therefore does not provide the private service at its
-production path. Use the packaging script for live integration. It builds arm64 Rust and Swift
-binaries, copies resources, installs the service, and applies local ad-hoc signatures. An ad-hoc
+production path. Use the packaging script for live integration. It archives the Xcode project,
+exports it, adds the arm64 private service to `Contents/Helpers`, and applies local ad-hoc
+signatures. An ad-hoc
 signature's designated requirement is the build's cdhash, so macOS treats every rebuild as a new
 app and asks again for Full Disk Access, Removable Volumes, and the Chrome Safe Storage Keychain
 item; set `QUOTABAR_CODESIGN_IDENTITY` to a self-signed code-signing certificate (Keychain Access ›
-Certificate Assistant) to keep those grants across local builds. The release
-workflow replaces them with Developer ID signatures before notarization.
+Certificate Assistant) to keep those grants across local builds. An ad-hoc signature carries no
+entitlements, so a local package joins no App Group and its desktop widgets stay empty; Diagnostics'
+**Desktop Widgets** row says so. The release workflow sets `QUOTABAR_SIGNING_IDENTITY`, so the same
+script archives and exports with Developer ID and the real App Group before notarization.
 `pnpm test:menubar:helper` runs the packaged helper through the Swift IPC tests with an isolated
 `HOME`, `XDG_CONFIG_HOME`, and provider data roots; it does not read the invoking user's local state.
 
