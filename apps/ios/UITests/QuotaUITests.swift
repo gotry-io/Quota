@@ -501,9 +501,28 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
-    XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
+    // What this phone read for itself has samples behind it, so the window draws its own curve
+    // and the day it belongs to is listed.
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.paceline"].firstMatch.waitForExistence(
+        timeout: 5),
+      "subscription.paceline"
+    )
     attachScreenshot(app, name: "subscription-detail-local")
     try audit(app)
+
+    // The day and the readings sit below the pace lines, so the page is several screens long.
+    scrollToIdentifier(app, "subscription.today.current")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["section.header.today"].exists,
+      "section.header.today"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.today.current"].firstMatch.exists,
+      "the window that is still running"
+    )
+    scrollToIdentifier(app, "subscription.reporting")
+    XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
   }
 
   /// One subscription two Macs and this phone all read stays one row, with every source listed.
@@ -521,11 +540,13 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
+    attachScreenshot(app, name: "subscription-detail-merged")
+    try audit(app)
+
+    scrollToIdentifier(app, "subscription.reporting")
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
     XCTAssertTrue(app.staticTexts["Studio Mac"].exists, "Studio Mac")
     XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
-    attachScreenshot(app, name: "subscription-detail-merged")
-    try audit(app)
   }
 
   /// The one page that offers every way in, over the tabs it was asked from.
@@ -594,6 +615,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.sign-in-methods.manage"].exists, "Manage on Web")
     attachScreenshot(app, name: "settings-sign-in-methods")
+    settle(app)
     try audit(app)
   }
 
@@ -1083,6 +1105,22 @@ final class QuotaUITests: XCTestCase {
   private func scrollToTop(_ app: XCUIApplication) {
     for _ in 0..<5 {
       scrollContent(app, up: false)
+    }
+  }
+
+  /// Scroll until an identifier is in the hierarchy, or give up after `attempts` drags.
+  ///
+  /// A SwiftUI `List` builds its rows lazily, so a row several screens down does not exist yet;
+  /// one drag is not always enough to reach it.
+  private func scrollToIdentifier(
+    _ app: XCUIApplication,
+    _ identifier: String,
+    attempts: Int = 6
+  ) {
+    let element = app.descendants(matching: .any)[identifier].firstMatch
+    for _ in 0..<attempts where !element.exists {
+      scrollContent(app, up: true)
+      _ = element.waitForExistence(timeout: 1)
     }
   }
 

@@ -64,6 +64,7 @@ final class AppModel {
   private let resetScheduler: IOSResetReminderScheduler
   private let activity: any ActivityLoading
   private let localStore: any LocalCollectionStoring
+  private let sampleStore: any LocalQuotaSampleStoring
   private let localCollector: LocalCollector
   private let installation: any InstallationIdentifying
   private let providerStatusClient: any ProviderStatusServing
@@ -81,6 +82,9 @@ final class AppModel {
   /// What this iPhone last read from the providers it signed in to. Kept across launches so a
   /// phone that opens offline still shows the quota it knows.
   var localCollection: LocalCollection?
+  /// What this phone has read of its own quota over time, and only its own: a reading that came
+  /// from an Account was taken by some other device and leaves no sample here (ADR 0042).
+  var localSamples = LocalQuotaSamples()
   var fetchedAt: Date?
   var fromCache = false
   var isRefreshing = false
@@ -149,6 +153,7 @@ final class AppModel {
     activity: (any ActivityLoading)? = nil,
     providerSessions: any ProviderSessionStoring = KeychainProviderSessionStore(),
     localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
+    sampleStore: any LocalQuotaSampleStoring = MemoryLocalQuotaSampleStore(),
     localCollector: LocalCollector? = nil,
     purchases: any PurchasesFacade = UnconfiguredPurchases(),
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
@@ -159,6 +164,7 @@ final class AppModel {
     self.installation = installation
     self.providers = ProvidersModel(store: providerSessions)
     self.localStore = localStore
+    self.sampleStore = sampleStore
     self.localCollector =
       localCollector ?? LocalCollector(sessions: providerSessions, now: now)
     self.budgetStore = budgetStore
@@ -209,6 +215,8 @@ final class AppModel {
       alertStateStore: FileIOSAlertStateStore.applicationSupport(),
       notificationCenter: IOSNotificationCenter(),
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
+      sampleStore: FileLocalQuotaSampleStore.applicationSupport()
+        ?? MemoryLocalQuotaSampleStore(),
       purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
         ?? UnconfiguredPurchases(),
       providerStatusClient: ProviderStatusClient()
@@ -298,6 +306,7 @@ final class AppModel {
 
   func restore() async {
     localCollection = try? localStore.load()
+    localSamples = (try? sampleStore.load()) ?? LocalQuotaSamples()
     providers.markNeedsSignIn(localCollection?.needsSignIn ?? [])
     let cached = try? await account.loadCachedSummary()
     let session = try? await account.loadSession()
@@ -647,6 +656,8 @@ final class AppModel {
   private func applyLocalCollection(_ collection: LocalCollection) {
     localCollection = collection
     try? localStore.save(collection)
+    localSamples.record(collection.snapshots, now: now())
+    try? sampleStore.save(localSamples)
     // A successful read moves `lastValidatedAt` in the Keychain, so the rows are re-read.
     providers.load()
     providers.markNeedsSignIn(collection.needsSignIn)

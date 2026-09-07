@@ -234,7 +234,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
     {
-      "ipc_version": 2,
+      "ipc_version": 3,
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,

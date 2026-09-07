@@ -48,7 +48,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
     isStale: false
   )
   let state = LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 7,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -197,7 +197,7 @@ func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
 @Test @MainActor
 func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
   let state = LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 1,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -420,7 +420,7 @@ func justSignedInState(
   purchaseURL: URL? = nil
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 2,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -506,7 +506,7 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
     sources: [QuotaCollectionSource]
   ) -> LocalServiceState {
     LocalServiceState(
-      ipcVersion: 2,
+      ipcVersion: 3,
       revision: 3,
       usageUploadEnabled: true,
       groupUsageByProject: true,
@@ -601,7 +601,7 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
 @Test @MainActor
 func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
   let state = LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 2,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -937,7 +937,7 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
 
 func signedOutWithSessionEndedState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 1,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -975,7 +975,7 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
 
 func loggingInState() -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 1,
     usageUploadEnabled: true,
     groupUsageByProject: true,
@@ -1056,7 +1056,7 @@ func overviewOnlyState(
   overview: [LocalServiceOverviewItem]
 ) -> LocalServiceState {
   LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: 1,
     usageUploadEnabled: true,
     groupUsageByProject: true,
