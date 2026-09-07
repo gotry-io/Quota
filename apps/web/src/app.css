@@ -1348,6 +1348,14 @@ footer {
   font-size: var(--fs-caption);
 }
 
+.usage-priced {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  color: var(--body);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
 .usage-totals strong {
   font-size: 20px;
   font-weight: 500;
@@ -1808,9 +1816,28 @@ footer {
 }
 
 .quota-card-provider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+}
+
+.provider-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.provider-status-dot-minor {
+  background: var(--meter-warn);
+}
+
+.provider-status-dot-major,
+.provider-status-dot-critical {
+  background: var(--meter-critical);
 }
 
 .quota-card-account {

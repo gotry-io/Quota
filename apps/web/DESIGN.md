@@ -54,7 +54,12 @@ The site has these routes:
    When the return is Delete Account (`return_to` carries `delete=account`), the heading is
    **Sign in again to delete your account** and the methods are shown so the session is
    authenticated again — **Continue as** does not refresh `authenticated_at`. `return_to`
-   defaults to `/my`, and anything but a same-origin path is a 400. The page is
+   defaults to `/my`, and anything but a same-origin path is a 400. When QuotaBar or Quota for
+   iPhone send someone here with `intent=link`, the heading is **Link a sign-in method** and the
+   supporting sentence is “Linking adds a way to sign in to the account you're already using; it
+   never merges two accounts.” Signed in, the page lists the same bindable channels Settings
+   does. Signed out, it offers the usual sign-in methods and `return_to` defaults to
+   `/my/settings`. The page is
    `noindex, nofollow`.
 3. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
@@ -108,7 +113,11 @@ The site has these routes:
      links to Settings; it is absent while subscribed. A Subscriptions grid (each card a
      link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
      today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
-     linking `/my/devices`. Overview does not repeat a cost block or an Installations list.
+     linking `/my/devices`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
+     or `--meter-critical` (major and critical) with `title` set to the official status-page
+     description, from public `GET /api/v2/providers/status`, matching QuotaBar: no dot for
+     `none` or `unknown`. `/u/<handle>` does not draw it. Overview does not repeat a cost block
+     or an Installations list.
    - `/my/subscriptions/<sel>` — one subscription, visually the same card as Overview: provider
      mark, provider display name, masked account label, plan badge, and the shared freshness
      line; each window with remaining quota, a remaining-percent meter in the shared threshold
@@ -123,6 +132,9 @@ The site has these routes:
      on the left and Activity (heatmap plus day-detail panel) on the right; below 1024 px those
      stack. The graph is one tab stop (roving tabindex). Choosing a day opens its details under
      the grid and writes `?day=YYYY-MM-DD`. The selected period is `?period=today|7d|30d|all`.
+     Under the totals, one line `Priced N of M rows` from that period's cost row counts, or
+     `Cost covers every row` / `Cost skips N rows this catalog can't price` when those counts
+     are absent.
    - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
      (macOS, or a generic device for any other value), Active / Idle / Not reporting (semantic
      color plus the label; Not reporting reads `Paused (no subscription)` when the Account is
@@ -277,14 +289,17 @@ The landing is six blocks, in this order. It does not use slogan sections.
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
 Account nav in the site header. The overview leads with remaining quota: when sync is off, a static
 notice `Sync is off. Your Macs stop uploading until you subscribe.` with a Settings link, then
-subscription cards, then a Today strip (tokens, API-equivalent cost, today's top model), then a
+subscription cards (a 6 pt incident dot beside the provider name when official status is minor or
+worse), then a Today strip (tokens, API-equivalent cost, today's top model), then a
 Devices summary line (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's
 verdict). It does not repeat a cost block or an Installations list. The notice is absent while the
 entitlement is `active` or `grace`. Under Usage, period tabs sit on the same row as the
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. The Usage page period tabs are **Day**, **Week**, **Month**,
+partial cost uses a lower bound marker. Under the totals headline, one line `Priced N of M rows`
+from that period's cost row counts, or `Cost covers every row` / `Cost skips N rows this catalog
+can't price` when those counts are absent. The Usage page period tabs are **Day**, **Week**, **Month**,
 **7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
 vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
 sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and

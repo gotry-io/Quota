@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountUsageActivityResponseReadSchema,
 } from "@gotry-io/quota-protocol";
@@ -120,13 +121,18 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
   purchase: { web_url: string };
 } {
   const body = summary as { account: { account_id: string }; entitlement: unknown };
-  return {
-    protocol_version: 2,
+  const payload = {
+    protocol_version: 2 as const,
     account: body.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
     entitlement: body.entitlement,
     purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
   };
+  const parsed = AccountResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`accountReadFromSummary failed schema: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
@@ -480,9 +486,9 @@ export function screenshotAccountSummary(): unknown {
       product_id: "quota_sync_monthly",
       store: "app_store",
       stale: false,
-      checked_at: isoFrom(now, 0),
+      checked_at: studioObserved,
     },
-    purchase: { web_url: "https://pay.rev.cat/testtoken/account_1" },
+    purchase: { web_url: `https://pay.rev.cat/token/account_visual_octocat` },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);

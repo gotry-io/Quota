@@ -135,6 +135,7 @@ an Account owns the channels it is reached through
 | `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the browser error page (`expired` / `invalid_request`) except `identity_taken`, which is a 302 to `return_to?linked=taken`. |
 | `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
 | `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
+| `GET /api/v2/providers/status` | Public catalog status-page readings: `{ providers: [{ id, indicator, description, checked_at }] }`. No session. |
 | `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
 | `DELETE /api/v2/account` | Removes the Account and everything stored for it in one D1 batch. |
 | `GET /oauth/v2/authorize` | Redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…` rather than to a provider, so a native login confirms which Account it is. |

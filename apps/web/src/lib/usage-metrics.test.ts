@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   cacheHitLabel,
   cacheSavedLabel,
+  costPricedLabel,
   dailyMaximum,
   shareLabel,
   usageDailyRows,
@@ -28,6 +29,37 @@ function cost(amount: string | null, status = "complete") {
 it("states the cache hit rate as whole percent, and no rate without input", () => {
   expect(cacheHitLabel(totals(1_000, 940))).toBe("94%");
   expect(cacheHitLabel(totals(0, 0))).toBe(null);
+});
+
+it("names how many rows the catalog priced", () => {
+  expect(
+    costPricedLabel({
+      status: "complete",
+      calculated_rows: 12,
+      reported_rows: 0,
+      unpriced_rows: 0,
+    }),
+  ).toBe("Priced 12 of 12 rows");
+  expect(
+    costPricedLabel({
+      status: "partial",
+      calculated_rows: 9,
+      reported_rows: 1,
+      unpriced_rows: 2,
+    }),
+  ).toBe("Priced 10 of 12 rows");
+  expect(
+    costPricedLabel({
+      status: "unavailable",
+      calculated_rows: 0,
+      reported_rows: 0,
+      unpriced_rows: 4,
+    }),
+  ).toBe("Priced 0 of 4 rows");
+  expect(costPricedLabel({ status: "complete" })).toBe("Cost covers every row");
+  expect(costPricedLabel({ status: "partial", unpriced_rows: 3 })).toBe(
+    "Cost skips 3 rows this catalog can't price",
+  );
 });
 
 it("names a saving as a saving, and says nothing when nothing could be priced", () => {

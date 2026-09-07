@@ -55,11 +55,13 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   cookie says, which this service would otherwise report as `auth_required`. Linux builds keep
   rustls. Certificate validation is the platform's in both cases.
 - Provider status-page polls are unauthenticated GET of public JSON (`/api/v2/status.json` where
-  the catalog says `statuspage_v2`). They send `User-Agent: Quota/<version>`, follow no redirects,
-  time out at ten seconds, cap the body at 64 KiB, store only `status.indicator`,
-  `status.description`, and the time this device checked, and never send a cookie, API key, or
+  the catalog says `statuspage_v2`). They send `User-Agent: Quota/<version>` on the device (or
+  `QuotaRelay` from the Worker), follow no redirects, time out at ten seconds locally and five
+  seconds on Relay, cap the body at 64 KiB, store only `status.indicator`,
+  `status.description`, and the time this check ran, and never send a cookie, API key, or
   account identifier. A failed poll keeps the last reading. Quota iOS fetches the same URLs on the
-  device; Relay does not proxy them.
+  device. Relay publishes them at public `GET /api/v2/providers/status` with no session
+  ([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
 
 ## Local credentials and identity
 

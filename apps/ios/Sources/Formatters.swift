@@ -59,6 +59,13 @@ enum QuotaFormat {
     return "\((part * 200 + whole) / (whole * 2))%"
   }
 
+  /// How many of this period's rows the catalog priced, matching the website coverage line.
+  static func costPriced(_ outcome: UsageCostOutcome) -> String {
+    let priced = outcome.calculatedRows + outcome.reportedRows
+    let total = priced + outcome.unpricedRows
+    return "Priced \(priced) of \(total) rows"
+  }
+
   /// How the cost was arrived at, matching the website's basis line.
   static func costBasis(_ outcome: UsageCostOutcome) -> String {
     if outcome.status == .unavailable { return "Unpriced" }

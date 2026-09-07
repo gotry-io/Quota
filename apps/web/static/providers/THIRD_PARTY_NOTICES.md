@@ -2,9 +2,9 @@
 
 ## Lobe Icons
 
-The OpenAI, Claude, Grok, Cursor, OpenRouter, DeepSeek, Kimi, and LiteLLM monochrome SVG assets
-are from `@lobehub/icons-static-svg` / [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)
-(https://lobehub.com/icons).
+The OpenAI, Claude, Grok, Cursor, OpenRouter, DeepSeek, Kimi, LiteLLM, Gemini, and GitHub Copilot
+monochrome SVG assets are from `@lobehub/icons-static-svg` /
+[lobehub/lobe-icons](https://github.com/lobehub/lobe-icons) (https://lobehub.com/icons).
 
 MIT License
 
