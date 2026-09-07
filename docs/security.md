@@ -279,6 +279,13 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   tree or cwd, so This Mac can group Usage by repository; that column is stripped when an hour is
   folded for upload and is never a path
   ([ADR 0039](decisions/0039-project-attribution-stays-local.md)).
+- Quota sample rows in `cache.sqlite` (`quota_samples`), and the equivalent file in Quota iOS's own
+  Application Support container, retain only what a reading already said about one window: provider,
+  window id, `resets_at`, `observed_at`, `used_percent`, and the optional remaining, limit, and unit.
+  They carry no credential, no account label, and no fingerprint; a reading whose numbers have not
+  moved is not written again; they are deleted after 30 days; and they leave the device never — no
+  wire schema names a sample and Relay has no route that accepts one
+  ([ADR 0042](decisions/0042-quota-history-is-local-samples.md)).
 - Local session rows in `cache.sqlite` (`usage_sessions`) retain only: the file-index hash, agent,
   a basename `project_key` (never a path), `started_at`, `last_activity_at`, message and token
   counts, optional `cost_micros`, and `top_model`. They keep no session id, conversation id, prompt,

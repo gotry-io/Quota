@@ -580,7 +580,7 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   /// The one private IPC version this app speaks. The two ship together, so a helper that
   /// announces anything else is not the one in this bundle.
-  static let supportedIPCVersion = 2
+  static let supportedIPCVersion = 3
 
   let ipcVersion: Int
   let revision: Int

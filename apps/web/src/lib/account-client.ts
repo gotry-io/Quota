@@ -88,10 +88,11 @@ export async function fetchAccountActivity(
     from: string;
     to: string;
   },
-  detail?: "agents",
+  detail?: "agents" | "hours",
+  timezone?: string,
 ): Promise<AccountActivityResult> {
   try {
-    const response = await fetch(accountActivityPath(range, detail), jsonRequest);
+    const response = await fetch(accountActivityPath(range, detail, timezone), jsonRequest);
     if (!response.ok) return classifyAccountError(response);
     return parseAccountActivityResponse(response.status, await response.json());
   } catch {

@@ -17,11 +17,20 @@ struct SubscriptionDetailContent: Equatable {
   var freshness: String
   var windows: [QuotaWindow]
   var sources: [SourceRow]
+  /// The curve each window's own samples draw, keyed by window id. Empty unless the reading on
+  /// screen is the one this phone took: nothing else has samples behind it (ADR 0042).
+  var histories: [String: QuotaHistory]
+  /// The windows of the reading's own cadence that the reader's day already holds.
+  var windowsToday: [QuotaHistoryWindow]
+
+  var todayLine: String? { QuotaHistoryCopy.todayLine(windowsToday) }
 
   static func make(
     subscription: QuotaSubscription,
     deviceNames: [String: String],
-    now: Date = Date()
+    samples: LocalQuotaSamples = LocalQuotaSamples(),
+    now: Date = Date(),
+    utcOffsetSeconds: Int = TimeZone.autoupdatingCurrent.secondsFromGMT()
   ) -> SubscriptionDetailContent {
     let snapshot = subscription.snapshot
     let sources = subscription.sources
@@ -41,14 +50,38 @@ struct SubscriptionDetailContent: Equatable {
           isReporting: isReporting(source, subscription: subscription)
         )
       }
+    let histories = isLocalReading(subscription)
+      ? snapshot.windows.reduce(into: [String: QuotaHistory]()) { result, window in
+        result[window.id] = QuotaHistory.fold(
+          window: QuotaHistoryReading(
+            resetsAt: window.resetsAt,
+            cadenceSeconds: window.durationSeconds
+          ),
+          samples: samples.samples(provider: snapshot.provider, windowID: window.id),
+          now: now,
+          utcOffsetSeconds: utcOffsetSeconds
+        )
+      }
+      : [:]
+    let primary = snapshot.primaryCadenceWindows.first ?? snapshot.windows.first
     return SubscriptionDetailContent(
       providerName: snapshot.provider.displayName,
       accountLabel: PlanDisplay.accountLabel(snapshot.account.label) ?? "Account",
       plan: QuotaFormat.planBadge(snapshot.account.plan),
       freshness: QuotaFormat.observation(snapshot, now: now),
       windows: snapshot.windows,
-      sources: sources
+      sources: sources,
+      histories: histories,
+      windowsToday: primary.flatMap { histories[$0.id] }?.windowsToday ?? []
     )
+  }
+
+  /// Whether the reading on screen is the one this phone took for itself. A reading Relay
+  /// resolved was taken by some Mac, and this phone kept no samples of it.
+  static func isLocalReading(_ subscription: QuotaSubscription) -> Bool {
+    subscription.sources.contains { source in
+      source.deviceID == ThisDevice.sourceID && source.snapshot == subscription.snapshot
+    }
   }
 
   /// Every string the page would print. Tests use this to prove identifiers stay off screen.
@@ -60,6 +93,11 @@ struct SubscriptionDetailContent: Equatable {
     } else {
       strings.append(contentsOf: windows.map { QuotaFormat.windowTitle($0) })
       strings.append(contentsOf: windows.map { QuotaFormat.remaining($0) })
+    }
+    if let todayLine {
+      strings.append(todayLine)
+      strings.append(contentsOf: windowsToday.map(QuotaHistoryCopy.span))
+      strings.append(contentsOf: windowsToday.map { QuotaHistoryCopy.peak($0.peakUsedPercent) })
     }
     if sources.isEmpty {
       strings.append("No device readings yet.")
@@ -105,15 +143,20 @@ struct SubscriptionDetailView: View {
   /// What to call each source: the Account's Macs, and **This iPhone** for what this device read
   /// itself. A source with no name is a **Device**.
   let deviceNames: [String: String]
+  /// What this phone has read of its own quota over time. Only the reading it took itself is
+  /// drawn from these (ADR 0042).
+  var samples = LocalQuotaSamples()
 
   var body: some View {
     let content = SubscriptionDetailContent.make(
       subscription: subscription,
-      deviceNames: deviceNames
+      deviceNames: deviceNames,
+      samples: samples
     )
     List {
       identitySection(content)
       quotaSection(content)
+      todaySection(content)
       readingsSection(content)
     }
     .listStyle(.insetGrouped)
@@ -151,13 +194,51 @@ struct SubscriptionDetailView: View {
           QuotaWindowBlock(
             window: window,
             usesLiveCountdown: true,
-            emphasizedRemaining: true
+            emphasizedRemaining: true,
+            history: content.histories[window.id]
           )
         }
       }
     } header: {
       Text("Quota")
         .accessibilityIdentifier("section.header.quota")
+    }
+  }
+
+  /// The windows of this subscription's own cadence that the reader's day already holds.
+  ///
+  /// Absent for a reading that came from an Account: those were taken by a Mac, which keeps its
+  /// own samples and never sends them here.
+  @ViewBuilder
+  private func todaySection(_ content: SubscriptionDetailContent) -> some View {
+    if let todayLine = content.todayLine {
+      Section {
+        ForEach(content.windowsToday, id: \.startedAt) { window in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(QuotaHistoryCopy.span(window))
+              .font(.subheadline)
+              .foregroundStyle(.primary)
+              .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Text(QuotaHistoryCopy.peak(window.peakUsedPercent))
+              .font(.body.monospacedDigit().weight(.medium))
+              .foregroundStyle(.primary)
+          }
+          .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+          .accessibilityElement(children: .combine)
+          .accessibilityIdentifier(
+            window.isCurrent ? "subscription.today.current" : "subscription.today.window"
+          )
+        }
+      } header: {
+        Text("Today")
+          .accessibilityIdentifier("section.header.today")
+      } footer: {
+        Text(todayLine)
+          .font(.footnote)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("section.footer.today")
+      }
     }
   }
 

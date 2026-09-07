@@ -64,6 +64,7 @@ final class AppModel {
   private let resetScheduler: IOSResetReminderScheduler
   private let activity: any ActivityLoading
   private let localStore: any LocalCollectionStoring
+  private let sampleStore: any LocalQuotaSampleStoring
   private let localCollector: LocalCollector
   private let installation: any InstallationIdentifying
   private let providerStatusClient: any ProviderStatusServing
@@ -81,6 +82,9 @@ final class AppModel {
   /// What this iPhone last read from the providers it signed in to. Kept across launches so a
   /// phone that opens offline still shows the quota it knows.
   var localCollection: LocalCollection?
+  /// What this phone has read of its own quota over time, and only its own: a reading that came
+  /// from an Account was taken by some other device and leaves no sample here (ADR 0042).
+  var localSamples = LocalQuotaSamples()
   var fetchedAt: Date?
   var fromCache = false
   var isRefreshing = false
@@ -96,6 +100,8 @@ final class AppModel {
   var overviewPath: [String] = []
   /// Last 365 UTC days. Memory only; a failed read stays here and does not block the period list.
   var activityChart: ActivityChartPhase = .idle
+  /// The selected period's hour-of-day rhythm, asked with `detail=hours`.
+  var activityRhythm: ActivityRhythmPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
   /// The managed Account session this device holds, and how far along it is. Not private because
@@ -149,6 +155,7 @@ final class AppModel {
     activity: (any ActivityLoading)? = nil,
     providerSessions: any ProviderSessionStoring = KeychainProviderSessionStore(),
     localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
+    sampleStore: any LocalQuotaSampleStoring = MemoryLocalQuotaSampleStore(),
     localCollector: LocalCollector? = nil,
     purchases: any PurchasesFacade = UnconfiguredPurchases(),
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
@@ -159,6 +166,7 @@ final class AppModel {
     self.installation = installation
     self.providers = ProvidersModel(store: providerSessions)
     self.localStore = localStore
+    self.sampleStore = sampleStore
     self.localCollector =
       localCollector ?? LocalCollector(sessions: providerSessions, now: now)
     self.budgetStore = budgetStore
@@ -209,6 +217,8 @@ final class AppModel {
       alertStateStore: FileIOSAlertStateStore.applicationSupport(),
       notificationCenter: IOSNotificationCenter(),
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
+      sampleStore: FileLocalQuotaSampleStore.applicationSupport()
+        ?? MemoryLocalQuotaSampleStore(),
       purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
         ?? UnconfiguredPurchases(),
       providerStatusClient: ProviderStatusClient()
@@ -298,6 +308,7 @@ final class AppModel {
 
   func restore() async {
     localCollection = try? localStore.load()
+    localSamples = (try? sampleStore.load()) ?? LocalQuotaSamples()
     providers.markNeedsSignIn(localCollection?.needsSignIn ?? [])
     let cached = try? await account.loadCachedSummary()
     let session = try? await account.loadSession()
@@ -647,6 +658,8 @@ final class AppModel {
   private func applyLocalCollection(_ collection: LocalCollection) {
     localCollection = collection
     try? localStore.save(collection)
+    localSamples.record(collection.snapshots, now: now())
+    try? sampleStore.save(localSamples)
     // A successful read moves `lastValidatedAt` in the Keychain, so the rows are re-read.
     providers.load()
     providers.markNeedsSignIn(collection.needsSignIn)
@@ -870,6 +883,7 @@ final class AppModel {
 
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
     usagePeriod = selection
+    activityRhythm = .idle
   }
 
   func setBudget(_ next: UsageBudget) {
@@ -904,9 +918,41 @@ final class AppModel {
     }
     activityChart = .loading
     let range = activityDateRange
-    let result = await activity.fetchUsageActivity(from: range.from, to: range.to, detail: nil)
+    let result = await activity.fetchUsageActivity(
+      from: range.from,
+      to: range.to,
+      detail: nil,
+      timeZone: nil
+    )
     guard phase == .signedIn else { return }
     applyActivity(result)
+  }
+
+  /// The selected period's rhythm, omitted for All, which has no first day.
+  func loadRhythm(force: Bool = false) async {
+    guard phase == .signedIn, let range = usagePeriodRange else {
+      activityRhythm = .idle
+      return
+    }
+    if !force {
+      switch activityRhythm {
+      case .idle: break
+      case .loading, .loaded, .failed: return
+      }
+    } else if case .loading = activityRhythm {
+      return
+    }
+    activityRhythm = .loading
+    let result = await activity.fetchUsageActivity(
+      from: range.from,
+      to: range.to,
+      detail: .hours,
+      timeZone: TimeZone.current.identifier
+    )
+    guard phase == .signedIn, usagePeriodRange?.from == range.from,
+      usagePeriodRange?.to == range.to
+    else { return }
+    applyRhythm(result)
   }
 
   func retryActivity() async {
@@ -938,7 +984,8 @@ final class AppModel {
     let result = await activity.fetchUsageActivity(
       from: current.date,
       to: current.date,
-      detail: .agents
+      detail: .agents,
+      timeZone: nil
     )
     guard phase == .signedIn, activityDaySheet?.date == current.date else { return }
     switch result {
@@ -964,6 +1011,25 @@ final class AppModel {
       applySignedOut()
     case .failure:
       activityChart = .failed
+    }
+  }
+
+  private func applyRhythm(_ result: AccountActivityResult) {
+    switch result {
+    case .activity(let response):
+      if let hours = response.hoursOfDay, let weekdays = response.weekdayHours,
+        hours.contains(where: { $0.totalTokens > 0 })
+      {
+        activityRhythm = .loaded(hoursOfDay: hours, weekdayHours: weekdays)
+      } else {
+        activityRhythm = .idle
+      }
+    case .failure(.sessionExpired):
+      applyExpired()
+    case .failure(.notSignedIn):
+      applySignedOut()
+    case .failure:
+      activityRhythm = .failed
     }
   }
 
@@ -1141,6 +1207,7 @@ final class AppModel {
     pendingSubscriptionSelection = nil
     overviewPath = []
     activityChart = .idle
+    activityRhythm = .idle
     activityDaySheet = nil
     // The providers this phone signed in to are not the account's, so what it collects for
     // itself survives losing the account — and so does the background window that refreshes it.
@@ -1250,6 +1317,13 @@ enum ActivityChartPhase: Equatable, Sendable {
   case idle
   case loading
   case loaded([UsageActivityDay])
+  case failed
+}
+
+enum ActivityRhythmPhase: Equatable, Sendable {
+  case idle
+  case loading
+  case loaded(hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])
   case failed
 }
 

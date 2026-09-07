@@ -219,6 +219,7 @@ private actor ScriptedActivityLoader: ActivityLoading {
     var from: String
     var to: String
     var detail: ActivityDetail?
+    var timeZone: String?
   }
 
   private var results: [AccountActivityResult]
@@ -231,9 +232,10 @@ private actor ScriptedActivityLoader: ActivityLoading {
   func fetchUsageActivity(
     from: String,
     to: String,
-    detail: ActivityDetail?
+    detail: ActivityDetail?,
+    timeZone: String?
   ) async -> AccountActivityResult {
-    calls.append(Call(from: from, to: to, detail: detail))
+    calls.append(Call(from: from, to: to, detail: detail, timeZone: timeZone))
     return results.isEmpty ? .failure(.relay(.unavailable)) : results.removeFirst()
   }
 }

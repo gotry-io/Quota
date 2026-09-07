@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 5;
+const CURRENT_SCHEMA: i64 = 6;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -38,6 +38,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
             5 => migration_v5(&tx)?,
+            6 => migration_v6(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -396,6 +397,28 @@ fn migration_v5(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// One row per window per collection, kept for thirty days and never uploaded (ADR 0042).
+///
+/// The primary key is the reading itself, so a refresh that repeats a window's last numbers
+/// costs nothing and a window is never sampled twice for one instant.
+fn migration_v6(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "CREATE TABLE quota_samples (
+            provider TEXT NOT NULL,
+            window_id TEXT NOT NULL,
+            resets_at TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            used_percent REAL NOT NULL,
+            remaining REAL,
+            \"limit\" REAL,
+            value_unit TEXT,
+            PRIMARY KEY(provider, window_id, resets_at, observed_at)
+         );
+         CREATE INDEX quota_samples_age ON quota_samples(observed_at);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +584,47 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_sessions", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn a_cache_below_v6_gains_the_quota_sample_journal() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-25T00:00:00Z');",
+        )
+        .expect("v1 marker");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+        conn.execute_batch(
+            "INSERT INTO quota_samples(
+                provider, window_id, resets_at, observed_at, used_percent, remaining,
+                \"limit\", value_unit
+             ) VALUES (
+                'codex', 'five_hour', '2026-09-05T12:00:00Z', '2026-09-05T09:30:00Z', 50.0,
+                NULL, NULL, NULL
+             );
+             INSERT OR IGNORE INTO quota_samples(
+                provider, window_id, resets_at, observed_at, used_percent
+             ) VALUES (
+                'codex', 'five_hour', '2026-09-05T12:00:00Z', '2026-09-05T09:30:00Z', 51.0
+             );",
+        )
+        .expect("sample rows");
+        let (count, used): (i64, f64) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(used_percent) FROM quota_samples",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("count");
+        assert_eq!((count, used), (1, 50.0));
     }
 
     #[test]

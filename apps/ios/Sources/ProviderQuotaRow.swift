@@ -110,6 +110,8 @@ struct QuotaWindowBlock: View {
   var emphasizedRemaining: Bool = false
   /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
   var now: Date = Date()
+  /// The curve this device's own samples draw for the window, when it has any (ADR 0042).
+  var history: QuotaHistory? = nil
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -132,6 +134,10 @@ struct QuotaWindowBlock: View {
           .tint(QuotaTheme.emerald)
           .accessibilityHidden(true)
           .allowsHitTesting(false)
+      }
+
+      if let history, !history.points.isEmpty {
+        QuotaPaceLineView(history: history)
       }
 
       if usesLiveCountdown {

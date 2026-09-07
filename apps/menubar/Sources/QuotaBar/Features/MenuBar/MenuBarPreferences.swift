@@ -63,6 +63,16 @@ enum ResetCopyStylePreference: String, CaseIterable, Identifiable, Sendable {
   }
 }
 
+/// Whether Overview draws each window's sample curve and its extrapolation to the reset.
+///
+/// On by default: the line is what turns a meter into a rate a reader can act on. A Mac that
+/// only wants the numbers turns it off and keeps the pace phrase, which needs no samples
+/// ([ADR 0035](../../../../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
+enum PaceLinePreference {
+  static let storageKey = "quota.paceLines.enabled"
+  static let fallback = true
+}
+
 /// How several chosen providers occupy the menu bar: one packed item, or one item each.
 enum MenuBarArrangementPreference: String, CaseIterable, Identifiable, Sendable {
   case combined

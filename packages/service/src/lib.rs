@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod config;
 pub mod copy;
+pub mod history;
 pub mod ipc;
 pub mod migration;
 pub mod model_catalog;

@@ -6,6 +6,7 @@ import {
   accountReadFromSummary,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
+  screenshotAccountRhythm,
   screenshotAccountSummary,
 } from "./account-fixture.ts";
 
@@ -48,11 +49,16 @@ async function mockV6(page: Page): Promise<void> {
       const from = asked.searchParams.get("from") ?? "2026-08-12";
       const to = asked.searchParams.get("to") ?? from;
       const detailed = asked.searchParams.get("detail") === "agents";
+      const hours = asked.searchParams.get("detail") === "hours";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          detailed ? screenshotAccountActivityDay(from) : screenshotAccountActivity(from, to),
+          detailed
+            ? screenshotAccountActivityDay(from)
+            : hours
+              ? screenshotAccountRhythm(from, to)
+              : screenshotAccountActivity(from, to),
         ),
       });
       return;
@@ -108,8 +114,11 @@ for (const appearance of appearances) {
       await expect(page.locator("#message-total")).toBeVisible();
       await expect(page.locator(".usage-columns")).toBeVisible();
       await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Rhythm" })).toBeVisible();
+      await expect(page.locator(".usage-rhythm-heat")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
+      await page.getByRole("heading", { name: "Rhythm" }).scrollIntoViewIfNeeded();
       await shot(page, `web-usage-${appearance}-desktop.png`);
     });
 

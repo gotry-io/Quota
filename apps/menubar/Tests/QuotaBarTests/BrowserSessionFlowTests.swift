@@ -956,7 +956,7 @@ private func flowState(
     quota = empty()
   }
   return LocalServiceState(
-    ipcVersion: 2,
+    ipcVersion: 3,
     revision: revision,
     usageUploadEnabled: true,
     groupUsageByProject: true,
