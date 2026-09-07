@@ -5,6 +5,7 @@ import {
   accountActivityDay,
   accountReadFromSummary,
   accountSummary,
+  screenshotAccountRhythm,
 } from "./account-fixture.ts";
 
 async function mockAccountRead(page: Page, summary: unknown = accountSummary): Promise<void> {
@@ -39,11 +40,19 @@ async function mockV6(page: Page, summary: unknown = accountSummary): Promise<vo
     if (url.includes("/api/v6/account/usage/activity")) {
       const asked = new URL(url);
       const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
       const detailed = asked.searchParams.get("detail") === "agents";
+      const hours = asked.searchParams.get("detail") === "hours";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
+        body: JSON.stringify(
+          detailed
+            ? accountActivityDay(from)
+            : hours
+              ? screenshotAccountRhythm(from, to)
+              : accountActivity,
+        ),
       });
       return;
     }
@@ -83,7 +92,7 @@ test("Overview does not prefetch activity", async ({ page }) => {
     }
     if (url.includes("/api/v6/account/usage/activity")) {
       const asked = new URL(url);
-      if (asked.searchParams.get("detail") !== "agents") activityListRequests += 1;
+      if (!asked.searchParams.get("detail")) activityListRequests += 1;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -116,13 +125,21 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
     }
     if (url.includes("/api/v6/account/usage/activity")) {
       const asked = new URL(url);
-      if (asked.searchParams.get("detail") !== "agents") activityListRequests += 1;
+      if (!asked.searchParams.get("detail")) activityListRequests += 1;
       const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
       const detailed = asked.searchParams.get("detail") === "agents";
+      const hours = asked.searchParams.get("detail") === "hours";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(detailed ? accountActivityDay(from) : accountActivity),
+        body: JSON.stringify(
+          detailed
+            ? accountActivityDay(from)
+            : hours
+              ? screenshotAccountRhythm(from, to)
+              : accountActivity,
+        ),
       });
       return;
     }

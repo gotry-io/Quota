@@ -96,6 +96,8 @@ final class AppModel {
   var overviewPath: [String] = []
   /// Last 365 UTC days. Memory only; a failed read stays here and does not block the period list.
   var activityChart: ActivityChartPhase = .idle
+  /// The selected period's hour-of-day rhythm, asked with `detail=hours`.
+  var activityRhythm: ActivityRhythmPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
   /// The managed Account session this device holds, and how far along it is. Not private because
@@ -870,6 +872,7 @@ final class AppModel {
 
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
     usagePeriod = selection
+    activityRhythm = .idle
   }
 
   func setBudget(_ next: UsageBudget) {
@@ -904,9 +907,41 @@ final class AppModel {
     }
     activityChart = .loading
     let range = activityDateRange
-    let result = await activity.fetchUsageActivity(from: range.from, to: range.to, detail: nil)
+    let result = await activity.fetchUsageActivity(
+      from: range.from,
+      to: range.to,
+      detail: nil,
+      timeZone: nil
+    )
     guard phase == .signedIn else { return }
     applyActivity(result)
+  }
+
+  /// The selected period's rhythm, omitted for All, which has no first day.
+  func loadRhythm(force: Bool = false) async {
+    guard phase == .signedIn, let range = usagePeriodRange else {
+      activityRhythm = .idle
+      return
+    }
+    if !force {
+      switch activityRhythm {
+      case .idle: break
+      case .loading, .loaded, .failed: return
+      }
+    } else if case .loading = activityRhythm {
+      return
+    }
+    activityRhythm = .loading
+    let result = await activity.fetchUsageActivity(
+      from: range.from,
+      to: range.to,
+      detail: .hours,
+      timeZone: TimeZone.current.identifier
+    )
+    guard phase == .signedIn, usagePeriodRange?.from == range.from,
+      usagePeriodRange?.to == range.to
+    else { return }
+    applyRhythm(result)
   }
 
   func retryActivity() async {
@@ -938,7 +973,8 @@ final class AppModel {
     let result = await activity.fetchUsageActivity(
       from: current.date,
       to: current.date,
-      detail: .agents
+      detail: .agents,
+      timeZone: nil
     )
     guard phase == .signedIn, activityDaySheet?.date == current.date else { return }
     switch result {
@@ -964,6 +1000,25 @@ final class AppModel {
       applySignedOut()
     case .failure:
       activityChart = .failed
+    }
+  }
+
+  private func applyRhythm(_ result: AccountActivityResult) {
+    switch result {
+    case .activity(let response):
+      if let hours = response.hoursOfDay, let weekdays = response.weekdayHours,
+        hours.contains(where: { $0.totalTokens > 0 })
+      {
+        activityRhythm = .loaded(hoursOfDay: hours, weekdayHours: weekdays)
+      } else {
+        activityRhythm = .idle
+      }
+    case .failure(.sessionExpired):
+      applyExpired()
+    case .failure(.notSignedIn):
+      applySignedOut()
+    case .failure:
+      activityRhythm = .failed
     }
   }
 
@@ -1141,6 +1196,7 @@ final class AppModel {
     pendingSubscriptionSelection = nil
     overviewPath = []
     activityChart = .idle
+    activityRhythm = .idle
     activityDaySheet = nil
     // The providers this phone signed in to are not the account's, so what it collects for
     // itself survives losing the account — and so does the background window that refreshes it.
@@ -1250,6 +1306,13 @@ enum ActivityChartPhase: Equatable, Sendable {
   case idle
   case loading
   case loaded([UsageActivityDay])
+  case failed
+}
+
+enum ActivityRhythmPhase: Equatable, Sendable {
+  case idle
+  case loading
+  case loaded(hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])
   case failed
 }
 

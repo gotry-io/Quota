@@ -598,6 +598,64 @@ describe("managed Relay on real Workers and D1", () => {
     expect((await app.request(`${dayPath}&detail=models`)).status).toBe(400);
   });
 
+  it("adds a 24-hour and weekday rhythm when asked with detail=hours", async () => {
+    await seedDevice("activity_hours");
+    const usage = new D1UsageState(env.DB);
+    const principal = devicePrincipal("activity_hours", 1);
+    await usage.recordUsage(
+      principal,
+      usageUpload([usageHour("2026-08-10T21:00:00Z", 1)]),
+      now.toISOString(),
+    );
+    const app = appFor("account_activity_hours");
+    const path =
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10&detail=hours&tz=America/Los_Angeles";
+    const response = await app.request(path);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      days: Array<{ date: string }>;
+      hours_of_day: Array<{ hour: number; total_tokens: number; cost_microusd: string | null }>;
+      weekday_hours: number[][];
+    };
+    expect(body.days.map((day) => day.date)).toEqual(["2026-08-10"]);
+    expect(body.hours_of_day).toHaveLength(24);
+    expect(body.hours_of_day.map((hour) => hour.hour)).toEqual([...Array(24).keys()]);
+    // 21:00 UTC on 10 August is 14:00 in Los Angeles, a Monday.
+    expect(body.hours_of_day[14]?.total_tokens).toBeGreaterThan(0);
+    expect(body.hours_of_day[12]?.total_tokens).toBe(0);
+    expect(body.hours_of_day[12]?.cost_microusd).toBeNull();
+    expect(body.weekday_hours).toHaveLength(7);
+    expect(body.weekday_hours.every((row) => row.length === 24)).toBe(true);
+    expect(body.weekday_hours[1]?.[14]).toBe(body.hours_of_day[14]?.total_tokens);
+
+    const withoutTz = await app.request(
+      "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10&detail=hours",
+    );
+    expect(withoutTz.status).toBe(200);
+    const utc = (await withoutTz.json()) as {
+      hours_of_day: Array<{ hour: number; total_tokens: number }>;
+    };
+    expect(utc.hours_of_day[21]?.total_tokens).toBeGreaterThan(0);
+
+    const first = await app.request(path);
+    const etag = first.headers.get("ETag");
+    expect(
+      (
+        await app.request(path, {
+          headers: { "If-None-Match": etag ?? "" },
+        })
+      ).status,
+    ).toBe(304);
+    expect(
+      (
+        await app.request(
+          "https://quota.gotry.io/api/v6/account/usage/activity?from=2026-08-10&to=2026-08-10",
+          { headers: { "If-None-Match": etag ?? "" } },
+        )
+      ).status,
+    ).toBe(200);
+  });
+
   it("keys the activity ETag on Usage and not on a quota snapshot", async () => {
     await seedDevice("activity_etag");
     const usage = new D1UsageState(env.DB);

@@ -7,7 +7,8 @@ protocol ActivityLoading: Sendable {
   func fetchUsageActivity(
     from: String,
     to: String,
-    detail: ActivityDetail?
+    detail: ActivityDetail?,
+    timeZone: String?
   ) async -> AccountActivityResult
 }
 
@@ -17,8 +18,9 @@ struct AccountClientActivityLoading: ActivityLoading {
   func fetchUsageActivity(
     from: String,
     to: String,
-    detail: ActivityDetail?
+    detail: ActivityDetail?,
+    timeZone: String?
   ) async -> AccountActivityResult {
-    await client.fetchUsageActivity(from: from, to: to, detail: detail)
+    await client.fetchUsageActivity(from: from, to: to, detail: detail, timeZone: timeZone)
   }
 }

@@ -42,6 +42,30 @@ export interface UsageDailyResult {
   truncated: boolean;
 }
 
+/**
+ * One identity's Usage over one stored UTC hour, rolled up across devices.
+ *
+ * `partial_hours` counts the scans behind this row that came up short, so a clock hour
+ * reports incompleteness the same way a day does.
+ */
+export interface StoredUsageHourlyRow extends UsageRow {
+  bucket_start_utc: string;
+  partial_hours: number;
+}
+
+export interface UsageHourlyQuery {
+  /** Inclusive `bucket_start_utc`. */
+  from: string;
+  /** Exclusive `bucket_start_utc`. */
+  to: string;
+  limit: number;
+}
+
+export interface UsageHourlyResult {
+  rows: StoredUsageHourlyRow[];
+  truncated: boolean;
+}
+
 /** A half-open range of whole UTC hours, named the way `usage_hourly` keys them. */
 export interface UsageHourRange {
   /** Inclusive `bucket_start_utc`. */
@@ -75,6 +99,7 @@ export interface UsageState {
     receivedAt: string,
   ): Promise<UsageWriteResult>;
   queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult>;
+  queryHourlyUsage(accountId: string, query: UsageHourlyQuery): Promise<UsageHourlyResult>;
   queryBoundaryHours(accountId: string, query: UsageBoundaryQuery): Promise<UsageBoundaryResult>;
   readUsageFold(accountId: string, foldKey: string): Promise<string | null>;
   storeUsageFold(

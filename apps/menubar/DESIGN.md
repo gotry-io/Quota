@@ -606,10 +606,11 @@ The default page contains:
   provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
   model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
   share` when unpriced.
-- Rhythm, for This Mac and for any period but 2 Years: 24 bars at 36pt, one per hour of the local
-  clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as a whole-percent
-  share. Omit the section when every hour is empty. The Account source has no Rhythm — Relay stores
-  hours on UTC keys and does not fold a local clock.
+- Rhythm, for This Mac and for Account, and for any period but 2 Years: 24 bars at 36pt, one per
+  hour of the local clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as
+  a whole-percent share. Omit the section when every hour is empty. Account hours come from
+  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
 - Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
   repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
   as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.

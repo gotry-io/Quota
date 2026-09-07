@@ -172,6 +172,24 @@ impl RelayClient {
         self.conditional_get_json(&format!("/api/v6/account/summary?{query}"), token, etag)
     }
 
+    /// The activity read with `detail=hours`, so Account Usage can draw the same rhythm This Mac
+    /// already has. This is the one Account read that opens stored hours.
+    pub fn account_usage_hours(
+        &self,
+        token: &str,
+        from: &str,
+        to: &str,
+        timezone: &str,
+    ) -> Result<Value, RelayError> {
+        self.get_json(
+            &format!(
+                "/api/v6/account/usage/activity?from={from}&to={to}&detail=hours&tz={timezone}"
+            ),
+            token,
+            200,
+        )
+    }
+
     pub fn pricing_catalog(
         &self,
         etag: Option<&str>,
@@ -1416,6 +1434,39 @@ impl AccountManager {
             account_summary: Some(summary),
         })
         .unwrap_or(Value::Null))
+    }
+
+    /// The 24-hour rhythm of one UTC date range, in this device's calendar.
+    pub fn account_usage_hours(
+        &self,
+        from: &str,
+        to: &str,
+        timezone: &str,
+        cancel: &AtomicBool,
+    ) -> Result<Value, BackendError> {
+        if cancel.load(Ordering::Acquire) {
+            return Err(BackendError::cancelled());
+        }
+        let (mut session, mut session_epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(|| {
+                BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::AuthenticationRequired,
+                    crate::protocol::RecoveryAction::Login,
+                ))
+            })?;
+        if !is_active_session(&session) {
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::AuthenticationRequired,
+                crate::protocol::RecoveryAction::Login,
+            )));
+        }
+        let access_token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
+        self.client
+            .account_usage_hours(&access_token, from, to, timezone)
+            .map_err(|error| relay_backend_error(error, session_epoch))
     }
 
     fn read_account_summary(
@@ -3067,9 +3118,10 @@ mod tests {
             ("account_summary", validate_account_summary),
             ("usage_submission", validate_usage_submission),
         ];
-        // This service never fetches GET /api/v6/account/usage/activity or GET /api/v2/account,
-        // so it has no trust-boundary restatement of either read (ADR 0019). TypeScript answers
-        // both, and Swift answers the activity one.
+        // This service fetches GET /api/v6/account/usage/activity only for `detail=hours` so
+        // Account Usage can draw a rhythm, and never fetches GET /api/v2/account. It has no
+        // trust-boundary restatement of either read (ADR 0019). TypeScript answers both, and
+        // Swift answers the activity one.
         const SKIPPED_CONTRACTS: &[&str] = &["account_usage_activity", "account_response"];
         let registered = validators.map(|(contract, _)| contract);
         for skipped in SKIPPED_CONTRACTS {

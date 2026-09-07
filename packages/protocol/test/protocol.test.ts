@@ -850,6 +850,48 @@ describe("quota protocol", () => {
         ],
       }).success,
     ).toBe(true);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(true);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay().slice(0, 23),
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(false);
+    const unordered = emptyHoursOfDay();
+    unordered.reverse();
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: unordered,
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsageActivityResponseReadSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+        weekday_hours: emptyWeekdayHours(),
+        extra: true,
+      }).success,
+    ).toBe(true);
     const summary = accountSummary();
     expect(
       AccountSummarySchema.safeParse({
@@ -1259,6 +1301,20 @@ function emptyCost() {
     assumptions: [],
     unpriced: [],
   };
+}
+
+function emptyHoursOfDay() {
+  return Array.from({ length: protocol.HOURS_OF_DAY }, (_, hour) => ({
+    hour,
+    total_tokens: 0,
+    cost_microusd: null,
+  }));
+}
+
+function emptyWeekdayHours() {
+  return Array.from({ length: protocol.WEEKDAYS_OF_WEEK }, () =>
+    Array.from({ length: protocol.HOURS_OF_DAY }, () => 0),
+  );
 }
 
 function emptySaving() {
