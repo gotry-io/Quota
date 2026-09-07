@@ -90,7 +90,9 @@ emits revisioned `state_changed` events, and then waits on one scheduler thread 
 four events: an Account conditional read every minute, a quota collection at the stored interval
 (1, 2, 5, 10, or 15 minutes; default five), a quota-only catch-up when a window `resets_at`
 falls before the next collection, and a status-page poll every ten minutes that never wins a tie
-against quota, reset, or Account work. The first status poll runs at scheduler start. Usage indexes
+against quota, reset, or Account work. The first status poll runs at scheduler start. QuotaBar follows those events, and also
+re-reads state once a minute on its own and every two seconds while a sign-in is in progress, so
+the panel is never further behind the service than one interval when an event does not reach it. Usage indexes
 on the collection tick when the file index is dirty, on its own in-flight lane, so a long scan does
 not postpone the next quota pass. An Account poll that lands while Quota is already in flight is
 kept pending and starts when Quota finishes, rather than being dropped for that minute. Manual refresh and Diagnostics Recheck run both lanes as

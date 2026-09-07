@@ -359,6 +359,28 @@ pub struct StateStore {
 }
 
 impl StateStore {
+    /// [`Self::open`], waiting for an owner that is on its way out.
+    ///
+    /// QuotaBar starts its helper as soon as it launches, and the helper the previous QuotaBar
+    /// ran — an update relaunch, a crash that AppKit is still reaping — can still hold the owner
+    /// lock while it checkpoints and exits. That helper is leaving, not competing, so the new one
+    /// waits for it rather than answering every request with `unavailable` for as long as it
+    /// lives. A lock still held at the deadline is the same `Unavailable` it always was.
+    pub fn open_waiting_for_owner(
+        root: impl AsRef<Path>,
+        wait: std::time::Duration,
+    ) -> Result<Self, StateError> {
+        let deadline = Instant::now() + wait;
+        loop {
+            match Self::open(root.as_ref()) {
+                Err(StateError::Unavailable) if Instant::now() < deadline => {
+                    thread::sleep(std::time::Duration::from_millis(250));
+                }
+                result => return result,
+            }
+        }
+    }
+
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StateError> {
         let root = root.as_ref().to_path_buf();
         ensure_owner_only_directory(&root)?;
@@ -4939,6 +4961,29 @@ mod tests {
         assert!(
             store.diagnostic_recent_attempts().expect("recent").len() <= MAXIMUM_DIAGNOSTIC_RECENT
         );
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn open_waits_for_an_owner_that_is_leaving_and_gives_up_on_one_that_stays() {
+        let root = std::env::temp_dir().join(format!("quota-state-wait-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let held = OwnerLock::acquire(&root).expect("first lock");
+        let started = Instant::now();
+        assert!(matches!(
+            StateStore::open_waiting_for_owner(&root, std::time::Duration::from_millis(600)),
+            Err(StateError::Unavailable)
+        ));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(600));
+        let release_at = Instant::now() + std::time::Duration::from_millis(500);
+        let releaser = thread::spawn(move || {
+            thread::sleep(release_at.saturating_duration_since(Instant::now()));
+            drop(held);
+        });
+        let store = StateStore::open_waiting_for_owner(&root, std::time::Duration::from_secs(5))
+            .expect("opens once the owner has left");
+        releaser.join().expect("releaser");
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -258,6 +258,14 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   @ObservationIgnored
   private var loginTask: Task<Void, Never>?
 
+  /// Follows a sign-in in progress by asking for state, until the service says the flow is over.
+  @ObservationIgnored
+  private var loginPollTask: Task<Void, Never>?
+
+  /// Re-reads state on a fixed cadence, whatever events did or did not arrive.
+  @ObservationIgnored
+  private var statePollTask: Task<Void, Never>?
+
   @ObservationIgnored
   private var cancelLoginTask: Task<Void, Never>?
 
@@ -294,6 +302,15 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
 
   /// How long a quit waits for the service's goodbye before going ahead without it.
   nonisolated static let shutdownDeadline: Duration = .seconds(2)
+  /// How often a sign-in in progress asks the service for its state, until the flow is over. A
+  /// browser round trip ends on the service's thread and is announced by an event; this is the
+  /// answer for the one event that does not arrive.
+  nonisolated static let loginPollInterval: Duration = .seconds(2)
+  /// How often the panel re-reads the service's state on its own. Events are the fast path and
+  /// carry every change; this is the bound on how stale the panel can be without one.
+  nonisolated static let statePollInterval: Duration = .seconds(60)
+  /// A sign-in that has been in progress this long is no longer being followed by the poll.
+  nonisolated static let loginPollLimit: Duration = .seconds(900)
 
   /// How often the menu-bar item is re-evaluated against the clock. The shared freshness rule's
   /// smallest unit is a minute — under one everything reads "just now" — so a minute is as fine
@@ -302,6 +319,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
 
   @ObservationIgnored
   private let shutdownDeadline: Duration
+  private let loginPollInterval: Duration
+  private let statePollInterval: Duration
 
   @ObservationIgnored
   private let notificationStore: any NotificationStateStore
@@ -349,7 +368,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     notificationDefaults: UserDefaults = .standard,
     budgetStore: UsageBudgetStore? = nil,
     widgetPublisher: DesktopWidgetPublisher? = nil,
-    shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline
+    shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline,
+    loginPollInterval: Duration = MenuBarViewModel.loginPollInterval,
+    statePollInterval: Duration = MenuBarViewModel.statePollInterval
   ) {
     let injectedClient = client != nil
     // A test's QuotaBar publishes nowhere: it neither joins the App Group nor asks the Keychain
@@ -371,6 +392,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       ? NoOpQuotaBarRelauncher()
       : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
+    self.loginPollInterval = loginPollInterval
+    self.statePollInterval = statePollInterval
     self.notificationDefaults = notificationDefaults
     self.notificationRules = NotificationRules.load(from: notificationDefaults)
     let resolvedCenter =
@@ -431,6 +454,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       widgetPublishingStatus = .unentitled
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
+      loginPollInterval = MenuBarViewModel.loginPollInterval
+      statePollInterval = MenuBarViewModel.statePollInterval
       notificationStore = InMemoryNotificationStateStore()
       notificationSink = NoOpNotificationSink()
       notificationDefaults = .standard
@@ -601,7 +626,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
 
   deinit {
     eventTask?.cancel()
+    statePollTask?.cancel()
     loginTask?.cancel()
+    loginPollTask?.cancel()
     cancelLoginTask?.cancel()
     menuBarClockTask?.cancel()
     fullDiskAccessPollTask?.cancel()
@@ -620,6 +647,20 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         guard let self else { continue }
         guard event.revision > revision else { continue }
         await reloadState()
+      }
+    }
+    // Events carry every change and arrive at once; this is the bound on how long the panel can
+    // disagree with the service when one does not, which a reader cannot otherwise tell from
+    // "nothing changed".
+    let statePollInterval = statePollInterval
+    statePollTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: statePollInterval)
+        } catch {
+          return
+        }
+        await self?.reloadState()
       }
     }
     let interval = Self.menuBarClockInterval
@@ -659,6 +700,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   func shutdown() async {
     eventTask?.cancel()
     eventTask = nil
+    statePollTask?.cancel()
+    statePollTask = nil
+    loginPollTask?.cancel()
+    loginPollTask = nil
     fullDiskAccessPollTask?.cancel()
     fullDiskAccessPollTask = nil
     grantPresenter?.dismiss()
@@ -943,11 +988,36 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         // state/events, rather than the short-lived request task, are authoritative.
         loginTask = nil
         await reloadState()
+        followLoginInProgress()
       } catch is CancellationError {
         return
       } catch {
         accountActionErrorMessage = Self.message(for: error)
         accountErrorMessage = accountActionErrorMessage
+        await reloadState()
+      }
+    }
+  }
+
+  /// Keeps asking the service how the sign-in is going until it is no longer in progress.
+  ///
+  /// The browser round trip finishes on the service's own thread and is announced with a
+  /// `state_changed` event, which is the fast path. A sign-in is the one moment the panel is
+  /// waiting on exactly one event, so it also asks, on a short cadence and for a bounded time,
+  /// rather than showing "finish sign-in in browser" past a sign-in that already finished.
+  private func followLoginInProgress() {
+    loginPollTask?.cancel()
+    guard authStatus == .loggingIn else { return }
+    let interval = loginPollInterval
+    let deadline = ContinuousClock.now + Self.loginPollLimit
+    loginPollTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled, ContinuousClock.now < deadline {
+        do {
+          try await Task.sleep(for: interval)
+        } catch {
+          return
+        }
+        guard let self, authStatus == .loggingIn else { return }
         await reloadState()
       }
     }
@@ -962,6 +1032,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     guard cancelLoginTask == nil, let client else { return }
     loginTask?.cancel()
     loginTask = nil
+    loginPollTask?.cancel()
+    loginPollTask = nil
     isLoggingIn = false
     accountActionErrorMessage = nil
     accountErrorMessage = nil
@@ -1559,6 +1631,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       browserOpenFailed = false
     }
     authStatus = incomingAuth
+    if authStatus != .loggingIn {
+      loginPollTask?.cancel()
+      loginPollTask = nil
+    }
     accountDisconnectReason =
       if authStatus == .signedOut {
         switch state.account.lastError?.code {
