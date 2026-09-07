@@ -3046,6 +3046,64 @@ button:focus-visible {
   font-size: var(--fs-caption);
 }
 
+.leaderboard-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.leaderboard {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+
+.leaderboard th,
+.leaderboard td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.leaderboard th {
+  color: var(--charcoal);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.leaderboard-rank,
+.leaderboard-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-rank {
+  width: 3em;
+  color: var(--mute);
+}
+
+/* The reader's own row, which is the only thing on this page that differs per reader. */
+.leaderboard-you {
+  background: var(--brand-surface);
+}
+
+.leaderboard-you .leaderboard-rank {
+  color: var(--brand-emerald);
+}
+
+.leaderboard-you-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-emerald);
+  color: var(--on-inverted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .share-dialog {
   max-width: min(760px, calc(100vw - 32px));
   padding: 0;

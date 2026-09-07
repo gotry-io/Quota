@@ -21,6 +21,7 @@ import {
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
+  LeaderboardResponseSchema,
   LOCAL_PROVIDER_IDS,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
@@ -1204,7 +1205,13 @@ describe("quota protocol", () => {
   });
 
   it("cannot state a public page with no address, and refuses a key the page does not publish", () => {
-    const profile = { handle: "kyle", enabled: true, show_models: true, show_cost: false };
+    const profile = {
+      handle: "kyle",
+      enabled: true,
+      show_models: true,
+      show_cost: false,
+      on_leaderboard: false,
+    };
     expect(
       PublicProfileUpdateRequestSchema.safeParse({ protocol_version: PROTOCOL_VERSION, profile })
         .success,
@@ -1251,6 +1258,54 @@ describe("quota protocol", () => {
       expect(
         PublicUsageResponseSchema.safeParse({ ...page, ...extra }).success,
         JSON.stringify(extra),
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a page that would be listed without being published", () => {
+    const listed = {
+      handle: "kyle",
+      enabled: false,
+      show_models: true,
+      show_cost: false,
+      on_leaderboard: true,
+    };
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: listed,
+      }).success,
+    ).toBe(false);
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: { ...listed, enabled: true },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps cost, models, providers, and agents off the board", () => {
+    const board = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      period: "30d",
+      generated_at: "2026-09-06T12:00:00Z",
+      entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1 }],
+    };
+    expect(LeaderboardResponseSchema.safeParse(board).success).toBe(true);
+
+    for (const broken of [
+      { period: "7d" },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 0 }] },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 101 }] },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1, cost: null }] },
+      {
+        entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1, models: [] }],
+      },
+      { entries: Array.from({ length: 101 }, () => board.entries[0]) },
+    ]) {
+      expect(
+        LeaderboardResponseSchema.safeParse({ ...board, ...broken }).success,
+        JSON.stringify(broken),
       ).toBe(false);
     }
   });

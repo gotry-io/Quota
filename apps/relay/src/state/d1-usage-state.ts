@@ -1,5 +1,7 @@
 import type {
   DeviceWriterPrincipal,
+  LeaderboardQuery,
+  LeaderboardRow,
   StoredUsageDailyRow,
   StoredUsageHourlyRow,
   UsageBoundaryQuery,
@@ -212,6 +214,42 @@ export class D1UsageState implements UsageState {
       rows: rows.results.slice(0, query.limit).map(hourlyRow),
       truncated: rows.results.length > query.limit,
     };
+  }
+
+  /**
+   * The whole board, in one aggregate over the rollup.
+   *
+   * Ranking is what `usage_daily` is already keyed for, so the board is grouped and ordered in
+   * SQLite rather than folded here: one statement bounded by the window and the number of
+   * places, instead of one scan per listed profile. Tokens are input plus output, the same
+   * total a public page prints, and `messages` is the request count, so a handle's place on
+   * the board and the numbers on its own page cannot disagree.
+   */
+  async queryLeaderboard(query: LeaderboardQuery): Promise<LeaderboardRow[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT public_profiles.handle AS handle,
+                SUM(daily.input_tokens + daily.output_tokens) AS total_tokens,
+                SUM(daily.requests) AS messages
+           FROM usage_daily AS daily
+           INNER JOIN devices ON devices.id = daily.device_id
+           INNER JOIN public_profiles ON public_profiles.account_id = devices.account_id
+          WHERE public_profiles.on_leaderboard = 1
+            AND public_profiles.enabled = 1
+            AND devices.deleted_at IS NULL
+            AND daily.utc_date >= ?1
+          GROUP BY public_profiles.handle
+          HAVING total_tokens > 0
+          ORDER BY total_tokens DESC, public_profiles.handle ASC
+          LIMIT ?2`,
+      )
+      .bind(query.from, query.limit)
+      .all<{ handle: string; total_tokens: number; messages: number }>();
+    return rows.results.map((row) => ({
+      handle: row.handle,
+      total_tokens: Number(row.total_tokens),
+      messages: Number(row.messages),
+    }));
   }
 
   /**

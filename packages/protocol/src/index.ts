@@ -1610,6 +1610,7 @@ export const RESERVED_PUBLIC_PROFILE_HANDLES = [
   "download",
   "healthz",
   "help",
+  "leaderboard",
   "login",
   "logout",
   "my",
@@ -1658,6 +1659,7 @@ const PublicProfileSchema = z
     enabled: z.boolean(),
     show_models: z.boolean(),
     show_cost: z.boolean(),
+    on_leaderboard: z.boolean(),
   })
   .strict()
   .superRefine((profile, context) => {
@@ -1666,6 +1668,13 @@ const PublicProfileSchema = z
         code: "custom",
         path: ["handle"],
         message: "An enabled public profile must name a handle.",
+      });
+    }
+    if (profile.on_leaderboard && !profile.enabled) {
+      context.addIssue({
+        code: "custom",
+        path: ["on_leaderboard"],
+        message: "A page that is not published cannot be on the leaderboard.",
       });
     }
   });
@@ -1684,8 +1693,18 @@ const PublicProfileUpdateSchema = z
     enabled: z.boolean(),
     show_models: z.boolean(),
     show_cost: z.boolean(),
+    on_leaderboard: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((profile, context) => {
+    if (profile.on_leaderboard && !profile.enabled) {
+      context.addIssue({
+        code: "custom",
+        path: ["on_leaderboard"],
+        message: "A page that is not published cannot be on the leaderboard.",
+      });
+    }
+  });
 export type PublicProfileUpdate = z.infer<typeof PublicProfileUpdateSchema>;
 
 export const PublicProfileUpdateRequestSchema = z
@@ -1796,6 +1815,39 @@ export const PublicUsageResponseSchema = z
   })
   .strict();
 export type PublicUsageResponse = z.infer<typeof PublicUsageResponseSchema>;
+
+/** The leaderboard is the last 30 UTC days, and that is the only period it has. */
+export const LEADERBOARD_PERIOD = "30d";
+/** How many places the board has. Everyone below the last one is off it. */
+export const MAXIMUM_LEADERBOARD_ENTRIES = 100;
+
+/**
+ * One place on the leaderboard.
+ *
+ * It carries less than a public page does, not more: a handle, how much it ran, and where that
+ * put it. There is no cost, no model, no provider, no agent, and no device here, because a
+ * board is read by people who followed no link and asked for nobody in particular
+ * ([ADR 0045](../../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
+ */
+const LeaderboardEntrySchema = z
+  .object({
+    handle: PublicProfileHandleSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    messages: SafeNonnegativeIntegerSchema,
+    rank: z.number().int().min(1).max(MAXIMUM_LEADERBOARD_ENTRIES),
+  })
+  .strict();
+export type LeaderboardEntry = z.infer<typeof LeaderboardEntrySchema>;
+
+export const LeaderboardResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    period: z.literal(LEADERBOARD_PERIOD),
+    generated_at: Rfc3339InstantSchema,
+    entries: z.array(LeaderboardEntrySchema).max(MAXIMUM_LEADERBOARD_ENTRIES),
+  })
+  .strict();
+export type LeaderboardResponse = z.infer<typeof LeaderboardResponseSchema>;
 
 /**
  * What a client takes from a managed read.

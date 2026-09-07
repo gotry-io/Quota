@@ -1,7 +1,8 @@
 # QuotaBar
 
-QuotaBar is the native macOS 14+ menu-bar UI. It ships as one app containing the SwiftUI executable
-and a private Rust child at `Contents/Helpers/quota-service`.
+QuotaBar is the native macOS 14+ menu-bar UI. It ships as one app containing the SwiftUI executable,
+a private Rust child at `Contents/Helpers/quota-service`, and the public `quota` command at
+`Contents/Helpers/quota`.
 
 ## Runtime boundary
 
@@ -91,6 +92,25 @@ system notification center; nothing is uploaded.
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
 requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
 [`DESIGN.md`](DESIGN.md).
+
+## The `quota` command
+
+The bundle carries one public command beside the private service
+([ADR 0046](../../docs/decisions/0046-a-read-only-quota-command.md)). It prints what QuotaBar has
+already collected on this Mac and nothing else: it opens the disposable cache read-only, starts no
+collection, reads no credential, and takes no lock, so it can be run while QuotaBar is running and
+says nothing QuotaBar was not already showing.
+
+```bash
+ln -s "/Applications/QuotaBar.app/Contents/Helpers/quota" /usr/local/bin/quota
+quota status                       # each provider's windows: what is left, and when it refills
+quota usage --period today|7d|30d  # this Mac's Usage totals and its busiest models
+quota status --json                # the same state QuotaBar reads over IPC
+```
+
+The symlink is the whole installation; there is no installer, no Homebrew formula, and nothing to
+uninstall but the link. A Mac QuotaBar has never run on has no state to print, so the command says
+so and exits 1. It is not a way to collect: only QuotaBar's own child does that.
 
 ## Development
 

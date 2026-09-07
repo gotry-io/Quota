@@ -10,6 +10,14 @@ license = "MIT"
 name = "quota_service"
 path = "src/lib.rs"
 
+# The one public command this repository ships. It reads the state QuotaBar publishes and
+# prints it; the collecting service stays private behind `apps/menubar/helper`
+# (docs/decisions/0046-a-read-only-quota-command.md). The source is not under `src/bin/`
+# because the repository ignores every `bin/` as a build output.
+[[bin]]
+name = "quota"
+path = "src/command.rs"
+
 [dependencies]
 base64 = "0.22.1"
 chrono = { version = "0.4.41", features = ["serde"] }
