@@ -631,12 +631,17 @@ export interface AccountState {
   createRedemptionCodes(rows: RedemptionCodeRow[]): Promise<void>;
   getRedemptionCode(code: string): Promise<RedemptionCodeRow | null>;
   hasRedeemedCode(code: string, accountId: string): Promise<boolean>;
-  /** Atomic: increment the count and write code_redemptions; excess or a repeat is a result. */
+  /**
+   * Reserve one redemption: increment the count and write code_redemptions atomically, so two
+   * concurrent redeems of a one-use code cannot both pass. Excess or a repeat is a result.
+   */
   recordRedemption(
     code: string,
     accountId: string,
     redeemedAt: string,
   ): Promise<"recorded" | "exhausted" | "already_redeemed">;
+  /** Give a reservation back when the grant it was made for did not happen. */
+  releaseRedemption(code: string, accountId: string): Promise<void>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

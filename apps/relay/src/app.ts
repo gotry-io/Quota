@@ -1034,6 +1034,25 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (billing.restSecret.length === 0) {
       return relayError(context, 503, "billing_unavailable", "Billing is unavailable.");
     }
+    // Reserve the redemption before asking RevenueCat for the grant, so two concurrent redeems
+    // of a one-use code cannot both be granted; a grant that then fails gives the reservation
+    // back.
+    const reserved = await options.state.recordRedemption(
+      code,
+      principal.account_id,
+      checkedAt.toISOString(),
+    );
+    if (reserved === "already_redeemed") {
+      return relayError(
+        context,
+        409,
+        "code_already_redeemed",
+        "This account has already redeemed this code.",
+      );
+    }
+    if (reserved === "exhausted") {
+      return relayError(context, 409, "code_exhausted", "This code has no redemptions left.");
+    }
     let subscriber: Awaited<ReturnType<typeof grantPromotionalEntitlement>>;
     try {
       subscriber = await grantPromotionalEntitlement(
@@ -1042,6 +1061,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         row.grant_duration,
       );
     } catch {
+      await options.state.releaseRedemption(code, principal.account_id);
       console.error(
         JSON.stringify({
           event: "relay_redeem_failed",
@@ -1061,22 +1081,6 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       updated_at: checkedAt.toISOString(),
     };
     await options.state.putEntitlement(entitlementRow);
-    const recorded = await options.state.recordRedemption(
-      code,
-      principal.account_id,
-      checkedAt.toISOString(),
-    );
-    if (recorded !== "recorded") {
-      console.warn(
-        JSON.stringify({
-          event: "relay_code_redeemed_race",
-          account_id: principal.account_id,
-          campaign: row.campaign,
-          duration: row.grant_duration,
-          outcome: recorded,
-        }),
-      );
-    }
     console.log(
       JSON.stringify({
         event: "relay_code_redeemed",

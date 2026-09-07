@@ -22,7 +22,9 @@ entitlement with `expires_at: null` and `will_renew: false` — there is nothing
 accepts RevenueCat `NON_RENEWING_PURCHASE` for that row.
 
 **A code is a grant Relay issues and RevenueCat records.** Relay stores the code, checks it, and
-counts redemptions. A successful redeem calls RevenueCat
+counts redemptions. A redeem reserves its count first, in one atomic write, so two concurrent
+redeems of a one-use code cannot both be granted; the reservation is given back when the grant
+fails. A reserved redeem then calls RevenueCat
 `POST /v1/subscribers/{account_id}/entitlements/pro/promotional` with the code's duration
 (`weekly`, `monthly`, `two_month`, `three_month`, `six_month`, `yearly`, `lifetime`). The
 subscriber that comes back is folded and stored the same way a REST refresh is. RevenueCat
