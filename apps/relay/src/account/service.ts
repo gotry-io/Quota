@@ -607,11 +607,19 @@ function expiresAt(now: Date, milliseconds: number): string {
   return new Date(now.getTime() + milliseconds).toISOString();
 }
 
-function sanitizeLabel(value: string, maximumLength: number): string {
+/**
+ * Bound a Device display name or platform. Letters, numbers, spaces, `._()-`, and
+ * apostrophes (`'` / `’`) stay; control characters and extra whitespace do not.
+ */
+export function sanitizeLabel(value: string, maximumLength: number): string {
   const sanitized = value
+    .replace(/\s+/gu, " ")
     .trim()
-    .replace(/[^\p{L}\p{N} ._()-]/gu, "")
-    .slice(0, maximumLength);
+    .replace(/[^\p{L}\p{N} ._()'\u2019-]/gu, "")
+    .replace(/ {2,}/g, " ")
+    .trim()
+    .slice(0, maximumLength)
+    .trim();
   if (!sanitized) {
     throw new AccountFlowError("invalid_request");
   }

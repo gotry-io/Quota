@@ -190,7 +190,9 @@ Body, in order:
    is `minor` or worse (VoiceOver speaks the status-page description; there is no tooltip),
    masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
    List row background is the only content container. Status pages are fetched on this device
-   (`QuotaProviderStatus`); Relay does not forward them. Widgets do not show the mark. Remaining
+   (`QuotaProviderStatus`) on the helper's ten-minute cadence while the app is in the foreground
+   (`AppModel` holds the timer) and again on a background refresh; a failed poll keeps the last
+   reading. Relay does not forward them. Widgets do not show the mark. Remaining
    is the strongest number, with one meter per percent window and reset copy. A reading that is
    not current names why in place of, or ahead of, that reset time, because the reset it names
    may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t

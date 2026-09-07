@@ -60,8 +60,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   seconds on Relay, cap the body at 64 KiB, store only `status.indicator`,
   `status.description`, and the time this check ran, and never send a cookie, API key, or
   account identifier. A failed poll keeps the last reading. Quota iOS fetches the same URLs on the
-  device. Relay publishes them at public `GET /api/v2/providers/status` with no session
-  ([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
+  device every ten minutes while foregrounded, and again on a background refresh. Relay publishes
+  the same pages at public `GET /api/v2/providers/status` with no session
+  ([ADR 0044](decisions/0044-relay-publishes-provider-status.md)); the iPhone reads them itself.
 
 ## Local credentials and identity
 
@@ -261,7 +262,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   Device ends every token issued before it. A session that names no Device — the browser's, and a
   phone that presented no installation — cannot write device data at all. The device profile endpoint writes only the Device its
   own session names, and only that Device's bounded display name and platform: it cannot select a
-  Device ID, read Account data, or change authorization.
+  Device ID, read Account data, or change authorization. A display name keeps letters, numbers,
+  spaces, `._()-`, and apostrophes (`'` and `’`); control characters and extra whitespace are
+  stripped, and the value is capped at 128 characters.
 - An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by
   when it was observed, an hour is replaced only by a strictly newer `scan_version`, and the
   response names what it accepted and ignored.
