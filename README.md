@@ -32,7 +32,8 @@ service writes that sentence; QuotaBar renders it
 ## Architecture
 
 QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and communicates over bounded,
-versioned stdin/stdout NDJSON. The child announces `ready` once its local state is open, and
+versioned stdin/stdout NDJSON. The child waits up to twenty seconds for a previous QuotaBar's helper
+to release the state owner lock, announces `ready` once its local state is open, and
 QuotaBar holds every request until then. Requests have no deadline of their own: a `ping` the child
 answers without taking a lock is what says it is alive, and only a child that leaves two consecutive
 pings unanswered is killed and replaced. The Rust service immediately returns its last valid state,

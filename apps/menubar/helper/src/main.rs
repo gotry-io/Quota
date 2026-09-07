@@ -24,12 +24,21 @@ fn main() {
     }
 }
 
+/// How long a starting helper waits for the previous one to release the state. QuotaBar gives a
+/// helper sixty seconds to announce itself, and a departing helper needs only the time a
+/// checkpoint takes, so this stays well inside that.
+const OWNER_HANDOVER_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 fn build_service(writer: Arc<JsonLineWriter>) -> Result<LocalService, IpcError> {
     // QuotaBar owns this process. There is intentionally no daemonization, launch agent, CLI
     // parser, socket listener, or PATH lookup here. Initialization failures use only this fixed
     // recovery pair; paths and source errors never cross the IPC boundary.
     let root = default_state_root().ok_or_else(unavailable_startup_error)?;
-    let state = Arc::new(StateStore::open(root).map_err(state_startup_error)?);
+    // The helper QuotaBar ran before this one may still be closing its files; see the wait.
+    let state = Arc::new(
+        StateStore::open_waiting_for_owner(root, OWNER_HANDOVER_WAIT)
+            .map_err(state_startup_error)?,
+    );
     let relay = Arc::new(RelayClient::new().map_err(relay_startup_error)?);
     let backend = Arc::new(NativeBackend::new(
         state.clone(),
