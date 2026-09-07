@@ -41,7 +41,9 @@ if [[ ! -d "$PROJECT" ]]; then
 fi
 
 QUOTABAR_VERSION="$VERSION" cargo build --locked --release --package quota-menubar-helper
+cargo build --locked --release --package quota-service --bin quota
 HELPER_BINARY="${ROOT_DIR}/target/release/quota-menubar-helper"
+COMMAND_BINARY="${ROOT_DIR}/target/release/quota"
 
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quotabar-package.XXXXXX")"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
@@ -99,9 +101,14 @@ done
 
 mkdir -p "$APP_PATH/Contents/Helpers"
 cp "$HELPER_BINARY" "$APP_PATH/Contents/Helpers/quota-service"
-chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"
+# The public command ships beside the private service, in the same bundle and signed the same
+# way, so what a person symlinks onto their PATH is the build QuotaBar is running.
+cp "$COMMAND_BINARY" "$APP_PATH/Contents/Helpers/quota"
+chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service" \
+  "$APP_PATH/Contents/Helpers/quota"
 
-for binary in "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"; do
+for binary in "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service" \
+  "$APP_PATH/Contents/Helpers/quota"; do
   if [[ "$(lipo -archs "$binary")" != "arm64" ]]; then
     echo "expected an arm64-only executable: $binary" >&2
     exit 1
@@ -120,6 +127,8 @@ plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APPEX_PATH/Contents/In
 if [[ -n "$SIGNING_IDENTITY" ]]; then
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
     "$APP_PATH/Contents/Helpers/quota-service"
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+    "$APP_PATH/Contents/Helpers/quota"
   codesign --force --options runtime --timestamp \
     --entitlements apps/menubar/Widgets/QuotaBarWidgets.entitlements \
     --sign "$SIGNING_IDENTITY" "$APPEX_PATH"
@@ -136,10 +145,12 @@ else
   chmod +x "${ROOT_DIR}/scripts/sign-sparkle-framework.sh"
   "${ROOT_DIR}/scripts/sign-sparkle-framework.sh" "$APP_PATH" "$CODESIGN_IDENTITY"
   codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH/Contents/Helpers/quota-service"
+  codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH/Contents/Helpers/quota"
   codesign --force --sign "$CODESIGN_IDENTITY" "$APPEX_PATH"
   codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH"
 fi
 codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota-service"
+codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 printf '%s\n' "$APP_PATH"

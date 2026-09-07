@@ -63,6 +63,9 @@ targets:
         buildPhase: resources
       - path: ../../LICENSE
         buildPhase: resources
+        # Placed under Support explicitly: xcodegen would otherwise name the parent group after
+        # the checkout directory, and the committed project must not depend on that.
+        group: Support
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quotabar

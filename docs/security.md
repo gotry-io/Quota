@@ -218,10 +218,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `POST /oauth/v2/revoke` needs no scope: presenting the refresh token is the proof, and it ends the
   whole family and signs out the Device the session spoke for.
 
-## The public profile page
+## The public profile page and the leaderboard
 
-- A public page is the only account data Relay answers with no session, and what it may carry is
-  the whole of `PublicUsageResponseSchema`: the handle, when the page was published, when the
+- A public page and the board it may appear on are the only account data Relay answers with no
+  session. What a page may carry is the whole of `PublicUsageResponseSchema`: the handle, when the
+  page was published, when the
   answer was folded, tokens/messages totals for the last 30 UTC days and for the retained window,
   an optional API-equivalent cost amount and its status, provider and model shares in tokens and
   thousandths, and 365 days of heatmap intensity as bands from 0 to 4. Nothing else is publishable
@@ -232,16 +233,25 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - `show_models` and `show_cost` are owner switches over that shape: with `show_cost` off no cost
   field is present at all, and with `show_models` off no model list is. Cost is off until asked
   for.
+- `on_leaderboard` is a third owner switch, and the only thing it publishes is a place in an order.
+  `LeaderboardResponseSchema` is the whole of what `GET /api/v6/public/leaderboard` may carry: a
+  handle, 30-day token and message totals, and a rank from 1 to 100. There is no cost, model,
+  provider, agent, device, account id, or instant beside a handle in that shape. It is `0` until an
+  Account asks for it, the contract refuses it on a page that is not published, and the read
+  requires `enabled = 1` as well, so taking a page down takes it off the board
+  ([ADR 0045](decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
 - A handle is `^[a-z0-9][a-z0-9-]{2,29}$`, is not one of the reserved names, is unique without
   regard to case, and is kept when the page is switched off so a shared link cannot be reassigned.
   A malformed, unclaimed, and disabled handle are one 404 with one body, so the route cannot be
   used to ask whether a person has an Account. Deleting the Account deletes the row in the same
   batch as everything else.
-- `GET /api/v6/public/<handle>/usage` is the one route answered `Cache-Control: public, max-age=300`,
-  because its answer is the same for every reader. It is rate limited by Cloudflare's trusted
-  connecting-IP metadata, and its `ETag` is computed before any Usage row is read.
-  `PUT /api/v2/account/profile` writes it, and requires `account:manage`, an exact same-origin
-  `Origin` with same-origin Fetch Metadata when present, and a per-Account rate limit.
+- `GET /api/v6/public/<handle>/usage` and `GET /api/v6/public/leaderboard` are the two routes
+  answered `Cache-Control: public, max-age=300`, because their answers are the same for every
+  reader. Both are rate limited by Cloudflare's trusted connecting-IP metadata, and both compute
+  their `ETag` before any Usage row is read. The leaderboard takes no principal and no handle, and
+  `period` accepts only `30d`. `PUT /api/v2/account/profile` writes all five owner values, and
+  requires `account:manage`, an exact same-origin `Origin` with same-origin Fetch Metadata when
+  present, and a per-Account rate limit.
 
 ## Upload, Usage, and deletion safety
 

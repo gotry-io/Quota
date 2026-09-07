@@ -18,7 +18,6 @@
 		17254FCE637FB5B5F8329DE6 /* QuotaSelectionPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2A81C66F35D3DEA53983DC /* QuotaSelectionPopup.swift */; };
 		1744D78281AA3C8DA3E06851 /* NotificationsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 694B85A2C2350E33025244D4 /* NotificationsSettingsView.swift */; };
 		185FE5D684B0A2586596CCD7 /* ProviderStatusCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B36F00727C9AB209CA65BBE /* ProviderStatusCopy.swift */; };
-		23483EDC91F3D476581DD7D2 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = BA9A309A9579672E8D042B45 /* LICENSE */; };
 		237B5D24C43D86C4D8B8F9AA /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = 2F8C41076717525FB8C694FE /* QuotaWidgetData */; };
 		2E2CC5D17C11AF48E8356352 /* QuotaWidgetProjection in Frameworks */ = {isa = PBXBuildFile; productRef = 367E9DED1196EB366E2B53B4 /* QuotaWidgetProjection */; };
 		2FC3F378B60118AB5A5B33CB /* SignInRungPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6BB7E519FD895677E512C8 /* SignInRungPresentation.swift */; };
@@ -46,6 +45,7 @@
 		5AEAFB9A5F96FBDAEEA394C1 /* SettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D12A2C1B7AB76E6D2D4A92C /* SettingsSection.swift */; };
 		608B8A91FDDC452648C6B931 /* QuotaCollectionReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14464EE21ADFF1D37CDE533B /* QuotaCollectionReport.swift */; };
 		64D7D47E30F7FD504C598B35 /* BrowserSessionImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC8FC4F1A53DB20C35B26F7 /* BrowserSessionImporter.swift */; };
+		68DB46B27A7694A2EC73194A /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 87A6E2941984FE94D4FFB960 /* LICENSE */; };
 		69FDAFFF5F83727DDC4CE1B5 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 1FE61935A04309B1F538CEAE /* QuotaPresentation */; };
 		6A34B8FAD59F51E4E9C14B05 /* SyncStatusCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B68E6429A0D1F53AFA4224 /* SyncStatusCopy.swift */; };
 		6A6B89F8BE19A90EBD2EC0B8 /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = CCF4B5C6B4570D159C2F9D80 /* QuotaWidgetData */; };
@@ -193,6 +193,7 @@
 		7195FA5D82026647691446F1 /* QuotaBarAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaBarAppDelegate.swift; sourceTree = "<group>"; };
 		78B68E6429A0D1F53AFA4224 /* SyncStatusCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusCopy.swift; sourceTree = "<group>"; };
 		8298A966FAFFAF2C782105DD /* ResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetReminderScheduler.swift; sourceTree = "<group>"; };
+		87A6E2941984FE94D4FFB960 /* LICENSE */ = {isa = PBXFileReference; name = LICENSE; path = ../../../LICENSE; sourceTree = "<group>"; };
 		88A1B4EDA44D6B5D78EEE4D1 /* AppMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMetadata.swift; sourceTree = "<group>"; };
 		8A544624C0227F587DBA8F43 /* QuotaOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaOverviewView.swift; sourceTree = "<group>"; };
 		8B36F00727C9AB209CA65BBE /* ProviderStatusCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatusCopy.swift; sourceTree = "<group>"; };
@@ -212,7 +213,6 @@
 		B75CF4E4A7F2965DC0F0EC3B /* QuotaRefreshInterval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshInterval.swift; sourceTree = "<group>"; };
 		B94332710A19F72E6D8D20F9 /* LocalServiceClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServiceClient.swift; sourceTree = "<group>"; };
 		B9B61FF0C55ED8FBADB66E02 /* ProviderID.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderID.generated.swift; sourceTree = "<group>"; };
-		BA9A309A9579672E8D042B45 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		BB726D37137BD1C9D10A0C11 /* MenuBarPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPanelController.swift; sourceTree = "<group>"; };
 		BD621E406EBA0D3F3385FB08 /* QuotaComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaComponents.swift; sourceTree = "<group>"; };
 		BE3348233CF275CAB4617906 /* MenuBarSettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarSettingsViews.swift; sourceTree = "<group>"; };
@@ -370,15 +370,6 @@
 			path = Appearance;
 			sourceTree = "<group>";
 		};
-		457805A937BFC672B0E91DDE /* wp-e3 */ = {
-			isa = PBXGroup;
-			children = (
-				BA9A309A9579672E8D042B45 /* LICENSE */,
-			);
-			name = "wp-e3";
-			path = ../..;
-			sourceTree = "<group>";
-		};
 		5A6BF41B5B436D2C37985339 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
@@ -465,7 +456,6 @@
 				95733517431B0CA7FA4CE165 /* Resources */,
 				C0BD2FAD979CD496FD91B1B5 /* Support */,
 				A2F4417C5BE90268AE5A99E4 /* Widgets */,
-				457805A937BFC672B0E91DDE /* wp-e3 */,
 				C44D7060799061FD1E8AD2F9 /* Frameworks */,
 				86EEC0ABD1A556BC49FD78F7 /* Products */,
 			);
@@ -508,6 +498,7 @@
 		C0BD2FAD979CD496FD91B1B5 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				87A6E2941984FE94D4FFB960 /* LICENSE */,
 				9DEB908D5A2EC2215E7EEF2D /* QuotaBar.icns */,
 			);
 			path = Support;
@@ -693,7 +684,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CAD51420907FDD6F62EB031D /* BrandIcons in Resources */,
-				23483EDC91F3D476581DD7D2 /* LICENSE in Resources */,
+				68DB46B27A7694A2EC73194A /* LICENSE in Resources */,
 				B1630C605FB2C8ED72E857E0 /* QuotaBar.icns in Resources */,
 				BDC3BB674ED2DAA27ABE7989 /* THIRD_PARTY_NOTICES.md in Resources */,
 			);

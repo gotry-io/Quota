@@ -39,6 +39,8 @@ Read the relevant source before changing that area:
 | Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
 | Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
 | What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
+| The opt-in leaderboard, and what a place on it carries | `docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md` |
+| The public `quota` command, and why a reader is not a second service | `docs/decisions/0046-a-read-only-quota-command.md` |
 | Sessions are a local view of Usage source files | `docs/decisions/0038-sessions-are-a-local-view-of-files.md` |
 | Project attribution stays on This Mac | `docs/decisions/0039-project-attribution-stays-local.md` |
 | Client-folded Usage periods, the `usage_period` IPC operation, and the device-only budget | `docs/decisions/0040-a-period-is-folded-where-its-days-already-are.md` |
@@ -130,17 +132,19 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Use `@gotry-io/*` for TypeScript workspace packages and `workspace:*` for internal dependencies.
 - Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
   `Cargo.lock`; do not add npm, Yarn, or Bun lockfiles.
-- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point over
-  `packages/service`; keep it private: no command parser, socket listener, daemonization, or public
-  installation surface. The shared crate stays platform-neutral in style, but only macOS is built,
-  tested, and released.
+- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point that may
+  *write* over `packages/service`; keep it private: no command parser, socket listener,
+  daemonization, or public installation surface. The `quota` binary in the same crate is a reader —
+  it opens the disposable cache read-only, collects nothing, and touches no credential
+  (`docs/decisions/0046-a-read-only-quota-command.md`). Do not give it a second one. The shared
+  crate stays platform-neutral in style, but only macOS is built, tested, and released.
 - Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, and QuotaRelay. The iOS app's product name is Quota. The
-  bundled Rust service executable is a private QuotaBar implementation detail, never a public
-  command.
+  bundled Rust *service* executable is a private QuotaBar implementation detail, never a public
+  command; `quota` is the one public command, and it only reads.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 

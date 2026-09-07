@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod config;
+pub mod copy;
 pub mod history;
 pub mod ipc;
 pub mod migration;
@@ -10,6 +11,7 @@ pub mod pricing;
 pub mod protocol;
 pub mod provider_status;
 pub mod providers;
+pub mod readonly;
 pub mod relay;
 pub mod service;
 pub mod state;

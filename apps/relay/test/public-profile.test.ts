@@ -48,7 +48,13 @@ describe("the public profile an Account may publish", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       protocol_version: 2,
-      profile: { handle: null, enabled: false, show_models: true, show_cost: false },
+      profile: {
+        handle: null,
+        enabled: false,
+        show_models: true,
+        show_cost: false,
+        on_leaderboard: false,
+      },
     });
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
@@ -80,6 +86,7 @@ describe("the public profile an Account may publish", () => {
       enabled: true,
       show_models: true,
       show_cost: false,
+      on_leaderboard: false,
     });
 
     // A handle is lowercase by contract, so an uppercase one is not a rival claim but a
@@ -267,23 +274,24 @@ describe("the page a published handle answers", () => {
   });
 });
 
-function profileBody(
-  handle: string,
-  options: { enabled?: boolean; showModels?: boolean; showCost?: boolean } = {},
-) {
+function profileBody(handle: string, options: ProfileOptions = {}) {
   return {
     handle,
     enabled: options.enabled ?? true,
     show_models: options.showModels ?? true,
     show_cost: options.showCost ?? false,
+    on_leaderboard: options.onLeaderboard ?? false,
   };
 }
 
-function put(
-  app: ReturnType<typeof createRelayApp>,
-  handle: string,
-  options: { enabled?: boolean; showModels?: boolean; showCost?: boolean } = {},
-) {
+interface ProfileOptions {
+  enabled?: boolean;
+  showModels?: boolean;
+  showCost?: boolean;
+  onLeaderboard?: boolean;
+}
+
+function put(app: ReturnType<typeof createRelayApp>, handle: string, options: ProfileOptions = {}) {
   return app.request(`${origin}/api/v2/account/profile`, {
     method: "PUT",
     ...webRequest,
