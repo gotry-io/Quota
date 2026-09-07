@@ -1,6 +1,6 @@
 import Foundation
 
-/// How often a Sync subscription bills. The paywall shows one row per term.
+/// How often a Quota Pro subscription bills. The paywall shows one row per term.
 enum SubscriptionTerm: String, CaseIterable, Sendable {
   case monthly
   case yearly
@@ -16,13 +16,13 @@ enum SubscriptionTerm: String, CaseIterable, Sendable {
   /// what the RevenueCat Offering is built from.
   var productID: String {
     switch self {
-    case .monthly: "quota_sync_monthly"
-    case .yearly: "quota_sync_yearly"
+    case .monthly: "quota_pro_monthly"
+    case .yearly: "quota_pro_yearly"
     }
   }
 }
 
-/// One purchasable Sync plan, already localized by the store.
+/// One purchasable Quota Pro plan, already localized by the store.
 ///
 /// Prices are strings because the store formats them for the customer's storefront; the app
 /// never composes a currency amount of its own.
@@ -57,6 +57,8 @@ protocol PurchasesFacade: Sendable {
   func offers() async throws -> [SubscriptionOffer]
   func purchase(_ offer: SubscriptionOffer) async throws -> SubscriptionPurchaseOutcome
   func restorePurchases() async throws
+  /// Presents Apple's Offer Code sheet. There is no typed-code field in the app.
+  func presentOfferCodeRedemption() async
   /// One element each time the store's own view of this customer changes. Quota uses it only as
   /// a nudge to re-read Relay, which learns the same purchase from a RevenueCat webhook.
   func customerChanges() -> AsyncStream<Void>
@@ -78,6 +80,8 @@ struct UnconfiguredPurchases: PurchasesFacade {
   func restorePurchases() async throws {
     throw SubscriptionError.purchasesUnavailable
   }
+
+  func presentOfferCodeRedemption() async {}
 
   func customerChanges() -> AsyncStream<Void> {
     AsyncStream { $0.finish() }

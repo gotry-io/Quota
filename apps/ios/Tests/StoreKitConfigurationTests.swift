@@ -14,12 +14,12 @@ import Testing
 /// path is a manual Xcode run, described in `apps/ios/README.md`.
 struct StoreKitConfigurationTests {
   @Test
-  func oneGroupSellsBothSyncPlansWithASevenDayTrial() throws {
+  func oneGroupSellsBothProPlansWithASevenDayTrial() throws {
     let configuration = try Self.configuration()
     let groups = try #require(configuration["subscriptionGroups"] as? [[String: Any]])
     #expect(groups.count == 1)
     let group = try #require(groups.first)
-    #expect(group["name"] as? String == "Quota Sync")
+    #expect(group["name"] as? String == "Quota Pro")
 
     let subscriptions = try #require(group["subscriptions"] as? [[String: Any]])
     #expect(
@@ -40,9 +40,9 @@ struct StoreKitConfigurationTests {
     #expect(period(of: subscriptions, term: .yearly) == "P1Y")
   }
 
-  /// Nothing is sold outside the Sync group: no one-off products, no non-renewing subscriptions.
+  /// Nothing is sold outside the Quota Pro group: no one-off products, no non-renewing subscriptions.
   @Test
-  func syncIsTheOnlyThingForSale() throws {
+  func proIsTheOnlyThingForSale() throws {
     let configuration = try Self.configuration()
     #expect((configuration["products"] as? [Any])?.isEmpty == true)
     #expect((configuration["nonRenewingSubscriptions"] as? [Any])?.isEmpty == true)

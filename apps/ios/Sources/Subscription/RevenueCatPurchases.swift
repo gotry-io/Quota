@@ -86,6 +86,12 @@ actor RevenueCatPurchases: PurchasesFacade {
     }
   }
 
+  func presentOfferCodeRedemption() async {
+    await MainActor.run {
+      Purchases.shared.presentCodeRedemptionSheet()
+    }
+  }
+
   nonisolated func customerChanges() -> AsyncStream<Void> {
     AsyncStream { continuation in
       let task = Task {
@@ -98,8 +104,8 @@ actor RevenueCatPurchases: PurchasesFacade {
     }
   }
 
-  /// The RevenueCat entitlement paid sync is sold as. Relay reads the same id.
-  static let entitlementID = "sync"
+  /// The RevenueCat entitlement Quota Pro is sold as. Relay reads the same id.
+  static let entitlementID = "pro"
 
   private static func offer(term: SubscriptionTerm, product: StoreProduct) -> SubscriptionOffer {
     SubscriptionOffer(

@@ -255,7 +255,7 @@ final class AppModel {
   /// none of what they send reaches this Account until sync is on.
   var syncBanner: String? {
     guard phase == .signedIn, summary != nil, !isSyncOn else { return nil }
-    return SyncCopy.offBanner
+    return ProCopy.offBanner
   }
 
   /// The Overview title. Without an account there is no label to print, and the app is still

@@ -60,23 +60,25 @@ the only Quota identity (above).
 
 Reviewers can exercise this with any provider account, or skip it: the demo Account below shows
 Overview without it.
-## Subscription: Quota Sync (Guidelines 3.1.2, 2.1)
+## Subscription: Quota Pro (Guidelines 3.1.2, 2.1)
 
-The app has one auto-renewable subscription group, **Quota Sync**, with two durations that sell
+The app has one auto-renewable subscription group, **Quota Pro**, with two durations that sell
 the same thing:
 
-- `quota_sync_monthly` — 1 month
-- `quota_sync_yearly` — 1 year
+- `quota_pro_monthly` — Quota Pro Monthly, 1 month, $0.99
+- `quota_pro_yearly` — Quota Pro Yearly, 1 year, $2.99
 
-Both offer a **7-day free trial** to new subscribers. What is sold is multi-device sync: carrying
+Both offer a **7-day free trial** to new subscribers. What is sold is Quota Pro: carrying
 what QuotaBar collects on a Mac to this iPhone, the website, and the Home Screen widgets. Without
 it the app still signs in and shows the Account; the Macs' readings do not reach it.
 
-- The paywall is **Settings › Sync › Sync across devices**, and is also reachable from the row at
-  the top of Overview when sync is off. It states the duration, the localized price the App Store
+- The paywall is **Settings › Quota Pro › Get Quota Pro**, and is also reachable from the row at
+  the top of Overview when Quota Pro is off. It states the duration, the localized price the App Store
   returned, and the trial before it, and links to Terms
   (`https://quota.gotry.io/terms`) and Privacy (`https://quota.gotry.io/privacy`).
 - **Restore Purchases** is on that same screen.
+- **Redeem Offer Code** presents Apple's own Offer Code redemption sheet. The app does not accept
+  typed license keys or promo codes of its own.
 - Managing or cancelling is the system's own screen; the **Manage** row opens
   `https://apps.apple.com/account/subscriptions`. The app never asks for payment details itself
   and offers no external purchase path on iOS.
@@ -99,7 +101,7 @@ user.
 
 Owner: create this GitHub user, disable 2FA (or provide a Reviewer-usable path), sign it
 into QuotaBar on one Mac, and confirm Overview shows remaining quota plus Today Usage
-before submitting. The demo Account must have an active Quota Sync subscription (a sandbox
+before submitting. The demo Account must have an active Quota Pro subscription (a sandbox
 purchase, a promotional offer, or an entitlement granted in RevenueCat) so the reviewer sees
 synced content rather than the paywall.
 

@@ -26,12 +26,12 @@
       "id" : "21DF5A08",
       "localizations" : [
         {
-          "description" : "Sync Quota across your devices.",
-          "displayName" : "Quota Sync",
+          "description" : "Quota Pro: sync across your devices.",
+          "displayName" : "Quota Pro",
           "locale" : "en_US"
         }
       ],
-      "name" : "Quota Sync",
+      "name" : "Quota Pro",
       "subscriptions" : [
         {
           "adHocOffers" : [
@@ -40,7 +40,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "2.99",
+          "displayPrice" : "0.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "6C4A11B2",
@@ -53,14 +53,14 @@
           },
           "localizations" : [
             {
-              "description" : "Sync Quota across your devices, monthly.",
-              "displayName" : "Quota Sync Monthly",
+              "description" : "Quota Pro: sync across your devices, monthly.",
+              "displayName" : "Quota Pro Monthly",
               "locale" : "en_US"
             }
           ],
-          "productID" : "quota_sync_monthly",
+          "productID" : "quota_pro_monthly",
           "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Quota Sync Monthly",
+          "referenceName" : "Quota Pro Monthly",
           "subscriptionGroupID" : "21DF5A08",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
@@ -74,7 +74,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "29.99",
+          "displayPrice" : "2.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "4B90E5F1",
@@ -87,14 +87,14 @@
           },
           "localizations" : [
             {
-              "description" : "Sync Quota across your devices, yearly.",
-              "displayName" : "Quota Sync Yearly",
+              "description" : "Quota Pro: sync across your devices, yearly.",
+              "displayName" : "Quota Pro Yearly",
               "locale" : "en_US"
             }
           ],
-          "productID" : "quota_sync_yearly",
+          "productID" : "quota_pro_yearly",
           "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Quota Sync Yearly",
+          "referenceName" : "Quota Pro Yearly",
           "subscriptionGroupID" : "21DF5A08",
           "type" : "RecurringSubscription",
           "winbackOffers" : [

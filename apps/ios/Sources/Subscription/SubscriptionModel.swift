@@ -84,7 +84,7 @@ final class SubscriptionModel {
 
   func buy(_ offer: SubscriptionOffer) async {
     guard purchases.isConfigured else {
-      purchase = .failed(SyncCopy.unavailable)
+      purchase = .failed(ProCopy.unavailable)
       return
     }
     purchase = .purchasing
@@ -100,13 +100,13 @@ final class SubscriptionModel {
         purchase = .idle
       }
     } catch {
-      purchase = .failed(SyncCopy.purchaseFailed)
+      purchase = .failed(ProCopy.purchaseFailed)
     }
   }
 
   func restore() async {
     guard purchases.isConfigured else {
-      restoreMessage = SyncCopy.unavailable
+      restoreMessage = ProCopy.unavailable
       return
     }
     purchase = .purchasing
@@ -117,8 +117,19 @@ final class SubscriptionModel {
       await onStoreChange()
     } catch {
       purchase = .idle
-      restoreMessage = SyncCopy.restoreFailed
+      restoreMessage = ProCopy.restoreFailed
     }
+  }
+
+  /// Presents Apple's Offer Code sheet and nothing more: the sheet reports no outcome, so a
+  /// redemption reaches this model the way any store change does, through `customerChanges`.
+  func redeemOfferCode() async {
+    guard purchases.isConfigured else {
+      restoreMessage = ProCopy.unavailable
+      return
+    }
+    restoreMessage = nil
+    await purchases.presentOfferCodeRedemption()
   }
 
   /// Relay has confirmed the entitlement; the paywall has nothing left to say.
