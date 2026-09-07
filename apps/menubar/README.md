@@ -5,8 +5,8 @@ and a private Rust child at `Contents/Helpers/quota-service`.
 
 ## Runtime boundary
 
-QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v1
-connection. The helper emits `{"type":"event","event":"ready","ipc_version":1}` once it has opened
+QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v3
+connection. The helper emits `{"type":"event","event":"ready","ipc_version":3}` once it has opened
 its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
 that stays silent for a minute, and reports the service unavailable after a second. Requests have no
 deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two

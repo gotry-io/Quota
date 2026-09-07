@@ -1,0 +1,441 @@
+{
+  "$comment": "How a window's local samples fold into the one history every Quota surface draws: the curve behind the reader, the dashed line to the reset, and the windows that belong to the reader's today. Samples are local to the device that took them and never travel (ADR 0042). `window` is the current reading, `samples` are that provider and window id's stored rows, `now` is the reader's clock, and `utc_offset_seconds` places the reader's day. `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer this file. `expected` is null where there is no history to draw. Projection is ADR 0035's `projected_at_reset` over the last sample, so the two files move together.",
+  "rounding": {
+    "$comment": "Every runtime states these to the same precision so one file can judge all of them.",
+    "elapsed_fraction_decimals": 4,
+    "used_percent_decimals": 2
+  },
+  "decimation_seconds": 300,
+  "retention_days": 30,
+  "cases": [
+    {
+      "name": "the samples of one window are its curve, in the order they were taken",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 50,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:30:00Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T08:30:00Z",
+          "used_percent": 30
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 50
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.1, "used_percent": 10.0 },
+          { "elapsed_fraction": 0.3, "used_percent": 30.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 50.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 100.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 50.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "readings closer together than five minutes are thinned to one point",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 50,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:30:00Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:32:00Z",
+          "used_percent": 12
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:34:00Z",
+          "used_percent": 14
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:40:00Z",
+          "used_percent": 20
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 50
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.1, "used_percent": 10.0 },
+          { "elapsed_fraction": 0.1333, "used_percent": 20.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 50.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 100.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 50.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "the last reading of a thinned run is kept even when it lands inside the gap",
+      "now": "2026-09-05T09:32:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 54,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:30:00Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 50
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:32:00Z",
+          "used_percent": 54
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.1, "used_percent": 10.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 50.0 },
+          { "elapsed_fraction": 0.5067, "used_percent": 54.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 106.58 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 54.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "a reading that came back lower does not pull the curve down inside its window",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 28,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:30:00Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T08:30:00Z",
+          "used_percent": 30
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 28
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.1, "used_percent": 10.0 },
+          { "elapsed_fraction": 0.3, "used_percent": 30.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 30.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 60.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 30.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "too little of the window behind the last sample draws a curve and no dashed line",
+      "now": "2026-09-05T07:06:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 1,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T07:06:00Z",
+          "used_percent": 1
+        }
+      ],
+      "expected": {
+        "points": [{ "elapsed_fraction": 0.02, "used_percent": 1.0 }],
+        "projection": null,
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 1.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "a window burning ahead of itself projects past the reset it will not reach",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 85,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T08:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 85
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.2, "used_percent": 40.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 85.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 170.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 85.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "today is every window that refilled since local midnight, oldest first",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 12,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T02:00:00Z",
+          "observed_at": "2026-09-04T23:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-05T02:00:00Z",
+          "observed_at": "2026-09-05T01:00:00Z",
+          "used_percent": 82
+        },
+        {
+          "resets_at": "2026-09-05T07:00:00Z",
+          "observed_at": "2026-09-05T03:00:00Z",
+          "used_percent": 25
+        },
+        {
+          "resets_at": "2026-09-05T07:00:00Z",
+          "observed_at": "2026-09-05T06:30:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T08:00:00Z",
+          "used_percent": 12
+        },
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 12
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.2, "used_percent": 12.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 12.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 24.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-04T21:00:00Z",
+            "resets_at": "2026-09-05T02:00:00Z",
+            "peak_used_percent": 82.0,
+            "is_current": false
+          },
+          {
+            "started_at": "2026-09-05T02:00:00Z",
+            "resets_at": "2026-09-05T07:00:00Z",
+            "peak_used_percent": 40.0,
+            "is_current": false
+          },
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 12.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "a window that refills after the reader's midnight is today's because it is running now",
+      "now": "2026-09-05T15:30:00Z",
+      "utc_offset_seconds": 28800,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 44,
+        "resets_at": "2026-09-05T18:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-04T13:00:00Z",
+          "observed_at": "2026-09-04T12:00:00Z",
+          "used_percent": 55
+        },
+        {
+          "resets_at": "2026-09-05T13:00:00Z",
+          "observed_at": "2026-09-05T12:00:00Z",
+          "used_percent": 66
+        },
+        {
+          "resets_at": "2026-09-05T18:00:00Z",
+          "observed_at": "2026-09-05T14:00:00Z",
+          "used_percent": 20
+        },
+        {
+          "resets_at": "2026-09-05T18:00:00Z",
+          "observed_at": "2026-09-05T15:30:00Z",
+          "used_percent": 44
+        }
+      ],
+      "expected": {
+        "points": [
+          { "elapsed_fraction": 0.2, "used_percent": 20.0 },
+          { "elapsed_fraction": 0.5, "used_percent": 44.0 }
+        ],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 88.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T08:00:00Z",
+            "resets_at": "2026-09-05T13:00:00Z",
+            "peak_used_percent": 66.0,
+            "is_current": false
+          },
+          {
+            "started_at": "2026-09-05T13:00:00Z",
+            "resets_at": "2026-09-05T18:00:00Z",
+            "peak_used_percent": 44.0,
+            "is_current": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "a window nothing has sampled yet has no history at all",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 50,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "samples": [],
+      "expected": null
+    },
+    {
+      "name": "a window with no cadence cannot be placed in time and takes no history",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "balance",
+        "title": "Balance",
+        "used_percent": 0,
+        "remaining_value": 4.25,
+        "value_unit": "usd"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 0
+        }
+      ],
+      "expected": null
+    }
+  ]
+}

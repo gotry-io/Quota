@@ -1219,6 +1219,119 @@ impl StateStore {
         self.with_cache(read_overview)
     }
 
+    /// Record what this device just read, one row per window, and drop what has aged out.
+    ///
+    /// A refresh that comes back with a window's previous numbers unchanged adds nothing to the
+    /// curve, so the row is only written when the reading moved. The samples stay here: nothing
+    /// uploads them and no wire contract names them (ADR 0042).
+    pub fn record_quota_samples(
+        &self,
+        provider: &str,
+        observed_at: &str,
+        windows: &[Value],
+        now: DateTime<Utc>,
+    ) -> Result<(), StateError> {
+        let horizon = (now - Duration::days(crate::history::HISTORY_RETENTION_DAYS))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            for window in windows {
+                let (Some(id), Some(resets_at), Some(used)) = (
+                    window.get("id").and_then(Value::as_str),
+                    window.get("resets_at").and_then(Value::as_str),
+                    window.get("used_percent").and_then(Value::as_f64),
+                ) else {
+                    continue;
+                };
+                let remaining = window.get("remaining_value").and_then(Value::as_f64);
+                let limit = window.get("limit_value").and_then(Value::as_f64);
+                let unit = window.get("value_unit").and_then(Value::as_str);
+                let unchanged = tx
+                    .query_row(
+                        "SELECT used_percent, remaining, \"limit\", value_unit FROM quota_samples
+                         WHERE provider = ?1 AND window_id = ?2 AND resets_at = ?3
+                         ORDER BY observed_at DESC LIMIT 1",
+                        params![provider, id, resets_at],
+                        |row| {
+                            Ok((
+                                row.get::<_, f64>(0)?,
+                                row.get::<_, Option<f64>>(1)?,
+                                row.get::<_, Option<f64>>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .is_some_and(|last| last == (used, remaining, limit, unit.map(str::to_owned)));
+                if unchanged {
+                    continue;
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO quota_samples(
+                        provider, window_id, resets_at, observed_at, used_percent, remaining,
+                        \"limit\", value_unit
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        provider,
+                        id,
+                        resets_at,
+                        observed_at,
+                        used,
+                        remaining,
+                        limit,
+                        unit
+                    ],
+                )?;
+            }
+            tx.execute(
+                "DELETE FROM quota_samples WHERE observed_at < ?1",
+                params![horizon],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Every stored sample, oldest first, by provider and then by window id.
+    pub fn quota_samples(&self) -> Result<QuotaSamplesByProvider, StateError> {
+        self.with_cache(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT provider, window_id, resets_at, observed_at, used_percent
+                 FROM quota_samples ORDER BY observed_at",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            })?;
+            let mut samples = QuotaSamplesByProvider::new();
+            for row in rows {
+                let (provider, window_id, resets_at, observed_at, used_percent) = row?;
+                let (Ok(resets_at), Ok(observed_at)) = (
+                    DateTime::parse_from_rfc3339(&resets_at),
+                    DateTime::parse_from_rfc3339(&observed_at),
+                ) else {
+                    continue;
+                };
+                samples
+                    .entry(provider)
+                    .or_default()
+                    .entry(window_id)
+                    .or_default()
+                    .push(crate::history::QuotaSample {
+                        resets_at: resets_at.with_timezone(&Utc),
+                        observed_at: observed_at.with_timezone(&Utc),
+                        used_percent,
+                    });
+            }
+            Ok(samples)
+        })
+    }
+
     pub fn current_revision(&self) -> Result<u64, StateError> {
         self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
@@ -4533,6 +4646,10 @@ fn set_owner_permissions(path: &Path) -> Result<(), StateError> {
     Ok(())
 }
 
+/// What this device has read of its own quota, by provider and then by window id (ADR 0042).
+pub type QuotaSamplesByProvider =
+    BTreeMap<String, BTreeMap<String, Vec<crate::history::QuotaSample>>>;
+
 pub fn now_rfc3339() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5999,6 +6116,51 @@ mod tests {
             .expect("replace event body");
 
         assert_eq!(store.usage_event_count().expect("count"), 1);
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A refresh that reads the same numbers again adds nothing to the curve, and a sample
+    /// older than the retention horizon is gone the next time one is written (ADR 0042).
+    #[test]
+    fn quota_samples_skip_a_repeated_reading_and_drop_what_has_aged_out() {
+        let root = temp_root("quota-samples");
+        let store = StateStore::open(&root).expect("state");
+        let now = DateTime::parse_from_rfc3339("2026-09-05T09:30:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
+        let window = |used: f64| {
+            serde_json::json!({
+                "id": "five_hour",
+                "title": "5 Hours",
+                "used_percent": used,
+                "resets_at": "2026-09-05T12:00:00Z",
+                "duration_seconds": 18000
+            })
+        };
+        let stale = (now - Duration::days(31)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        store
+            .record_quota_samples("codex", &stale, &[window(4.0)], now - Duration::days(31))
+            .expect("stale sample");
+        store
+            .record_quota_samples("codex", "2026-09-05T08:00:00Z", &[window(40.0)], now)
+            .expect("first sample");
+        store
+            .record_quota_samples("codex", "2026-09-05T09:00:00Z", &[window(40.0)], now)
+            .expect("repeat sample");
+        store
+            .record_quota_samples("codex", "2026-09-05T09:30:00Z", &[window(50.0)], now)
+            .expect("moved sample");
+
+        let samples = store.quota_samples().expect("samples");
+        let five_hour = &samples["codex"]["five_hour"];
+        assert_eq!(
+            five_hour
+                .iter()
+                .map(|sample| sample.used_percent)
+                .collect::<Vec<_>>(),
+            [40.0, 50.0]
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

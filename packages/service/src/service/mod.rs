@@ -1149,12 +1149,18 @@ impl LocalService {
             .state
             .overview_source_pins()
             .map_err(state_error)?;
+        let now = Utc::now();
+        let history = backend::LocalQuotaHistory::new(
+            self.inner.state.quota_samples().map_err(state_error)?,
+            now,
+        );
         let (items, kept) = backend::overview_items_and_pins(
             &quota,
             snapshot.account.value.as_ref(),
             &previous,
             &pins,
-            Utc::now(),
+            &history,
+            now,
         );
         if kept != pins {
             self.inner
@@ -3694,6 +3700,7 @@ mod tests {
             Some(&account),
             &[],
             &std::collections::HashMap::new(),
+            &backend::LocalQuotaHistory::default(),
             now,
         );
         state.set_overview(&items).expect("overview");
@@ -3902,6 +3909,7 @@ mod tests {
             Some(&account),
             &[],
             &state.overview_source_pins().expect("pins"),
+            &backend::LocalQuotaHistory::default(),
             now,
         );
         assert!(kept.get("codex|fp|global|").is_none());

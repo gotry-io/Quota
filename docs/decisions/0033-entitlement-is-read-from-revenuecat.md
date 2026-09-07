@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-09-05
+- Updated 2026-09-07 by [ADR 0042](0042-quota-history-is-local-samples.md): quota history is
+  local samples, so it is outside what paid sync buys. No sample is uploaded, gated, or stored
+  by Relay, and a signed-out device draws the same lines as a subscribed one.
 - Extends [ADR 0006](0006-managed-account-device-usage.md) and
   [ADR 0028](0028-the-boundary-answers-the-write.md)
 
