@@ -1,3 +1,4 @@
+import QuotaWidgetViews
 import SwiftUI
 import Testing
 import UIKit
@@ -98,6 +99,9 @@ struct WidgetScreenshotTests {
       .background(background)
       .clipShape(RoundedRectangle(cornerRadius: accessory ? 12 : 22, style: .continuous))
       .environment(\.colorScheme, accessory ? .dark : .light)
+      // The extension gets this from its own AccentColor asset catalog; a test bundle runs
+      // inside the app, whose accent is the same product emerald.
+      .tint(QuotaTheme.emerald)
     let renderer = ImageRenderer(content: framed)
     renderer.scale = 3
     renderer.proposedSize = ProposedViewSize(

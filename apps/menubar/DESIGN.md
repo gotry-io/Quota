@@ -63,6 +63,23 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/service`, `packages/apple-shared` (`QuotaPace`, `QuotaPaceCopy`), and
   `apps/web/src/lib/format.ts`; see
   [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
+- **A pace line has a picture: the window's own samples, drawn under its meter.** A 22pt sparkline,
+  solid over the readings this Mac took inside the running window, dashed from the last of them to
+  where ADR 0035's projection lands at the reset. The vertical axis is the whole window, 0 to 100
+  percent used, so two windows of different cadences are read the same way; the horizontal axis is
+  the window's start to its reset. It takes the meter's own color. A window with no samples yet —
+  a new install, a rebuilt cache, a reading that came from another device — shows no line and takes
+  no space.
+- **A provider group ends with the day it has had.** One secondary line,
+  **Today: 3 windows · 82% / 40% / 12%**, oldest first, that opens into a row per window naming the
+  local clock times it ran between and its peak. Singular is **1 window**. The day is the
+  primary-cadence window's — the same window Quota iOS names its Today section after, so both
+  surfaces answer for one window rather than for whichever happened to have samples. A provider whose day
+  holds no window shows nothing. Both the line and the sparkline are turned off together by
+  Settings → Menu Bar → **Show pace lines**, on by default. The fold is
+  `packages/protocol/fixtures/quota-history-conformance.json`, answered by `packages/service` and
+  `packages/apple-shared` (`QuotaHistory`, `QuotaHistoryCopy`); see
+  [ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md).
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
   window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
@@ -606,10 +623,11 @@ The default page contains:
   provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
   model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
   share` when unpriced.
-- Rhythm, for This Mac and for any period but 2 Years: 24 bars at 36pt, one per hour of the local
-  clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as a whole-percent
-  share. Omit the section when every hour is empty. The Account source has no Rhythm — Relay stores
-  hours on UTC keys and does not fold a local clock.
+- Rhythm, for This Mac and for Account, and for any period but 2 Years: 24 bars at 36pt, one per
+  hour of the local clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as
+  a whole-percent share. Omit the section when every hour is empty. Account hours come from
+  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
 - Projects: This Mac only, and only while **Group Usage by project** is on. A table of at most 50
   repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
   as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
@@ -775,19 +793,42 @@ Swift clears the field after Save; the service owns validation, owner-only persi
 
 ## Desktop widgets
 
-QuotaBar does not embed a WidgetKit extension in this build: SwiftPM plus
-`scripts/package-menubar.sh` cannot produce an `.appex`. When packaging can embed one, the
-widgets read the same non-secret `WidgetSnapshot` as iOS (`group.io.gotry.quota`,
-[ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)). They never talk to Relay
-or the private service.
+QuotaBar embeds `PlugIns/QuotaBarWidgets.appex`. The widgets read the same non-secret
+`WidgetSnapshot` as iOS ([ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)),
+from QuotaBar's own App Group `86Y537ZF24.group.io.gotry.quota`, and never talk to Relay or the
+private service. QuotaBar publishes it after every state update from the Overview rows already on
+screen, and clears it when there is nothing to show.
 
 | Kind | Families | Content |
 | --- | --- | --- |
-| Overview | systemSmall, systemMedium | Remaining quota across the most constrained subscriptions, reset, **Updated** age |
-| Today | systemSmall | Today's tokens and API-equivalent cost |
+| Overview | systemSmall, systemMedium, systemLarge | Remaining quota across the most constrained subscriptions, reset, **Updated** age, and Today's tokens and API-equivalent cost |
 
-Home Screen remaining figures follow the same information order as iOS widgets. A carried
-`pace` of `runs_out` uses the existing warning color; no pace means no extra color.
+The views are the phone's: one `QuotaWidgetViews` package draws both platforms
+([ADR 0043](../../docs/decisions/0043-one-widget-view-package-for-both-platforms.md)), so Home
+Screen remaining figures follow the same information order, the same ranking, and the same **Updated**
+phrase as iOS. A carried `pace` of `runs_out` uses the existing warning color; no pace means no
+extra color.
+
+Links follow the iPhone's rule. QuotaBar registers the `quotabar:` scheme and answers
+`quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`; either opens the panel from the
+first status item, and a subscription scrolls Overview to that provider. A link whose
+`selection_id` this installation never published — an older salt, a provider since removed —
+lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
+subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
+several.
+
+The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
+extension has no app to borrow a tint from.
+
+Two things differ from the phone, and only these two:
+
+- **No Lock Screen.** The desktop offers small, medium, and large; the accessory families stay iPhone's.
+- **The meter is drawn with SwiftUI shapes**, not `Gauge`, which on macOS is an AppKit-backed
+  control a widget's archived view tree cannot draw.
+
+An ad-hoc signed local package is not entitled to the App Group, so it publishes nothing. That is
+not a failure the panel reports: Diagnostics' **Data** section carries a **Desktop Widgets** row
+whose sentence says whether a snapshot was published, cleared, refused, or is simply off.
 
 ## Shared components
 

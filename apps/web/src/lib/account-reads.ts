@@ -62,10 +62,12 @@ export function accountActivityRange(today: Date): { from: string; to: string } 
 
 export function accountActivityPath(
   range: { from: string; to: string },
-  detail?: "agents",
+  detail?: "agents" | "hours",
+  timezone?: string,
 ): string {
   const params = new URLSearchParams(range);
   if (detail !== undefined) params.set("detail", detail);
+  if (timezone !== undefined) params.set("tz", timezone);
   return `/api/v6/account/usage/activity?${params.toString()}`;
 }
 

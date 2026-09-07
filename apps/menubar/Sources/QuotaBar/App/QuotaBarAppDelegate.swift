@@ -17,6 +17,24 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
     startStatusItemsIfNeeded()
   }
 
+  /// A desktop widget's `quotabar:` link. Overview opens the panel as it stands; a subscription
+  /// opens it scrolled to that subscription's provider. A link this installation never published
+  /// — an old salt, a provider since removed — resolves to nothing and lands on Overview.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    startStatusItemsIfNeeded()
+    guard let statusItems, let model else { return }
+    for url in urls {
+      guard let link = QuotaBarDeepLink.parse(url) else { continue }
+      switch link {
+      case .overview:
+        statusItems.openPanel(revealing: nil)
+      case .subscription(let id):
+        statusItems.openPanel(revealing: model.provider(forWidgetSelectionID: id))
+      }
+      return
+    }
+  }
+
   private func startStatusItemsIfNeeded() {
     guard statusItems == nil, let model else { return }
     statusItems = MenuBarStatusItemController(model: model)

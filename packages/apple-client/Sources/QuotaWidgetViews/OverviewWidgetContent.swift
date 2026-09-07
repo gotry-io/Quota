@@ -4,27 +4,32 @@ import QuotaWidgetData
 
 /// Pure widget read/format helpers shared by the extension and app tests.
 /// No network, Keychain, Security, or account types.
-enum OverviewWidgetContent {
-  static let appGroupIdentifier = "group.io.gotry.quota"
-  static let widgetKind = "io.gotry.quota.overview"
-  static let overviewURL = URL(string: "io.gotry.quota:/overview")!
-  static let refreshInterval: TimeInterval = 15 * 60
-  static let smallWindowLimit = 2
-  static let mediumProviderLimit = 3
-  static let largeProviderLimit = 3
-  static let largeWindowsPerProvider = 2
+public enum OverviewWidgetContent {
+  /// The scheme the app on this platform answers: Quota's is `io.gotry.quota:`, QuotaBar's is
+  /// `quotabar:`. The paths behind them are the same two.
+  #if os(macOS)
+    public static let urlScheme = "quotabar"
+  #else
+    public static let urlScheme = "io.gotry.quota"
+  #endif
+  public static let overviewURL = URL(string: "\(urlScheme):/overview")!
+  public static let refreshInterval: TimeInterval = 15 * 60
+  public static let smallWindowLimit = 2
+  public static let mediumProviderLimit = 3
+  public static let largeProviderLimit = 3
+  public static let largeWindowsPerProvider = 2
   /// Live `Text(timerInterval:)` is only for a refill still under a day away.
-  static let liveResetCountdownLimit: TimeInterval = 86_400
+  public static let liveResetCountdownLimit: TimeInterval = 86_400
 
   /// Per-item deep link. The widget as a whole (medium/large with several items) still
   /// opens `overviewURL`.
-  static func subscriptionURL(for item: WidgetQuotaItem) -> URL {
-    URL(string: "io.gotry.quota:/subscriptions/\(item.selectionID)")!
+  public static func subscriptionURL(for item: WidgetQuotaItem) -> URL {
+    URL(string: "\(urlScheme):/subscriptions/\(item.selectionID)")!
   }
 
   /// One subscription (possibly several of its windows) opens that subscription;
   /// several subscriptions keep Overview.
-  static func widgetURL(for items: [WidgetQuotaItem]) -> URL {
+  public static func widgetURL(for items: [WidgetQuotaItem]) -> URL {
     let ids = Set(items.map(\.selectionID))
     if ids.count == 1, let item = items.first {
       return subscriptionURL(for: item)
@@ -32,10 +37,8 @@ enum OverviewWidgetContent {
     return overviewURL
   }
 
-  static func loadSnapshot(
-    containerURL: URL? = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: appGroupIdentifier
-    )
+  public static func loadSnapshot(
+    containerURL: URL? = WidgetAppGroup.containerURL()
   ) -> WidgetSnapshot? {
     guard let containerURL else { return nil }
     let store = ProtectedFileWidgetSnapshotStore(directory: containerURL)
@@ -47,13 +50,13 @@ enum OverviewWidgetContent {
     }
   }
 
-  static func nextRefreshDate(from now: Date = Date()) -> Date {
+  public static func nextRefreshDate(from now: Date = Date()) -> Date {
     now.addingTimeInterval(refreshInterval)
   }
 
   /// Automatic (`nil` or an id the snapshot no longer carries) keeps the ranked list.
   /// A known `selection_id` keeps every window of that subscription.
-  static func select(
+  public static func select(
     items: [WidgetQuotaItem],
     configuredSelectionID: String?
   ) -> [WidgetQuotaItem] {
@@ -62,7 +65,7 @@ enum OverviewWidgetContent {
     return matches.isEmpty ? items : matches
   }
 
-  static func primaryItem(
+  public static func primaryItem(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> WidgetQuotaItem? {
@@ -70,7 +73,7 @@ enum OverviewWidgetContent {
   }
 
   /// One subscription, shortest cadence first, up to two windows.
-  static func smallItems(
+  public static func smallItems(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> [WidgetQuotaItem] {
@@ -85,7 +88,7 @@ enum OverviewWidgetContent {
 
   /// Automatic: one row per provider, most constrained window, up to three.
   /// A configured subscription: that subscription's windows, shortest first.
-  static func mediumItems(
+  public static func mediumItems(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> [WidgetQuotaItem] {
@@ -101,7 +104,7 @@ enum OverviewWidgetContent {
     return uniqueProviderHeads(selected, limit: mediumProviderLimit)
   }
 
-  static func largeProviderGroups(
+  public static func largeProviderGroups(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> [WidgetProviderGroup] {
@@ -130,7 +133,7 @@ enum OverviewWidgetContent {
     }
   }
 
-  static func largeItems(
+  public static func largeItems(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> [WidgetQuotaItem] {
@@ -141,7 +144,7 @@ enum OverviewWidgetContent {
   }
 
   /// Weekly window of the focused subscription; otherwise that subscription's first window.
-  static func lockScreenWeeklyItem(
+  public static func lockScreenWeeklyItem(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> WidgetQuotaItem? {
@@ -153,7 +156,7 @@ enum OverviewWidgetContent {
   }
 
   /// The other window of the same subscription, for the Lock Screen rectangular family.
-  static func lockScreenSecondItem(
+  public static func lockScreenSecondItem(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> WidgetQuotaItem? {
@@ -169,7 +172,7 @@ enum OverviewWidgetContent {
   }
 
   /// The Lock Screen families are one tap target: the focused subscription, or Overview.
-  static func lockScreenURL(
+  public static func lockScreenURL(
     from snapshot: WidgetSnapshot?,
     configuredSelectionID: String? = nil
   ) -> URL {
@@ -179,7 +182,7 @@ enum OverviewWidgetContent {
     ).map(subscriptionURL(for:)) ?? overviewURL
   }
 
-  static func remainingLabel(for item: WidgetQuotaItem) -> String {
+  public static func remainingLabel(for item: WidgetQuotaItem) -> String {
     RemainingQuotaFormat.remaining(
       remainingPercent: item.remainingPercent,
       remainingValue: item.remainingValue,
@@ -189,7 +192,7 @@ enum OverviewWidgetContent {
     )
   }
 
-  static func remainingAccessibility(for item: WidgetQuotaItem) -> String {
+  public static func remainingAccessibility(for item: WidgetQuotaItem) -> String {
     RemainingQuotaFormat.remainingAccessibility(
       windowTitle: item.windowTitle,
       remainingLabel: remainingLabel(for: item),
@@ -197,14 +200,14 @@ enum OverviewWidgetContent {
     )
   }
 
-  static func isBalanceOnly(_ item: WidgetQuotaItem) -> Bool {
+  public static func isBalanceOnly(_ item: WidgetQuotaItem) -> Bool {
     RemainingQuotaFormat.isBalanceOnly(
       remainingValue: item.remainingValue,
       hasLimit: item.hasLimit == true
     )
   }
 
-  static func showsPercentMeter(_ item: WidgetQuotaItem) -> Bool {
+  public static func showsPercentMeter(_ item: WidgetQuotaItem) -> Bool {
     RemainingQuotaFormat.showsPercentMeter(
       remainingPercent: item.remainingPercent,
       remainingValue: item.remainingValue,
@@ -214,16 +217,16 @@ enum OverviewWidgetContent {
     )
   }
 
-  static func percentLabel(for item: WidgetQuotaItem) -> String {
+  public static func percentLabel(for item: WidgetQuotaItem) -> String {
     RemainingQuotaFormat.percent(item.remainingPercent)
   }
 
-  static func usedPercentLabel(for item: WidgetQuotaItem) -> String {
+  public static func usedPercentLabel(for item: WidgetQuotaItem) -> String {
     RemainingQuotaFormat.percent(item.usedPercent)
   }
 
   /// Lock Screen inline: `Weekly 29%` plus a static reset when the refill is a day or more away.
-  static func inlineLabel(for item: WidgetQuotaItem, now: Date = Date()) -> String {
+  public static func inlineLabel(for item: WidgetQuotaItem, now: Date = Date()) -> String {
     var parts = ["\(item.windowTitle) \(usedPercentLabel(for: item))"]
     if let resetsAt = item.resetsAt,
       !usesLiveResetCountdown(resetsAt: resetsAt, now: now),
@@ -234,52 +237,52 @@ enum OverviewWidgetContent {
     return parts.joined(separator: " · ")
   }
 
-  static func usedAccessibility(for item: WidgetQuotaItem) -> String {
+  public static func usedAccessibility(for item: WidgetQuotaItem) -> String {
     "\(item.windowTitle), \(usedPercentLabel(for: item)) used"
   }
 
-  static func paceRunsOut(_ item: WidgetQuotaItem) -> Bool {
+  public static func paceRunsOut(_ item: WidgetQuotaItem) -> Bool {
     item.pace?.isRunsOut == true
   }
 
-  static func isWeeklyWindow(_ item: WidgetQuotaItem) -> Bool {
+  public static func isWeeklyWindow(_ item: WidgetQuotaItem) -> Bool {
     item.windowTitle.caseInsensitiveCompare("Weekly") == .orderedSame
   }
 
   /// The whole phrase, so a widget says how old its reading is exactly the way the app does.
-  static func updated(fetchedAt: Date, now: Date = Date()) -> String {
+  public static func updated(fetchedAt: Date, now: Date = Date()) -> String {
     FreshnessCopy.updated(since: fetchedAt, now: now)
   }
 
   /// System-ticking countdown when the refill is still under a day away.
-  static func usesLiveResetCountdown(resetsAt: Date, now: Date) -> Bool {
+  public static func usesLiveResetCountdown(resetsAt: Date, now: Date) -> Bool {
     let seconds = resetsAt.timeIntervalSince(now)
     return seconds > 0 && seconds < liveResetCountdownLimit
   }
 
-  static func todayTokensLabel(input: Int, output: Int) -> String {
+  public static func todayTokensLabel(input: Int, output: Int) -> String {
     "\(CompactCountFormat.compact(input)) in · \(CompactCountFormat.compact(output)) out"
   }
 
-  static func todayTokensAccessibility(input: Int, output: Int) -> String {
+  public static func todayTokensAccessibility(input: Int, output: Int) -> String {
     "\(CompactCountFormat.accessible(input)) input tokens, \(CompactCountFormat.accessible(output)) output tokens"
   }
 
-  static func costLabel(for cost: WidgetCost) -> String {
+  public static func costLabel(for cost: WidgetCost) -> String {
     UsageCostFormat.compact(
       status: coverage(cost.status),
       amountMicrousd: cost.amountMicrousd
     )
   }
 
-  static func costAccessibility(for cost: WidgetCost) -> String {
+  public static func costAccessibility(for cost: WidgetCost) -> String {
     UsageCostFormat.accessible(
       status: coverage(cost.status),
       amountMicrousd: cost.amountMicrousd
     )
   }
 
-  static func itemAccessibility(
+  public static func itemAccessibility(
     item: WidgetQuotaItem,
     fetchedAt: Date?,
     now: Date = Date()
@@ -319,7 +322,7 @@ enum OverviewWidgetContent {
     }
   }
 
-  static func sortedWindows(_ items: [WidgetQuotaItem]) -> [WidgetQuotaItem] {
+  public static func sortedWindows(_ items: [WidgetQuotaItem]) -> [WidgetQuotaItem] {
     items.sorted { lhs, rhs in
       switch (cadenceKind(for: lhs.windowTitle), cadenceKind(for: rhs.windowTitle)) {
       case (let left?, let right?) where left != right:
@@ -362,8 +365,14 @@ enum OverviewWidgetContent {
   }
 }
 
-struct WidgetProviderGroup: Equatable, Sendable {
-  var providerID: String
-  var providerDisplayName: String
-  var items: [WidgetQuotaItem]
+public struct WidgetProviderGroup: Equatable, Sendable {
+  public var providerID: String
+  public var providerDisplayName: String
+  public var items: [WidgetQuotaItem]
+
+  public init(providerID: String, providerDisplayName: String, items: [WidgetQuotaItem]) {
+    self.providerID = providerID
+    self.providerDisplayName = providerDisplayName
+    self.items = items
+  }
 }

@@ -275,6 +275,7 @@ struct MenuBarContentView: View {
       SettingsDiagnosticsView(
         state: diagnostics.pageState,
         model: diagnostics,
+        widgetPublishingMessage: model.widgetPublishingMessage,
         onRetry: { Task { await runDiagnosticsCheck() } }
       )
       .task {

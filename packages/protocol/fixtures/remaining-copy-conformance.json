@@ -1,5 +1,5 @@
 {
-  "$comment": "How remaining quota is printed. Percent is remaining of a budget. A wallet with no limit prints the amount and drops the meter. A usd or credits window whose remaining and limit describe that same percent prints remaining of limit (`$x of $y`) and drops the meter; when remaining/limit is a different quantity from used_percent the percent stays the meter. `packages/quota-model`, `packages/apple-shared` RemainingQuotaFormat, and `apps/web/src/lib/format.ts` all answer this file.",
+  "$comment": "How remaining quota is printed. Percent is remaining of a budget. A wallet with no limit prints the amount and drops the meter. A usd or credits window whose remaining and limit describe that same percent prints remaining of limit (`$x of $y`) and drops the meter; when remaining/limit is a different quantity from used_percent the percent stays the meter. `packages/quota-model`, `packages/apple-shared` RemainingQuotaFormat, `apps/web/src/lib/format.ts`, and `packages/service` `copy.rs` all answer this file.",
   "amount_of_limit_percent_tolerance": 1,
   "cases": [
     {

@@ -42,6 +42,21 @@ export function isPublicProfilePath(pathname: string): boolean {
   return pathname === "/u" || pathname.startsWith("/u/");
 }
 
+/** Where the ranked pages are listed. Everyone on it opted in. */
+export const LEADERBOARD_PATH = "/leaderboard";
+
+export function isLeaderboardPath(pathname: string): boolean {
+  return pathname === LEADERBOARD_PATH;
+}
+
+/**
+ * Every page a link can be followed to without an Account, which is every page that wears the
+ * published header rather than the account one.
+ */
+export function isPublishedPagePath(pathname: string): boolean {
+  return isPublicProfilePath(pathname) || isLeaderboardPath(pathname);
+}
+
 export function isSettingsPath(pathname: string): boolean {
   return pathname === SETTINGS_PATH;
 }

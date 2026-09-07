@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -20,13 +20,16 @@ const theme = readFileSync(join(root, "../src/lib/components/ThemeToggle.svelte"
 const styles = readFileSync(join(root, "../src/app.css"), "utf8");
 const overview = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
 const usage = readFileSync(join(root, "../src/routes/my/usage/+page.svelte"), "utf8");
+const publicProfile = readFileSync(join(root, "../src/routes/u/[handle]/+page.svelte"), "utf8");
 const devices = readFileSync(join(root, "../src/routes/my/devices/+page.svelte"), "utf8");
 const settings = readFileSync(join(root, "../src/routes/my/settings/+page.svelte"), "utf8");
 const accountLayout = readFileSync(join(root, "../src/routes/my/+layout.svelte"), "utf8");
 const accountNav = readFileSync(join(root, "../src/lib/components/AccountNav.svelte"), "utf8");
 const catalog = JSON.parse(
   readFileSync(join(root, "../../../packages/provider/catalog.json"), "utf8"),
-) as { providers: Array<{ display_name: string; order: number }> };
+) as {
+  providers: Array<{ id: string; display_name: string; order: number; brand_icon_asset: string }>;
+};
 
 test("homepage introduces QuotaBar and both install paths", () => {
   assert.match(landing, /See what's left across your coding-agent plans\./);
@@ -103,6 +106,18 @@ test("works-with names come from the catalog and billing agents", () => {
   );
   for (const name of catalogNames) {
     assert.doesNotMatch(landing, new RegExp(`>${name}<`));
+  }
+  assert.match(overview, /showsProviderStatusDot/);
+  assert.doesNotMatch(publicProfile, /provider-status-dot/);
+  assert.doesNotMatch(publicProfile, /fetchProviderStatus/);
+});
+
+test("every catalog provider mark resolves to a file", () => {
+  assert.equal(catalog.providers.length, 10);
+  for (const provider of catalog.providers) {
+    const asset = join(root, `../static/providers/${provider.brand_icon_asset}.svg`);
+    assert.equal(existsSync(asset), true, provider.brand_icon_asset);
+    assert.match(readFileSync(asset, "utf8"), /fill="currentColor"/);
   }
 });
 
@@ -187,6 +202,7 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.match(usage, /id="token-total"/);
   assert.match(usage, /id="cost-total"/);
   assert.match(usage, /id="message-total"/);
+  assert.match(usage, /id="cost-priced"/);
   assert.match(usage, />Messages</);
   assert.match(usage, /usage-columns/);
   assert.match(usage, /totals\.messages/);

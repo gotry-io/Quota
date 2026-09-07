@@ -146,6 +146,38 @@ function utcDate(instant: number): string {
   return new Date(instant).toISOString().slice(0, 10);
 }
 
+const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/**
+ * The caller's clock at a stored UTC hour: civil date, hour of day, Sunday-first weekday.
+ */
+export function localClockAt(
+  timezone: string,
+  bucketStartUtc: string,
+): { date: string; hour: number; weekday: number } {
+  const clock = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    weekday: "short",
+  });
+  const parts = clock.formatToParts(new Date(bucketStartUtc));
+  const field = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const month = field("month").padStart(2, "0");
+  const day = field("day").padStart(2, "0");
+  const weekdayName = field("weekday");
+  const weekday = weekdayNames.indexOf(weekdayName as (typeof weekdayNames)[number]);
+  return {
+    date: `${field("year")}-${month}-${day}`,
+    hour: Number(field("hour")),
+    weekday: weekday < 0 ? 0 : weekday,
+  };
+}
+
 /** A whole hour in the text `usage_hourly` keys it by. */
 function utcHour(instant: number): string {
   return `${new Date(instant).toISOString().slice(0, 19)}Z`;

@@ -59,8 +59,13 @@ Verified 2026-09-06 (no redirects; this client's HTTP stack follows none):
 
 The local helper polls every ten minutes (and once at scheduler start) with
 `User-Agent: Quota/<version>`, a ten-second timeout, and a 64 KiB body cap. A failed poll keeps
-the last reading. Quota iOS uses the same URL list through `QuotaProviderStatus` on the device;
-Relay does not forward status pages. The menu-bar icon does not overlay an incident mark.
+the last reading. Quota iOS uses the same URL list through `QuotaProviderStatus` on the device.
+Relay publishes the same feeds at public `GET /api/v2/providers/status` (no principal, no cookie):
+the Worker polls `statuspage_v2` URLs with a five-second timeout, stores last-good readings in
+`caches.default` for ten minutes, and answers `unknown` when a poll fails with nothing cached
+([ADR 0044](decisions/0044-relay-publishes-provider-status.md)). The website Overview draws a 6
+pt incident dot from that read; a public profile does not. The menu-bar icon does not overlay an
+incident mark.
 
 API-key HTTPS providers share the bounded request, credential resolution, URL validation, and
 snapshot helpers in `packages/service/src/providers/common/`.

@@ -400,6 +400,31 @@ struct DecodingTests {
         from: try Fixtures.usageActivityJSON(days: [nullAgents])
       )
     }
+
+    var withHours = try JSONSerialization.jsonObject(
+      with: try Fixtures.usageActivityJSON(days: [Fixtures.usageActivityDay()])
+    ) as! [String: Any]
+    withHours["hours_of_day"] = (0..<24).map {
+      ["hour": $0, "total_tokens": $0 == 14 ? 100 : 0, "cost_microusd": NSNull()] as [String: Any]
+    }
+    withHours["weekday_hours"] = (0..<7).map { weekday in
+      (0..<24).map { hour in weekday == 1 && hour == 14 ? 100 : 0 }
+    }
+    let rhythm = try WireCodec.decode(
+      AccountUsageActivityResponse.self,
+      from: try JSONSerialization.data(withJSONObject: withHours)
+    )
+    #expect(rhythm.hoursOfDay?.count == 24)
+    #expect(rhythm.hoursOfDay?[14].totalTokens == 100)
+    #expect(rhythm.weekdayHours?[1][14] == 100)
+
+    withHours.removeValue(forKey: "weekday_hours")
+    #expect(throws: DecodingError.self) {
+      _ = try WireCodec.decode(
+        AccountUsageActivityResponse.self,
+        from: try JSONSerialization.data(withJSONObject: withHours)
+      )
+    }
   }
 
   /// The Account read that names the channels reaching an Account, read tolerantly: this app

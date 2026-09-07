@@ -21,7 +21,7 @@ test("public pages exist and set head metadata", () => {
 
 test("footer links to the public pages", () => {
   const layout = readFileSync(join(root, "src/routes/+layout.svelte"), "utf8");
-  for (const href of ["/download", "/support", "/privacy", "/terms"]) {
+  for (const href of ["/leaderboard", "/download", "/support", "/privacy", "/terms"]) {
     assert.match(layout, new RegExp(`href="${href}"`));
   }
 });
@@ -60,7 +60,7 @@ test("the published Usage page states its own head and loads only through the do
 
 test("a published page wears no account chrome", () => {
   const layout = readFileSync(join(root, "src/routes/+layout.svelte"), "utf8");
-  assert.match(layout, /isPublicProfilePath\(page\.url\.pathname\)/);
+  assert.match(layout, /isPublishedPagePath\(page\.url\.pathname\)/);
   assert.match(layout, /<PublicPageHeader \/>/);
 
   const header = readFileSync(join(root, "src/lib/components/PublicPageHeader.svelte"), "utf8");

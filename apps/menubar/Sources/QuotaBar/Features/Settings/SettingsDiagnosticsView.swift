@@ -25,6 +25,9 @@ enum DiagnosticsPresentation {
   /// disguise, and the service's own sentence underneath already says what the row is about.
   static let unnamed = "Other"
 
+  /// QuotaBar's own Data row: the App Group snapshot is written by the app, not by the service.
+  static let desktopWidgetsTitle = "Desktop Widgets"
+
   static func surfaceTitle(_ id: String) -> String {
     switch id {
     case "quota_overview": "Quota Overview"
@@ -218,6 +221,9 @@ final class DiagnosticsPageModel {
 struct SettingsDiagnosticsView: View {
   let state: DiagnosticsPageState
   @Bindable var model: DiagnosticsPageModel
+  /// QuotaBar's own sentence about the App Group snapshot the desktop widgets read. The private
+  /// service knows nothing about it, so it is not in the service's report.
+  let widgetPublishingMessage: String
   let onRetry: () -> Void
 
   var body: some View {
@@ -297,6 +303,17 @@ struct SettingsDiagnosticsView: View {
               + "\(DiagnosticsPresentation.dataLabel(surface.data)). \(surface.message)"
           )
         }
+        SettingsListRow(
+          title: DiagnosticsPresentation.desktopWidgetsTitle,
+          subtitle: widgetPublishingMessage,
+          systemImage: "square.grid.2x2"
+        ) {
+          EmptyView()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+          "\(DiagnosticsPresentation.desktopWidgetsTitle). \(widgetPublishingMessage)"
+        )
       }
     }
   }

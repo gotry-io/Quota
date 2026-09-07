@@ -5,6 +5,7 @@ import {
   type ContextBucket,
   type DatedUsageRow,
   DatedUsageRowSchema,
+  HOURS_OF_DAY,
   type InferenceProvider,
   PROTOCOL_VERSION,
   type PricingCatalog,
@@ -25,6 +26,7 @@ import {
   type UsageCostOutcomeRead,
   UsageCostOutcomeReadSchema,
   UsageCostOutcomeSchema,
+  type UsageHourOfDay,
   MAXIMUM_UNPRICED_ITEMS,
   type UsageRow,
   UsageRowSchema,
@@ -35,6 +37,7 @@ import {
   type UsageUnpricedItem,
   type UsageUnpricedItemRead,
   type UsageUnpricedReason,
+  WEEKDAYS_OF_WEEK,
 } from "@gotry-io/quota-protocol";
 
 export function remainingPercent(usedPercent: number): number {
@@ -1417,6 +1420,69 @@ export function foldUsageCostOutcomes(
       ? { unpriced_truncated: true as const }
       : {}),
   });
+}
+
+/**
+ * One hour-of-day fact a rhythm folds: the local calendar date, the hour of that date, and
+ * the tokens and amount already measured for it.
+ */
+export type UsageRhythmHourFact = {
+  date: string;
+  hour: number;
+  total_tokens: number;
+  cost_microusd: string | null;
+};
+
+export type UsageRhythm = {
+  hours_of_day: UsageHourOfDay[];
+  weekday_hours: number[][];
+};
+
+/**
+ * Sunday-first weekday of a `YYYY-MM-DD` civil date, matching the activity heatmap.
+ *
+ * The date is a calendar day, not an instant, so it is read as UTC noon of that civil date
+ * and the weekday is that date's.
+ */
+export function weekdaySundayFirst(date: string): number {
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+/**
+ * The 24-hour and Sunday-first 7×24 rhythm of a list of local hour facts.
+ *
+ * Every clock hour is named, including the ones nothing reached. An hour with no fact states
+ * no amount. Tokens add. Amounts add when at least one contributing fact states one; an hour
+ * whose facts all state no amount still states no amount.
+ */
+export function foldUsageRhythm(hours: readonly UsageRhythmHourFact[]): UsageRhythm {
+  const hoursOfDay: UsageHourOfDay[] = Array.from({ length: HOURS_OF_DAY }, (_, hour) => ({
+    hour,
+    total_tokens: 0,
+    cost_microusd: null,
+  }));
+  const weekdayHours: number[][] = Array.from({ length: WEEKDAYS_OF_WEEK }, () =>
+    Array.from({ length: HOURS_OF_DAY }, () => 0),
+  );
+  for (const fact of hours) {
+    if (fact.hour < 0 || fact.hour >= HOURS_OF_DAY) continue;
+    const bucket = hoursOfDay[fact.hour];
+    if (!bucket) continue;
+    bucket.total_tokens += fact.total_tokens;
+    bucket.cost_microusd = addMicrousd(bucket.cost_microusd, fact.cost_microusd);
+    const weekday = weekdaySundayFirst(fact.date);
+    const row = weekdayHours[weekday];
+    if (row) row[fact.hour] = (row[fact.hour] ?? 0) + fact.total_tokens;
+  }
+  return { hours_of_day: hoursOfDay, weekday_hours: weekdayHours };
+}
+
+function addMicrousd(left: string | null, right: string | null): string | null {
+  if (left === null && right === null) return null;
+  return (BigInt(left ?? "0") + BigInt(right ?? "0")).toString();
 }
 
 export type { DatedUsageRow, PricingCatalog, PricingCatalogEntry, PricingRates, UsageRow };

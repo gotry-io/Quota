@@ -5,6 +5,7 @@ import QuotaProviderSessions
 import QuotaPresentation
 import QuotaProviderStatus
 import QuotaRelay
+import QuotaWidgetData
 import QuotaWire
 import Testing
 
@@ -151,6 +152,41 @@ struct AppModelTests {
     #expect(await model.refresh() == false)
     #expect(model.providerStatus[.claude]?.indicator == .minor)
     #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
+  }
+
+  /// The helper polls every ten minutes; the foreground app holds the same timer.
+  @Test
+  func providerStatusForegroundCadenceMatchesTheHelper() {
+    #expect(AppModel.providerStatusInterval == 600)
+  }
+
+  @Test
+  func enteringForegroundPollsProviderStatusAndBackgroundStopsTheTimer() async {
+    let client = ScriptedProviderStatusClient(
+      readings: [
+        ProviderStatusReading(
+          provider: .claude,
+          indicator: .minor,
+          description: "Partial System Outage",
+          checkedAt: Date(timeIntervalSince1970: 0)
+        )
+      ]
+    )
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      providerStatusClient: client
+    )
+    await model.setForeground(true)
+    #expect(client.refreshCount == 1)
+    #expect(model.providerStatus[.claude]?.indicator == .minor)
+    await model.setForeground(true)
+    #expect(client.refreshCount == 1)
+    await model.setForeground(false)
+    await model.setForeground(true)
+    #expect(client.refreshCount == 2)
+    await model.setForeground(false)
   }
 
   @Test
@@ -1160,11 +1196,17 @@ func makeModel(
   )
 }
 
-private struct ScriptedProviderStatusClient: ProviderStatusServing {
-  let readings: [ProviderStatusReading]
+private final class ScriptedProviderStatusClient: ProviderStatusServing, @unchecked Sendable {
+  var readings: [ProviderStatusReading]
+  private(set) var refreshCount = 0
+
+  init(readings: [ProviderStatusReading]) {
+    self.readings = readings
+  }
 
   func refresh() async -> [ProviderStatusReading] {
-    readings
+    refreshCount += 1
+    return readings
   }
 }
 

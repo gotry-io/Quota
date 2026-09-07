@@ -21,10 +21,13 @@ links to it rather than restating it.
   ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). It is also where paid sync is bought:
   the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
   to an Account is read from the Relay `entitlement` rather than from the store on the device.
-- **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service; Swift
-  owns views, UI preferences, accessibility, Launch at Login, and wire decoding only. Desktop
-  WidgetKit extensions, when packaging can embed one, read the same non-secret `WidgetSnapshot`
-  as iOS ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)).
+- **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
+  one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
+  wire decoding only. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
+  ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
+  Overview rows it has already resolved, through the projection both Apple clients share, and
+  answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
+  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
   a Cloudflare Worker backed by D1.
@@ -33,9 +36,12 @@ links to it rather than restating it.
 
 The bundled Rust executable is not a separate product; QuotaBar is its parent, transport peer,
 scheduler lifetime, and release boundary. `packages/service` holds the shared provider, Usage,
-pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only entry point: the
-private macOS stdio binary. The crate itself stays platform-neutral, and its owner-only
-configuration and state live under `~/.config/quota/`.
+pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only writing entry point:
+the private macOS stdio binary. The crate's second binary, `quota`, is the public command shipped
+beside it in the same bundle; it opens the disposable cache read-only, collects nothing, and
+touches no credential, so it is a reader over the same state rather than a second service
+([ADR 0046](decisions/0046-a-read-only-quota-command.md)). The crate itself stays platform-neutral,
+and its owner-only configuration and state live under `~/.config/quota/`.
 
 An Account owns the channels it is reached through — GitHub today, with Apple and Email registering
 against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the
@@ -127,6 +133,15 @@ reading and nothing else ([ADR 0035](decisions/0035-quota-pace-is-derived-from-t
 QuotaBar is handed each window's pace on the IPC state its service publishes, while Quota iOS and
 the website derive their own, and Relay neither stores nor carries one.
 
+Drawing that rate as a line needs more than one reading, so the device that takes them keeps them
+([ADR 0042](decisions/0042-quota-history-is-local-samples.md)). QuotaBar's service writes one
+`quota_samples` row per window per collection into `cache.sqlite`; Quota iOS keeps the same journal
+as a file in its own container. Both are kept thirty days, both are folded by one rule —
+`history` in `packages/service` and `QuotaHistory` in `packages/apple-shared`, judged by
+`packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
+contract names a sample, Relay gains no route, and the website shows no history. A reading that
+arrived from another device carries no history, because this device has no samples of it.
+
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
 `{device_id, observed_at}` behind it. That rule is stated once in
@@ -207,7 +222,8 @@ marks truncated unpriced-model detail with `unpriced_truncated`. Exact totals st
 clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
-no version of its own and moves with `ipc_version`. State snapshots separately carry the Today,
+no version of its own and moves with `ipc_version`, which is 3. Each window of a locally collected
+reading also carries `history`, the fold of that window's own samples. State snapshots separately carry the Today,
 7 Days, 30 Days, and All summaries with exact totals, cost, `agents[].providers[].models[]`
 detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
 ([ADR 0039](decisions/0039-project-attribution-stays-local.md)). `total_tokens` is input plus output; cache-read and cache-write tokens are named input
@@ -216,7 +232,9 @@ and is not a session count. Each summary also carries
 `cache_saved` — what its cache reads saved against the uncached input price — and, for the three
 periods bounded by two local midnights, `days[]` on local dates and `hours_of_day[24]` on the local
 clock; `all` carries neither, because the per-day shape of every retained day is what the activity
-chart answers ([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
+chart answers. Account answers the same `hours_of_day[24]` (and `weekday_hours[7][24]` of tokens)
+when the activity read is asked with `detail=hours` and `tz`
+([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
 carried at all: every reader derives it from the two counts it already holds, by the one rule that
 ADR states. Sessions are a separate local view of source files
 ([ADR 0038](decisions/0038-sessions-are-a-local-view-of-files.md)): the report carries
@@ -338,8 +356,10 @@ and network authority — on screen and under the `io.gotry.quota.refresh` backg
 sooner than thirty minutes apart — and projects a non-secret `WidgetSnapshot` into App Group
 `group.io.gotry.quota` for the `QuotaWidgets` extension, which reads only that file. Each item may
 carry a locally salted `selection_id`; the salt stays in the app-private Keychain and is never
-written to the App Group. The same snapshot shape is what a QuotaBar widget extension would read
-from the macOS App Group; this build does not embed that extension.
+written to the App Group. QuotaBar reads the same shape from its own App Group container —
+`86Y537ZF24.group.io.gotry.quota`, because a Developer ID Mac app may only join a team-prefixed
+group — and publishes it after every state update from the Overview rows the private service
+resolved, clearing it when there is nothing to show.
 
 `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
@@ -347,7 +367,9 @@ and model catalog revisions, and — for the summary — the caller's local date
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
 and observation rows the response projects, plus `entitlements.updated_at`; the activity stamp is usage-only (device count, usage
 revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
-keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. The summary's Usage fold is stored keyed by what it depends on
+keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+is the same rule: `tz` is in the query string, so a different clock is a different validator.
+The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a
@@ -387,7 +409,10 @@ normalization never creates a pricing alias or changes a cost outcome. Relay
 publishes the model catalog at `GET /api/v2/model/catalog` with ETag validation and `public,
 max-age=300, must-revalidate`; summaries carry its revision, the Rust client stores payload and ETag
 atomically with a last-known-good cache, and a fetch failure never blocks collection, upload, totals,
-or a report.
+or a report. Official Statuspage v2 feeds are a separate public read, `GET /api/v2/providers/status`,
+with no principal and no cookie: the Worker polls catalog `statuspage_v2` URLs, caches last-good
+readings for ten minutes, and answers `unknown` when a poll fails with nothing stored
+([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
 
 ## Source and dependency rules
 
@@ -401,6 +426,9 @@ or a report.
   files or provider-owned credentials. It depends on `packages/apple-shared` for presentation
   semantics and on QuotaWire for the managed wire types and `ProviderID`, and must not depend on
   QuotaRelay or QuotaAccount, because the local service owns all Relay traffic for this product.
+  Its Xcode project is generated from `apps/menubar/project.yml` by `pnpm generate:menubar` and
+  committed, the way Quota iOS's is; `apps/menubar/Package.swift` stays the library and `swift test`
+  view of the same sources.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
   quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
@@ -430,9 +458,17 @@ or a report.
   `QuotaProviderStatus`, which polls catalog Statuspage v2 URLs on the device. `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
   non-persistent data store, the local collection pass over its stored provider sessions and the
-  app-container file holding its result, App Group snapshot publish/clear, the app-private
-  selection-salt Keychain item, and the WidgetKit extension; its views do not call `URLSession` or
-  Security or decode JSON. `QuotaWidgets` depends only on `QuotaWidgetData` and `QuotaPresentation`,
+  app-container file holding its result, the app-private selection-salt Keychain item, and the
+  WidgetKit extension; its views do not call `URLSession` or Security or decode JSON.
+  `QuotaWidgetViews` holds the widget's SwiftUI views, its selection rules, and its configuration
+  Intent; only an extension links it — an app that links it takes on the extension's WidgetKit and
+  AppIntents environment and renders its own views differently. `QuotaWidgetData` holds the
+  snapshot types, the App Group name, the protected file store, and the publisher both apps write
+  through; `QuotaWidgetProjection` turns resolved
+  `QuotaSnapshot` readings into that snapshot and is the publishing side, so it speaks `QuotaWire`
+  and neither extension links it
+  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)). `QuotaWidgets` and
+  `QuotaBarWidgets` depend only on `QuotaWidgetViews`, `QuotaWidgetData`, and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`, or Security,
   or use `URLSession` or Keychain. Relay does not forward provider status pages.
 - `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie

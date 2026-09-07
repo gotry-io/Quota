@@ -109,6 +109,18 @@ test("asks a single UTC day for its agent tree", async () => {
   }
 });
 
+test("asks a range for its hour-of-day rhythm", () => {
+  const range = { from: "2026-08-01", to: "2026-08-10" };
+  const url = new URL(
+    accountActivityPath(range, "hours", "America/Los_Angeles"),
+    "https://quota.gotry.io",
+  );
+  assert.equal(url.pathname, "/api/v6/account/usage/activity");
+  assert.equal(url.searchParams.get("detail"), "hours");
+  assert.equal(url.searchParams.get("tz"), "America/Los_Angeles");
+  assert.equal([...url.searchParams.keys()].sort().join(","), "detail,from,to,tz");
+});
+
 test("asks Relay to mail a sign-in link and treats 202 as accepted", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";

@@ -39,7 +39,7 @@ pub use scan::{
     session_project_key,
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
@@ -672,6 +672,25 @@ pub struct LocalHourUsage {
 
 /// A day has 24 hours, and a rhythm names every one of them.
 pub const HOURS_OF_DAY: usize = 24;
+/// Sunday-first weekdays, matching the activity heatmap.
+pub const WEEKDAYS_OF_WEEK: usize = 7;
+
+/// One hour-of-day fact a rhythm folds: the local calendar date, the hour of that date, and
+/// the tokens and amount already measured for it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageRhythmHourFact {
+    pub date: String,
+    pub hour: u8,
+    pub total_tokens: u64,
+    pub cost_microusd: Option<String>,
+}
+
+/// The 24-hour and Sunday-first 7×24 rhythm of a list of local hour facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageRhythm {
+    pub hours_of_day: Vec<LocalUsageHourOfDay>,
+    pub weekday_hours: Vec<Vec<u64>>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LocalUsagePeriodSummary {
@@ -959,6 +978,72 @@ pub fn build_local_usage_summary_with_projects(
     })
 }
 
+/// Sunday-first weekday of a `YYYY-MM-DD` civil date, matching the activity heatmap.
+pub fn weekday_sunday_first(date: &str) -> Result<usize, UsageError> {
+    let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| UsageError("Usage date is not a calendar date".into()))?;
+    Ok(parsed.weekday().num_days_from_sunday() as usize)
+}
+
+/// The 24-hour and Sunday-first 7×24 rhythm of a list of local hour facts.
+///
+/// Every clock hour is named, including the ones nothing reached. An hour with no fact states
+/// no amount. Tokens add. Amounts add when at least one contributing fact states one; an hour
+/// whose facts all state no amount still states no amount.
+pub fn fold_usage_rhythm(hours: &[UsageRhythmHourFact]) -> Result<UsageRhythm, UsageError> {
+    let mut hours_of_day = Vec::with_capacity(HOURS_OF_DAY);
+    for hour in 0..HOURS_OF_DAY {
+        hours_of_day.push(LocalUsageHourOfDay {
+            hour: hour as u8,
+            total_tokens: 0,
+            cost_microusd: None,
+        });
+    }
+    let mut weekday_hours = vec![vec![0u64; HOURS_OF_DAY]; WEEKDAYS_OF_WEEK];
+    for fact in hours {
+        if fact.hour as usize >= HOURS_OF_DAY {
+            return Err(UsageError("Usage hour is not an hour of the day".into()));
+        }
+        let bucket = &mut hours_of_day[fact.hour as usize];
+        bucket.total_tokens = bucket
+            .total_tokens
+            .checked_add(fact.total_tokens)
+            .ok_or_else(|| UsageError("Usage token total overflowed".into()))?;
+        bucket.cost_microusd = add_microusd(
+            bucket.cost_microusd.as_deref(),
+            fact.cost_microusd.as_deref(),
+        )?;
+        let weekday = weekday_sunday_first(&fact.date)?;
+        if weekday >= WEEKDAYS_OF_WEEK {
+            return Err(UsageError("Usage weekday is not a day of the week".into()));
+        }
+        weekday_hours[weekday][fact.hour as usize] = weekday_hours[weekday][fact.hour as usize]
+            .checked_add(fact.total_tokens)
+            .ok_or_else(|| UsageError("Usage token total overflowed".into()))?;
+    }
+    Ok(UsageRhythm {
+        hours_of_day,
+        weekday_hours,
+    })
+}
+
+fn add_microusd(left: Option<&str>, right: Option<&str>) -> Result<Option<String>, UsageError> {
+    match (left, right) {
+        (None, None) => Ok(None),
+        _ => {
+            let sum = parse_nonnegative_decimal_integer(left.unwrap_or("0"))
+                .ok_or_else(|| UsageError("invalid cost_microusd".into()))?
+                + parse_nonnegative_decimal_integer(right.unwrap_or("0"))
+                    .ok_or_else(|| UsageError("invalid cost_microusd".into()))?;
+            let value = sum.to_string();
+            if value.len() > 32 {
+                return Err(UsageError("Usage cost total exceeds protocol bound".into()));
+            }
+            Ok(Some(value))
+        }
+    }
+}
+
 /// The per-day table and the 24-hour rhythm of one period bounded by two local midnights.
 ///
 /// Both folds read the same facts the period's totals read, grouped by where the local clock
@@ -969,7 +1054,7 @@ pub fn build_local_usage_rhythm(
     pricing_catalog: Option<&crate::pricing::PricingCatalog>,
 ) -> Result<(Vec<LocalUsageDay>, Vec<LocalUsageHourOfDay>), UsageError> {
     let mut by_date: BTreeMap<&str, Vec<DatedUsageRow>> = BTreeMap::new();
-    let mut by_hour: BTreeMap<u8, Vec<DatedUsageRow>> = BTreeMap::new();
+    let mut by_date_hour: BTreeMap<(String, u8), Vec<DatedUsageRow>> = BTreeMap::new();
     for entry in entries {
         if entry.hour as usize >= HOURS_OF_DAY {
             return Err(UsageError("Usage hour is not an hour of the day".into()));
@@ -978,8 +1063,8 @@ pub fn build_local_usage_rhythm(
             .entry(entry.date.as_str())
             .or_default()
             .push(entry.row.clone());
-        by_hour
-            .entry(entry.hour)
+        by_date_hour
+            .entry((entry.date.clone(), entry.hour))
             .or_default()
             .push(entry.row.clone());
     }
@@ -997,21 +1082,22 @@ pub fn build_local_usage_rhythm(
         });
     }
 
-    let mut hours = Vec::with_capacity(HOURS_OF_DAY);
-    for hour in 0..HOURS_OF_DAY {
-        let rows = by_hour.remove(&(hour as u8)).unwrap_or_default();
+    let mut facts = Vec::with_capacity(by_date_hour.len());
+    for ((date, hour), rows) in by_date_hour {
         let cost = crate::pricing::calculate_usage_cost(
             &rows,
             pricing_catalog,
             crate::pricing::UsageCostMode::Auto,
         )?;
-        hours.push(LocalUsageHourOfDay {
-            hour: hour as u8,
+        facts.push(UsageRhythmHourFact {
+            date,
+            hour,
             total_tokens: summary_totals(&rows)?.total_tokens,
             cost_microusd: cost.amount_microusd,
         });
     }
-    Ok((days, hours))
+    let rhythm = fold_usage_rhythm(&facts)?;
+    Ok((days, rhythm.hours_of_day))
 }
 
 fn build_local_usage_projects(

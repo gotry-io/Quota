@@ -351,7 +351,6 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
       && (days?.allSatisfy(\.isValid) ?? true)
       && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
       && (hoursOfDay.map { $0.count == 24 && $0.enumerated().allSatisfy { $1.hour == $0 } } ?? true)
-      && (days == nil) == (hoursOfDay == nil)
       && modelsTruncated != false
   }
 

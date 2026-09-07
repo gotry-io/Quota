@@ -64,6 +64,17 @@ final class MenuBarStatusItemController: NSObject {
     slots.first { $0.id == id }?.item.button
   }
 
+  /// Opens the panel without a click, for a desktop widget's deep link. It anchors on the first
+  /// status item, because a link names a subscription rather than the item that was pressed.
+  /// With no status item on the bar there is nothing to anchor to and nothing is opened.
+  func openPanel(revealing provider: ProviderID?) {
+    guard let slot = slots.first, let button = slot.item.button else { return }
+    panel.open(relativeTo: button, id: slot.id)
+    if let provider {
+      panel.reveal(provider: provider)
+    }
+  }
+
   private func startTracking() {
     tracking = true
     withObservationTracking {

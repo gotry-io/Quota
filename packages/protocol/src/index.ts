@@ -66,7 +66,9 @@ const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
  */
 const MAXIMUM_LOCAL_USAGE_DAYS = 31;
 /** A day has 24 hours, and a rhythm names every one of them. */
-const HOURS_OF_DAY = 24;
+export const HOURS_OF_DAY = 24;
+/** Sunday-first weekdays, matching the activity heatmap. */
+export const WEEKDAYS_OF_WEEK = 7;
 const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 const MAXIMUM_PRICING_ENTRIES = 4_096;
@@ -445,6 +447,42 @@ export const AccountResponseSchema = z
   })
   .strict();
 export type AccountResponse = z.infer<typeof AccountResponseSchema>;
+
+/**
+ * Atlassian Statuspage v2 `status.indicator`, plus `unknown` when Relay has no last reading.
+ *
+ * `none` / `minor` / `major` / `critical` are what a status page states. `unknown` is Relay's
+ * own answer when a poll failed and nothing is cached, not a fifth Statuspage value.
+ */
+export const ProviderStatusIndicatorSchema = z.enum([
+  "none",
+  "minor",
+  "major",
+  "critical",
+  "unknown",
+]);
+export type ProviderStatusIndicator = z.infer<typeof ProviderStatusIndicatorSchema>;
+
+const ProviderStatusEntrySchema = z
+  .object({
+    id: ProviderIdSchema,
+    indicator: ProviderStatusIndicatorSchema,
+    description: z.string().max(512),
+    checked_at: Rfc3339InstantSchema,
+  })
+  .strict();
+export type ProviderStatusEntry = z.infer<typeof ProviderStatusEntrySchema>;
+
+/**
+ * Public `GET /api/v2/providers/status`: one row per catalog provider that has a
+ * `statuspage_v2` feed, in catalog order. No principal, no cookie.
+ */
+export const ProviderStatusResponseSchema = z
+  .object({
+    providers: z.array(ProviderStatusEntrySchema).max(PROVIDER_IDS.length),
+  })
+  .strict();
+export type ProviderStatusResponse = z.infer<typeof ProviderStatusResponseSchema>;
 
 const NativeClientSchema = z.literal("quotabar");
 const InstallationIdSchema = z.string().uuid();
@@ -1189,7 +1227,7 @@ export type LocalUsageDay = z.infer<typeof LocalUsageDaySchema>;
  * Cost is the amount alone: a rhythm compares hours against each other, and the basis and
  * coverage that qualify an amount are already stated once for the period above it.
  */
-const LocalUsageHourOfDaySchema = z
+export const UsageHourOfDaySchema = z
   .object({
     hour: z
       .number()
@@ -1200,15 +1238,17 @@ const LocalUsageHourOfDaySchema = z
     cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
   })
   .strict();
-export type LocalUsageHourOfDay = z.infer<typeof LocalUsageHourOfDaySchema>;
+export type UsageHourOfDay = z.infer<typeof UsageHourOfDaySchema>;
+export type LocalUsageHourOfDay = UsageHourOfDay;
 
 /**
  * One period of this Mac's own Usage.
  *
- * `days` and `hours_of_day` describe a period bounded by two local midnights, so the three
- * trailing periods carry them and `all` — every retained day — does not: the per-day shape of
- * two years of history is what the activity heatmap answers, and folding it on every scan would
- * cost more than any reader asks for.
+ * `days` and `hours_of_day` are each optional. A local period bounded by two midnights carries
+ * both. An Account period may carry `hours_of_day` from the activity read without the per-day
+ * table, which stays on the UTC dates the activity chart already answers. `all` carries
+ * neither: two years of per-day shape is what the activity heatmap answers, and folding it on
+ * every scan would cost more than any reader asks for.
  */
 const LocalUsagePeriodSummarySchema = z
   .object({
@@ -1217,7 +1257,7 @@ const LocalUsagePeriodSummarySchema = z
     cache_saved: UsageCacheSavedSchema,
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length),
     days: z.array(LocalUsageDaySchema).max(MAXIMUM_LOCAL_USAGE_DAYS).optional(),
-    hours_of_day: z.array(LocalUsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
+    hours_of_day: z.array(UsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
     models_truncated: z.literal(true).optional(),
   })
   .strict()
@@ -1235,13 +1275,6 @@ const LocalUsagePeriodSummarySchema = z
         code: "custom",
         path: ["hours_of_day"],
         message: "Hours of the day must name 0 through 23 in order.",
-      });
-    }
-    if ((summary.days === undefined) !== (summary.hours_of_day === undefined)) {
-      context.addIssue({
-        code: "custom",
-        path: ["hours_of_day"],
-        message: "A period bounded by local midnights carries both folds, or neither.",
       });
     }
   });
@@ -1509,12 +1542,49 @@ export const UsageActivityDaySchema = z
   .strict();
 export type UsageActivityDay = z.infer<typeof UsageActivityDaySchema>;
 
-export const AccountUsageActivityResponseSchema = z
+const UsageWeekdayHoursSchema = z
+  .array(z.array(SafeNonnegativeIntegerSchema).length(HOURS_OF_DAY))
+  .length(WEEKDAYS_OF_WEEK);
+
+/**
+ * The activity chart an Account read answers: up to 400 UTC days of totals, optionally one
+ * day's agent tree, and optionally the 24-hour and weekday×hour rhythm of the asked range.
+ *
+ * `hours_of_day` and `weekday_hours` travel together when the read asked `detail=hours`. Hours
+ * are the caller's clock (`tz`, default UTC) for every stored hour whose UTC date lies in
+ * `from`…`to`. A clock hour nothing reached states no amount.
+ */
+const AccountUsageActivityResponseObjectSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     days: z.array(UsageActivityDaySchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+    hours_of_day: z.array(UsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
+    weekday_hours: UsageWeekdayHoursSchema.optional(),
   })
   .strict();
+
+function refineActivityRhythm(
+  response: z.infer<typeof AccountUsageActivityResponseObjectSchema>,
+  context: z.RefinementCtx,
+): void {
+  if ((response.hours_of_day === undefined) !== (response.weekday_hours === undefined)) {
+    context.addIssue({
+      code: "custom",
+      path: ["hours_of_day"],
+      message: "Hours of the day and weekday hours travel together.",
+    });
+  }
+  if (response.hours_of_day?.some((hour, index) => hour.hour !== index)) {
+    context.addIssue({
+      code: "custom",
+      path: ["hours_of_day"],
+      message: "Hours of the day must name 0 through 23 in order.",
+    });
+  }
+}
+
+export const AccountUsageActivityResponseSchema =
+  AccountUsageActivityResponseObjectSchema.superRefine(refineActivityRhythm);
 
 /**
  * The handle a public profile is published under, which is the whole address of that page.
@@ -1544,6 +1614,7 @@ export const RESERVED_PUBLIC_PROFILE_HANDLES = [
   "download",
   "healthz",
   "help",
+  "leaderboard",
   "login",
   "logout",
   "my",
@@ -1592,6 +1663,7 @@ const PublicProfileSchema = z
     enabled: z.boolean(),
     show_models: z.boolean(),
     show_cost: z.boolean(),
+    on_leaderboard: z.boolean(),
   })
   .strict()
   .superRefine((profile, context) => {
@@ -1600,6 +1672,13 @@ const PublicProfileSchema = z
         code: "custom",
         path: ["handle"],
         message: "An enabled public profile must name a handle.",
+      });
+    }
+    if (profile.on_leaderboard && !profile.enabled) {
+      context.addIssue({
+        code: "custom",
+        path: ["on_leaderboard"],
+        message: "A page that is not published cannot be on the leaderboard.",
       });
     }
   });
@@ -1618,8 +1697,18 @@ const PublicProfileUpdateSchema = z
     enabled: z.boolean(),
     show_models: z.boolean(),
     show_cost: z.boolean(),
+    on_leaderboard: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((profile, context) => {
+    if (profile.on_leaderboard && !profile.enabled) {
+      context.addIssue({
+        code: "custom",
+        path: ["on_leaderboard"],
+        message: "A page that is not published cannot be on the leaderboard.",
+      });
+    }
+  });
 export type PublicProfileUpdate = z.infer<typeof PublicProfileUpdateSchema>;
 
 export const PublicProfileUpdateRequestSchema = z
@@ -1731,6 +1820,39 @@ export const PublicUsageResponseSchema = z
   .strict();
 export type PublicUsageResponse = z.infer<typeof PublicUsageResponseSchema>;
 
+/** The leaderboard is the last 30 UTC days, and that is the only period it has. */
+export const LEADERBOARD_PERIOD = "30d";
+/** How many places the board has. Everyone below the last one is off it. */
+export const MAXIMUM_LEADERBOARD_ENTRIES = 100;
+
+/**
+ * One place on the leaderboard.
+ *
+ * It carries less than a public page does, not more: a handle, how much it ran, and where that
+ * put it. There is no cost, no model, no provider, no agent, and no device here, because a
+ * board is read by people who followed no link and asked for nobody in particular
+ * ([ADR 0045](../../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
+ */
+const LeaderboardEntrySchema = z
+  .object({
+    handle: PublicProfileHandleSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    messages: SafeNonnegativeIntegerSchema,
+    rank: z.number().int().min(1).max(MAXIMUM_LEADERBOARD_ENTRIES),
+  })
+  .strict();
+export type LeaderboardEntry = z.infer<typeof LeaderboardEntrySchema>;
+
+export const LeaderboardResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    period: z.literal(LEADERBOARD_PERIOD),
+    generated_at: Rfc3339InstantSchema,
+    entries: z.array(LeaderboardEntrySchema).max(MAXIMUM_LEADERBOARD_ENTRIES),
+  })
+  .strict();
+export type LeaderboardResponse = z.infer<typeof LeaderboardResponseSchema>;
+
 /**
  * What a client takes from a managed read.
  *
@@ -1832,6 +1954,16 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
+const ProviderStatusEntryReadSchema = ProviderStatusEntrySchema.extend({
+  id: ReadEnumSchema,
+  indicator: ReadEnumSchema,
+}).loose();
+
+export const ProviderStatusResponseReadSchema = ProviderStatusResponseSchema.extend({
+  providers: z.array(ProviderStatusEntryReadSchema).max(PROVIDER_IDS.length),
+}).loose();
+export type ProviderStatusResponseRead = z.infer<typeof ProviderStatusResponseReadSchema>;
+
 const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   totals: UsageSummaryTotalsReadSchema,
   cost: UsageCostOutcomeReadSchema,
@@ -1846,9 +1978,10 @@ export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
 export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
 export type UsageSummaryTotalsRead = z.infer<typeof UsageSummaryTotalsReadSchema>;
 
-export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
-  days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
-}).loose();
+export const AccountUsageActivityResponseReadSchema =
+  AccountUsageActivityResponseObjectSchema.extend({
+    days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+  }).loose();
 export type AccountUsageActivityResponseRead = z.infer<
   typeof AccountUsageActivityResponseReadSchema
 >;

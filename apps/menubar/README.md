@@ -1,12 +1,13 @@
 # QuotaBar
 
-QuotaBar is the native macOS 14+ menu-bar UI. It ships as one app containing the SwiftUI executable
-and a private Rust child at `Contents/Helpers/quota-service`.
+QuotaBar is the native macOS 14+ menu-bar UI. It ships as one app containing the SwiftUI executable,
+a private Rust child at `Contents/Helpers/quota-service`, and the public `quota` command at
+`Contents/Helpers/quota`.
 
 ## Runtime boundary
 
-QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v1
-connection. The helper emits `{"type":"event","event":"ready","ipc_version":1}` once it has opened
+QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v3
+connection. The helper emits `{"type":"event","event":"ready","ipc_version":3}` once it has opened
 its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
 that stays silent for a minute, and reports the service unavailable after a second. Requests have no
 deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
@@ -92,11 +93,31 @@ The detailed system boundary is in [`docs/architecture.md`](../../docs/architect
 requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
 [`DESIGN.md`](DESIGN.md).
 
+## The `quota` command
+
+The bundle carries one public command beside the private service
+([ADR 0046](../../docs/decisions/0046-a-read-only-quota-command.md)). It prints what QuotaBar has
+already collected on this Mac and nothing else: it opens the disposable cache read-only, starts no
+collection, reads no credential, and takes no lock, so it can be run while QuotaBar is running and
+says nothing QuotaBar was not already showing.
+
+```bash
+ln -s "/Applications/QuotaBar.app/Contents/Helpers/quota" /usr/local/bin/quota
+quota status                       # each provider's windows: what is left, and when it refills
+quota usage --period today|7d|30d  # this Mac's Usage totals and its busiest models
+quota status --json                # the same state QuotaBar reads over IPC
+```
+
+The symlink is the whole installation; there is no installer, no Homebrew formula, and nothing to
+uninstall but the link. A Mac QuotaBar has never run on has no state to print, so the command says
+so and exits 1. It is not a way to collect: only QuotaBar's own child does that.
+
 ## Development
 
 From the repository root:
 
 ```bash
+pnpm generate:menubar
 swift test --package-path apps/menubar
 cargo test --locked --package quota-menubar-helper
 pnpm build:menubar:app
@@ -104,14 +125,23 @@ pnpm test:menubar:helper
 open dist/menubar/QuotaBar.app
 ```
 
+QuotaBar has two build descriptions of the same sources. `project.yml` generates the committed
+`QuotaBar.xcodeproj` that ships — it is what carries `PlugIns/QuotaBarWidgets.appex`, Sparkle, and
+the app's entitlements — and `Package.swift` is the library and `swift test` view of the same
+sources. Add a source file to one and add it to the other; re-run `pnpm generate:menubar` and commit
+the project whenever `project.yml` changes.
+
 `swift run` does not assemble an app bundle and therefore does not provide the private service at its
-production path. Use the packaging script for live integration. It builds arm64 Rust and Swift
-binaries, copies resources, installs the service, and applies local ad-hoc signatures. An ad-hoc
+production path. Use the packaging script for live integration. It archives the Xcode project,
+exports it, adds the arm64 private service to `Contents/Helpers`, and applies local ad-hoc
+signatures. An ad-hoc
 signature's designated requirement is the build's cdhash, so macOS treats every rebuild as a new
 app and asks again for Full Disk Access, Removable Volumes, and the Chrome Safe Storage Keychain
 item; set `QUOTABAR_CODESIGN_IDENTITY` to a self-signed code-signing certificate (Keychain Access ›
-Certificate Assistant) to keep those grants across local builds. The release
-workflow replaces them with Developer ID signatures before notarization.
+Certificate Assistant) to keep those grants across local builds. An ad-hoc signature carries no
+entitlements, so a local package joins no App Group and its desktop widgets stay empty; Diagnostics'
+**Desktop Widgets** row says so. The release workflow sets `QUOTABAR_SIGNING_IDENTITY`, so the same
+script archives and exports with Developer ID and the real App Group before notarization.
 `pnpm test:menubar:helper` runs the packaged helper through the Swift IPC tests with an isolated
 `HOME`, `XDG_CONFIG_HOME`, and provider data roots; it does not read the invoking user's local state.
 

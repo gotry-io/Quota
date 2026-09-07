@@ -54,7 +54,12 @@ The site has these routes:
    When the return is Delete Account (`return_to` carries `delete=account`), the heading is
    **Sign in again to delete your account** and the methods are shown so the session is
    authenticated again — **Continue as** does not refresh `authenticated_at`. `return_to`
-   defaults to `/my`, and anything but a same-origin path is a 400. The page is
+   defaults to `/my`, and anything but a same-origin path is a 400. When QuotaBar or Quota for
+   iPhone send someone here with `intent=link`, the heading is **Link a sign-in method** and the
+   supporting sentence is “Linking adds a way to sign in to the account you're already using; it
+   never merges two accounts.” Signed in, the page lists the same bindable channels Settings
+   does. Signed out, it offers the usual sign-in methods and `return_to` defaults to
+   `/my/settings`. The page is
    `noindex, nofollow`.
 3. `/download` is the install page: the same `.dmg` and Homebrew controls as the Platforms macOS card, plus
    requirements (macOS 14 or later, Apple silicon), that QuotaBar updates itself with Sparkle, and
@@ -69,8 +74,8 @@ The site has these routes:
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
    [`docs/security.md`](../../docs/security.md).
-5. `/u/<handle>` is a published Usage page, and the only route that renders account data with no
-   session. Its header is the brand plus one **Get Quota** action: no viewer name, no sign-in
+5. `/u/<handle>` is a published Usage page, and one of the two routes that render account data with
+   no session. Its header is the brand plus one **Get Quota** action: no viewer name, no sign-in
    prompt beside someone else's numbers, and no Account nav. The page is a heading (`@handle`,
    when it was published, and **Coding-agent Usage only**) with a **Share** action, then Last 30
    days and All time as three-cell stat rows (Tokens, Messages, and API-equivalent cost when the
@@ -85,7 +90,17 @@ The site has these routes:
    The page never prints a device, an agent, a provider sign-in, a plan, a remaining figure, or
    the account label
    ([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
-6. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
+6. `/leaderboard` is the other route rendered with no session, and wears the same published
+   header. It is a heading (**Leaderboard**, the window, when it was folded, and **Everyone here
+   asked to be listed**), then one table — rank, handle, tokens, messages — of at most a hundred
+   rows, each handle linking to `/u/<handle>`, then one footnote saying what the board does not
+   rank and where the switch is. The reader's own row is the one thing that differs per reader:
+   it takes the brand surface and a **You** badge. Numbers are tabular, the table scrolls inside
+   its own container rather than the page, and an empty board says **Nobody is listed yet.**
+   There is no cost, model, provider, device, or account label anywhere on it
+   ([ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)). The site
+   footer links it from every page.
+7. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
    with four routes when the viewer is signed in and the path is under `/my`; the current item
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
    `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
@@ -98,7 +113,11 @@ The site has these routes:
      links to Settings; it is absent while subscribed. A Subscriptions grid (each card a
      link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
      today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
-     linking `/my/devices`. Overview does not repeat a cost block or an Installations list.
+     linking `/my/devices`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
+     or `--meter-critical` (major and critical) with `title` set to the official status-page
+     description, from public `GET /api/v2/providers/status`, matching QuotaBar: no dot for
+     `none` or `unknown`. `/u/<handle>` does not draw it. Overview does not repeat a cost block
+     or an Installations list.
    - `/my/subscriptions/<sel>` — one subscription, visually the same card as Overview: provider
      mark, provider display name, masked account label, plan badge, and the shared freshness
      line; each window with remaining quota, a remaining-percent meter in the shared threshold
@@ -113,6 +132,9 @@ The site has these routes:
      on the left and Activity (heatmap plus day-detail panel) on the right; below 1024 px those
      stack. The graph is one tab stop (roving tabindex). Choosing a day opens its details under
      the grid and writes `?day=YYYY-MM-DD`. The selected period is `?period=today|7d|30d|all`.
+     Under the totals, one line `Priced N of M rows` from that period's cost row counts, or
+     `Cost covers every row` / `Cost skips N rows this catalog can't price` when those counts
+     are absent.
    - `/my/devices` — a table sorted by last-seen, newest first. Columns: name, platform icon
      (macOS, or a generic device for any other value), Active / Idle / Not reporting (semantic
      color plus the label; Not reporting reads `Paused (no subscription)` when the Account is
@@ -134,7 +156,8 @@ The site has these routes:
      delete region and focuses its heading. Legal links Privacy, Terms, and Support. Sign out
      stays in the header account menu. Public profile is the handle field (prefixed
      `quota.gotry.io/u/`), **Publish this page**, **Show which models**, **Show API-equivalent
-     cost**, one **Save**, and — once published — **Open page** and **Copy link**. A handle the
+     cost**, **Show on the leaderboard** (disabled until the page is published, and cleared with
+     it), one **Save**, and — once published — **Open page** and **Copy link**. A handle the
      contract refuses is named before the request is made; one another Account holds reads **That
      handle is already taken.** Switching the page off keeps the handle.
    Quota remaining has no "left"/"remaining" suffix; usd/credits remaining of a cap use
@@ -164,8 +187,9 @@ The site has these routes:
    is a single redirect to `/my`. Account data is never published without a session.
 
 The document `<head>` is per-route. `/` publishes the public title, description, canonical URL
-`https://quota.gotry.io/`, and Open Graph tags. `/u/<handle>` publishes its own canonical URL and
-Open Graph tags. `/my` is `noindex, nofollow` and has no canonical URL.
+`https://quota.gotry.io/`, and Open Graph tags. `/u/<handle>` and `/leaderboard` publish their own
+canonical URL and Open Graph tags, each built from the same summary sentence the page states.
+`/my` is `noindex, nofollow` and has no canonical URL.
 
 Signing in is the only account action the marketing pages take. There is no Relay selection,
 pairing group, owner capability, provider-secret form, server administration, or self-hosted setup
@@ -256,8 +280,8 @@ The landing is six blocks, in this order. It does not use slogan sections.
    coming soon` while that default holds. The type may carry optional `url` and `actionLabel`;
    render **Join TestFlight** or **View in App Store** only when `url` is set. Do not present a
    dead store link.
-6. **Footer.** `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
-   and Account, and the appearance toggle in a controls group. The toggle keeps a visible
+6. **Footer.** `© {year} GoTry IO · MIT`, links for Leaderboard, Download, Support, Privacy,
+   Terms, GitHub, and Account, and the appearance toggle in a controls group. The toggle keeps a visible
    focus ring and a 42 px target.
 
 ## Account dashboard
@@ -265,14 +289,17 @@ The landing is six blocks, in this order. It does not use slogan sections.
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
 Account nav in the site header. The overview leads with remaining quota: when sync is off, a static
 notice `Sync is off. Your Macs stop uploading until you subscribe.` with a Settings link, then
-subscription cards, then a Today strip (tokens, API-equivalent cost, today's top model), then a
+subscription cards (a 6 pt incident dot beside the provider name when official status is minor or
+worse), then a Today strip (tokens, API-equivalent cost, today's top model), then a
 Devices summary line (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's
 verdict). It does not repeat a cost block or an Installations list. The notice is absent while the
 entitlement is `active` or `grace`. Under Usage, period tabs sit on the same row as the
 page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
-partial cost uses a lower bound marker. The Usage page period tabs are **Day**, **Week**, **Month**,
+partial cost uses a lower bound marker. Under the totals headline, one line `Priced N of M rows`
+from that period's cost row counts, or `Cost covers every row` / `Cost skips N rows this catalog
+can't price` when those counts are absent. The Usage page period tabs are **Day**, **Week**, **Month**,
 **7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
 vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
 sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and
@@ -365,7 +392,13 @@ Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input,
 add up to the day's total, using the three darkest activity steps; a day with nothing in it is drawn
 in `--activity-0` rather than left out. The panel is labelled **UTC**, the calendar the activity
 read answers. **Up to 2 years** has no Daily panel: its per-day shape is the Activity graph beside
-it. No period has a Rhythm — Relay stores hours on UTC keys and does not fold a local clock.
+it.
+
+Under Daily, for every period but **Up to 2 years**, a **Rhythm** panel: a Sunday-first weekday ×
+hour heatmap using the same `--activity-0`…`--activity-4` steps as the Activity graph, then 24 bars
+for the hour-of-day totals. The period's URL parameters select the range; the read is
+`GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this browser's zone. Omit the
+panel when every hour is empty. The public page `/u/<handle>` has no Rhythm.
 
 Agent Usage is an agent → provider → model tree in a semantic table: a caption, Model / Tokens /
 Share / Cost column headers, and one `<tbody>` per agent. Above it sit the three largest models as
@@ -405,7 +438,7 @@ couldn't load this. Retry.** — at most one next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/u/<handle>`, `/my`,
+- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/u/<handle>`, `/leaderboard`, `/my`,
   `/my/subscriptions/<sel>`, `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app`
   redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
   tooling is available;

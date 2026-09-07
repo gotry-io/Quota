@@ -64,4 +64,37 @@ struct AgentDisplayTests {
     )
     #expect(QuotaFormat.costBasis(unpriced) == "Unpriced")
   }
+
+  @Test
+  func costPricedMatchesTheWebsiteLine() {
+    let complete = UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .complete,
+      amountMicrousd: "1230000",
+      catalogRevision: nil,
+      calculatedRows: 12,
+      reportedRows: 0,
+      unpricedRows: 0,
+      assumptions: [],
+      unpriced: []
+    )
+    #expect(QuotaFormat.costPriced(complete) == "Priced 12 of 12 rows")
+    let partial = UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .partial,
+      amountMicrousd: "1000000",
+      catalogRevision: nil,
+      calculatedRows: 9,
+      reportedRows: 1,
+      unpricedRows: 2,
+      assumptions: [],
+      unpriced: [
+        UsageUnpricedItem(
+          billingChannel: .openaiDirect, model: "other", reason: .unknownModel, rows: 2)
+      ]
+    )
+    #expect(QuotaFormat.costPriced(partial) == "Priced 10 of 12 rows")
+  }
 }

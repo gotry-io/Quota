@@ -28,6 +28,7 @@ import type {
   DeviceSyncControl,
   DeviceWriterPrincipal,
   IdentityProviderId,
+  LeaderboardVersionStamp,
   LinkIdentityInput,
   LinkIdentityOutcome,
   LoginGrantConsumeResult,
@@ -1104,15 +1105,18 @@ export class D1AccountState implements AccountState {
       const row = await this.database
         .prepare(
           `INSERT INTO public_profiles (
-             account_id, handle, enabled, show_models, show_cost, created_at, updated_at
-           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+             account_id, handle, enabled, show_models, show_cost, on_leaderboard,
+             created_at, updated_at
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
            ON CONFLICT(account_id) DO UPDATE SET
              handle = excluded.handle,
              enabled = excluded.enabled,
              show_models = excluded.show_models,
              show_cost = excluded.show_cost,
+             on_leaderboard = excluded.on_leaderboard,
              updated_at = excluded.updated_at
-           RETURNING account_id, handle, enabled, show_models, show_cost, created_at, updated_at`,
+           RETURNING account_id, handle, enabled, show_models, show_cost, on_leaderboard,
+                     created_at, updated_at`,
         )
         .bind(
           input.account_id,
@@ -1120,6 +1124,7 @@ export class D1AccountState implements AccountState {
           input.enabled ? 1 : 0,
           input.show_models ? 1 : 0,
           input.show_cost ? 1 : 0,
+          input.on_leaderboard ? 1 : 0,
           input.written_at,
         )
         .first<PublicProfileRow>();
@@ -1226,6 +1231,38 @@ export class D1AccountState implements AccountState {
       devices: stampCount(merged.devices),
       usage_revision: stampCount(merged.usage_revision),
       device_generation: stampCount(merged.device_generation),
+    };
+  }
+
+  /**
+   * The whole board's validator, computed from the listed set rather than the rollup.
+   *
+   * One statement over `public_profiles` and one over the devices behind them: a page joining
+   * or leaving the board moves the count, a rename or a switch moves the newest `updated_at`,
+   * and any listed Account's next upload moves the summed sync revision. Nothing here reads
+   * `usage_daily`, which is the point — a held validator is answered without the fold.
+   */
+  async leaderboardVersionStamp(): Promise<LeaderboardVersionStamp> {
+    const [profiles, devices] = await this.database.batch<Record<string, unknown>>([
+      this.database.prepare(
+        `SELECT COUNT(*) AS profiles, MAX(updated_at) AS profile_updated_at
+           FROM public_profiles
+          WHERE on_leaderboard = 1 AND enabled = 1`,
+      ),
+      this.database.prepare(
+        `SELECT COALESCE(SUM(devices.usage_sync_revision), 0) AS usage_revision
+           FROM devices
+           INNER JOIN public_profiles ON public_profiles.account_id = devices.account_id
+          WHERE public_profiles.on_leaderboard = 1
+            AND public_profiles.enabled = 1
+            AND devices.deleted_at IS NULL`,
+      ),
+    ]);
+    const merged = { ...(profiles?.results[0] ?? {}), ...(devices?.results[0] ?? {}) };
+    return {
+      profiles: stampCount(merged.profiles),
+      profile_updated_at: stampInstant(merged.profile_updated_at),
+      usage_revision: stampCount(merged.usage_revision),
     };
   }
 
@@ -1621,12 +1658,13 @@ interface PublicProfileRow {
   enabled: number;
   show_models: number;
   show_cost: number;
+  on_leaderboard: number;
   created_at: string;
   updated_at: string;
 }
 
 const publicProfileSelect = `SELECT account_id, handle, enabled, show_models, show_cost,
-  created_at, updated_at FROM public_profiles`;
+  on_leaderboard, created_at, updated_at FROM public_profiles`;
 
 function publicProfile(row: PublicProfileRow): PublicProfileRecord {
   return {
@@ -1635,6 +1673,7 @@ function publicProfile(row: PublicProfileRow): PublicProfileRecord {
     enabled: row.enabled === 1,
     show_models: row.show_models === 1,
     show_cost: row.show_cost === 1,
+    on_leaderboard: row.on_leaderboard === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

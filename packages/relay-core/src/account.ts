@@ -399,6 +399,25 @@ export interface AccountUsageVersionStamp {
 }
 
 /**
+ * The aggregates the leaderboard's answer depends on, over every listed profile at once.
+ *
+ * The board is not one Account's read, so its stamp is not one Account's either: it is the
+ * shape of the listed set plus everything those Accounts have uploaded.
+ */
+export interface LeaderboardVersionStamp {
+  profiles: number;
+  profile_updated_at: string | null;
+  usage_revision: number;
+}
+
+/** One place on the board, as the store folds it. */
+export interface LeaderboardRow {
+  handle: string;
+  total_tokens: number;
+  messages: number;
+}
+
+/**
  * One Account's public page, as Relay stores it.
  *
  * The row exists as soon as a handle is chosen, whether or not the page is on: turning a page
@@ -411,6 +430,8 @@ export interface PublicProfileRecord {
   enabled: boolean;
   show_models: boolean;
   show_cost: boolean;
+  /** Whether this page asked to be ranked against everyone else's. */
+  on_leaderboard: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -421,6 +442,7 @@ export interface PublicProfileWriteInput {
   enabled: boolean;
   show_models: boolean;
   show_cost: boolean;
+  on_leaderboard: boolean;
   written_at: string;
 }
 
@@ -580,6 +602,15 @@ export interface AccountState {
    * read must not be able to tell a handle that was turned off from one that never existed.
    */
   findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null>;
+  /**
+   * What the leaderboard's answer turns over on, read without touching the rollup.
+   *
+   * The board is one answer for everyone, so its validator is computed before the fold runs,
+   * the same way a public page's is. It has to move whenever the board would: a profile
+   * joining, leaving, or renaming moves the count and the newest `updated_at`, and an upload
+   * from any device of any listed Account moves the summed sync revision.
+   */
+  leaderboardVersionStamp(): Promise<LeaderboardVersionStamp>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
   getEntitlement(accountId: string): Promise<StoredEntitlement | null>;

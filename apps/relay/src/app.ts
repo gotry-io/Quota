@@ -27,6 +27,7 @@ import {
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
   identityProviderDisplayName,
+  LEADERBOARD_PERIOD,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
@@ -35,6 +36,7 @@ import {
   ModelCatalogSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  ProviderStatusResponseSchema,
   type PricingCatalog,
   PricingCatalogSchema,
   PublicProfileResponseSchema,
@@ -114,9 +116,16 @@ import {
 } from "./entitlement.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { LEADERBOARD_MAX_AGE_SECONDS, readLeaderboard } from "./leaderboard.ts";
+import { readProviderStatus } from "./provider-status.ts";
 import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
-import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
+import {
+  buildAccountUsage,
+  buildActivityDays,
+  buildActivityRhythm,
+  UsageSummaryLimitError,
+} from "./usage-summary.ts";
 
 /** Where a browser is sent to choose, or confirm, which Account it is signing in as. */
 const SIGN_IN_PATH = "/sign-in";
@@ -218,6 +227,10 @@ export interface RelayAppOptions {
   billing?: BillingBindings;
   /** Test override for the Usage fold/representation version in the activity ETag. */
   usageFoldVersion?: number;
+  /** Test override for official status-page fetches. Production uses global `fetch`. */
+  providerStatusFetch?: typeof fetch;
+  /** Test override for last-good status-page readings. Production uses `caches.default`. */
+  providerStatusCache?: Cache;
 }
 
 export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
@@ -245,6 +258,10 @@ function daysBefore(instant: Date, days: number): Date {
 
 function utcDate(instant: Date): string {
   return instant.toISOString().slice(0, 10);
+}
+
+function nextUtcDate(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + dayMilliseconds).toISOString().slice(0, 10);
 }
 
 export function createRelayApp(options: RelayAppOptions): Hono {
@@ -992,7 +1009,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const checkedAt = now();
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    if (!hasOnlyQueryKeys(context, ["from", "to", "detail"])) return invalidRequest(context);
+    if (!hasOnlyQueryKeys(context, ["from", "to", "detail", "tz"])) return invalidRequest(context);
     const range = UsageActivityRangeSchema.safeParse({
       from: context.req.query("from"),
       to: context.req.query("to"),
@@ -1000,9 +1017,15 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (!range.success) return invalidRequest(context);
     const detail = context.req.query("detail");
     const includeAgents = detail === "agents";
-    if (detail !== undefined && (!includeAgents || range.data.from !== range.data.to)) {
+    const includeHours = detail === "hours";
+    if (
+      detail !== undefined &&
+      ((!includeAgents && !includeHours) || (includeAgents && range.data.from !== range.data.to))
+    ) {
       return invalidRequest(context);
     }
+    const timezone = requestedTimezone(context);
+    if (timezone === null) return invalidRequest(context);
     // The stamp is usage-only: a quota snapshot must not move an activity ETag. Retention
     // deletes `usage_daily` without touching that stamp, so a range that reaches the cutoff
     // carries the cutoff date as its rollover — only then does the calendar move the ETag.
@@ -1020,6 +1043,20 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       limit: maximumAccountDailyRows,
     });
     if (daily.truncated) return resultLimit(context);
+    let rhythm: { hours_of_day: unknown; weekday_hours: unknown } | undefined;
+    if (includeHours) {
+      const hourly = await options.usageState.queryHourlyUsage(principal.account_id, {
+        from: `${range.data.from}T00:00:00Z`,
+        to: `${nextUtcDate(range.data.to)}T00:00:00Z`,
+        limit: maximumAccountDailyRows,
+      });
+      if (hourly.truncated) return resultLimit(context);
+      rhythm = buildActivityRhythm({
+        rows: hourly.rows,
+        catalog,
+        timezone,
+      });
+    }
     try {
       return context.json(
         AccountUsageActivityResponseSchema.parse({
@@ -1029,6 +1066,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             catalog,
             ...(includeAgents ? { modelCatalog } : {}),
           }),
+          ...(rhythm === undefined
+            ? {}
+            : { hours_of_day: rhythm.hours_of_day, weekday_hours: rhythm.weekday_hours }),
         }),
       );
     } catch (error) {
@@ -1311,6 +1351,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       enabled: update.profile.enabled,
       show_models: update.profile.show_models,
       show_cost: update.profile.show_cost,
+      on_leaderboard: update.profile.on_leaderboard,
       written_at: now().toISOString(),
     });
     if (written.outcome === "handle_taken") {
@@ -1322,6 +1363,43 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         profile: publicProfileView(written.profile),
       }),
     );
+  });
+
+  /**
+   * The board, to whoever asks.
+   *
+   * It is the second answer Relay gives with no principal, and the second a shared cache may
+   * hold: like a public page, what it says is the same for every reader. Only the profiles
+   * that asked to be ranked are on it, and only while their page is published, so going
+   * unlisted is one switch rather than taking a page down
+   * ([ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
+   * `period` names the one window the board has; anything else is a request for a board that
+   * does not exist.
+   */
+  app.get("/api/v6/public/leaderboard", async (context) => {
+    const checkedAt = now();
+    if (!hasOnlyQueryKeys(context, ["period"])) return invalidRequest(context);
+    const period = context.req.query("period");
+    if (period !== undefined && period !== LEADERBOARD_PERIOD) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "leaderboard-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const read = await readLeaderboard({
+      state: options.state,
+      usageState: options.usageState,
+      checkedAt,
+    });
+    context.header("ETag", read.etag);
+    context.header("Cache-Control", `public, max-age=${LEADERBOARD_MAX_AGE_SECONDS}`);
+    if (context.req.header("If-None-Match") === read.etag) return context.body(null, 304);
+    return context.json(await read.payload());
   });
 
   /**
@@ -1385,6 +1463,37 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       return context.body(null, 304);
     }
     return context.json(modelCatalog);
+  });
+
+  /**
+   * Official provider status pages, as public JSON.
+   *
+   * Catalog rows with `status_page.kind = statuspage_v2` are polled for `status.indicator` and
+   * `status.description` only. The request carries no credential and names no Account. A failed
+   * poll keeps the last reading in `caches.default`, or answers `unknown`.
+   */
+  app.get("/api/v2/providers/status", async (context) => {
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const checkedAt = now();
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "provider-status-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const body = ProviderStatusResponseSchema.parse(
+      await readProviderStatus({
+        fetch: options.providerStatusFetch ?? globalThis.fetch,
+        cache: options.providerStatusCache ?? workerCaches().default,
+        now: checkedAt,
+      }),
+    );
+    context.header("Cache-Control", "public, max-age=600");
+    return context.json(body);
   });
 
   // A request naming an API version this deployment does not serve comes from a caller
@@ -1834,6 +1943,7 @@ function publicProfileView(profile: PublicProfileRecord | null) {
     enabled: profile?.enabled ?? false,
     show_models: profile?.show_models ?? true,
     show_cost: profile?.show_cost ?? false,
+    on_leaderboard: profile?.on_leaderboard ?? false,
   };
 }
 
@@ -1947,6 +2057,11 @@ async function parseRawJSON(context: Context): Promise<unknown | Response> {
 
 function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean {
   return hasOnlyKeys(new URL(context.req.url).searchParams, allowed);
+}
+
+/** Workers `caches.default`. The DOM CacheStorage type this check also loads has no such field. */
+function workerCaches(): { default: Cache } {
+  return caches as unknown as { default: Cache };
 }
 
 /** Each key at most once, and every key one this route names. */

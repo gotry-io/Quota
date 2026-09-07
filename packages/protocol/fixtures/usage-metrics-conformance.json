@@ -403,5 +403,119 @@
         "unpriced_rows": 1
       }
     }
+  ],
+  "rhythm_cases": [
+    {
+      "name": "no hours name every bucket with no amount",
+      "hours": [],
+      "expected": {
+        "hours_of_day": {},
+        "weekday_hours": {}
+      }
+    },
+    {
+      "name": "one Monday afternoon lands in hour 14 and weekday 1",
+      "hours": [
+        {
+          "date": "2026-08-03",
+          "hour": 14,
+          "total_tokens": 100,
+          "cost_microusd": "5000"
+        }
+      ],
+      "expected": {
+        "hours_of_day": {
+          "14": { "total_tokens": 100, "cost_microusd": "5000" }
+        },
+        "weekday_hours": { "1": { "14": 100 } }
+      }
+    },
+    {
+      "name": "two Mondays at the same clock hour stack tokens and cost",
+      "hours": [
+        {
+          "date": "2026-08-03",
+          "hour": 14,
+          "total_tokens": 100,
+          "cost_microusd": "5000"
+        },
+        {
+          "date": "2026-08-10",
+          "hour": 14,
+          "total_tokens": 50,
+          "cost_microusd": "2500"
+        }
+      ],
+      "expected": {
+        "hours_of_day": {
+          "14": { "total_tokens": 150, "cost_microusd": "7500" }
+        },
+        "weekday_hours": { "1": { "14": 150 } }
+      }
+    },
+    {
+      "name": "Sunday night and Monday morning stay on their own weekdays",
+      "hours": [
+        {
+          "date": "2026-08-02",
+          "hour": 23,
+          "total_tokens": 10,
+          "cost_microusd": "100"
+        },
+        {
+          "date": "2026-08-03",
+          "hour": 0,
+          "total_tokens": 30,
+          "cost_microusd": "300"
+        }
+      ],
+      "expected": {
+        "hours_of_day": {
+          "0": { "total_tokens": 30, "cost_microusd": "300" },
+          "23": { "total_tokens": 10, "cost_microusd": "100" }
+        },
+        "weekday_hours": { "0": { "23": 10 }, "1": { "0": 30 } }
+      }
+    },
+    {
+      "name": "an hour with tokens but no priced row states no amount",
+      "hours": [
+        {
+          "date": "2026-08-08",
+          "hour": 9,
+          "total_tokens": 40,
+          "cost_microusd": null
+        }
+      ],
+      "expected": {
+        "hours_of_day": {
+          "9": { "total_tokens": 40, "cost_microusd": null }
+        },
+        "weekday_hours": { "6": { "9": 40 } }
+      }
+    },
+    {
+      "name": "a priced hour beside an unpriced one at the same clock keeps the priced amount",
+      "hours": [
+        {
+          "date": "2026-08-03",
+          "hour": 9,
+          "total_tokens": 10,
+          "cost_microusd": "100"
+        },
+        {
+          "date": "2026-08-10",
+          "hour": 9,
+          "total_tokens": 20,
+          "cost_microusd": null
+        }
+      ],
+      "expected": {
+        "hours_of_day": {
+          "9": { "total_tokens": 30, "cost_microusd": "100" }
+        },
+        "weekday_hours": { "1": { "9": 30 } }
+      }
+    }
   ]
 }

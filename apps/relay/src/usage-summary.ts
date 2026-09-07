@@ -2,12 +2,14 @@ import {
   type DatedUsageRow,
   foldPreparedUsageCacheSaved,
   foldPreparedUsageCosts,
+  foldUsageRhythm,
   type PreparedUsageCacheSaved,
   type PreparedUsageCosts,
   prepareUsageCacheSaved,
   prepareUsageCosts,
   resolveModel,
   resolveProvider,
+  type UsageRhythm,
 } from "@gotry-io/quota-model";
 import {
   type AccountUsage,
@@ -28,8 +30,13 @@ import {
   type UsageSummaryTotals,
   type UsageUnpricedItem,
 } from "@gotry-io/quota-protocol";
-import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
-import { LOCAL_PERIOD_KEYS, type LocalPeriodKey, type UsageDateWindow } from "./local-periods.ts";
+import type { StoredUsageDailyRow, StoredUsageHourlyRow } from "@gotry-io/relay-core";
+import {
+  LOCAL_PERIOD_KEYS,
+  localClockAt,
+  type LocalPeriodKey,
+  type UsageDateWindow,
+} from "./local-periods.ts";
 
 /**
  * Cost is resolved from the catalog and falls back to what a provider itself reported when the
@@ -87,6 +94,42 @@ export function buildAccountUsage(input: AccountUsageInput): AccountUsage {
       all: period(input.daily.map((_, index) => index)),
     }),
   );
+}
+
+/**
+ * The 24-hour and Sunday-first 7×24 rhythm of stored hours, on the caller's clock.
+ *
+ * Each stored UTC hour is placed on `timezone`, then facts that share a local date and hour
+ * are priced together and folded by the same rule the local service and QuotaPresentation
+ * answer.
+ */
+export function buildActivityRhythm(input: {
+  rows: readonly StoredUsageHourlyRow[];
+  catalog: PricingCatalog;
+  timezone: string;
+}): UsageRhythm {
+  const facts = input.rows.map(hourlyFact);
+  const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const groups = new Map<string, { date: string; hour: number; indexes: number[] }>();
+  for (const [index, row] of input.rows.entries()) {
+    const local = localClockAt(input.timezone, row.bucket_start_utc);
+    const key = `${local.date}|${local.hour}`;
+    const group = groups.get(key);
+    if (group) group.indexes.push(index);
+    else groups.set(key, { date: local.date, hour: local.hour, indexes: [index] });
+  }
+  const hourFacts = [...groups.values()].map((group) => ({
+    date: group.date,
+    hour: group.hour,
+    total_tokens: summaryTotals(facts, group.indexes).total_tokens,
+    cost_microusd: boundedFoldPreparedUsageCosts(prepared, group.indexes).amount_microusd,
+  }));
+  return foldUsageRhythm(hourFacts);
+}
+
+function hourlyFact(row: StoredUsageHourlyRow): DatedUsageRow {
+  const { bucket_start_utc, partial_hours: _partial, ...fact } = row;
+  return { ...fact, date: bucket_start_utc.slice(0, 10) };
 }
 
 /** One entry per UTC date that has Usage, in date order. */

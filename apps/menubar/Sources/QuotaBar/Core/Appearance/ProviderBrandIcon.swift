@@ -58,7 +58,13 @@ enum ProviderBrandAssets {
     ) {
       return appResource
     }
-    return Bundle.module.url(forResource: assetName, withExtension: "svg")
+    #if SWIFT_PACKAGE
+      // `swift test` runs these sources as a package, where the icons ride in Bundle.module
+      // rather than in an app bundle's Resources/BrandIcons.
+      return Bundle.module.url(forResource: assetName, withExtension: "svg")
+    #else
+      return nil
+    #endif
   }
 
   static func templateImage(named assetName: String) -> NSImage? {

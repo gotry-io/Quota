@@ -23,6 +23,7 @@ Read the relevant source before changing that area:
 | SvelteKit documents served through the Relay Worker | `docs/decisions/0011-sveltekit-document-worker.md` |
 | Freshness derived from the observation, not stamped on it | `docs/decisions/0017-derived-observation-freshness.md` |
 | Quota pace derived from the reading, and the one phrase every surface prints | `docs/decisions/0035-quota-pace-is-derived-from-the-reading.md` |
+| Quota history kept as local samples, folded once, and never uploaded | `docs/decisions/0042-quota-history-is-local-samples.md` |
 | One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
@@ -38,6 +39,8 @@ Read the relevant source before changing that area:
 | Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
 | Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
 | What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
+| The opt-in leaderboard, and what a place on it carries | `docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md` |
+| The public `quota` command, and why a reader is not a second service | `docs/decisions/0046-a-read-only-quota-command.md` |
 | Sessions are a local view of Usage source files | `docs/decisions/0038-sessions-are-a-local-view-of-files.md` |
 | Project attribution stays on This Mac | `docs/decisions/0039-project-attribution-stays-local.md` |
 | Client-folded Usage periods, the `usage_period` IPC operation, and the device-only budget | `docs/decisions/0040-a-period-is-folded-where-its-days-already-are.md` |
@@ -46,7 +49,9 @@ Read the relevant source before changing that area:
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
 | In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
 | The phone as a Device, and the paid-sync gate on what it uploads | `docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md` |
+| Relay's public provider status-page read | `docs/decisions/0044-relay-publishes-provider-status.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
+| One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
@@ -127,17 +132,19 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Use `@gotry-io/*` for TypeScript workspace packages and `workspace:*` for internal dependencies.
 - Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
   `Cargo.lock`; do not add npm, Yarn, or Bun lockfiles.
-- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point over
-  `packages/service`; keep it private: no command parser, socket listener, daemonization, or public
-  installation surface. The shared crate stays platform-neutral in style, but only macOS is built,
-  tested, and released.
+- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point that may
+  *write* over `packages/service`; keep it private: no command parser, socket listener,
+  daemonization, or public installation surface. The `quota` binary in the same crate is a reader —
+  it opens the disposable cache read-only, collects nothing, and touches no credential
+  (`docs/decisions/0046-a-read-only-quota-command.md`). Do not give it a second one. The shared
+  crate stays platform-neutral in style, but only macOS is built, tested, and released.
 - Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
 - Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
 - QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, and QuotaRelay. The iOS app's product name is Quota. The
-  bundled Rust service executable is a private QuotaBar implementation detail, never a public
-  command.
+  bundled Rust *service* executable is a private QuotaBar implementation detail, never a public
+  command; `quota` is the one public command, and it only reads.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
@@ -196,8 +203,10 @@ Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.bui
 - Local-state change: cover both stores. A damaged `cache.sqlite` must be rebuilt without touching
   identity; a damaged identity must make the device a new signed-out installation.
 - Quota iOS, `packages/apple-client`, or a QuotaBar change that crosses either: run
-  `pnpm generate:ios`, `swift test --package-path packages/apple-client`, `swift test --package-path
-  apps/menubar`, and the iOS Simulator build/tests from `apps/ios/README.md`.
+  `pnpm generate:ios`, `pnpm generate:menubar`, `swift test --package-path packages/apple-client`,
+  `swift test --package-path apps/menubar`, and the iOS Simulator build/tests from
+  `apps/ios/README.md`. A change to either app's `project.yml` re-generates and commits its
+  checked-in Xcode project in the same change.
 - Web change: run its type check, existing and component tests, e2e smoke, and production build;
   inspect desktop and mobile rendering when browser tooling is available.
 - Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets
