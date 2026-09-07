@@ -366,9 +366,12 @@ Body, in order:
    drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
    days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
    messages` beneath. The section footer names the calendar: **UTC days.** The All period has no
-   Daily section, and neither has any period a Rhythm — Relay stores hours on UTC keys and does not
-   fold a local clock, so the hour-of-day view is QuotaBar's alone
-   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+   Daily section.
+6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
+   and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
+   same five emerald Activity steps; 24 bars under it are the hour-of-day totals. The read is
+   `detail=hours` on the period's dates in this iPhone's zone
+   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
 7. Activity section, headed **Activity**:
    - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
      activity**.

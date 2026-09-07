@@ -66,7 +66,9 @@ const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
  */
 const MAXIMUM_LOCAL_USAGE_DAYS = 31;
 /** A day has 24 hours, and a rhythm names every one of them. */
-const HOURS_OF_DAY = 24;
+export const HOURS_OF_DAY = 24;
+/** Sunday-first weekdays, matching the activity heatmap. */
+export const WEEKDAYS_OF_WEEK = 7;
 const MAXIMUM_USAGE_COVERAGE_ITEMS = 2_048;
 export const MAXIMUM_UNPRICED_ITEMS = 100;
 const MAXIMUM_PRICING_ENTRIES = 4_096;
@@ -1221,7 +1223,7 @@ export type LocalUsageDay = z.infer<typeof LocalUsageDaySchema>;
  * Cost is the amount alone: a rhythm compares hours against each other, and the basis and
  * coverage that qualify an amount are already stated once for the period above it.
  */
-const LocalUsageHourOfDaySchema = z
+export const UsageHourOfDaySchema = z
   .object({
     hour: z
       .number()
@@ -1232,15 +1234,17 @@ const LocalUsageHourOfDaySchema = z
     cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
   })
   .strict();
-export type LocalUsageHourOfDay = z.infer<typeof LocalUsageHourOfDaySchema>;
+export type UsageHourOfDay = z.infer<typeof UsageHourOfDaySchema>;
+export type LocalUsageHourOfDay = UsageHourOfDay;
 
 /**
  * One period of this Mac's own Usage.
  *
- * `days` and `hours_of_day` describe a period bounded by two local midnights, so the three
- * trailing periods carry them and `all` — every retained day — does not: the per-day shape of
- * two years of history is what the activity heatmap answers, and folding it on every scan would
- * cost more than any reader asks for.
+ * `days` and `hours_of_day` are each optional. A local period bounded by two midnights carries
+ * both. An Account period may carry `hours_of_day` from the activity read without the per-day
+ * table, which stays on the UTC dates the activity chart already answers. `all` carries
+ * neither: two years of per-day shape is what the activity heatmap answers, and folding it on
+ * every scan would cost more than any reader asks for.
  */
 const LocalUsagePeriodSummarySchema = z
   .object({
@@ -1249,7 +1253,7 @@ const LocalUsagePeriodSummarySchema = z
     cache_saved: UsageCacheSavedSchema,
     agents: z.array(LocalUsageAgentSummarySchema).max(BillingAgentSchema.options.length),
     days: z.array(LocalUsageDaySchema).max(MAXIMUM_LOCAL_USAGE_DAYS).optional(),
-    hours_of_day: z.array(LocalUsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
+    hours_of_day: z.array(UsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
     models_truncated: z.literal(true).optional(),
   })
   .strict()
@@ -1267,13 +1271,6 @@ const LocalUsagePeriodSummarySchema = z
         code: "custom",
         path: ["hours_of_day"],
         message: "Hours of the day must name 0 through 23 in order.",
-      });
-    }
-    if ((summary.days === undefined) !== (summary.hours_of_day === undefined)) {
-      context.addIssue({
-        code: "custom",
-        path: ["hours_of_day"],
-        message: "A period bounded by local midnights carries both folds, or neither.",
       });
     }
   });
@@ -1541,12 +1538,49 @@ export const UsageActivityDaySchema = z
   .strict();
 export type UsageActivityDay = z.infer<typeof UsageActivityDaySchema>;
 
-export const AccountUsageActivityResponseSchema = z
+const UsageWeekdayHoursSchema = z
+  .array(z.array(SafeNonnegativeIntegerSchema).length(HOURS_OF_DAY))
+  .length(WEEKDAYS_OF_WEEK);
+
+/**
+ * The activity chart an Account read answers: up to 400 UTC days of totals, optionally one
+ * day's agent tree, and optionally the 24-hour and weekday×hour rhythm of the asked range.
+ *
+ * `hours_of_day` and `weekday_hours` travel together when the read asked `detail=hours`. Hours
+ * are the caller's clock (`tz`, default UTC) for every stored hour whose UTC date lies in
+ * `from`…`to`. A clock hour nothing reached states no amount.
+ */
+const AccountUsageActivityResponseObjectSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
     days: z.array(UsageActivityDaySchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+    hours_of_day: z.array(UsageHourOfDaySchema).length(HOURS_OF_DAY).optional(),
+    weekday_hours: UsageWeekdayHoursSchema.optional(),
   })
   .strict();
+
+function refineActivityRhythm(
+  response: z.infer<typeof AccountUsageActivityResponseObjectSchema>,
+  context: z.RefinementCtx,
+): void {
+  if ((response.hours_of_day === undefined) !== (response.weekday_hours === undefined)) {
+    context.addIssue({
+      code: "custom",
+      path: ["hours_of_day"],
+      message: "Hours of the day and weekday hours travel together.",
+    });
+  }
+  if (response.hours_of_day?.some((hour, index) => hour.hour !== index)) {
+    context.addIssue({
+      code: "custom",
+      path: ["hours_of_day"],
+      message: "Hours of the day must name 0 through 23 in order.",
+    });
+  }
+}
+
+export const AccountUsageActivityResponseSchema =
+  AccountUsageActivityResponseObjectSchema.superRefine(refineActivityRhythm);
 
 /**
  * The handle a public profile is published under, which is the whole address of that page.
@@ -1888,9 +1922,10 @@ export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
 export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
 export type UsageSummaryTotalsRead = z.infer<typeof UsageSummaryTotalsReadSchema>;
 
-export const AccountUsageActivityResponseReadSchema = AccountUsageActivityResponseSchema.extend({
-  days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
-}).loose();
+export const AccountUsageActivityResponseReadSchema =
+  AccountUsageActivityResponseObjectSchema.extend({
+    days: z.array(UsageActivityDayReadSchema).max(MAXIMUM_USAGE_ACTIVITY_DAYS),
+  }).loose();
 export type AccountUsageActivityResponseRead = z.infer<
   typeof AccountUsageActivityResponseReadSchema
 >;

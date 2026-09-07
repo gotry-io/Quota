@@ -2522,7 +2522,19 @@ impl NativeBackend {
             let range = span
                 .map(|span| span.dates)
                 .unwrap_or_else(|| (today.clone(), today.clone()));
-            if let Ok(detail) = account_usage_detail(value, &range) {
+            if let Ok(mut detail) = account_usage_detail(value, &range) {
+                if period != UsagePeriod::All
+                    && let Ok(activity) = self.account.account_usage_hours(
+                        &range.0,
+                        &range.1,
+                        &timezone,
+                        &AtomicBool::new(false),
+                    )
+                    && let Some(hours) = activity.get("hours_of_day").cloned()
+                    && let Some(usage) = detail.get_mut("usage")
+                {
+                    usage["hours_of_day"] = hours;
+                }
                 periods.push((period, detail));
             }
         }
@@ -4701,8 +4713,14 @@ mod tests {
                             .expect("relay timeout");
                         let mut request = [0_u8; 8_192];
                         let read = stream.read(&mut request).unwrap_or(0);
-                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
-                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                        let head = String::from_utf8_lossy(&request[..read]).into_owned();
+                        recorded.push(head.clone());
+                        let body = if head.contains("/api/v6/account/usage/activity") {
+                            activity_hours_response()
+                        } else {
+                            responses.next().unwrap_or_default()
+                        };
+                        let _ = stream.write_all(body.as_bytes());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(2))
@@ -4743,14 +4761,20 @@ mod tests {
                             .expect("relay timeout");
                         let mut request = [0_u8; 8_192];
                         let read = stream.read(&mut request).unwrap_or(0);
-                        recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                        let head = String::from_utf8_lossy(&request[..read]).into_owned();
+                        recorded.push(head.clone());
                         {
                             let (lock, cond) = arrived.as_ref();
                             *lock.lock().expect("gate") = true;
                             cond.notify_all();
                         }
                         std::thread::sleep(delay);
-                        let _ = stream.write_all(responses.next().unwrap_or_default().as_bytes());
+                        let body = if head.contains("/api/v6/account/usage/activity") {
+                            activity_hours_response()
+                        } else {
+                            responses.next().unwrap_or_default()
+                        };
+                        let _ = stream.write_all(body.as_bytes());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(2))
@@ -4808,6 +4832,25 @@ mod tests {
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
         );
         session
+    }
+
+    fn activity_hours_response() -> String {
+        let hours: Vec<Value> = (0..24)
+            .map(|hour| {
+                json!({
+                    "hour": hour,
+                    "total_tokens": 0,
+                    "cost_microusd": null
+                })
+            })
+            .collect();
+        let weekday = vec![vec![0u64; 24]; 7];
+        relay_json(&json!({
+            "protocol_version": 6,
+            "days": [],
+            "hours_of_day": hours,
+            "weekday_hours": weekday
+        }))
     }
 
     fn summary_requests(sent: &[String]) -> usize {
@@ -5071,7 +5114,11 @@ mod tests {
         assert_eq!(updates.published(), vec![account.clone()]);
 
         let sent = relay_server.finish();
-        assert_eq!(sent.len(), 4, "{sent:?}");
+        let accounted: Vec<_> = sent
+            .iter()
+            .filter(|head| !head.contains("/api/v6/account/usage/activity"))
+            .collect();
+        assert_eq!(accounted.len(), 4, "{sent:?}");
         assert!(
             sent[3].starts_with("GET /api/v6/account/summary"),
             "{}",

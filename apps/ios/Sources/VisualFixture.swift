@@ -257,8 +257,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
         switch self {
         case .activityLoading:
           model.activityChart = .loading
+          model.activityRhythm = .loading
         case .activityFailed:
           model.activityChart = .failed
+          model.activityRhythm = .failed
         case .activityDayEmpty:
           let date = UsageActivityCalendar.addDays(
             -3,
@@ -1159,7 +1161,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     func fetchUsageActivity(
       from: String,
       to: String,
-      detail: ActivityDetail?
+      detail: ActivityDetail?,
+      timeZone: String?
     ) async -> AccountActivityResult {
       if from == to {
         let base = days.first { $0.date == from } ?? UsageActivityChart.emptyDay(date: from)
@@ -1174,9 +1177,37 @@ enum VisualFixture: String, CaseIterable, Sendable {
           partial: base.partial,
           agents: detail == .agents ? agents : nil
         )
-        return .activity(AccountUsageActivityResponse(days: [day]))
+        return .activity(
+          AccountUsageActivityResponse(
+            days: [day],
+            hoursOfDay: detail == .hours ? hours : nil,
+            weekdayHours: detail == .hours ? weekdayHours : nil
+          )
+        )
       }
-      return .activity(AccountUsageActivityResponse(days: days))
+      return .activity(
+        AccountUsageActivityResponse(
+          days: days,
+          hoursOfDay: detail == .hours ? hours : nil,
+          weekdayHours: detail == .hours ? weekdayHours : nil
+        )
+      )
+    }
+
+    private var hours: [QuotaWire.UsageHourOfDay] {
+      let weights = [0, 0, 0, 0, 0, 1, 3, 6, 9, 12, 14, 13, 8, 11, 15, 13, 10, 7, 5, 4, 3, 2, 1, 0]
+      let sum = weights.reduce(0, +)
+      let total = days.reduce(0) { $0 + $1.totals.totalTokens }
+      return weights.enumerated().map { hour, weight in
+        QuotaWire.UsageHourOfDay(hour: hour, totalTokens: sum > 0 ? total * weight / sum : 0, costMicrousd: nil)
+      }
+    }
+
+    private var weekdayHours: [[Int]] {
+      let weights = [0.15, 1.0, 1.1, 1.05, 0.95, 0.55, 0.2]
+      return weights.map { weight in
+        hours.map { Int(Double($0.totalTokens) * weight) }
+      }
     }
   }
 

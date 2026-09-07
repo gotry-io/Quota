@@ -5,10 +5,17 @@ import type {
   DatedUsageRow,
   PricingCatalog,
   UsageCacheSaved,
+  UsageHourOfDay,
   UsageSummaryTotals,
 } from "@gotry-io/quota-protocol";
+import { HOURS_OF_DAY, WEEKDAYS_OF_WEEK } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
-import { calculateUsageCacheSaved, usageCacheHitBasisPoints } from "../src/index.ts";
+import {
+  calculateUsageCacheSaved,
+  foldUsageRhythm,
+  type UsageRhythmHourFact,
+  usageCacheHitBasisPoints,
+} from "../src/index.ts";
 
 type MetricsConformanceFixture = {
   catalogs: Record<string, PricingCatalog>;
@@ -24,6 +31,14 @@ type MetricsConformanceFixture = {
     catalog: string | null;
     rows: string[];
     expected: UsageCacheSaved;
+  }>;
+  rhythm_cases: Array<{
+    name: string;
+    hours: UsageRhythmHourFact[];
+    expected: {
+      hours_of_day: Record<string, { total_tokens: number; cost_microusd: string | null }>;
+      weekday_hours: Record<string, Record<string, number>>;
+    };
   }>;
 };
 
@@ -53,4 +68,36 @@ describe("usage metric conformance", () => {
       );
     }
   });
+
+  it("answers every rhythm the shared fixture names", () => {
+    expect(fixture.rhythm_cases.length).toBeGreaterThan(1);
+    for (const testCase of fixture.rhythm_cases) {
+      const observed = foldUsageRhythm(testCase.hours);
+      expect(observed.hours_of_day, testCase.name).toStrictEqual(
+        expandHoursOfDay(testCase.expected.hours_of_day),
+      );
+      expect(observed.weekday_hours, testCase.name).toStrictEqual(
+        expandWeekdayHours(testCase.expected.weekday_hours),
+      );
+    }
+  });
 });
+
+function expandHoursOfDay(
+  named: Record<string, { total_tokens: number; cost_microusd: string | null }>,
+): UsageHourOfDay[] {
+  return Array.from({ length: HOURS_OF_DAY }, (_, hour) => {
+    const cell = named[String(hour)];
+    return {
+      hour,
+      total_tokens: cell?.total_tokens ?? 0,
+      cost_microusd: cell?.cost_microusd ?? null,
+    };
+  });
+}
+
+function expandWeekdayHours(named: Record<string, Record<string, number>>): number[][] {
+  return Array.from({ length: WEEKDAYS_OF_WEEK }, (_, weekday) =>
+    Array.from({ length: HOURS_OF_DAY }, (_, hour) => named[String(weekday)]?.[String(hour)] ?? 0),
+  );
+}

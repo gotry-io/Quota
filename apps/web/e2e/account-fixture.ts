@@ -571,6 +571,32 @@ export function screenshotAccountActivity(from: string, to: string, detailed = f
   return parsed.data;
 }
 
+const hourWeights = [0, 0, 0, 0, 0, 1, 3, 6, 9, 12, 14, 13, 8, 11, 15, 13, 10, 7, 5, 4, 3, 2, 1, 0];
+
+export function screenshotAccountRhythm(from: string, to: string): unknown {
+  const days = screenshotAccountActivity(from, to) as {
+    protocol_version: number;
+    days: Array<{ totals: { total_tokens: number } }>;
+  };
+  const total = days.days.reduce((sum, day) => sum + day.totals.total_tokens, 0);
+  const sum = hourWeights.reduce((left, right) => left + right, 0);
+  const hours_of_day = hourWeights.map((weight, hour) => ({
+    hour,
+    total_tokens: sum > 0 ? Math.floor((total * weight) / sum) : 0,
+    cost_microusd: null as string | null,
+  }));
+  const weekdayWeights = [0.15, 1, 1.1, 1.05, 0.95, 0.55, 0.2];
+  const weekday_hours = weekdayWeights.map((weight) =>
+    hours_of_day.map((hour) => Math.floor(hour.total_tokens * weight)),
+  );
+  const payload = { ...days, hours_of_day, weekday_hours };
+  const parsed = AccountUsageActivityResponseReadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`screenshotAccountRhythm failed schema: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
 export function screenshotAccountActivityDay(date: string): unknown {
   const generated = activityDay(date, true);
   const payload = {

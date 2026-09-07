@@ -1252,6 +1252,92 @@ mod tests {
     }
 
     #[test]
+    fn rhythm_matches_shared_fixture() {
+        let root = metrics_fixture();
+        let cases = root
+            .get("rhythm_cases")
+            .and_then(Value::as_array)
+            .expect("rhythm cases");
+        assert!(cases.len() > 1);
+        for case in cases {
+            let name = case.get("name").and_then(Value::as_str).expect("case name");
+            let hours: Vec<crate::usage::UsageRhythmHourFact> = case
+                .get("hours")
+                .and_then(Value::as_array)
+                .expect("rhythm hours")
+                .iter()
+                .map(|value| crate::usage::UsageRhythmHourFact {
+                    date: value
+                        .get("date")
+                        .and_then(Value::as_str)
+                        .expect("date")
+                        .to_owned(),
+                    hour: value.get("hour").and_then(Value::as_u64).expect("hour") as u8,
+                    total_tokens: value
+                        .get("total_tokens")
+                        .and_then(Value::as_u64)
+                        .expect("tokens"),
+                    cost_microusd: value
+                        .get("cost_microusd")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                })
+                .collect();
+            let rhythm = crate::usage::fold_usage_rhythm(&hours).expect(name);
+            let expected = case.get("expected").expect("expected rhythm");
+            let hours_named = expected
+                .get("hours_of_day")
+                .and_then(Value::as_object)
+                .expect("expected hours");
+            assert_eq!(
+                rhythm.hours_of_day.len(),
+                crate::usage::HOURS_OF_DAY,
+                "{name}"
+            );
+            for (index, hour) in rhythm.hours_of_day.iter().enumerate() {
+                assert_eq!(hour.hour as usize, index, "{name}");
+                let named = hours_named.get(&index.to_string());
+                let tokens = named
+                    .and_then(|value| value.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let cost = named
+                    .and_then(|value| value.get("cost_microusd"))
+                    .and_then(Value::as_str);
+                assert_eq!(hour.total_tokens, tokens, "{name} hour {index}");
+                assert_eq!(
+                    hour.cost_microusd.as_deref(),
+                    cost,
+                    "{name} hour {index} cost"
+                );
+            }
+            let weekday_named = expected
+                .get("weekday_hours")
+                .and_then(Value::as_object)
+                .expect("expected weekday hours");
+            assert_eq!(
+                rhythm.weekday_hours.len(),
+                crate::usage::WEEKDAYS_OF_WEEK,
+                "{name}"
+            );
+            for (weekday, row) in rhythm.weekday_hours.iter().enumerate() {
+                assert_eq!(row.len(), crate::usage::HOURS_OF_DAY, "{name}");
+                let named_row = weekday_named.get(&weekday.to_string());
+                for (hour, tokens) in row.iter().enumerate() {
+                    let expected_tokens = named_row
+                        .and_then(|value| value.get(&hour.to_string()))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    assert_eq!(
+                        *tokens, expected_tokens,
+                        "{name} weekday {weekday} hour {hour}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cache_saving_matches_shared_fixture() {
         let root = metrics_fixture();
         let cases = root

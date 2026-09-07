@@ -30,6 +30,10 @@ struct UsageView: View {
       guard model.selectedTab == .usage else { return }
       await model.loadActivity()
     }
+    .task(id: "\(model.selectedTab)-\(model.usagePeriodTitle)") {
+      guard model.selectedTab == .usage else { return }
+      await model.loadRhythm()
+    }
     .sheet(item: $model.activityDaySheet) { _ in
       UsageDayDetailSheet(model: model)
     }
@@ -90,6 +94,9 @@ struct UsageView: View {
       if model.selectedTab == .usage {
         if UsageDailyFold.hasUsage(dailyRows) {
           UsageDailySection(rows: dailyRows)
+        }
+        if case .loaded(let hours, let weekdays) = model.activityRhythm {
+          UsageRhythmSection(hoursOfDay: hours, weekdayHours: weekdays)
         }
         UsageActivitySection(model: model)
         UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)

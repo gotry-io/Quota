@@ -1499,6 +1499,79 @@ footer {
   text-align: left;
 }
 
+.usage-rhythm {
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-rhythm-heat {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.usage-rhythm-weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  gap: 3px;
+  color: var(--body);
+  font-size: 10px;
+  line-height: 12px;
+}
+
+.usage-rhythm-grid {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  grid-template-rows: repeat(7, 12px);
+  gap: 3px;
+}
+
+.usage-rhythm-cell {
+  display: block;
+  min-width: 0;
+  border-radius: 2px;
+  background: var(--activity-0);
+}
+
+.usage-rhythm-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 36px;
+  margin-top: 12px;
+}
+
+.usage-rhythm-column {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.usage-rhythm-bar {
+  display: block;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+.usage-rhythm-bar.empty {
+  opacity: 0.12;
+}
+
+.usage-rhythm-hours {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  margin-top: 4px;
+  color: var(--body);
+  font-size: 10px;
+}
+
 /* Models: the three largest, and each provider's share of the period. */
 .usage-top-models {
   display: grid;
