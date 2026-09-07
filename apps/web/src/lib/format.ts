@@ -63,7 +63,8 @@ export function costBasisLabel(cost: CostView): string {
  * `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of age
  * thresholds, phrases, and when the no-reset phrase prints. How a future refill is named is
  * `reset-copy-conformance.json`. Remaining copy is `remaining-copy-conformance.json`. This file,
- * `packages/quota-model`, and `packages/apple-shared` all answer those files.
+ * `packages/quota-model`, and `packages/apple-shared` all answer those files, and
+ * `packages/service` answers the reset and remaining ones for the `quota` command.
  */
 export const NO_RESET_TIME_COPY = "No reset time reported";
 export const NOT_CHECKED_COPY = "Not checked";

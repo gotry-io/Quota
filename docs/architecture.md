@@ -33,9 +33,12 @@ links to it rather than restating it.
 
 The bundled Rust executable is not a separate product; QuotaBar is its parent, transport peer,
 scheduler lifetime, and release boundary. `packages/service` holds the shared provider, Usage,
-pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only entry point: the
-private macOS stdio binary. The crate itself stays platform-neutral, and its owner-only
-configuration and state live under `~/.config/quota/`.
+pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only writing entry point:
+the private macOS stdio binary. The crate's second binary, `quota`, is the public command shipped
+beside it in the same bundle; it opens the disposable cache read-only, collects nothing, and
+touches no credential, so it is a reader over the same state rather than a second service
+([ADR 0046](decisions/0046-a-read-only-quota-command.md)). The crate itself stays platform-neutral,
+and its owner-only configuration and state live under `~/.config/quota/`.
 
 An Account owns the channels it is reached through — GitHub today, with Apple and Email registering
 against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the

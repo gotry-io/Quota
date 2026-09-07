@@ -112,6 +112,14 @@ for (const appearance of appearances) {
       await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
       await shot(page, `web-usage-${appearance}-desktop.png`);
     });
+
+    test(`leaderboard ${appearance} desktop`, async ({ page }) => {
+      await page.goto("/leaderboard");
+      await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+      await expect(page.locator("table.leaderboard tbody tr")).toHaveCount(10);
+      await expect(page.locator("tr.leaderboard-you")).toHaveCount(1);
+      await shot(page, `web-leaderboard-${appearance}-desktop.png`);
+    });
   });
 
   test.describe(`${appearance} mobile`, () => {

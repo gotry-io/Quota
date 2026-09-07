@@ -8,10 +8,11 @@ subscription quota and privacy-preserving Usage together across a user's devices
   Home Screen and Lock Screen widgets, and writes nothing to Relay. Settings › Providers also signs
   in to a provider's own web session inside the app; those cookies stay in that iPhone's Keychain.
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
-  durable state, account sync, and scheduling.
+  durable state, account sync, and scheduling, plus the read-only `quota` command it bundles beside
+  it ([ADR 0046](docs/decisions/0046-a-read-only-quota-command.md)).
 - **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
-- **Quota Web** — public site, GitHub sign-in, account dashboard, and the opt-in public Usage page
-  at `quota.gotry.io/u/<handle>`.
+- **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
+  `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
 
 Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
 Cursor, Gemini CLI, and GitHub Copilot; local Usage analytics supports Codex, Claude Code, Grok,
@@ -162,8 +163,11 @@ background as well as on screen.
 An Account can publish one read-only page of its Usage totals at `quota.gotry.io/u/<handle>`, with
 a saved share card drawn in the browser. It carries tokens, messages, optional API-equivalent cost,
 provider and model shares, and a year of activity bands — never remaining quota, devices,
-providers, or the account behind it, and there is no leaderboard
-([ADR 0037](docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
+providers, or the account behind it
+([ADR 0037](docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)). A published page may
+also ask to be ranked at `quota.gotry.io/leaderboard`, which lists a handle, a 30-day token and
+message total, and a place. That switch is off until it is asked for
+([ADR 0045](docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
 
 Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
 the last parse stopped, local hourly facts a scan recomputes only where records moved,

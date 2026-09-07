@@ -19,6 +19,7 @@ import {
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
+  LeaderboardResponseSchema,
   LocalUsageReportSchema,
   LogoutResponseSchema,
   ModelCatalogSchema,
@@ -64,6 +65,7 @@ const AccountHttpPayloadSchema = z.union([
   PublicProfileUpdateRequestSchema,
   PublicProfileResponseSchema,
   PublicUsageResponseSchema,
+  LeaderboardResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

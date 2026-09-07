@@ -27,6 +27,7 @@ import {
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
   identityProviderDisplayName,
+  LEADERBOARD_PERIOD,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
@@ -114,6 +115,7 @@ import {
 } from "./entitlement.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { LEADERBOARD_MAX_AGE_SECONDS, readLeaderboard } from "./leaderboard.ts";
 import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
@@ -1311,6 +1313,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       enabled: update.profile.enabled,
       show_models: update.profile.show_models,
       show_cost: update.profile.show_cost,
+      on_leaderboard: update.profile.on_leaderboard,
       written_at: now().toISOString(),
     });
     if (written.outcome === "handle_taken") {
@@ -1322,6 +1325,43 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         profile: publicProfileView(written.profile),
       }),
     );
+  });
+
+  /**
+   * The board, to whoever asks.
+   *
+   * It is the second answer Relay gives with no principal, and the second a shared cache may
+   * hold: like a public page, what it says is the same for every reader. Only the profiles
+   * that asked to be ranked are on it, and only while their page is published, so going
+   * unlisted is one switch rather than taking a page down
+   * ([ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
+   * `period` names the one window the board has; anything else is a request for a board that
+   * does not exist.
+   */
+  app.get("/api/v6/public/leaderboard", async (context) => {
+    const checkedAt = now();
+    if (!hasOnlyQueryKeys(context, ["period"])) return invalidRequest(context);
+    const period = context.req.query("period");
+    if (period !== undefined && period !== LEADERBOARD_PERIOD) return invalidRequest(context);
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "leaderboard-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const read = await readLeaderboard({
+      state: options.state,
+      usageState: options.usageState,
+      checkedAt,
+    });
+    context.header("ETag", read.etag);
+    context.header("Cache-Control", `public, max-age=${LEADERBOARD_MAX_AGE_SECONDS}`);
+    if (context.req.header("If-None-Match") === read.etag) return context.body(null, 304);
+    return context.json(await read.payload());
   });
 
   /**
@@ -1834,6 +1874,7 @@ function publicProfileView(profile: PublicProfileRecord | null) {
     enabled: profile?.enabled ?? false,
     show_models: profile?.show_models ?? true,
     show_cost: profile?.show_cost ?? false,
+    on_leaderboard: profile?.on_leaderboard ?? false,
   };
 }
 

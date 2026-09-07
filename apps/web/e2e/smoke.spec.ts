@@ -682,3 +682,36 @@ test("Support names the Notifications anchor", async ({ page }) => {
     ),
   ).toBeVisible();
 });
+
+test("the leaderboard ranks handles, links each to its page, and points out your row", async ({
+  page,
+}) => {
+  await page.goto("/leaderboard");
+  await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+
+  const rows = page.locator("table.leaderboard tbody tr");
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.first().getByRole("link", { name: "@octocat" })).toHaveAttribute(
+    "href",
+    "/u/octocat",
+  );
+  await expect(page.locator("tr.leaderboard-you")).toHaveCount(1);
+  await expect(page.locator("tr.leaderboard-you .leaderboard-you-badge")).toHaveText("You");
+
+  // A published page wears no account chrome, and the board is a published page.
+  await expect(page.getByRole("link", { name: "Get Quota" })).toBeVisible();
+  await expect(page.getByText("octocat", { exact: true })).toHaveCount(0);
+
+  const violations = seriousOrCritical(
+    (await new AxeBuilder({ page }).analyze()).violations as never,
+  );
+  expect(violations).toEqual([]);
+});
+
+test("the footer offers the leaderboard from the landing page", async ({ page }) => {
+  await page.goto("/");
+  const link = page.locator("footer").getByRole("link", { name: "Leaderboard" });
+  await expect(link).toHaveAttribute("href", "/leaderboard");
+  await link.click();
+  await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+});

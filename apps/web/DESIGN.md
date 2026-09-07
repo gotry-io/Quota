@@ -69,8 +69,8 @@ The site has these routes:
    labeled Draft until review. Privacy states what Relay collects and does not collect, who
    processes it, how long it is kept, and how to delete it, from
    [`docs/security.md`](../../docs/security.md).
-5. `/u/<handle>` is a published Usage page, and the only route that renders account data with no
-   session. Its header is the brand plus one **Get Quota** action: no viewer name, no sign-in
+5. `/u/<handle>` is a published Usage page, and one of the two routes that render account data with
+   no session. Its header is the brand plus one **Get Quota** action: no viewer name, no sign-in
    prompt beside someone else's numbers, and no Account nav. The page is a heading (`@handle`,
    when it was published, and **Coding-agent Usage only**) with a **Share** action, then Last 30
    days and All time as three-cell stat rows (Tokens, Messages, and API-equivalent cost when the
@@ -85,7 +85,17 @@ The site has these routes:
    The page never prints a device, an agent, a provider sign-in, a plan, a remaining figure, or
    the account label
    ([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)).
-6. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
+6. `/leaderboard` is the other route rendered with no session, and wears the same published
+   header. It is a heading (**Leaderboard**, the window, when it was folded, and **Everyone here
+   asked to be listed**), then one table — rank, handle, tokens, messages — of at most a hundred
+   rows, each handle linking to `/u/<handle>`, then one footnote saying what the board does not
+   rank and where the switch is. The reader's own row is the one thing that differs per reader:
+   it takes the brand surface and a **You** badge. Numbers are tabular, the table scrolls inside
+   its own container rather than the page, and an empty board says **Nobody is listed yet.**
+   There is no cost, model, provider, device, or account label anywhere on it
+   ([ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)). The site
+   footer links it from every page.
+7. `/my` is the signed-in account shell. The site header carries `<nav aria-label="Account">`
    with four routes when the viewer is signed in and the path is under `/my`; the current item
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
    `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
@@ -134,7 +144,8 @@ The site has these routes:
      delete region and focuses its heading. Legal links Privacy, Terms, and Support. Sign out
      stays in the header account menu. Public profile is the handle field (prefixed
      `quota.gotry.io/u/`), **Publish this page**, **Show which models**, **Show API-equivalent
-     cost**, one **Save**, and — once published — **Open page** and **Copy link**. A handle the
+     cost**, **Show on the leaderboard** (disabled until the page is published, and cleared with
+     it), one **Save**, and — once published — **Open page** and **Copy link**. A handle the
      contract refuses is named before the request is made; one another Account holds reads **That
      handle is already taken.** Switching the page off keeps the handle.
    Quota remaining has no "left"/"remaining" suffix; usd/credits remaining of a cap use
@@ -164,8 +175,9 @@ The site has these routes:
    is a single redirect to `/my`. Account data is never published without a session.
 
 The document `<head>` is per-route. `/` publishes the public title, description, canonical URL
-`https://quota.gotry.io/`, and Open Graph tags. `/u/<handle>` publishes its own canonical URL and
-Open Graph tags. `/my` is `noindex, nofollow` and has no canonical URL.
+`https://quota.gotry.io/`, and Open Graph tags. `/u/<handle>` and `/leaderboard` publish their own
+canonical URL and Open Graph tags, each built from the same summary sentence the page states.
+`/my` is `noindex, nofollow` and has no canonical URL.
 
 Signing in is the only account action the marketing pages take. There is no Relay selection,
 pairing group, owner capability, provider-secret form, server administration, or self-hosted setup
@@ -256,8 +268,8 @@ The landing is six blocks, in this order. It does not use slogan sections.
    coming soon` while that default holds. The type may carry optional `url` and `actionLabel`;
    render **Join TestFlight** or **View in App Store** only when `url` is set. Do not present a
    dead store link.
-6. **Footer.** `© {year} GoTry IO · MIT`, links for Download, Support, Privacy, Terms, GitHub,
-   and Account, and the appearance toggle in a controls group. The toggle keeps a visible
+6. **Footer.** `© {year} GoTry IO · MIT`, links for Leaderboard, Download, Support, Privacy,
+   Terms, GitHub, and Account, and the appearance toggle in a controls group. The toggle keeps a visible
    focus ring and a 42 px target.
 
 ## Account dashboard
@@ -405,7 +417,7 @@ couldn't load this. Retry.** — at most one next action.
 Before shipping a Web change:
 
 - run the package check and production build;
-- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/u/<handle>`, `/my`,
+- inspect `/`, `/download`, `/support`, `/privacy`, `/terms`, `/u/<handle>`, `/leaderboard`, `/my`,
   `/my/subscriptions/<sel>`, `/my/usage`, `/my/devices`, `/my/settings` (and the shipped `/app`
   redirect) at desktop and narrow mobile widths in both light and dark appearance when browser
   tooling is available;

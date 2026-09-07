@@ -1,6 +1,6 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
+import { type LeaderboardResponse, MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { memoizeWebSessionAuthorization } from "../src/account/web-session.ts";
@@ -23,6 +23,14 @@ declare module "vitest" {
 }
 
 const now = new Date("2026-08-10T00:00:00.000Z");
+
+/** These cases are about the SSR envelope, not the board, so the board they carry is empty. */
+const emptyBoard: LeaderboardResponse = {
+  protocol_version: 6,
+  period: "30d",
+  generated_at: now.toISOString(),
+  entries: [],
+};
 
 beforeEach(async () => {
   await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
@@ -139,6 +147,9 @@ describe("document SSR observability", () => {
       async readPublicProfile() {
         return null;
       },
+      async readLeaderboard() {
+        return { board: emptyBoard, viewerHandle: null };
+      },
     });
     expect(await memoized.hasViewer()).toBe(false);
     expect(await memoized.port.getViewer(new Headers())).toEqual({ displayLabel: "octocat" });
@@ -160,6 +171,9 @@ describe("document SSR observability", () => {
       },
       async readPublicProfile() {
         return null;
+      },
+      async readLeaderboard() {
+        return { board: emptyBoard, viewerHandle: null };
       },
     });
     await expect(memoized.port.getViewer(new Headers())).rejects.toThrow(
@@ -187,6 +201,9 @@ describe("document SSR observability", () => {
           },
           async readPublicProfile() {
             return null;
+          },
+          async readLeaderboard() {
+            return { board: emptyBoard, viewerHandle: null };
           },
         },
         async (document) => {
@@ -228,6 +245,9 @@ describe("document SSR observability", () => {
           },
           async readPublicProfile() {
             return null;
+          },
+          async readLeaderboard() {
+            return { board: emptyBoard, viewerHandle: null };
           },
         },
         async (document) => {

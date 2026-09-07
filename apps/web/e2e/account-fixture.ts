@@ -480,7 +480,9 @@ export function screenshotAccountSummary(): unknown {
       product_id: "quota_sync_monthly",
       store: "app_store",
       stale: false,
+      checked_at: isoFrom(now, -3_600_000),
     },
+    purchase: { web_url: "https://pay.rev.cat/token/account_visual_octocat" },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);
