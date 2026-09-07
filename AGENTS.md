@@ -37,6 +37,7 @@ Read the relevant source before changing that area:
 | The Usage fold of an Account summary is stored, keyed by what it depends on | `docs/decisions/0031-the-usage-fold-is-stored.md` |
 | An Account owns its identities, and every sign-in confirms which Account it is | `docs/decisions/0032-an-account-owns-its-identities.md` |
 | Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
+| Quota Pro is one product, and a redemption code is a grant | `docs/decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md` |
 | Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
 | What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
 | The opt-in leaderboard, and what a place on it carries | `docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md` |

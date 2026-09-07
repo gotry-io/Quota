@@ -5,6 +5,9 @@
 - Updated 2026-09-07 by [ADR 0042](0042-quota-history-is-local-samples.md): quota history is
   local samples, so it is outside what paid sync buys. No sample is uploaded, gated, or stored
   by Relay, and a signed-out device draws the same lines as a subscribed one.
+- Updated 2026-09-07 by [ADR 0047](0047-quota-pro-is-one-product-and-a-code-is-a-grant.md):
+  the entitlement id is `pro`, product ids are `quota_pro_monthly` and `quota_pro_yearly`,
+  Lifetime is `expires_at: null`, and a redemption code is a RevenueCat promotional grant.
 - Extends [ADR 0006](0006-managed-account-device-usage.md) and
   [ADR 0028](0028-the-boundary-answers-the-write.md)
 
@@ -27,7 +30,7 @@ show the paywall. A refusal at that write boundary has to leave evidence
 `active`/`grace` entitlement has passed `expires_at`, reads
 `GET https://api.revenuecat.com/v1/subscribers/{app_user_id}` with the secret API key, 20s
 timeout. The webhook `Authorization` header is compared to `REVENUECAT_WEBHOOK_SECRET`. The
-entitlement id is `sync`. Product ids are `quota_sync_monthly` and `quota_sync_yearly`.
+entitlement id is `pro`. Product ids are `quota_pro_monthly` and `quota_pro_yearly`.
 
 **The stored row is a cache, not a grant.** `entitlements` holds `status` (`active`, `grace`,
 `expired`, `none`), `expires_at`, `will_renew`, `product_id`, `store`, and whether the last

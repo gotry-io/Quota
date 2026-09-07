@@ -291,8 +291,10 @@ provider ids that resolve each channel.
 Multi-device sync is paid. RevenueCat is the billing system of record: iOS purchases through
 the RevenueCat SDK, Mac opens a RevenueCat Web Purchase Link, and Relay neither verifies Apple
 receipts nor talks to Stripe. The Account id is the RevenueCat `app_user_id`. Relay stores the
-`sync` entitlement from the webhook and, when that row is older than 24 hours or an
-`active`/`grace` grant has expired, from `GET /v1/subscribers/{app_user_id}`. Writes of snapshots,
+`pro` entitlement from the webhook and, when that row is older than 24 hours or an
+`active`/`grace` grant has expired, from `GET /v1/subscribers/{app_user_id}`. A redemption code
+is a grant Relay issues and RevenueCat records as a promotional entitlement
+([ADR 0047](decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md)). Writes of snapshots,
 Usage, the device profile, and device sync answer 402 `subscription_required` unless status is
 `active` or `grace`; Account and summary reads are not gated and both carry the entitlement —
 `status`, `expires_at`, `will_renew`, `stale`, and `checked_at`, the instant the stored row was

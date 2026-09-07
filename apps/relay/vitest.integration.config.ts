@@ -20,6 +20,7 @@ export default defineConfig({
           REVENUECAT_WEBHOOK_SECRET: testSecret,
           REVENUECAT_SECRET_KEY: testSecret,
           REVENUECAT_WEB_PURCHASE_URL: "https://pay.rev.cat/testtoken",
+          REDEMPTION_ADMIN_SECRET: testSecret,
         },
       },
     }),

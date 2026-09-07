@@ -1,7 +1,7 @@
-import type { Entitlement } from "@gotry-io/quota-protocol";
+import type { Entitlement, RedemptionGrantDuration } from "@gotry-io/quota-protocol";
 import type { AccountState, EntitlementStatus, StoredEntitlement } from "@gotry-io/relay-core";
 
-export const SYNC_ENTITLEMENT_ID = "sync";
+export const PRO_ENTITLEMENT_ID = "pro";
 export const ENTITLEMENT_CACHE_MILLISECONDS = 24 * 60 * 60 * 1000;
 export const REVENUECAT_REST_TIMEOUT_MILLISECONDS = 20_000;
 export const REVENUECAT_SUBSCRIBER_URL = "https://api.revenuecat.com/v1/subscribers";
@@ -9,6 +9,7 @@ export const REVENUECAT_SUBSCRIBER_URL = "https://api.revenuecat.com/v1/subscrib
 const WEBHOOK_EVENT_TYPES = new Set([
   "INITIAL_PURCHASE",
   "RENEWAL",
+  "NON_RENEWING_PURCHASE",
   "CANCELLATION",
   "EXPIRATION",
   "BILLING_ISSUE",
@@ -24,6 +25,7 @@ export interface BillingBindings {
   webhookSecret: string;
   restSecret: string;
   webPurchaseUrl: string;
+  redemptionAdminSecret: string;
   fetch?: typeof fetch;
 }
 
@@ -121,13 +123,13 @@ export function webhookEventType(event: RevenueCatEvent): string | null {
   return typeof event.type === "string" && event.type.length > 0 ? event.type : null;
 }
 
-export function eventAffectsSync(event: RevenueCatEvent): boolean {
+export function eventAffectsPro(event: RevenueCatEvent): boolean {
   const ids = event.entitlement_ids;
   if (Array.isArray(ids)) {
-    return ids.some((id) => id === SYNC_ENTITLEMENT_ID);
+    return ids.some((id) => id === PRO_ENTITLEMENT_ID);
   }
   if (typeof event.entitlement_id === "string") {
-    return event.entitlement_id === SYNC_ENTITLEMENT_ID;
+    return event.entitlement_id === PRO_ENTITLEMENT_ID;
   }
   return event.type === "TRANSFER" || event.type === "TEST";
 }
@@ -138,7 +140,7 @@ export function foldWebhookEvent(
 ): Omit<StoredEntitlement, "account_id" | "source" | "last_event_id" | "updated_at"> | null {
   const type = webhookEventType(event);
   if (type === null || !WEBHOOK_EVENT_TYPES.has(type)) return null;
-  if (!eventAffectsSync(event)) return null;
+  if (!eventAffectsPro(event)) return null;
 
   const expiresAt = millisecondsToInstant(event.expiration_at_ms);
   const productId = optionalText(event.new_product_id) ?? optionalText(event.product_id);
@@ -178,7 +180,7 @@ export function foldWebhookEvent(
     product_id: productId,
     store,
     expires_at: expiresAt,
-    will_renew: true,
+    will_renew: expiresAt !== null,
   };
 }
 
@@ -190,7 +192,7 @@ export function foldSubscriber(
   subscriber: RevenueCatSubscriber,
   now: Date,
 ): Omit<StoredEntitlement, "account_id" | "source" | "last_event_id" | "updated_at"> {
-  const entitlement = subscriber.entitlements?.[SYNC_ENTITLEMENT_ID];
+  const entitlement = subscriber.entitlements?.[PRO_ENTITLEMENT_ID];
   if (!entitlement) return noneEntitlement;
 
   const productId = optionalText(entitlement.product_identifier);
@@ -223,7 +225,7 @@ export function foldSubscriber(
     product_id: productId,
     store,
     expires_at: expiresAt,
-    will_renew: unsubscribed === null && status !== "expired",
+    will_renew: expiresAt !== null && unsubscribed === null && status !== "expired",
   };
 }
 
@@ -276,6 +278,27 @@ interface RevenueCatSubscriptionInfo {
   billing_issues_detected_at?: unknown;
 }
 
+export async function grantPromotionalEntitlement(
+  billing: BillingBindings,
+  accountId: string,
+  duration: RedemptionGrantDuration,
+): Promise<RevenueCatSubscriber> {
+  const fetchFn = billing.fetch ?? fetch;
+  const response = await fetchFn(
+    `${REVENUECAT_SUBSCRIBER_URL}/${encodeURIComponent(accountId)}/entitlements/${encodeURIComponent(PRO_ENTITLEMENT_ID)}/promotional`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${billing.restSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ duration }),
+      signal: AbortSignal.timeout(REVENUECAT_REST_TIMEOUT_MILLISECONDS),
+    },
+  );
+  return subscriberFromResponse(response);
+}
+
 async function fetchSubscriber(
   billing: BillingBindings,
   accountId: string,
@@ -289,6 +312,10 @@ async function fetchSubscriber(
     },
     signal: AbortSignal.timeout(REVENUECAT_REST_TIMEOUT_MILLISECONDS),
   });
+  return subscriberFromResponse(response);
+}
+
+async function subscriberFromResponse(response: Response): Promise<RevenueCatSubscriber> {
   if (!response.ok) {
     throw new Error("revenuecat_subscriber_failed");
   }

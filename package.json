@@ -43,7 +43,8 @@
     "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
-    "check:schema": "node --experimental-strip-types packages/protocol/scripts/generate-json-schemas.ts --check"
+    "check:schema": "node --experimental-strip-types packages/protocol/scripts/generate-json-schemas.ts --check",
+    "issue-codes": "node scripts/issue-redemption-codes.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",

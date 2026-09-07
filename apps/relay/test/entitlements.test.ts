@@ -26,6 +26,7 @@ const now = new Date("2026-08-10T00:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const webhookSecret = "rc-webhook-secret-value";
 const restSecret = "rc-rest-secret-value";
+const adminSecret = "rc-admin-secret-value-that-is-long-enough";
 const webPurchaseUrl = "https://pay.rev.cat/testtoken";
 const accountId = "account_entitlement";
 const origin = "https://quota.gotry.io";
@@ -34,6 +35,8 @@ beforeEach(async () => {
   await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
   await env.DB.batch(
     [
+      "code_redemptions",
+      "redemption_codes",
       "entitlement_events",
       "entitlements",
       "sessions",
@@ -169,13 +172,13 @@ describe("RevenueCat entitlements", () => {
     await seedPaidEntitlement(now);
     const rest = restMock({
       entitlements: {
-        sync: {
+        pro: {
           expires_date: "2026-10-01T00:00:00Z",
-          product_identifier: "quota_sync_yearly",
+          product_identifier: "quota_pro_yearly",
         },
       },
       subscriptions: {
-        quota_sync_yearly: { store: "app_store", unsubscribe_detected_at: null },
+        quota_pro_yearly: { store: "app_store", unsubscribe_detected_at: null },
       },
     });
     const { app } = harness({ fetch: rest.fetch, clock: now });
@@ -185,7 +188,7 @@ describe("RevenueCat entitlements", () => {
     expect(await first.json()).toMatchObject({
       entitlement: {
         status: "active",
-        product_id: "quota_sync_monthly",
+        product_id: "quota_pro_monthly",
         stale: false,
         checked_at: now.toISOString(),
       },
@@ -200,7 +203,7 @@ describe("RevenueCat entitlements", () => {
     expect(await refreshed.json()).toMatchObject({
       entitlement: {
         status: "active",
-        product_id: "quota_sync_yearly",
+        product_id: "quota_pro_yearly",
         stale: false,
         checked_at: later.toISOString(),
       },
@@ -220,7 +223,7 @@ describe("RevenueCat entitlements", () => {
     expect(await response.json()).toMatchObject({
       entitlement: {
         status: "active",
-        product_id: "quota_sync_monthly",
+        product_id: "quota_pro_monthly",
         stale: true,
         checked_at: storedAt.toISOString(),
       },
@@ -254,7 +257,7 @@ describe("RevenueCat entitlements", () => {
         );
         expect(response.status, path).toBe(402);
         expect(await response.json()).toMatchObject({
-          error: { code: "subscription_required" },
+          error: { code: "subscription_required", message: "Quota Pro is required." },
         });
       }
     } finally {
@@ -323,6 +326,72 @@ describe("RevenueCat entitlements", () => {
     expect(moved.headers.get("ETag")).not.toBe(etag);
     expect(await moved.json()).toMatchObject({ entitlement: { status: "active" } });
   });
+
+  it("folds a non-renewing purchase with no expiry as lifetime", async () => {
+    await seedAccount();
+    const { app } = harness();
+    const response = await webhook(app, event("NON_RENEWING_PURCHASE", { expiration_at_ms: null }));
+    expect(response.status).toBe(200);
+    expect(await storedEntitlement()).toMatchObject({
+      status: "active",
+      will_renew: 0,
+      product_id: "quota_pro_monthly",
+    });
+    expect(
+      await env.DB.prepare("SELECT expires_at FROM entitlements WHERE account_id = ?1")
+        .bind(accountId)
+        .first("expires_at"),
+    ).toBeNull();
+  });
+
+  it("records a promotional grant's store from the webhook", async () => {
+    await seedAccount();
+    const { app } = harness();
+    const response = await webhook(
+      app,
+      event("NON_RENEWING_PURCHASE", {
+        store: "PROMOTIONAL",
+        product_id: "rc_promo_pro_monthly",
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await storedEntitlement()).toMatchObject({
+      status: "active",
+      product_id: "rc_promo_pro_monthly",
+    });
+    expect(
+      await env.DB.prepare("SELECT store FROM entitlements WHERE account_id = ?1")
+        .bind(accountId)
+        .first("store"),
+    ).toBe("PROMOTIONAL");
+  });
+
+  it("treats a REST entitlement with no expiry as lifetime", async () => {
+    await seedAccount();
+    const storedAt = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    await seedPaidEntitlement(storedAt);
+    const rest = restMock({
+      entitlements: {
+        pro: {
+          expires_date: null,
+          product_identifier: "rc_promo_pro_lifetime",
+        },
+      },
+      subscriptions: {},
+    });
+    const { app } = harness({ fetch: rest.fetch });
+    const response = await app.request(`${origin}/api/v2/account`, { headers: { Cookie: "web" } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      entitlement: {
+        status: "active",
+        expires_at: null,
+        will_renew: false,
+        product_id: "rc_promo_pro_lifetime",
+        stale: false,
+      },
+    });
+  });
 });
 
 function harness(overrides: { fetch?: typeof fetch; clock?: Date } = {}) {
@@ -340,6 +409,7 @@ function harness(overrides: { fetch?: typeof fetch; clock?: Date } = {}) {
       webhookSecret,
       restSecret: overrides.fetch === undefined ? "" : restSecret,
       webPurchaseUrl,
+      redemptionAdminSecret: adminSecret,
       ...(overrides.fetch === undefined ? {} : { fetch: overrides.fetch }),
     },
   });
@@ -376,7 +446,7 @@ async function seedPaidEntitlement(
   await env.DB.prepare(
     `INSERT INTO entitlements (
        account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
-     ) VALUES (?1, ?2, 'quota_sync_monthly', 'app_store', ?3, 1, 'webhook', NULL, ?4)`,
+     ) VALUES (?1, ?2, 'quota_pro_monthly', 'app_store', ?3, 1, 'webhook', NULL, ?4)`,
   )
     .bind(
       accountId,
@@ -419,9 +489,9 @@ function event(
       id: extra.id ?? `evt_${type}`,
       type,
       app_user_id: extra.app_user_id ?? accountId,
-      product_id: extra.product_id ?? "quota_sync_monthly",
+      product_id: extra.product_id ?? "quota_pro_monthly",
       store: extra.store ?? "APP_STORE",
-      entitlement_ids: extra.entitlement_ids ?? ["sync"],
+      entitlement_ids: extra.entitlement_ids ?? ["pro"],
       expiration_at_ms: extra.expiration_at_ms ?? Date.parse("2026-09-09T00:00:00.000Z"),
       event_timestamp_ms: now.getTime(),
       environment: "PRODUCTION",
