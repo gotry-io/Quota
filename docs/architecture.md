@@ -401,7 +401,10 @@ normalization never creates a pricing alias or changes a cost outcome. Relay
 publishes the model catalog at `GET /api/v2/model/catalog` with ETag validation and `public,
 max-age=300, must-revalidate`; summaries carry its revision, the Rust client stores payload and ETag
 atomically with a last-known-good cache, and a fetch failure never blocks collection, upload, totals,
-or a report.
+or a report. Official Statuspage v2 feeds are a separate public read, `GET /api/v2/providers/status`,
+with no principal and no cookie: the Worker polls catalog `statuspage_v2` URLs, caches last-good
+readings for ten minutes, and answers `unknown` when a poll fails with nothing stored
+([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
 
 ## Source and dependency rules
 
