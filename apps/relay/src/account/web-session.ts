@@ -318,7 +318,10 @@ export function safeReturnPath(value: string, origin = CANONICAL_ORIGIN): string
   }
   try {
     const url = new URL(value, origin);
-    return url.origin === origin ? `${url.pathname}${url.search}` : null;
+    // "/..//host" resolves on this origin with a pathname of "//host", which a browser reads
+    // as a protocol-relative URL once it is echoed on its own; that is still another origin.
+    if (url.origin !== origin || url.pathname.startsWith("//")) return null;
+    return `${url.pathname}${url.search}`;
   } catch {
     return null;
   }

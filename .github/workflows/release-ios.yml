@@ -224,3 +224,18 @@ jobs:
             --file "$RUNNER_TEMP/export/Quota.ipa" \
             --apiKey "$ASC_KEY_ID" \
             --apiIssuer "$ASC_ISSUER_ID"
+
+
+      # Hosted runners are discarded after the job; this keeps the same promise on any runner
+      # that is not, and does not depend on which earlier step failed.
+      - name: Remove signing material
+        if: always()
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db"
+          security delete-keychain "$RUNNER_TEMP/quota-ios-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/quota-ios-distribution.p12" apps/ios/Local.xcconfig
+          rm -rf "$HOME/.appstoreconnect/private_keys" \
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
