@@ -87,8 +87,8 @@ pub enum ErrorCode {
     AuthenticationRequired,
     DeviceDeleted,
     StaleGeneration,
-    /// Relay refused a write because the Account has no paid sync entitlement. The session is
-    /// intact and the local data is not affected: what is missing is a subscription.
+    /// Relay refused a write because the Account has no Quota Pro entitlement. The session is
+    /// intact and the local data is not affected: what is missing is Quota Pro.
     SubscriptionRequired,
     Unavailable,
     ProviderError,

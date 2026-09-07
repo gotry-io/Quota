@@ -255,6 +255,13 @@
   private func contentVisualState(at date: Date) -> MenuBarVisualState {
     let report = contentReport(at: date)
     let accountSummary = contentAccountSummary(at: date, report: report)
+    let entitlement = LocalServiceEntitlement(
+      status: .active,
+      expiresAt: date.addingTimeInterval(14 * 86_400),
+      willRenew: true,
+      stale: false,
+      checkedAt: nil
+    )
     return MenuBarVisualState(
       report: report,
       localUsage: localUsageReport(at: date, partial: accountSummary.usage.today.partial),
@@ -268,7 +275,9 @@
           description: "Partial System Outage",
           checkedAt: date
         )
-      ]
+      ],
+      entitlement: entitlement,
+      purchaseURL: URL(string: "https://pay.rev.cat/visual/account_visual_octocat")
     )
   }
 
