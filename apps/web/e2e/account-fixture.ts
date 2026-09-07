@@ -483,7 +483,7 @@ export function screenshotAccountSummary(): unknown {
       status: "active",
       expires_at: isoFrom(now, 30 * 86_400_000),
       will_renew: true,
-      product_id: "quota_sync_monthly",
+      product_id: "quota_pro_monthly",
       store: "app_store",
       stale: false,
       checked_at: studioObserved,

@@ -844,6 +844,114 @@
     {
       "type": "object",
       "properties": {
+        "campaign": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "duration": {
+          "$ref": "#/$defs/__schema77"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "max_redemptions": {
+          "default": 1,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": ["campaign", "duration", "count"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "codes": {
+          "minItems": 1,
+          "maxItems": 500,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema78"
+          }
+        },
+        "campaign": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "duration": {
+          "$ref": "#/$defs/__schema77"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema3"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["codes", "campaign", "duration", "expires_at"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["code"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
+        },
+        "entitlement": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "granted": {
+          "type": "object",
+          "properties": {
+            "duration": {
+              "$ref": "#/$defs/__schema77"
+            },
+            "campaign": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "required": ["duration", "campaign"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["protocol_version", "entitlement", "granted"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
         "error": {
           "type": "object",
           "properties": {
@@ -865,6 +973,11 @@
                 "client_upgrade_required",
                 "conflict",
                 "subscription_required",
+                "code_invalid",
+                "code_expired",
+                "code_already_redeemed",
+                "code_exhausted",
+                "billing_unavailable",
                 "internal_error"
               ]
             },
@@ -1918,6 +2031,15 @@
       },
       "required": ["handle", "total_tokens", "messages", "rank"],
       "additionalProperties": false
+    },
+    "__schema77": {
+      "type": "string",
+      "enum": ["weekly", "monthly", "two_month", "three_month", "six_month", "yearly", "lifetime"]
+    },
+    "__schema78": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
     }
   }
 }

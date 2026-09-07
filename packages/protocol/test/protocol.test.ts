@@ -21,6 +21,7 @@ import {
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
+  IssueRedemptionCodesRequestSchema,
   LeaderboardResponseSchema,
   LOCAL_PROVIDER_IDS,
   LocalProviderIdSchema,
@@ -33,6 +34,8 @@ import {
   ProviderStatusResponseReadSchema,
   ProviderStatusResponseSchema,
   PricingCatalogSchema,
+  RedeemCodeRequestSchema,
+  RedeemCodeResponseSchema,
   PublicProfileHandleSchema,
   PublicProfileUpdateRequestSchema,
   PublicUsageResponseSchema,
@@ -794,7 +797,7 @@ describe("quota protocol", () => {
     expect(protocol.exceedsContractBound(undefined)).toBe(false);
   });
 
-  it("states the paid-sync entitlement on the Account read and the summary", () => {
+  it("states the Quota Pro entitlement on the Account read and the summary", () => {
     const summary = accountSummary();
     expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
     expect(AccountSummarySchema.safeParse({ ...summary, entitlement: undefined }).success).toBe(
@@ -833,8 +836,38 @@ describe("quota protocol", () => {
       false,
     );
     // The summary answers the same pair, so a Mac that reads it needs no second request to
-    // say what sync costs.
+    // say what Quota Pro costs.
     expect(AccountSummarySchema.safeParse({ ...summary, purchase: undefined }).success).toBe(false);
+  });
+
+  it("accepts a redemption issue request with default max_redemptions and a redeem response", () => {
+    const issued = IssueRedemptionCodesRequestSchema.safeParse({
+      campaign: "beta",
+      duration: "monthly",
+      count: 2,
+    });
+    expect(issued.success).toBe(true);
+    if (issued.success) {
+      expect(issued.data.max_redemptions).toBe(1);
+    }
+    expect(
+      IssueRedemptionCodesRequestSchema.safeParse({
+        campaign: "beta",
+        duration: "forever",
+        count: 1,
+      }).success,
+    ).toBe(false);
+    expect(RedeemCodeRequestSchema.safeParse({ code: "QUOTA-AAAA-BBBB-CCCC-DDDD" }).success).toBe(
+      true,
+    );
+    const summary = accountSummary();
+    expect(
+      RedeemCodeResponseSchema.safeParse({
+        protocol_version: 2,
+        entitlement: { ...summary.entitlement, expires_at: null, will_renew: false },
+        granted: { duration: "lifetime", campaign: "beta" },
+      }).success,
+    ).toBe(true);
   });
 
   it("validates subscriptions and Usage as one normalized read summary", () => {
@@ -1469,7 +1502,7 @@ function accountSummary() {
       status: "active" as const,
       expires_at: "2026-09-12T00:00:00Z",
       will_renew: true,
-      product_id: "quota_sync_monthly",
+      product_id: "quota_pro_monthly",
       store: "app_store",
       stale: false,
       checked_at: "2026-09-05T00:00:00Z",

@@ -26,6 +26,8 @@ import {
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
   IosSessionRefreshResponseSchema,
+  IssueRedemptionCodesRequestSchema,
+  IssueRedemptionCodesResponseSchema,
   identityProviderDisplayName,
   LEADERBOARD_PERIOD,
   LogoutResponseSchema,
@@ -43,6 +45,8 @@ import {
   PublicProfileUpdateRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
+  RedeemCodeRequestSchema,
+  RedeemCodeResponseSchema,
   type RelayErrorCode,
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
@@ -103,9 +107,12 @@ import {
 import { managedServiceInfo } from "./config.ts";
 import {
   type BillingBindings,
+  foldSubscriber,
   foldWebhookEvent,
+  grantPromotionalEntitlement,
   isPaidSyncStatus,
   parseRevenueCatWebhookBody,
+  publicEntitlement,
   purchaseWebUrl,
   readEntitlement,
   sanitizeRevenueCatEvent,
@@ -114,6 +121,11 @@ import {
   webhookEventId,
   webhookEventType,
 } from "./entitlement.ts";
+import {
+  formatRedemptionCode,
+  generateRedemptionCodeBodies,
+  normalizeRedemptionCode,
+} from "./redemption.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { LEADERBOARD_MAX_AGE_SECONDS, readLeaderboard } from "./leaderboard.ts";
@@ -198,6 +210,7 @@ const rateLimits = {
   emailStartHour: { limit: 5, windowSeconds: 60 * 60 },
   sessionMutation: { limit: 60, windowSeconds: 10 * 60 },
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
+  redeem: { limit: 10, windowSeconds: 10 * 60 },
   profileMutation: { limit: 30, windowSeconds: 10 * 60 },
   publicRead: { limit: 120, windowSeconds: 60 },
 } as const;
@@ -287,6 +300,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     webhookSecret: options.billing?.webhookSecret ?? "",
     restSecret: options.billing?.restSecret ?? "",
     webPurchaseUrl: options.billing?.webPurchaseUrl || "https://pay.rev.cat/unconfigured",
+    redemptionAdminSecret: options.billing?.redemptionAdminSecret ?? "",
     ...(options.billing?.fetch === undefined ? {} : { fetch: options.billing.fetch }),
   };
 
@@ -300,6 +314,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v6/account/*",
     "/api/v6/device/*",
     "/api/billing/*",
+    "/api/admin/*",
   ]) {
     app.use(path, async (context, next) => {
       context.header("Cache-Control", "no-store");
@@ -317,7 +332,12 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
-  for (const path of ["/api/v2/device/profile", "/api/v2/account/profile"]) {
+  for (const path of [
+    "/api/v2/device/profile",
+    "/api/v2/account/profile",
+    "/api/v2/account/redeem",
+    "/api/admin/redemption-codes",
+  ]) {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.use(
@@ -914,6 +934,162 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         })),
         entitlement,
         purchase: { web_url: purchaseWebUrl(billing.webPurchaseUrl, principal.account_id) },
+      }),
+    );
+  });
+
+  app.post("/api/admin/redemption-codes", async (context) => {
+    const token = bearerToken(context.req.header("Authorization"));
+    if (
+      billing.redemptionAdminSecret.length === 0 ||
+      token === undefined ||
+      !constantTimeEqual(token, billing.redemptionAdminSecret)
+    ) {
+      return unauthorized(context);
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "redemption-codes-issue",
+      anonymousClientSubject(context),
+      rateLimits.destructiveMutation,
+      now(),
+    );
+    if (limited) return limited;
+    const body = await parseJSON(context, IssueRedemptionCodesRequestSchema);
+    if (body instanceof Response) return body;
+    const createdAt = now().toISOString();
+    const bodies = generateRedemptionCodeBodies(body.count);
+    await options.state.createRedemptionCodes(
+      bodies.map((code) => ({
+        code,
+        campaign: body.campaign,
+        grant_duration: body.duration,
+        max_redemptions: body.max_redemptions,
+        redeemed_count: 0,
+        expires_at: body.expires_at ?? null,
+        note: body.note ?? null,
+        created_at: createdAt,
+      })),
+    );
+    return context.json(
+      IssueRedemptionCodesResponseSchema.parse({
+        codes: bodies.map(formatRedemptionCode),
+        campaign: body.campaign,
+        duration: body.duration,
+        expires_at: body.expires_at ?? null,
+      }),
+    );
+  });
+
+  app.post("/api/v2/account/redeem", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:read", now());
+    if (principal instanceof Response) return principal;
+    const ipLimited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "redeem",
+      anonymousClientSubject(context),
+      rateLimits.redeem,
+      now(),
+    );
+    if (ipLimited) return ipLimited;
+    const accountLimited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "redeem",
+      principal.account_id,
+      rateLimits.redeem,
+      now(),
+    );
+    if (accountLimited) return accountLimited;
+    const body = await parseJSON(context, RedeemCodeRequestSchema);
+    if (body instanceof Response) return body;
+    const code = normalizeRedemptionCode(body.code);
+    const row = await options.state.getRedemptionCode(code);
+    if (!row) {
+      return relayError(context, 404, "code_invalid", "This code is not valid.");
+    }
+    const checkedAt = now();
+    if (row.expires_at !== null) {
+      const expires = Date.parse(row.expires_at);
+      if (Number.isFinite(expires) && expires <= checkedAt.getTime()) {
+        return relayError(context, 410, "code_expired", "This code has expired.");
+      }
+    }
+    if (await options.state.hasRedeemedCode(code, principal.account_id)) {
+      return relayError(
+        context,
+        409,
+        "code_already_redeemed",
+        "This account has already redeemed this code.",
+      );
+    }
+    if (row.redeemed_count >= row.max_redemptions) {
+      return relayError(context, 409, "code_exhausted", "This code has no redemptions left.");
+    }
+    if (billing.restSecret.length === 0) {
+      return relayError(context, 503, "billing_unavailable", "Billing is unavailable.");
+    }
+    let subscriber: Awaited<ReturnType<typeof grantPromotionalEntitlement>>;
+    try {
+      subscriber = await grantPromotionalEntitlement(
+        billing,
+        principal.account_id,
+        row.grant_duration,
+      );
+    } catch {
+      console.error(
+        JSON.stringify({
+          event: "relay_redeem_failed",
+          account_id: principal.account_id,
+          campaign: row.campaign,
+          duration: row.grant_duration,
+        }),
+      );
+      return relayError(context, 502, "billing_unavailable", "Billing is unavailable.");
+    }
+    const stored = await options.state.getEntitlement(principal.account_id);
+    const entitlementRow = {
+      account_id: principal.account_id,
+      ...foldSubscriber(subscriber, checkedAt),
+      source: "rest" as const,
+      last_event_id: stored?.last_event_id ?? null,
+      updated_at: checkedAt.toISOString(),
+    };
+    await options.state.putEntitlement(entitlementRow);
+    const recorded = await options.state.recordRedemption(
+      code,
+      principal.account_id,
+      checkedAt.toISOString(),
+    );
+    if (recorded !== "recorded") {
+      console.warn(
+        JSON.stringify({
+          event: "relay_code_redeemed_race",
+          account_id: principal.account_id,
+          campaign: row.campaign,
+          duration: row.grant_duration,
+          outcome: recorded,
+        }),
+      );
+    }
+    console.log(
+      JSON.stringify({
+        event: "relay_code_redeemed",
+        account_id: principal.account_id,
+        campaign: row.campaign,
+        duration: row.grant_duration,
+      }),
+    );
+    return context.json(
+      RedeemCodeResponseSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        entitlement: publicEntitlement(entitlementRow, false),
+        granted: { duration: row.grant_duration, campaign: row.campaign },
       }),
     );
   });
@@ -2164,12 +2340,12 @@ async function requirePaidSync(
       account_id: principal.account_id,
     }),
   );
-  return relayError(context, 402, "subscription_required", "A paid sync subscription is required.");
+  return relayError(context, 402, "subscription_required", "Quota Pro is required.");
 }
 
 function relayError(
   context: Context,
-  status: 400 | 401 | 402 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
+  status: 400 | 401 | 402 | 403 | 404 | 409 | 410 | 413 | 429 | 500 | 502 | 503,
   code: RelayErrorCode,
   message: string,
 ): Response {

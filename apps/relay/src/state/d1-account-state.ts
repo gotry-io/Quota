@@ -39,6 +39,7 @@ import type {
   QuotaSnapshotSubmission,
   RateLimitInput,
   RateLimitResult,
+  RedemptionCodeRow,
   RefreshSessionInput,
   ResolveSignInIdentityInput,
   RevokeRefreshSessionInput,
@@ -1295,6 +1296,81 @@ export class D1AccountState implements AccountState {
       .run();
   }
 
+  async createRedemptionCodes(rows: RedemptionCodeRow[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.database.batch(
+      rows.map((row) =>
+        this.database
+          .prepare(
+            `INSERT INTO redemption_codes (
+               code, campaign, grant_duration, max_redemptions, redeemed_count,
+               expires_at, note, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+          )
+          .bind(
+            row.code,
+            row.campaign,
+            row.grant_duration,
+            row.max_redemptions,
+            row.redeemed_count,
+            row.expires_at,
+            row.note,
+            row.created_at,
+          ),
+      ),
+    );
+  }
+
+  async getRedemptionCode(code: string): Promise<RedemptionCodeRow | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT code, campaign, grant_duration, max_redemptions, redeemed_count,
+                expires_at, note, created_at
+         FROM redemption_codes WHERE code = ?1`,
+      )
+      .bind(code)
+      .first<RedemptionCodeSqlRow>();
+    return row ? storedRedemptionCode(row) : null;
+  }
+
+  async hasRedeemedCode(code: string, accountId: string): Promise<boolean> {
+    const row = await this.database
+      .prepare("SELECT 1 AS present FROM code_redemptions WHERE code = ?1 AND account_id = ?2")
+      .bind(code, accountId)
+      .first();
+    return row !== null;
+  }
+
+  async recordRedemption(
+    code: string,
+    accountId: string,
+    redeemedAt: string,
+  ): Promise<"recorded" | "exhausted" | "already_redeemed"> {
+    try {
+      const results = await this.database.batch([
+        this.database
+          .prepare(
+            `UPDATE redemption_codes
+             SET redeemed_count = redeemed_count + 1
+             WHERE code = ?1 AND redeemed_count < max_redemptions`,
+          )
+          .bind(code),
+        this.database
+          .prepare(
+            `INSERT INTO code_redemptions (code, account_id, redeemed_at)
+             SELECT ?1, ?2, ?3 WHERE changes() = 1`,
+          )
+          .bind(code, accountId, redeemedAt),
+      ]);
+      return resultChanged(results[0]) && resultChanged(results[1]) ? "recorded" : "exhausted";
+    } catch (error) {
+      if (String(error).includes("UNIQUE constraint failed")) {
+        return "already_redeemed";
+      }
+      throw error;
+    }
+  }
+
   async applyRevenueCatWebhook(
     input: ApplyRevenueCatWebhookInput,
   ): Promise<"applied" | "duplicate"> {
@@ -1427,6 +1503,7 @@ export class D1AccountState implements AccountState {
       this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM entitlements WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM entitlement_events WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM code_redemptions WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
@@ -1777,6 +1854,30 @@ const upsertEntitlementSql = `INSERT INTO entitlements (
      source = excluded.source,
      last_event_id = excluded.last_event_id,
      updated_at = excluded.updated_at`;
+
+interface RedemptionCodeSqlRow {
+  code: string;
+  campaign: string;
+  grant_duration: string;
+  max_redemptions: number;
+  redeemed_count: number;
+  expires_at: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+function storedRedemptionCode(row: RedemptionCodeSqlRow): RedemptionCodeRow {
+  return {
+    code: row.code,
+    campaign: row.campaign,
+    grant_duration: row.grant_duration as RedemptionCodeRow["grant_duration"],
+    max_redemptions: row.max_redemptions,
+    redeemed_count: row.redeemed_count,
+    expires_at: row.expires_at,
+    note: row.note,
+    created_at: row.created_at,
+  };
+}
 
 function storedEntitlement(row: EntitlementRow): StoredEntitlement {
   return {
