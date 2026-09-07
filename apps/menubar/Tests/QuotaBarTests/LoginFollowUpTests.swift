@@ -96,6 +96,20 @@ final class ScriptedLocalService: LocalServiceServing, @unchecked Sendable {
   func shutdown() async {}
 }
 
+/// Waits for `condition`, checking often, for at most `timeout`.
+@MainActor
+private func eventually(
+  _ timeout: Duration = .seconds(3),
+  _ condition: @MainActor () -> Bool
+) async throws -> Bool {
+  let deadline = ContinuousClock.now + timeout
+  while ContinuousClock.now < deadline {
+    if condition() { return true }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  return condition()
+}
+
 /// A sign-in finishes on the service's thread and is announced by an event. When that event does
 /// not arrive, the panel still stops saying "finish sign-in in browser": it asks.
 @Test @MainActor
@@ -110,17 +124,16 @@ func aSignInThatFinishedWithoutAnEventIsNoticedByThePoll() async throws {
     statePollInterval: .seconds(3600)
   )
   model.start()
-  try await Task.sleep(for: .milliseconds(150))
-  #expect(model.accountState == .signedOut)
+  #expect(try await eventually { model.accountState == .signedOut })
 
   model.startLogin()
-  try await Task.sleep(for: .milliseconds(200))
-  #expect(model.isLoggingIn, "the service answers logging_in and no event has followed")
+  #expect(try await eventually { model.isLoggingIn })
+  try await Task.sleep(for: .milliseconds(150))
+  #expect(model.isLoggingIn, "the service still answers logging_in and no event has followed")
 
   service.release()
-  try await Task.sleep(for: .milliseconds(250))
-  #expect(model.accountState == .signedIn)
-  #expect(!model.isLoggingIn)
+  #expect(try await eventually { model.accountState == .signedIn && !model.isLoggingIn })
+  try await Task.sleep(for: .milliseconds(100))
   let calls = service.stateCalls
   try await Task.sleep(for: .milliseconds(200))
   #expect(service.stateCalls == calls, "a finished sign-in is not followed any further")
@@ -140,11 +153,10 @@ func thePanelReReadsStateOnItsOwnCadence() async throws {
     loginPollInterval: .seconds(3600),
     statePollInterval: .milliseconds(60)
   )
-  service.release()
   model.start()
-  try await Task.sleep(for: .milliseconds(20))
-  try await Task.sleep(for: .milliseconds(250))
-  #expect(model.accountState == .signedIn)
+  #expect(try await eventually { model.accountState == .signedOut })
+  service.release()
+  #expect(try await eventually { model.accountState == .signedIn })
   await model.shutdown()
 }
 
@@ -161,13 +173,13 @@ func cancellingASignInStopsThePoll() async throws {
     statePollInterval: .seconds(3600)
   )
   model.start()
-  try await Task.sleep(for: .milliseconds(60))
+  #expect(try await eventually { model.accountState == .signedOut })
   model.startLogin()
-  try await Task.sleep(for: .milliseconds(60))
+  #expect(try await eventually { model.isLoggingIn })
   model.cancelLogin()
-  try await Task.sleep(for: .milliseconds(60))
-  let calls = service.stateCalls
   try await Task.sleep(for: .milliseconds(150))
+  let calls = service.stateCalls
+  try await Task.sleep(for: .milliseconds(200))
   #expect(service.stateCalls == calls)
   await model.shutdown()
 }

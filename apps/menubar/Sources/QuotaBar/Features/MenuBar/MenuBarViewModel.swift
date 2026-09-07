@@ -988,7 +988,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         // state/events, rather than the short-lived request task, are authoritative.
         loginTask = nil
         await reloadState()
-        followLoginInProgress()
+        // A cancel that landed while the request was in flight has already stopped following.
+        if !Task.isCancelled {
+          followLoginInProgress()
+        }
       } catch is CancellationError {
         return
       } catch {
