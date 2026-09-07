@@ -65,8 +65,13 @@ xcodebuild_args=(
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 )
 if [[ -n "$SIGNING_IDENTITY" ]]; then
+  # DEVELOPMENT_TEAM goes on the command line as well as through the project's variable: the
+  # Swift package resource bundles (SweetCookieKit's) are signed by this archive too, take no
+  # settings from project.yml, and refuse to sign without a team.
   xcodebuild_args+=(
     CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"
+    CODE_SIGN_STYLE=Manual
+    DEVELOPMENT_TEAM=86Y537ZF24
     QUOTABAR_DEVELOPMENT_TEAM=86Y537ZF24
   )
 else
