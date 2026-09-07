@@ -314,6 +314,11 @@ public enum RelayErrorCode: String, Codable, Sendable, TolerantWireEnum {
   case deviceDeleted = "device_deleted"
   case clientUpgradeRequired = "client_upgrade_required"
   case subscriptionRequired = "subscription_required"
+  case codeInvalid = "code_invalid"
+  case codeExpired = "code_expired"
+  case codeAlreadyRedeemed = "code_already_redeemed"
+  case codeExhausted = "code_exhausted"
+  case billingUnavailable = "billing_unavailable"
   case conflict
   case internalError = "internal_error"
   case unknown

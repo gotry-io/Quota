@@ -34,6 +34,7 @@ export interface CloudflareBindings {
   REVENUECAT_WEBHOOK_SECRET?: string;
   REVENUECAT_SECRET_KEY?: string;
   REVENUECAT_WEB_PURCHASE_URL?: string;
+  REDEMPTION_ADMIN_SECRET?: string;
 }
 
 export default {
@@ -91,6 +92,7 @@ export default {
         webhookSecret: environment.REVENUECAT_WEBHOOK_SECRET ?? "",
         restSecret: environment.REVENUECAT_SECRET_KEY ?? "",
         webPurchaseUrl: environment.REVENUECAT_WEB_PURCHASE_URL ?? "",
+        redemptionAdminSecret: environment.REDEMPTION_ADMIN_SECRET ?? "",
       },
     });
 

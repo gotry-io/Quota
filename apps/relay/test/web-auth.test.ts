@@ -551,6 +551,7 @@ describe("browser sign-in through GitHub", () => {
       "login_grants",
       "entitlements",
       "entitlement_events",
+      "code_redemptions",
     ]) {
       expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).first("count")).toBe(
         0,

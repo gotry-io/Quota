@@ -29,6 +29,10 @@ import {
   PublicProfileResponseSchema,
   PublicProfileUpdateRequestSchema,
   PublicUsageResponseSchema,
+  IssueRedemptionCodesRequestSchema,
+  IssueRedemptionCodesResponseSchema,
+  RedeemCodeRequestSchema,
+  RedeemCodeResponseSchema,
   QuotaCollectionReportSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -68,6 +72,10 @@ const AccountHttpPayloadSchema = z.union([
   PublicProfileResponseSchema,
   PublicUsageResponseSchema,
   LeaderboardResponseSchema,
+  IssueRedemptionCodesRequestSchema,
+  IssueRedemptionCodesResponseSchema,
+  RedeemCodeRequestSchema,
+  RedeemCodeResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 
