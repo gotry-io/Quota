@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaProviderSessions
 import QuotaProviderWeb
 import QuotaWire
@@ -334,5 +335,60 @@ struct LocalModeAppModelTests {
   @Test
   func theBackgroundBudgetFitsInsideABackgroundTask() {
     #expect(LocalCollector.backgroundBudget <= .seconds(20))
+  }
+}
+
+/// The phone's own sample journal: one row per reading that moved, kept for thirty days
+/// ([ADR 0042](../../../docs/decisions/0042-quota-history-is-local-samples.md)).
+struct LocalQuotaSamplesTests {
+  private let now = Date(timeIntervalSince1970: 1_786_723_200)
+
+  @Test
+  func aReadingThatDidNotMoveIsNotSampledTwiceAndOldOnesAgeOut() {
+    var samples = LocalQuotaSamples()
+    samples.record([snapshot(usedPercent: 40, observedAt: now.addingTimeInterval(-3_600))], now: now)
+    samples.record([snapshot(usedPercent: 40, observedAt: now.addingTimeInterval(-1_800))], now: now)
+    samples.record([snapshot(usedPercent: 52, observedAt: now)], now: now)
+    #expect(
+      samples.samples(provider: .codex, windowID: "five_hour").map(\.usedPercent) == [40, 52]
+    )
+
+    samples.prune(now: now.addingTimeInterval(Double(QuotaHistory.retentionDays) * 86_400 + 1))
+    #expect(samples.samples(provider: .codex, windowID: "five_hour").isEmpty)
+    #expect(samples.windows.isEmpty)
+  }
+
+  @Test
+  func aWindowWithNoRefillInstantLeavesNoSample() {
+    var samples = LocalQuotaSamples()
+    samples.record([snapshot(usedPercent: 12, observedAt: now, resetsAt: nil)], now: now)
+    #expect(samples.windows.isEmpty)
+  }
+
+  private func snapshot(
+    usedPercent: Double,
+    observedAt: Date,
+    resetsAt: Date? = Date(timeIntervalSince1970: 1_786_726_800)
+  ) -> QuotaSnapshot {
+    QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(
+        fingerprint: "fp_samples",
+        label: nil,
+        plan: nil,
+        fingerprintScope: .global
+      ),
+      windows: [
+        QuotaWindow(
+          id: "five_hour",
+          title: "5 Hours",
+          usedPercent: usedPercent,
+          resetsAt: resetsAt,
+          durationSeconds: 18_000
+        )
+      ],
+      status: .available,
+      observedAt: observedAt
+    )
   }
 }

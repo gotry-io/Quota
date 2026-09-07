@@ -58,7 +58,8 @@ struct RootView: View {
               if let subscription = model.subscription(forKey: key) {
                 SubscriptionDetailView(
                   subscription: subscription,
-                  deviceNames: model.readingDeviceNames
+                  deviceNames: model.readingDeviceNames,
+                  samples: model.localSamples
                 )
               }
             }

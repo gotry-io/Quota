@@ -292,6 +292,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
     @MainActor
     private static func applyLocal(_ collection: LocalCollection, to model: AppModel) {
       model.localCollection = collection
+      model.localSamples = VisualFixtureContent.localSamples(
+        for: collection,
+        at: collection.collectedAt
+      )
       model.providers.markNeedsSignIn(collection.needsSignIn)
     }
 
@@ -874,13 +878,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
                 id: "five_hour",
                 title: "5 Hours",
                 usedPercent: 58,
-                resetsAt: date.addingTimeInterval(5_400)
+                resetsAt: date.addingTimeInterval(5_400),
+                durationSeconds: 18_000
               ),
               window(
                 id: "weekly",
                 title: "Weekly",
                 usedPercent: 24,
-                resetsAt: date.addingTimeInterval(3 * 86_400)
+                resetsAt: date.addingTimeInterval(3 * 86_400),
+                durationSeconds: 604_800
               ),
             ],
             observedAt: date.addingTimeInterval(-45)
@@ -895,7 +901,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
                 id: "five_hour",
                 title: "5 Hours",
                 usedPercent: 12,
-                resetsAt: date.addingTimeInterval(9_000)
+                resetsAt: date.addingTimeInterval(9_000),
+                durationSeconds: 18_000
               )
             ],
             observedAt: date.addingTimeInterval(-60)
@@ -920,13 +927,15 @@ enum VisualFixture: String, CaseIterable, Sendable {
                 id: "five_hour",
                 title: "5 Hours",
                 usedPercent: 36,
-                resetsAt: date.addingTimeInterval(2_700)
+                resetsAt: date.addingTimeInterval(2_700),
+                durationSeconds: 18_000
               ),
               window(
                 id: "weekly",
                 title: "Weekly",
                 usedPercent: 18,
-                resetsAt: date.addingTimeInterval(4 * 86_400)
+                resetsAt: date.addingTimeInterval(4 * 86_400),
+                durationSeconds: 604_800
               ),
             ],
             observedAt: date.addingTimeInterval(-30)
@@ -992,6 +1001,52 @@ enum VisualFixture: String, CaseIterable, Sendable {
         session(.codex, "codex_personal", "k•••e@example.com", checkedSecondsAgo: 7_200),
         session(.claude, "claude_team", "o•••t@example.com", checkedSecondsAgo: 900),
       ]
+    }
+
+    /// The sample journal a phone that had been collecting all along would hold: a rising curve
+    /// inside the window on screen, and the short windows the day already spent.
+    static func localSamples(for collection: LocalCollection, at date: Date) -> LocalQuotaSamples {
+      var samples = LocalQuotaSamples()
+      for snapshot in collection.snapshots {
+        for quotaWindow in snapshot.windows {
+          guard let resetsAt = quotaWindow.resetsAt, let seconds = quotaWindow.durationSeconds
+          else { continue }
+          let cadence = Double(seconds)
+          let start = resetsAt.addingTimeInterval(-cadence)
+          let span = snapshot.observedAt.timeIntervalSince(start)
+          guard span > 0 else { continue }
+          var entry = LocalQuotaSamples.Entry(
+            provider: snapshot.provider,
+            windowID: quotaWindow.id,
+            samples: []
+          )
+          // Every window the day already spent, so Today has more than the running one to name.
+          if seconds <= 21_600 {
+            for (index, peak) in [82.0, 40.0].enumerated() {
+              let refilled = start.addingTimeInterval(-cadence * Double(index))
+              entry.samples.append(
+                QuotaSample(
+                  resetsAt: refilled,
+                  observedAt: refilled.addingTimeInterval(-60),
+                  usedPercent: peak
+                )
+              )
+            }
+          }
+          for step in 1...4 {
+            let fraction = Double(step) / 4
+            entry.samples.append(
+              QuotaSample(
+                resetsAt: resetsAt,
+                observedAt: start.addingTimeInterval(span * fraction),
+                usedPercent: (quotaWindow.usedPercent * pow(fraction, 1.4) * 100).rounded() / 100
+              )
+            )
+          }
+          samples.windows.append(entry)
+        }
+      }
+      return samples
     }
 
     private static func window(

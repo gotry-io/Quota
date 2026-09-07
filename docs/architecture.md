@@ -127,6 +127,15 @@ reading and nothing else ([ADR 0035](decisions/0035-quota-pace-is-derived-from-t
 QuotaBar is handed each window's pace on the IPC state its service publishes, while Quota iOS and
 the website derive their own, and Relay neither stores nor carries one.
 
+Drawing that rate as a line needs more than one reading, so the device that takes them keeps them
+([ADR 0042](decisions/0042-quota-history-is-local-samples.md)). QuotaBar's service writes one
+`quota_samples` row per window per collection into `cache.sqlite`; Quota iOS keeps the same journal
+as a file in its own container. Both are kept thirty days, both are folded by one rule —
+`history` in `packages/service` and `QuotaHistory` in `packages/apple-shared`, judged by
+`packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
+contract names a sample, Relay gains no route, and the website shows no history. A reading that
+arrived from another device carries no history, because this device has no samples of it.
+
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
 `{device_id, observed_at}` behind it. That rule is stated once in
@@ -207,7 +216,8 @@ marks truncated unpriced-model detail with `unpriced_truncated`. Exact totals st
 clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
-no version of its own and moves with `ipc_version`. State snapshots separately carry the Today,
+no version of its own and moves with `ipc_version`, which is 3. Each window of a locally collected
+reading also carries `history`, the fold of that window's own samples. State snapshots separately carry the Today,
 7 Days, 30 Days, and All summaries with exact totals, cost, `agents[].providers[].models[]`
 detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
 ([ADR 0039](decisions/0039-project-attribution-stays-local.md)). `total_tokens` is input plus output; cache-read and cache-write tokens are named input

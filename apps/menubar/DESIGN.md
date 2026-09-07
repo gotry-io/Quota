@@ -63,6 +63,23 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   `packages/service`, `packages/apple-shared` (`QuotaPace`, `QuotaPaceCopy`), and
   `apps/web/src/lib/format.ts`; see
   [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
+- **A pace line has a picture: the window's own samples, drawn under its meter.** A 22pt sparkline,
+  solid over the readings this Mac took inside the running window, dashed from the last of them to
+  where ADR 0035's projection lands at the reset. The vertical axis is the whole window, 0 to 100
+  percent used, so two windows of different cadences are read the same way; the horizontal axis is
+  the window's start to its reset. It takes the meter's own color. A window with no samples yet —
+  a new install, a rebuilt cache, a reading that came from another device — shows no line and takes
+  no space.
+- **A provider group ends with the day it has had.** One secondary line,
+  **Today: 3 windows · 82% / 40% / 12%**, oldest first, that opens into a row per window naming the
+  local clock times it ran between and its peak. Singular is **1 window**. The day is the
+  primary-cadence window's — the same window Quota iOS names its Today section after, so both
+  surfaces answer for one window rather than for whichever happened to have samples. A provider whose day
+  holds no window shows nothing. Both the line and the sparkline are turned off together by
+  Settings → Menu Bar → **Show pace lines**, on by default. The fold is
+  `packages/protocol/fixtures/quota-history-conformance.json`, answered by `packages/service` and
+  `packages/apple-shared` (`QuotaHistory`, `QuotaHistoryCopy`); see
+  [ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md).
 - **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
   window that is still full omits the line: there is no refill to wait for.
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is

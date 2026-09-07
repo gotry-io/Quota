@@ -578,7 +578,7 @@ private struct TemporaryService {
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
       def ready():
-          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 2}), flush=True)
+          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 3}), flush=True)
       def component(status, value=None):
           return {
               "status": status,
@@ -591,7 +591,7 @@ private struct TemporaryService {
           return {"rebuilding": False, "reset_at": None}
       def state(revision):
           return {
-              "ipc_version": 2,
+              "ipc_version": 3,
               "revision": revision,
               "usage_upload_enabled": True,
               "group_usage_by_project": True,
