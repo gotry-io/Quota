@@ -80,14 +80,32 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # A change confined to the website, the Relay Worker, relay-core, or documentation reaches
+      # no Rust or Swift target, and verify-web already checks it; this job then answers
+      # success without the toolchain. Anything else, including packages/protocol (Swift and Rust
+      # decode its fixtures), scripts, and this file, runs the whole job.
+      - name: Detect paths that reach Rust or Swift
+        id: mac
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: >-
+          ./scripts/ci-changed-paths.sh all
+          '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(deploy-cloudflare|pr-agent|release-ios|release-menubar)\.yml$)'
 
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ steps.mac.outputs.run == 'true' }}
         with:
           components: rustfmt
 
       # Only main writes the cache. Feature branches restore from it but never save, which
       # keeps a busy PR queue from evicting main's entry out of the 10 GB repository limit.
       - uses: Swatinem/rust-cache@v2
+        if: ${{ steps.mac.outputs.run == 'true' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -98,6 +116,7 @@ jobs:
       # `check` runs first, and the packaging step below links QuotaBar in release, so neither
       # belongs here. rustfmt covers the whole workspace and this is the only Rust runner.
       - name: Verify Rust and Swift
+        if: ${{ steps.mac.outputs.run == 'true' }}
         run: |
           set -euo pipefail
           swift --version
@@ -109,17 +128,21 @@ jobs:
       # file added without regenerating it would still build under SwiftPM above and only fail
       # here, so the committed project is checked against a fresh generation first.
       - name: Install XcodeGen
+        if: ${{ steps.mac.outputs.run == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
       - name: Check the committed QuotaBar project is current
+        if: ${{ steps.mac.outputs.run == 'true' }}
         run: |
           ./scripts/generate-menubar.sh
           git diff --exit-code -- apps/menubar/QuotaBar.xcodeproj
 
       - name: Package unsigned arm64 app
+        if: ${{ steps.mac.outputs.run == 'true' }}
         run: ./scripts/package-menubar.sh 0.0.1 "${{ github.run_number }}"
 
       - name: Test packaged helper with isolated local state
+        if: ${{ steps.mac.outputs.run == 'true' }}
         run: ./scripts/test-menubar-helper.sh
 
   # iOS generate/build/test. Advisory: not a required check. The Xcode steps run
@@ -137,29 +160,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          pattern='^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|\.github/workflows/ci\.yml$)'
-          run=true
-          from=""
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${BASE_SHA:-}" ]; then
-            from="$BASE_SHA"
-          elif [ "$EVENT_NAME" = "push" ] && [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
-            from="$BEFORE_SHA"
-          fi
-          if [ -n "$from" ]; then
-            if changed=$(git diff --name-only "$from" HEAD); then
-              if printf '%s\n' "$changed" | grep -E -q "$pattern"; then
-                run=true
-              else
-                run=false
-                echo "No iOS-related path changes; skipping generate/build/test."
-              fi
-            else
-              echo "Could not diff against $from; running iOS verification."
-            fi
-          fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
+        run: >-
+          ./scripts/ci-changed-paths.sh any
+          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
       - name: Install XcodeGen
         if: ${{ steps.ios.outputs.run == 'true' }}
@@ -175,4 +178,40 @@ jobs:
 
       - name: Test Quota iOS
         if: ${{ steps.ios.outputs.run == 'true' }}
-        run: ./scripts/test-ios.sh
+        run: QUOTA_IOS_ONLY_TESTING=QuotaTests ./scripts/test-ios.sh
+
+  # The 29 UI tests launch the app, load a fixture, and run the accessibility audit one screen
+  # at a time, which is most of an iOS run; they get their own runner so a unit failure is
+  # known in minutes and the two halves finish side by side. Same path gate as verify-ios.
+  verify-ios-ui:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect iOS-related path changes
+        id: ios
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: >-
+          ./scripts/ci-changed-paths.sh any
+          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
+
+      - name: Install XcodeGen
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate the iOS Xcode project
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: ./scripts/generate-ios.sh
+
+      - name: Build Quota iOS
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: ./scripts/build-ios.sh
+
+      - name: Test Quota iOS UI
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        run: QUOTA_IOS_ONLY_TESTING=QuotaUITests ./scripts/test-ios.sh
