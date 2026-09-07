@@ -172,10 +172,8 @@ jobs:
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: ./scripts/generate-ios.sh
 
-      - name: Build Quota iOS
-        if: ${{ steps.ios.outputs.run == 'true' }}
-        run: ./scripts/build-ios.sh
-
+      # `xcodebuild test` builds the app and the test bundles itself; a separate build step
+      # first was the same simulator build twice. `pnpm build:ios` remains for a local check.
       - name: Test Quota iOS
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: QUOTA_IOS_ONLY_TESTING=QuotaTests ./scripts/test-ios.sh
@@ -207,10 +205,6 @@ jobs:
       - name: Generate the iOS Xcode project
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: ./scripts/generate-ios.sh
-
-      - name: Build Quota iOS
-        if: ${{ steps.ios.outputs.run == 'true' }}
-        run: ./scripts/build-ios.sh
 
       - name: Test Quota iOS UI
         if: ${{ steps.ios.outputs.run == 'true' }}
