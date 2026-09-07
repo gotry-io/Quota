@@ -346,7 +346,9 @@ Body, in order:
 4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
    **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
    **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
-   section is `{input} in · {output} out`, the cost-basis line, `Cache hit {percent} · saved $X.XX`
+   section is `{input} in · {output} out`, then one line `{cost-basis} · Priced N of M rows`
+   from that period's cost row counts (the priced sentence shares the cost-basis row so later
+   List sections stay on screen), `Cache hit {percent} · saved $X.XX`
    when the period's cache reads could be priced, and **Some hours in this period were scanned
    incompletely.** when `partial` is true. Cache hit and its saving follow
    [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text

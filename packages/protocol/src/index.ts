@@ -448,6 +448,42 @@ export const AccountResponseSchema = z
   .strict();
 export type AccountResponse = z.infer<typeof AccountResponseSchema>;
 
+/**
+ * Atlassian Statuspage v2 `status.indicator`, plus `unknown` when Relay has no last reading.
+ *
+ * `none` / `minor` / `major` / `critical` are what a status page states. `unknown` is Relay's
+ * own answer when a poll failed and nothing is cached, not a fifth Statuspage value.
+ */
+export const ProviderStatusIndicatorSchema = z.enum([
+  "none",
+  "minor",
+  "major",
+  "critical",
+  "unknown",
+]);
+export type ProviderStatusIndicator = z.infer<typeof ProviderStatusIndicatorSchema>;
+
+const ProviderStatusEntrySchema = z
+  .object({
+    id: ProviderIdSchema,
+    indicator: ProviderStatusIndicatorSchema,
+    description: z.string().max(512),
+    checked_at: Rfc3339InstantSchema,
+  })
+  .strict();
+export type ProviderStatusEntry = z.infer<typeof ProviderStatusEntrySchema>;
+
+/**
+ * Public `GET /api/v2/providers/status`: one row per catalog provider that has a
+ * `statuspage_v2` feed, in catalog order. No principal, no cookie.
+ */
+export const ProviderStatusResponseSchema = z
+  .object({
+    providers: z.array(ProviderStatusEntrySchema).max(PROVIDER_IDS.length),
+  })
+  .strict();
+export type ProviderStatusResponse = z.infer<typeof ProviderStatusResponseSchema>;
+
 const NativeClientSchema = z.literal("quotabar");
 const InstallationIdSchema = z.string().uuid();
 
@@ -1861,6 +1897,16 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   purchase: PurchaseSchema.loose(),
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
+
+const ProviderStatusEntryReadSchema = ProviderStatusEntrySchema.extend({
+  id: ReadEnumSchema,
+  indicator: ReadEnumSchema,
+}).loose();
+
+export const ProviderStatusResponseReadSchema = ProviderStatusResponseSchema.extend({
+  providers: z.array(ProviderStatusEntryReadSchema).max(PROVIDER_IDS.length),
+}).loose();
+export type ProviderStatusResponseRead = z.infer<typeof ProviderStatusResponseReadSchema>;
 
 const UsageActivityDayReadSchema = UsageActivityDaySchema.extend({
   totals: UsageSummaryTotalsReadSchema,

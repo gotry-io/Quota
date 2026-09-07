@@ -25,6 +25,35 @@ type TotalsView = {
 
 type CostView = { amount_microusd: string | null; status: string; basis: string };
 type SavedView = { amount_microusd: string | null; status: string };
+type CostPricedView = {
+  status: string;
+  calculated_rows?: number;
+  reported_rows?: number;
+  unpriced_rows?: number;
+};
+
+/**
+ * How much of this period's Usage the catalog priced.
+ *
+ * `Priced N of M rows` when the cost outcome names both counts. Otherwise the status line:
+ * every row, or how many this catalog skipped.
+ */
+export function costPricedLabel(cost: CostPricedView): string {
+  const calculated = cost.calculated_rows;
+  const reported = cost.reported_rows;
+  const unpriced = cost.unpriced_rows;
+  if (
+    typeof calculated === "number" &&
+    typeof reported === "number" &&
+    typeof unpriced === "number"
+  ) {
+    const priced = calculated + reported;
+    return `Priced ${new Intl.NumberFormat(WEB_LOCALE).format(priced)} of ${new Intl.NumberFormat(WEB_LOCALE).format(priced + unpriced)} rows`;
+  }
+  if (cost.status === "complete") return "Cost covers every row";
+  const skipped = typeof unpriced === "number" ? unpriced : 0;
+  return `Cost skips ${new Intl.NumberFormat(WEB_LOCALE).format(skipped)} rows this catalog can't price`;
+}
 
 /** How much of a period's input came back from a cache, as whole percent, or `null` for no input. */
 export function cacheHitLabel(totals: TotalsView): string | null {
