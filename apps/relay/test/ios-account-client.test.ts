@@ -5,12 +5,12 @@ import {
   IOS_OAUTH_REDIRECT_URI,
   type IosOAuthTokenResponse,
   IosOAuthTokenResponseSchema,
+  IosSessionRefreshResponseSchema,
   type OAuthTokenResponse,
   OAuthTokenResponseSchema,
-  IosSessionRefreshResponseSchema,
 } from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import { AccountService } from "../src/account/service.ts";
+import { AccountFlowError, AccountService, sanitizeLabel } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
@@ -216,11 +216,11 @@ describe("quota-ios account and device client", () => {
     )
       .bind(harness.accountId)
       .first<{ id: string; display_name: string; platform: string }>();
-    // The name is sanitized the same way a Mac's is: an apostrophe is not a character a
-    // display name keeps.
+    // Apostrophes stay: "Kyle's iPhone" is a real device name, and sanitizing them away
+    // was turning every possessive iPhone into a different string.
     expect(device).toMatchObject({
       id: tokens.device_id,
-      display_name: "Kyles iPhone",
+      display_name: "Kyle's iPhone",
       platform: "ios",
     });
     const session = await env.DB.prepare(
@@ -655,6 +655,24 @@ describe("quota-ios account and device client", () => {
     expect(body.devices[0]?.id).toBe(tokens.device_id);
     expect(body.devices[0]?.platform).toBe("macos");
     expect(body.devices.some((device) => device.platform === "ios")).toBe(false);
+  });
+});
+
+describe("sanitizeLabel", () => {
+  it("keeps ASCII and typographic apostrophes in a device name", () => {
+    expect(sanitizeLabel("Kyle's iPhone", 128)).toBe("Kyle's iPhone");
+    expect(sanitizeLabel("Kyle\u2019s iPhone", 128)).toBe("Kyle\u2019s iPhone");
+  });
+
+  it("strips control characters, collapses extra whitespace, and caps length", () => {
+    expect(sanitizeLabel("  Kyle's\n\tiPhone  ", 128)).toBe("Kyle's iPhone");
+    expect(sanitizeLabel("Kyle\u0000's iPhone", 128)).toBe("Kyle's iPhone");
+    expect(sanitizeLabel(`${"a".repeat(200)}'s Phone`, 128)).toBe("a".repeat(128));
+  });
+
+  it("refuses a label that sanitizes to nothing", () => {
+    expect(() => sanitizeLabel("@@@", 128)).toThrow(AccountFlowError);
+    expect(() => sanitizeLabel("   ", 128)).toThrow(AccountFlowError);
   });
 });
 

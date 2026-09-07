@@ -31,6 +31,8 @@ struct QuotaApp: App {
             if model.skipsRestore { return }
           #endif
           await model.restore()
+          await model.setForeground(true)
+          model.observeApplicationLifecycle()
         }
         .onOpenURL { url in
           model.openDeepLink(url)
