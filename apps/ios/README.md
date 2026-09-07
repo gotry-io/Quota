@@ -52,12 +52,12 @@ and `QuotaPresentation`. It reads the App Group protected snapshot and never imp
 Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
-Paid multi-device sync is bought here. `apps/ios` is the only target that depends on the
+Quota Pro is bought here. `apps/ios` is the only target that depends on the
 RevenueCat `purchases-ios` SDK (SPM, pinned to an exact version in `project.yml`);
 `packages/apple-client` does not, so QuotaBar and the widget extension link no store code.
 `RevenueCatPurchases` is the one file that imports it, behind the app-local `PurchasesFacade`, and
 `Purchases.logIn` binds a purchase to the Quota Account id so RevenueCat's `app_user_id` is the
-`accounts.id` Relay gates writes on. What sync is *worth* is never read from the SDK: the
+`accounts.id` Relay gates writes on. What Quota Pro is *worth* is never read from the SDK: the
 `entitlement` on the Account summary is, because that is the same row the Relay write routes
 refuse a Device with. See [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
 
@@ -116,17 +116,18 @@ secret REST key and the webhook authorization value are Relay's, listed in
 [`apps/relay/README.md`](../relay/README.md).
 
 A build with no key does not configure the SDK at all. `AppModel` gets `UnconfiguredPurchases`
-instead, Settings › Sync still shows what Relay says the Account is entitled to, and the paywall
+instead, Settings › Quota Pro still shows what Relay says the Account is entitled to, and the paywall
 says **Purchases unavailable in this build.** in place of the plans. That is what
 `pnpm build:ios`, `pnpm check:ios`, `pnpm test:ios`, and every unsigned pull-request build are.
 
 ## StoreKit configuration
 
 `apps/ios/Quota.storekit` stands in for App Store Connect while the products do not exist there
-yet. It declares one subscription group, **Quota Sync**, with `quota_sync_monthly` and
-`quota_sync_yearly`, each with a seven-day free introductory offer. `project.yml` sets it as the
+yet. It declares one subscription group, **Quota Pro**, with `quota_pro_monthly` ($0.99) and
+`quota_pro_yearly` ($2.99), each with a seven-day free introductory offer. `project.yml` sets it as the
 Quota scheme's `storeKitConfiguration`, so running the app from Xcode buys against it instead of
-the App Store; delete the app from the simulator to reset the test store.
+the App Store; delete the app from the simulator to reset the test store. The paywall also offers
+Apple's **Redeem Offer Code** sheet; there is no typed license-key field.
 
 `QuotaTests` ships the same file as a bundle resource, and `StoreKitConfigurationTests` reads it:
 one group, the two product ids `SubscriptionTerm` names, the durations they are sold for, the
@@ -235,7 +236,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sync-off | sync-active | paywall | paywall-unavailable
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sync-off | sync-active | sync-lifetime | paywall | paywall-unavailable
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

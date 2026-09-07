@@ -45,7 +45,7 @@ struct DecodingTests {
     #expect(summary.entitlement.status == .active)
     #expect(summary.entitlement.expiresAt == Fixtures.date("2026-09-14T12:00:00Z"))
     #expect(summary.entitlement.willRenew)
-    #expect(summary.entitlement.productID == "quota_sync_monthly")
+    #expect(summary.entitlement.productID == "quota_pro_monthly")
     #expect(summary.entitlement.store == "app_store")
     #expect(summary.entitlement.stale == false)
     #expect(summary.entitlement.status.allowsSync)

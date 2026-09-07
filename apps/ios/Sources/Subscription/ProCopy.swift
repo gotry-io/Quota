@@ -2,20 +2,22 @@ import Foundation
 import QuotaAccount
 import QuotaWire
 
-/// Every word the Sync Settings group and the paywall say.
+/// Every word the Quota Pro Settings group and the paywall say.
 ///
 /// Status copy is derived from the Relay `entitlement`, never from the store SDK: the boundary
 /// that refuses a Device's write is the one this device quotes.
-enum SyncCopy {
-  static let section = "Sync"
-  static let subscribeRow = "Sync across devices"
+enum ProCopy {
+  static let section = "Quota Pro"
+  static let subscribeRow = "Get Quota Pro"
   static let manage = "Manage"
   static let restore = "Restore Purchases"
+  static let redeemOfferCode = "Redeem Offer Code"
+  static let lifetime = "Lifetime"
   static let terms = "Terms"
   static let privacy = "Privacy"
-  static let paywallTitle = "Sync across devices"
+  static let paywallTitle = "Quota Pro"
   static let paywallSubtitle =
-    "Paid sync carries what your Macs collect to this iPhone, the website, and your widgets."
+    "Quota Pro carries what your Macs collect to this iPhone, the website, and your widgets."
   static let benefits = [
     "Every Mac you run QuotaBar on reports into one Account.",
     "The website and your Home Screen widgets read that same account.",
@@ -32,14 +34,14 @@ enum SyncCopy {
   /// The same sentence Relay's own 402 is spoken as, so the banner and a refused write agree.
   static let offBanner = AccountClientError.subscriptionRequiredMessage
   static let sectionFooter =
-    "Sync is billed through the App Store and managed in your Apple Account."
+    "Quota Pro is billed through the App Store and managed in your Apple Account."
 
-  /// The Sync status line for an entitlement Relay answered with, or nil when there is nothing
-  /// bought yet and the group should offer the paywall instead.
+  /// The Quota Pro status line for an entitlement Relay answered with, or nil when there is
+  /// nothing bought yet and the group should offer the paywall instead.
   static func status(_ entitlement: AccountEntitlement) -> String? {
     switch entitlement.status {
     case .active:
-      guard let expiresAt = entitlement.expiresAt else { return "Active" }
+      guard let expiresAt = entitlement.expiresAt else { return lifetime }
       return entitlement.willRenew
         ? "Active · renews \(date(expiresAt))"
         : "Expires \(date(expiresAt))"

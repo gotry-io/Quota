@@ -1326,7 +1326,7 @@ enum Fixtures {
       "status": status,
       "expires_at": expiresAt as Any? ?? NSNull(),
       "will_renew": willRenew,
-      "product_id": "quota_sync_monthly",
+      "product_id": "quota_pro_monthly",
       "store": "app_store",
       "stale": false,
     ]

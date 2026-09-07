@@ -332,5 +332,17 @@ struct VisualFixtureParserTests {
       #expect(model.providerCards.isEmpty)
       #expect(model.banner == nil)
     }
+
+    @Test
+    func syncLifetimeShowsLifetimeStatusOnSettings() {
+      let model = AppModel.visualFixture(.syncLifetime, now: VisualFixture.referenceDate)
+      #expect(model.skipsRestore)
+      #expect(model.phase == .signedIn)
+      #expect(model.selectedTab == .settings)
+      #expect(model.entitlement.status == .active)
+      #expect(model.entitlement.expiresAt == nil)
+      #expect(model.entitlement.willRenew == false)
+      #expect(ProCopy.status(model.entitlement) == "Lifetime")
+    }
   }
 #endif

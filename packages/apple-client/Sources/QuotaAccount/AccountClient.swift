@@ -454,8 +454,8 @@ public actor AccountClient {
 
 extension AccountClientError {
   /// What a client says when Relay answers 402: the Macs are still collecting, but nothing they
-  /// send reaches this Account until paid sync is on.
-  public static let subscriptionRequiredMessage = "Sync is off. Subscribe to see your Macs here."
+  /// send reaches this Account until Quota Pro is on.
+  public static let subscriptionRequiredMessage = "Sync is off: Quota Pro is required."
 
   /// Copy a Connect Account failure can show. Cancel is handled before this is read.
   public var userFacingMessage: String {

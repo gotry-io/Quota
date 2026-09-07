@@ -182,7 +182,7 @@ Body, in order:
    shared formatters unchanged.
 2. Sync-off row, when the Account read carries an `entitlement` that is not `active` or `grace`:
    a tappable `StatusMessage` with `arrow.trianglehead.2.clockwise.rotate.90` and a trailing
-   chevron, reading **Sync is off. Subscribe to see your Macs here.** It presents the paywall as
+   chevron, reading **Sync is off: Quota Pro is required.** It presents the paywall as
    a sheet with **Done**. The sentence is the one Relay's own 402 `subscription_required` is
    spoken as, so a refused write and this row never disagree.
 3. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
@@ -446,16 +446,16 @@ About are pushed destinations that share `SettingsModel`. Account actions sit on
 are reachable without scrolling through alert groups. Every control is a standard Form toggle,
 picker, link, or button. Settings has no custom loading state.
 
-**Sync.** The first group, and the only place a subscription is bought or read. Without one —
+**Quota Pro.** The first group, and the only place a subscription is bought or read. Without one —
 `entitlement.status` of `expired`, `none`, or a member this build cannot name — one NavigationLink
-**Sync across devices** to the paywall. With one, a `LabeledContent` **Sync** whose value is the
+**Get Quota Pro** to the paywall. With one, a `LabeledContent` **Quota Pro** whose value is the
 state Relay reports, and a Link **Manage** to `https://apps.apple.com/account/subscriptions`; the
-system owns cancelling and changing a plan and Quota does not reimplement it. Footer: **Sync is
+system owns cancelling and changing a plan and Quota does not reimplement it. Footer: **Quota Pro is
 billed through the App Store and managed in your Apple Account.**
 
 Status values are derived from the Relay entitlement, never from the store SDK on the device:
 `active` and renewing is **Active · renews `<date>`**, `active` and not renewing is
-**Expires `<date>`**, `active` without an expiry is **Active**, and `grace` is **Grace period**.
+**Expires `<date>`**, `active` without an expiry is **Lifetime**, and `grace` is **Grace period**.
 
 **Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
 value **System**, **Light**, or **Dark** trailing.
@@ -536,14 +536,14 @@ Without an account the group is one button, **Sign in to Quota**, with the foote
 what QuotaBar reports from your Macs, and your usage across them.** There are no devices to manage
 and nothing to delete, so those rows are absent rather than disabled.
 
-#### Sync across devices
+#### Quota Pro
 
-The paywall, pushed from Settings › Sync and presented as a sheet from the Overview sync-off row.
+The paywall, pushed from Settings › Quota Pro and presented as a sheet from the Overview sync-off row.
 Quota draws it rather than rendering a remote RevenueCat Paywalls template, so its copy is
 reviewed here, the offline fixtures can render it, and the accessibility audit covers it. An
 inset-grouped `List`:
 
-1. Headline **Sync across devices** and **Paid sync carries what your Macs collect to this iPhone,
+1. Headline **Quota Pro** and **Quota Pro carries what your Macs collect to this iPhone,
    the website, and your widgets.**
 2. Three checkmark `Label` benefits: **Every Mac you run QuotaBar on reports into one Account.**,
    **The website and your Home Screen widgets read that same account.**, **Usage history and a
@@ -551,8 +551,9 @@ inset-grouped `List`:
 3. Plans, one Button row per term with the price the store localized and the trial before it:
    **Monthly** and **Yearly**, detail **`<n>` days free, then `<price>`** or the price alone.
    Quota never composes a currency amount of its own.
-4. **Restore Purchases**, Link **Terms** (`https://quota.gotry.io/terms`), Link **Privacy**, and
-   the same billing footer as the Settings group.
+4. **Restore Purchases**, **Redeem Offer Code** (Apple's Offer Code sheet; hidden when purchases
+   are unavailable in this build), Link **Terms** (`https://quota.gotry.io/terms`), Link **Privacy**,
+   and the same billing footer as the Settings group. There is no typed license-key field.
 
 A purchase the store accepts does not turn sync on by itself. The entitlement belongs to Relay,
 which learns the purchase from a RevenueCat webhook, so the paywall says **Purchase complete.
@@ -673,7 +674,7 @@ Rules:
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
 | Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
-| Sync off | Overview sync-off row **Sync is off. Subscribe to see your Macs here.**, and Settings › Sync offering the paywall |
+| Sync off | Overview sync-off row **Sync is off: Quota Pro is required.**, and Settings › Quota Pro offering the paywall |
 | Loading plans | **Loading plans…** with progress, accessibility value **Loading plans** |
 | Plans failed | **Couldn't load subscription options.** with **Retry** |
 | Purchase running | **Working…** with progress, plan rows disabled |
@@ -800,7 +801,8 @@ provider and support, and no custom card chrome beyond the system widget contain
     About **License** and **Version** labels, the
     Notifications **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
     **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
-    Mac**, **Download QuotaBar**.
+    Mac**, **Download QuotaBar**, and the paywall **Redeem Offer Code** row
+    (`paywall.redeem-offer-code`).
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
   without contrast; the run attaches which screen did not complete contrast. That is a deadline,
   not a type skip.
@@ -869,6 +871,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture activity-day-failed
 --visual-fixture sync-off
 --visual-fixture sync-active
+--visual-fixture sync-lifetime
 --visual-fixture paywall
 --visual-fixture paywall-unavailable
 --visual-fixture sign-in
@@ -897,7 +900,8 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |
 | `activity-day-failed` | Signed-in Usage presenting a day sheet with **Couldn't load this day's usage.** and **Retry** |
 | `sync-off` | Signed-in Overview whose entitlement is `none`: the sync-off row above Quota |
-| `sync-active` | Settings with the Sync group showing **Active · renews `<date>`** and **Manage** |
+| `sync-active` | Settings with the Quota Pro group showing **Active · renews `<date>`** and **Manage** |
+| `sync-lifetime` | Settings with the Quota Pro group showing **Lifetime** and **Manage** |
 | `paywall` | Settings with the paywall's two plans priced from a fixture store, no network |
 | `paywall-unavailable` | The same screen in a build with no RevenueCat key: **Purchases unavailable in this build.** |
 | `sign-in-methods` | Signed-in Settings with the Sign-in methods group in every row state: GitHub bound as **octocat**, Apple bound with no label (**Linked**), Email **Not linked** with **Link on Web** |

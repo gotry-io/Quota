@@ -114,7 +114,6 @@
 		CF0106D41F578E1909080626 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5FCDA22B62B0D142212AA65 /* RootView.swift */; };
 		D3480A0E787B196E8D4CBB69 /* NotificationDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */; };
 		D4F6C9061D4E442A8156BF91 /* BackgroundRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */; };
-		D85884B956120B121094277A /* SyncCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0FECE51658D40F74029665 /* SyncCopy.swift */; };
 		D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC67366D6301AC5644D841EB /* OverviewView.swift */; };
 		DAF943A875E436921237F021 /* SubscriptionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */; };
 		DDE6A6D1075A876C9DF0DA11 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = A16F5F6EF52A9473C084077F /* QuotaWire */; };
@@ -128,6 +127,7 @@
 		E9CF2CCB8FC6AD1CF83A99EA /* UsageBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97CC275AFB0771C0C27763E /* UsageBreakdownTests.swift */; };
 		ECE01AA85AEC06F4AB6A873F /* QuotaProviderStatus in Frameworks */ = {isa = PBXBuildFile; productRef = 5757332985E7556DB12D798B /* QuotaProviderStatus */; };
 		ED34571BE1303B0FA36876C0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C2D6608523B711CFB7FFFFEB /* WebKit.framework */; };
+		EFF55B5B0B976931D4456398 /* ProCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F723E4B2B7C290E952415E72 /* ProCopy.swift */; };
 		F5552867B7621F88991A385E /* ProviderLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3665064D02927ACCDC0753 /* ProviderLoginView.swift */; };
 		F7C0E34B3ACF4FAF4B9CDB31 /* AlertCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE24F23209102B4AEFA59594 /* AlertCoordinatorTests.swift */; };
 		F9EAD472C5490F4C9F6233CB /* QuotaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8243A68073C5E5DD8FA5BD70 /* QuotaUITests.swift */; };
@@ -206,7 +206,6 @@
 		59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModelTests.swift; sourceTree = "<group>"; };
 		5CD24709587D0DE24991A7DC /* StatusMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMessage.swift; sourceTree = "<group>"; };
 		5CE1A9E6B6F4DB3AF29DF133 /* QuotaAppMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAppMark.swift; sourceTree = "<group>"; };
-		5D0FECE51658D40F74029665 /* SyncCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCopy.swift; sourceTree = "<group>"; };
 		608229F3060A24633515D297 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		61B3068E31E61E47925EBC63 /* MacSetupGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupGuide.swift; sourceTree = "<group>"; };
 		6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -273,6 +272,7 @@
 		E97CC275AFB0771C0C27763E /* UsageBreakdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageBreakdownTests.swift; sourceTree = "<group>"; };
 		EC67366D6301AC5644D841EB /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
 		F6F5BEBE04624D4EE7699987 /* IOSAlertStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAlertStateStore.swift; sourceTree = "<group>"; };
+		F723E4B2B7C290E952415E72 /* ProCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProCopy.swift; sourceTree = "<group>"; };
 		F8A9076FE7F3F12E50B59B10 /* InstallationIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallationIdentity.swift; sourceTree = "<group>"; };
 		F9141D8E147B24CE24D48194 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		FD6AEB03C55BFF99F77BD429 /* BackgroundRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefreshTests.swift; sourceTree = "<group>"; };
@@ -399,10 +399,10 @@
 			isa = PBXGroup;
 			children = (
 				8E12A58297D3E6E739A6636D /* PaywallView.swift */,
+				F723E4B2B7C290E952415E72 /* ProCopy.swift */,
 				E3030DCC7940732BCD50A080 /* PurchasesFacade.swift */,
 				B1CD70CF0BA0858524BE4C31 /* RevenueCatPurchases.swift */,
 				00C9FEE2B7DDA35A9747C99A /* SubscriptionModel.swift */,
-				5D0FECE51658D40F74029665 /* SyncCopy.swift */,
 			);
 			path = Subscription;
 			sourceTree = "<group>";
@@ -777,6 +777,7 @@
 				011405043FDF67F0D00C7144 /* NotificationCentering.swift in Sources */,
 				D94219C49FEE1E3ACE3F9A7E /* OverviewView.swift in Sources */,
 				6E6D6FCF6A1C5BC7B3120E59 /* PaywallView.swift in Sources */,
+				EFF55B5B0B976931D4456398 /* ProCopy.swift in Sources */,
 				CA7885249DC0CF79CF774235 /* ProviderLogin.swift in Sources */,
 				F5552867B7621F88991A385E /* ProviderLoginView.swift in Sources */,
 				316462E1FB5271216BC2253D /* ProviderQuotaRow.swift in Sources */,
@@ -796,7 +797,6 @@
 				BD65DDD0CE1AC66E4C438CA9 /* StatusMessage.swift in Sources */,
 				DAF943A875E436921237F021 /* SubscriptionDetailView.swift in Sources */,
 				2EAA3A9D95F12DD7FE9FA094 /* SubscriptionModel.swift in Sources */,
-				D85884B956120B121094277A /* SyncCopy.swift in Sources */,
 				3F8F9830CD84E331EAFC6FFC /* Theme.swift in Sources */,
 				47B560DDAD359CE7E6437DF9 /* UsageActivityChart.swift in Sources */,
 				7B8AA7F5381EBA3D6FCC14B3 /* UsageActivityView.swift in Sources */,

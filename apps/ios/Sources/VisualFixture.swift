@@ -31,6 +31,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case activityDayFailed = "activity-day-failed"
   case syncOff = "sync-off"
   case syncActive = "sync-active"
+  case syncLifetime = "sync-lifetime"
   case paywall
   case paywallUnavailable = "paywall-unavailable"
   case signIn = "sign-in"
@@ -61,8 +62,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       case .confirmAccount, .connectRefreshFailed:
         .pending
       case .content, .cachedError, .empty, .noDevices, .merged, .providers, .activityLoading,
-        .activityFailed, .activityDayEmpty, .activityDayFailed, .syncOff, .syncActive, .paywall,
-        .paywallUnavailable, .signInMethods:
+        .activityFailed, .activityDayEmpty, .activityDayFailed, .syncOff, .syncActive,
+        .syncLifetime, .paywall, .paywallUnavailable, .signInMethods:
         .active
       }
     }
@@ -241,6 +242,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
           entitlement: VisualFixtureContent.activeEntitlement(at: now)
         )
         model.selectedTab = .settings
+      case .syncLifetime:
+        applySignedInContent(
+          to: model,
+          now: now,
+          entitlement: VisualFixtureContent.lifetimeEntitlement()
+        )
+        model.selectedTab = .settings
       case .paywall:
         applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
         model.selectedTab = .settings
@@ -375,7 +383,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
       ]
     }
 
-    /// Paid sync as a signed-in fixture has it: active, renewing in a fortnight.
+    /// Quota Pro as a signed-in fixture has it: active, renewing in a fortnight.
     static func activeEntitlement(at date: Date) -> AccountEntitlement {
       AccountEntitlement(
         status: .active,
@@ -387,18 +395,30 @@ enum VisualFixture: String, CaseIterable, Sendable {
       )
     }
 
+    /// Quota Pro as a lifetime grant: active, no expiry, not renewing.
+    static func lifetimeEntitlement() -> AccountEntitlement {
+      AccountEntitlement(
+        status: .active,
+        expiresAt: nil,
+        willRenew: false,
+        productID: nil,
+        store: "app_store",
+        stale: false
+      )
+    }
+
     static func offers() -> [SubscriptionOffer] {
       [
         SubscriptionOffer(
           term: .monthly,
           productID: SubscriptionTerm.monthly.productID,
-          displayPrice: "$2.99",
+          displayPrice: "$0.99",
           freeTrialDays: 7
         ),
         SubscriptionOffer(
           term: .yearly,
           productID: SubscriptionTerm.yearly.productID,
-          displayPrice: "$29.99",
+          displayPrice: "$2.99",
           freeTrialDays: 7
         ),
       ]
@@ -1080,7 +1100,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       let days: [UsageActivityDay]
       switch fixture {
       case .content, .cachedError, .activityLoading, .activityFailed, .activityDayEmpty,
-        .activityDayFailed, .syncOff, .syncActive, .paywall, .paywallUnavailable, .signInMethods:
+        .activityDayFailed, .syncOff, .syncActive, .syncLifetime, .paywall, .paywallUnavailable,
+        .signInMethods:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
         .loading, .empty, .noDevices, .localOnly, .providers, .signIn:
@@ -1143,6 +1164,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
     func restorePurchases() async throws {
       throw SubscriptionError.purchasesUnavailable
     }
+
+    func presentOfferCodeRedemption() async {}
 
     func customerChanges() -> AsyncStream<Void> {
       AsyncStream { $0.finish() }
