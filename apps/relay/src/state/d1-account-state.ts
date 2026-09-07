@@ -1371,6 +1371,21 @@ export class D1AccountState implements AccountState {
     }
   }
 
+  async releaseRedemption(code: string, accountId: string): Promise<void> {
+    await this.database.batch([
+      this.database
+        .prepare("DELETE FROM code_redemptions WHERE code = ?1 AND account_id = ?2")
+        .bind(code, accountId),
+      this.database
+        .prepare(
+          `UPDATE redemption_codes
+           SET redeemed_count = MAX(redeemed_count - 1, 0)
+           WHERE code = ?1 AND changes() = 1`,
+        )
+        .bind(code),
+    ]);
+  }
+
   async applyRevenueCatWebhook(
     input: ApplyRevenueCatWebhookInput,
   ): Promise<"applied" | "duplicate"> {

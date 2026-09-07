@@ -216,6 +216,25 @@ describe("redemption codes", () => {
     expect(logged.some((line) => line.includes("relay_redeem_failed"))).toBe(true);
   });
 
+  it("reserves the code before asking RevenueCat, so a spent code is refused without a grant", async () => {
+    await seedAccount();
+    await seedCode({ max_redemptions: 1 });
+    const state = new D1AccountState(env.DB);
+    await env.DB.prepare("INSERT INTO accounts (id, created_at, updated_at) VALUES (?1, ?2, ?2)")
+      .bind("account_other", now.toISOString())
+      .run();
+    expect(await state.recordRedemption(codeBody, "account_other", now.toISOString())).toBe(
+      "recorded",
+    );
+    const rest = promotionalMock({ status: 200 });
+    const { app } = harness({ fetch: rest.fetch });
+    const response = await redeem(app, formattedCode);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "code_exhausted" } });
+    expect(rest.calls).toHaveLength(0);
+    expect(await state.getRedemptionCode(codeBody)).toMatchObject({ redeemed_count: 1 });
+  });
+
   it("answers 503 when billing is not configured", async () => {
     await seedAccount();
     await seedCode();
