@@ -318,9 +318,14 @@ func repeatedCancelTapsSendOneCancelLogin() async throws {
   try await Task.sleep(for: .milliseconds(100))
   #expect(await record.count == 1, "three presses of one Cancel are one cancel_login")
 
-  // The first request has finished and cleared the in-flight task, so this press is its own.
-  model.cancelLogin()
-  try await record.waitForCount(2)
+  // The first request clears the in-flight task when it finishes, which on a loaded runner is
+  // later than any fixed sleep. Keep pressing until a press lands as its own request: a press
+  // that joins the one still in flight sends nothing, so the count cannot pass two.
+  let deadline = ContinuousClock.now + .seconds(5)
+  while await record.count < 2, ContinuousClock.now < deadline {
+    model.cancelLogin()
+    try await Task.sleep(for: .milliseconds(20))
+  }
   #expect(await record.count == 2, "a press after the first request finished is a request of its own")
 }
 

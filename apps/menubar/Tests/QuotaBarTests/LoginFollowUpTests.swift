@@ -177,9 +177,17 @@ func cancellingASignInStopsThePoll() async throws {
   model.startLogin()
   #expect(try await eventually { model.isLoggingIn })
   model.cancelLogin()
-  try await Task.sleep(for: .milliseconds(150))
-  let calls = service.stateCalls
-  try await Task.sleep(for: .milliseconds(200))
-  #expect(service.stateCalls == calls)
+  // A poll iteration already on the main actor's queue when Cancel landed still runs once, and
+  // on a loaded runner it can land later than any fixed offset. Wait for the count to hold
+  // still across a whole window instead of sampling it at one.
+  let deadline = ContinuousClock.now + .seconds(3)
+  var calls = service.stateCalls
+  var settled = false
+  while !settled, ContinuousClock.now < deadline {
+    try await Task.sleep(for: .milliseconds(200))
+    settled = service.stateCalls == calls
+    calls = service.stateCalls
+  }
+  #expect(settled, "state() is still being polled after Cancel")
   await model.shutdown()
 }
