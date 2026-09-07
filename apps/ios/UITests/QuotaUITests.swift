@@ -1417,6 +1417,12 @@ final class QuotaUITests: XCTestCase {
           if control.frame.intersects(overlay) {
             return true
           }
+          // A row scrolled clear past the bar sits above it entirely, with a negative origin
+          // and no overlap left to test: the auditor still samples it, against the glass and
+          // the status bar. Nothing a reader can see, and no colour of this app's.
+          if control.frame.maxY <= overlay.maxY {
+            return true
+          }
           if bar.frame.minY < 1,
             control.frame.intersects(
               CGRect(x: overlay.minX, y: -overlay.maxY, width: overlay.width, height: overlay.maxY))
