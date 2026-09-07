@@ -49,6 +49,7 @@
 		69FDAFFF5F83727DDC4CE1B5 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 1FE61935A04309B1F538CEAE /* QuotaPresentation */; };
 		6A34B8FAD59F51E4E9C14B05 /* SyncStatusCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B68E6429A0D1F53AFA4224 /* SyncStatusCopy.swift */; };
 		6A6B89F8BE19A90EBD2EC0B8 /* QuotaWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = CCF4B5C6B4570D159C2F9D80 /* QuotaWidgetData */; };
+		6F4DC7B4875BCCE7A8A87028 /* QuotaPaceLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D83E32B25D3A62CF03F763 /* QuotaPaceLine.swift */; };
 		71949E91D14EC40BF96D97A2 /* MenuBarPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB726D37137BD1C9D10A0C11 /* MenuBarPanelController.swift */; };
 		72C5EC089E7923E35A892999 /* QuotaBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6539536B49EDA1F90DE4892 /* QuotaBarApp.swift */; };
 		78A57D6B8B6F2A78062A1CC8 /* NotificationStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63B2AEEC7DB973AB22669BEB /* NotificationStateStore.swift */; };
@@ -180,6 +181,7 @@
 		4F226CFFBCC41E3451498ADD /* AccountSummaryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSummaryViews.swift; sourceTree = "<group>"; };
 		4F59382948F6BAB2EE8604DF /* QuotaObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaObservation.swift; sourceTree = "<group>"; };
 		50710BC153A03418AC444B78 /* QuotaBarUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaBarUpdater.swift; sourceTree = "<group>"; };
+		52D83E32B25D3A62CF03F763 /* QuotaPaceLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPaceLine.swift; sourceTree = "<group>"; };
 		5E023BD18BF3B9B1DD2EA3C3 /* QuotaDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaDesign.swift; sourceTree = "<group>"; };
 		637C855E541E0515228FDF03 /* MenuBarShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarShell.swift; sourceTree = "<group>"; };
 		63B2AEEC7DB973AB22669BEB /* NotificationStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationStateStore.swift; sourceTree = "<group>"; };
@@ -475,6 +477,7 @@
 				DD4DC7B395BF3FEE01C12BFC /* CacheRebuildNotice.swift */,
 				EEC82E99182A3D1F5FBF65C0 /* ProviderQuotaView.swift */,
 				8A544624C0227F587DBA8F43 /* QuotaOverviewView.swift */,
+				52D83E32B25D3A62CF03F763 /* QuotaPaceLine.swift */,
 			);
 			path = Overview;
 			sourceTree = "<group>";
@@ -772,6 +775,7 @@
 				3966AE98B53460E8C845BCBE /* QuotaDesign.swift in Sources */,
 				9F4B70B7744453CB086E2AF8 /* QuotaObservation.swift in Sources */,
 				84A5275FC6112AD53BD67291 /* QuotaOverviewView.swift in Sources */,
+				6F4DC7B4875BCCE7A8A87028 /* QuotaPaceLine.swift in Sources */,
 				8275B18E19D1F7A2A5147B94 /* QuotaPalette.swift in Sources */,
 				0A449FA4AA111F211FC0700E /* QuotaRefreshInterval.swift in Sources */,
 				8FDD3626FA52E3921DAFF650 /* QuotaRefreshIntervalSettingsView.swift in Sources */,

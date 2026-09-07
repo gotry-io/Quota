@@ -105,6 +105,17 @@ jobs:
           cargo test --locked --package quota-service --package quota-menubar-helper
           ./scripts/test-swift.sh
 
+      # QuotaBar.xcodeproj is generated from apps/menubar/project.yml and committed; a source
+      # file added without regenerating it would still build under SwiftPM above and only fail
+      # here, so the committed project is checked against a fresh generation first.
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Check the committed QuotaBar project is current
+        run: |
+          ./scripts/generate-menubar.sh
+          git diff --exit-code -- apps/menubar/QuotaBar.xcodeproj
+
       - name: Package unsigned arm64 app
         run: ./scripts/package-menubar.sh 0.0.1 "${{ github.run_number }}"
 
