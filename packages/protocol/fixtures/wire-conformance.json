@@ -1105,7 +1105,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -1434,7 +1434,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -1783,7 +1783,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -2115,7 +2115,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -2444,7 +2444,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -2773,7 +2773,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -3304,7 +3304,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"
@@ -3626,7 +3626,7 @@
             "status": "active",
             "expires_at": "2026-09-12T00:00:00Z",
             "will_renew": true,
-            "product_id": "quota_sync_monthly",
+            "product_id": "quota_pro_monthly",
             "store": "app_store",
             "stale": false,
             "checked_at": "2026-09-05T00:00:00Z"

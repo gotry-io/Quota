@@ -65,7 +65,7 @@ beforeEach(async () => {
   await env.DB.prepare(
     `INSERT INTO entitlements (
        account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
-     ) VALUES (?1, 'active', 'quota_sync_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
+     ) VALUES (?1, 'active', 'quota_pro_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
   )
     .bind(
       accountId,
