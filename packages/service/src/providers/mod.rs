@@ -3,6 +3,7 @@
 //! Collectors deliberately return normalized, redacted snapshots. Credentials and provider-owned
 //! response bodies never cross this module's result boundary.
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod common;
@@ -13,6 +14,7 @@ pub mod gemini;
 pub mod grok;
 pub mod kimi;
 pub mod litellm;
+pub mod opencode_go;
 pub mod openrouter;
 
 pub use common::{
@@ -34,6 +36,8 @@ pub fn discover(provider: ProviderId, context: &CollectionContext) -> Vec<Provid
         ProviderId::Cursor => cursor::discover(context),
         ProviderId::Gemini => gemini::discover(context),
         ProviderId::Copilot => copilot::discover(context),
+        ProviderId::Antigravity => antigravity::discover(context),
+        ProviderId::OpencodeGo => opencode_go::discover(context),
     }
 }
 
@@ -53,6 +57,8 @@ pub fn collect(
         ProviderId::Cursor => cursor::collect(session, context),
         ProviderId::Gemini => gemini::collect(session, context),
         ProviderId::Copilot => copilot::collect(session, context),
+        ProviderId::Antigravity => antigravity::collect(session, context),
+        ProviderId::OpencodeGo => opencode_go::collect(session, context),
     }
 }
 
@@ -82,6 +88,13 @@ pub fn session_source_id(provider: ProviderId, session: &ProviderSession) -> &'s
         ProviderId::Cursor => cursor::APP_SOURCE,
         ProviderId::Gemini => gemini::SOURCE,
         ProviderId::Copilot => copilot::SOURCE,
+        ProviderId::Antigravity => antigravity::SOURCE,
+        ProviderId::OpencodeGo
+            if opencode_go::is_local_credential_source(&session.credential_source) =>
+        {
+            opencode_go::LOCAL_SOURCE
+        }
+        ProviderId::OpencodeGo => opencode_go::SOURCE,
     }
 }
 

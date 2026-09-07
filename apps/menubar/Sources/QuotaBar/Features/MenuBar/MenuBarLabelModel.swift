@@ -12,7 +12,8 @@ extension BillingAgent {
     case .cursor: .cursor
     case .gemini: .gemini
     case .copilot: .copilot
-    case .opencode, .pi, .unknown: nil
+    case .antigravity: .antigravity
+    case .opencode, .pi, .kilo, .unknown: nil
     }
   }
 }

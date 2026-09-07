@@ -1091,7 +1091,9 @@
         "litellm",
         "cursor",
         "gemini",
-        "copilot"
+        "copilot",
+        "antigravity",
+        "opencode_go"
       ]
     },
     "__schema20": {
@@ -1239,7 +1241,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 8,
+          "maxItems": 10,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema40"
@@ -1470,7 +1472,18 @@
       "properties": {
         "agent": {
           "type": "string",
-          "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor", "gemini", "copilot"]
+          "enum": [
+            "codex",
+            "claude_code",
+            "grok",
+            "opencode",
+            "pi",
+            "cursor",
+            "gemini",
+            "copilot",
+            "kilo",
+            "antigravity"
+          ]
         },
         "providers": {
           "maxItems": 8,
@@ -1536,7 +1549,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 8,
+          "maxItems": 10,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema40"

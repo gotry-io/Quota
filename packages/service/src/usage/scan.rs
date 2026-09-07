@@ -22,8 +22,8 @@ use std::sync::{
 /// Bump it when a parser starts emitting different facts for input it already indexed; a rescan
 /// then re-derives every source and marks only the hours whose facts actually differ.
 ///
-/// v7 attributes each fact to a local project basename derived from cwd or the source path.
-pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v7";
+/// v8 adds Kilo (`kilo.db`) and Antigravity conversation-db parsers.
+pub const DEFAULT_PARSER_REVISION: &str = "usage-rust-v8";
 
 #[derive(Clone, Debug)]
 pub struct UsageScanOptions {
@@ -118,6 +118,8 @@ pub fn scan_local_usage(
         UsageAgent::Cursor => super::cursor::scan_cursor_usage(options),
         UsageAgent::Gemini => super::gemini::scan_gemini_usage(options),
         UsageAgent::Copilot => super::copilot::scan_copilot_usage(options),
+        UsageAgent::Kilo => super::kilo::scan_kilo_usage(options),
+        UsageAgent::Antigravity => super::antigravity::scan_antigravity_usage(options),
     }
 }
 
@@ -194,6 +196,31 @@ pub(crate) fn roots_for(agent: UsageAgent, options: &UsageScanOptions) -> Vec<Pa
         UsageAgent::Copilot => {
             let root = env("COPILOT_HOME").unwrap_or_else(|| home.join(".copilot"));
             vec![root.join("session-state")]
+        }
+        UsageAgent::Kilo => {
+            let root = env("KILO_DATA_DIR")
+                .unwrap_or_else(|| home.join(".local").join("share").join("kilo"));
+            vec![root]
+        }
+        UsageAgent::Antigravity => {
+            if let Some(root) = env("ANTIGRAVITY_DATA_DIR") {
+                let nested = root.join("conversations");
+                return vec![if nested.is_dir() { nested } else { root }];
+            }
+            [
+                ".gemini/antigravity",
+                ".gemini/antigravity-cli",
+                ".gemini/antigravity-ide",
+                ".gemini/antigravity-backup",
+                ".config/antigravity",
+            ]
+            .into_iter()
+            .map(|root| {
+                let path = home.join(root);
+                let nested = path.join("conversations");
+                if nested.is_dir() { nested } else { path }
+            })
+            .collect()
         }
     }
 }
@@ -701,7 +728,7 @@ pub fn session_project_key(path: &Path) -> String {
         .unwrap_or("session");
     let raw = if matches!(
         file_name,
-        "updates.jsonl" | "opencode.db" | "state.vscdb" | "store.db"
+        "updates.jsonl" | "opencode.db" | "kilo.db" | "state.vscdb" | "store.db"
     ) {
         path.parent()
             .and_then(|value| value.file_name())
@@ -1004,6 +1031,8 @@ pub(crate) fn accepts_file(agent: UsageAgent, path: &Path) -> bool {
             name.starts_with("session-") && (name.ends_with(".json") || name.ends_with(".jsonl"))
         }
         UsageAgent::Copilot => name == "events.jsonl",
+        UsageAgent::Kilo => name == "kilo.db",
+        UsageAgent::Antigravity => name.ends_with(".db"),
     }
 }
 

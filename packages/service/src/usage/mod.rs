@@ -4,12 +4,14 @@
 //! `UsageRow` values contain only the allow-listed fields that may leave this Mac;
 //! `NormalizedUsageEvent.project_key` and `LocalHourlyFact` stay on the disposable cache.
 
+mod antigravity;
 mod claude;
 mod codex;
 mod copilot;
 mod cursor;
 mod gemini;
 mod grok;
+mod kilo;
 mod opencode;
 mod pi;
 mod project;
@@ -18,12 +20,14 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub use antigravity::scan_antigravity_usage;
 pub use claude::scan_claude_usage;
 pub use codex::scan_codex_usage;
 pub use copilot::scan_copilot_usage;
 pub use cursor::scan_cursor_usage;
 pub use gemini::scan_gemini_usage;
 pub use grok::scan_grok_usage;
+pub use kilo::scan_kilo_usage;
 pub use opencode::scan_opencode_usage;
 pub use pi::scan_pi_usage;
 pub use project::{
@@ -94,10 +98,14 @@ pub enum UsageAgent {
     Gemini,
     #[serde(rename = "copilot")]
     Copilot,
+    #[serde(rename = "kilo")]
+    Kilo,
+    #[serde(rename = "antigravity")]
+    Antigravity,
 }
 
 impl UsageAgent {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Codex,
         Self::ClaudeCode,
         Self::Grok,
@@ -106,6 +114,8 @@ impl UsageAgent {
         Self::Cursor,
         Self::Gemini,
         Self::Copilot,
+        Self::Kilo,
+        Self::Antigravity,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -118,6 +128,8 @@ impl UsageAgent {
             Self::Cursor => "cursor",
             Self::Gemini => "gemini",
             Self::Copilot => "copilot",
+            Self::Kilo => "kilo",
+            Self::Antigravity => "antigravity",
         }
     }
 }

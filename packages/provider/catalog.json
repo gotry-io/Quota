@@ -280,6 +280,48 @@
       "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null
+    },
+    {
+      "id": "antigravity",
+      "display_name": "Antigravity",
+      "order": 10,
+      "default_visible": false,
+      "setup_action": "agy",
+      "brand_icon_asset": "antigravity",
+      "account_sync": true,
+      "environment_keys": ["GOOGLE_CLOUD_PROJECT"],
+      "credential_config": null,
+      "browser_session": null,
+      "default_base_url": null,
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "none",
+        "url": "https://www.google.com/appsstatus/dashboard/"
+      }
+    },
+    {
+      "id": "opencode_go",
+      "display_name": "OpenCode Go",
+      "order": 11,
+      "default_visible": false,
+      "setup_action": "Configure in QuotaBar",
+      "brand_icon_asset": "opencode-go",
+      "account_sync": true,
+      "environment_keys": ["OPENCODE_API_KEY"],
+      "credential_config": {
+        "kind": "api_key",
+        "supports_base_url": false,
+        "requires_base_url": false,
+        "allow_private_http": false,
+        "mask_label": "OpenCode Go"
+      },
+      "browser_session": null,
+      "default_base_url": "https://opencode.ai/zen/go/v1",
+      "base_url_environment_key": null,
+      "status_page": {
+        "kind": "none",
+        "url": null
+      }
     }
   ]
 }

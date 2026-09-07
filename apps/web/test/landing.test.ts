@@ -94,9 +94,9 @@ test("works-with names come from the catalog and billing agents", () => {
     .slice()
     .sort((left, right) => left.order - right.order)
     .map((provider) => provider.display_name);
-  assert.equal(catalogNames.length, 10);
+  assert.equal(catalogNames.length, 12);
   assert.deepEqual(PROVIDER_DISPLAY_NAMES, catalogNames);
-  assert.equal(AGENT_DISPLAY_NAMES.length, 8);
+  assert.equal(AGENT_DISPLAY_NAMES.length, 10);
   assert.deepEqual(
     AGENT_DISPLAY_NAMES,
     BILLING_AGENTS.map((agent) => agentDisplayName(agent)),

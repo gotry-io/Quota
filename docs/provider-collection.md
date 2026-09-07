@@ -32,7 +32,7 @@ signed-in web session declares one — Codex, Claude Code, Grok, Kimi Code, and 
 always the last rung, described once under [Browser session](#browser-session).
 
 Supported order today: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor,
-Gemini CLI, GitHub Copilot.
+Gemini CLI, GitHub Copilot, Antigravity, OpenCode Go.
 
 ## Service status
 
@@ -54,6 +54,8 @@ Verified 2026-09-06 (no redirects; this client's HTTP stack follows none):
 | Kimi Code | `statuspage_v2` | `https://status.moonshot.cn/api/v2/status.json` |
 | LiteLLM | `none` | no official page |
 | Cursor | `statuspage_v2` | `https://status.cursor.com/api/v2/status.json` |
+| Antigravity | `none` | `https://www.google.com/appsstatus/dashboard/` (Google Workspace HTML; no Statuspage v2) |
+| OpenCode Go | `none` | no official page |
 
 The local helper polls every ten minutes (and once at scheduler start) with
 `User-Agent: Quota/<version>`, a ten-second timeout, and a 64 KiB body cap. A failed poll keeps
@@ -534,6 +536,31 @@ make an otherwise unpriced fact priced.
    Preserve the reported `model`. The session does not name a billing channel; store `unknown`.
 3. Empty token objects emit no fact. Malformed timestamps or usage make only that file partial.
 
+### Kilo Usage
+
+1. Discover `kilo.db` below `$KILO_DATA_DIR` or `~/.local/share/kilo`. This is the Kilo CLI
+   session store; Rust opens it read-only.
+2. Parse assistant `message.data` JSON with the same token object OpenCode writes (`tokens.input` /
+   `output` / `reasoning` / `cache.read` / `cache.write`, `time.created`, `modelID`, `providerID`,
+   `cost`). Add cache-read and cache-write to uncached input. Resolve a billing channel only from an
+   explicit recognized `providerID`. `directory` / `cwd` on the record, or `session.directory` when
+   that table exists, becomes `project_key` as a basename ([ADR 0039](decisions/0039-project-attribution-stays-local.md)).
+3. Empty token objects emit no fact. An unreadable database makes only that file partial.
+
+### Antigravity Usage
+
+1. Discover `*.db` conversation files under `$ANTIGRAVITY_DATA_DIR` (a data root or its
+   `conversations/` folder) or, by default, `~/.gemini/antigravity`, `antigravity-cli`,
+   `antigravity-ide`, `antigravity-backup`, and `~/.config/antigravity`, preferring a nested
+   `conversations/` directory when it exists.
+2. Read `gen_metadata.data` and, when present, `steps.metadata` protobuf blobs. Emit a fact from
+   each token-bearing usage message: input, cache read/write, output, reasoning, and the model
+   string the blob carries. Input is uncached plus cache. Reasoning is a subset of output. The log
+   does not name a billing channel; store `unknown`. There is no cwd field; `project_key` stays
+   empty on the fact. Duplicate identities (`response:`, `provider:`, `message:`) in one file are
+   kept once.
+3. An unreadable database or undecodable blob makes only that file partial.
+
 ### GitHub Copilot Usage
 
 1. Discover `events.jsonl` below `$COPILOT_HOME/session-state` or `~/.copilot/session-state`, one
@@ -548,8 +575,8 @@ make an otherwise unpriced fact priced.
    source cost.
 3. OpenTelemetry JSONL under `~/.copilot/otel` and `~/.copilot/session-store.db` are not read.
 
-Cursor, Gemini CLI, and GitHub Copilot are part of the single BillingAgent set every managed
-contract carries.
+Cursor, Gemini CLI, GitHub Copilot, Kilo, and Antigravity are part of the single BillingAgent set
+every managed contract carries.
 
 All scanners preserve non-empty bounded model identifiers as opaque provider text, ignore zero-
 token/tool/cost internal records, and use canonical `[start_at, end_at)` UTC-hour boundaries,
@@ -855,13 +882,69 @@ called: that method answers `403` for this OAuth client.
    the fallback. `copilot_plan` is the plan slug. `login` is the global fingerprint.
 4. Absent token → `auth_required` with "Run `copilot login`". No browser-session rung.
 
+## Antigravity
+
+CodexBar Automatic is app language-server → `agy` CLI HTTPS → IDE language-server → Google OAuth.
+This build does **not** attach to a local `language_server`, does not spawn `agy`, and does not
+read CodexBar's `~/.codexbar/antigravity/oauth_creds.json`. Those rungs need a process this
+refresh is not allowed to start. The official remote path that remains is Cloud Code Assist with
+the CLI's own OAuth file.
+
+1. Discover `~/.gemini/antigravity-cli/antigravity-oauth-token` (or `$GEMINI_CLI_HOME/antigravity-cli/antigravity-oauth-token`).
+   The official CLI writes `{ "auth_method", "token": { "access_token", "refresh_token", "expiry" } }`.
+   macOS Keychain "Antigravity Safe Storage" is not read: the service name is not an official
+   file contract, and this collector does not invent a second grant store.
+2. A token more than 60 seconds from expiry is spent as-is. An expired access token is refreshed
+   in memory against `POST https://oauth2.googleapis.com/token` only when the same file also
+   carries `client_id` and `client_secret`. This build does not extract an OAuth client from
+   Antigravity.app binaries. Without a client an expired token answers `auth_required`. The file
+   is never written.
+3. `POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` with
+   `{ metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }`
+   and, when set, `GOOGLE_CLOUD_PROJECT` as `cloudaicompanionProject`. `currentTier.id` (else
+   `planInfo.planType`) becomes the plan slug. Requests identify as `User-Agent: antigravity`
+   because that is the client the Antigravity OAuth grant was issued for.
+4. Prefer `POST …:retrieveUserQuotaSummary`. When that is refused or has no windows,
+   `POST …:retrieveUserQuota` with `{ project }` when a project id is known. Summary `groups[]`
+   buckets become named windows (Gemini / Claude + GPT × 5 Hours / Weekly). Legacy `buckets[]`
+   REQUESTS rows pool by reset horizon the way Gemini CLI does, except a reset within six hours
+   is **5 Hours** rather than per-minute.
+5. Absent file or unusable grant → `auth_required` with "Run `agy` and sign in with Google".
+   HTTP 401/403 → `auth_required`. Identity is the access token JWT `email` (else stored `email`,
+   else `sub`).
+
+## OpenCode Go
+
+CodexBar Automatic unscoped is **local → API → web**. Scoped web-first order applies when a
+CodexBar account, manual cookie, or workspace is selected; this build has no cookie or workspace
+rung, so it keeps the unscoped order. The web path is CodexBar scraping `opencode.ai/_server`
+HTML/JSON with `auth` / `__Host-auth` cookies — not a documented official quota API — and is not
+implemented here.
+
+1. Discover a local OpenCode Go sign-in at `$XDG_DATA_HOME/opencode/auth.json` (default
+   `~/.local/share/opencode/auth.json`) when `opencode-go.key` is non-empty; else the API key from
+   owner-only `providers.opencode_go.api_key` or `OPENCODE_API_KEY`.
+2. Local: read `opencode.db` `message` rows whose `providerID` is `opencode-go` and that carry a
+   numeric `cost`. Sum dollars in the rolling 5-hour, UTC-week (Monday), and UTC-month windows.
+   Remaining is that sum against the published OpenCode Go limits of **$12 / 5 hours**, **$30 /
+   week**, and **$60 / month**. Those limits are product documentation, not a quota endpoint.
+   Empty history with a key present is not a reading: fall through to the API key.
+3. API: `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer`. Map `usage.rolling`
+   / `weekly` / `monthly` `usagePercent` (or `remainingPercent`) and `resetInSec` / `resetAt` onto
+   **5 Hours**, **Weekly**, and **Monthly**. Dollar remaining/limit fields are kept when present.
+   Custom base URLs are not supported.
+4. Absent key and no local auth → `auth_required` with guidance to configure QuotaBar (or set
+   `OPENCODE_API_KEY`). HTTP 401/403 → `auth_required`. Identity is the SHA-256 of the API key
+   (or the local `opencode-go` key) under `api_key`. No browser-session rung.
+
 ## Identity and normalization
 
 - A global `account.fingerprint` is SHA-256 over the provider, the identifier namespace, and the
   stable quota-owner identifier: Codex uses account ID; Claude Code uses organization ID; Grok uses
   team ID when present and otherwise user ID; Cursor uses its stable user `sub` and falls back to a
   normalized email; Gemini CLI uses the OAuth access-token JWT email (else `sub`); GitHub Copilot
-  uses the `login` from `copilot_internal/user`; OpenRouter, DeepSeek, Kimi Code, and LiteLLM use a
+  uses the `login` from `copilot_internal/user`; Antigravity uses the OAuth access-token JWT email
+  (else stored email, else `sub`); OpenRouter, DeepSeek, Kimi Code, LiteLLM, and OpenCode Go use a
   SHA-256 of the API key under the `api_key` namespace (never the raw key).
 - Cursor explicitly uses normalized email as a fingerprint fallback only when `/api/auth/me` omits
   `sub`. For every other provider, email is display enrichment only and never a global identity; a
@@ -874,7 +957,7 @@ called: that method answers `403` for this OAuth client.
 - One provider failure does not discard successful results from other requested providers.
 - Requested providers collect concurrently while the report preserves catalog order
   (`PROVIDER_ORDER`): Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor,
-  Gemini CLI, then GitHub Copilot.
+  Gemini CLI, GitHub Copilot, Antigravity, then OpenCode Go.
   Multiple sessions within one provider remain sequential so provider-owned credential refreshes do
   not race. A provider result with both successful and failed sessions remains explicitly partial in
   component state.

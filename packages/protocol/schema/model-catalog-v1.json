@@ -105,7 +105,18 @@
     },
     "__schema6": {
       "type": "string",
-      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor", "gemini", "copilot"]
+      "enum": [
+        "codex",
+        "claude_code",
+        "grok",
+        "opencode",
+        "pi",
+        "cursor",
+        "gemini",
+        "copilot",
+        "kilo",
+        "antigravity"
+      ]
     },
     "__schema7": {
       "$ref": "#/$defs/__schema8"

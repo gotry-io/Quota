@@ -706,6 +706,8 @@ export const BILLING_AGENTS = [
   "cursor",
   "gemini",
   "copilot",
+  "kilo",
+  "antigravity",
 ] as const;
 const BillingAgentSchema = z.enum(BILLING_AGENTS);
 export type BillingAgent = z.infer<typeof BillingAgentSchema>;
@@ -719,6 +721,8 @@ const AGENT_DISPLAY_NAMES: Readonly<Record<BillingAgent, string>> = {
   cursor: "Cursor",
   gemini: "Gemini CLI",
   copilot: "GitHub Copilot",
+  kilo: "Kilo",
+  antigravity: "Antigravity",
 };
 
 /** An agent this build has never heard of is named as what it is. */

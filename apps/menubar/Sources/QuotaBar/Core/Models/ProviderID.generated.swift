@@ -21,6 +21,8 @@ extension ProviderID {
     case .`cursor`: false
     case .`gemini`: false
     case .`copilot`: false
+    case .`antigravity`: false
+    case .`opencode_go`: false
     case .unknown: false
     }
   }
@@ -38,6 +40,8 @@ extension ProviderID {
     case .`cursor`: "Sign in with browser"
     case .`gemini`: "gemini"
     case .`copilot`: "copilot login"
+    case .`antigravity`: "agy"
+    case .`opencode_go`: "Configure in QuotaBar"
     case .unknown(let rawValue): rawValue
     }
   }
@@ -54,13 +58,15 @@ extension ProviderID {
     case .`cursor`: "cursor"
     case .`gemini`: "gemini"
     case .`copilot`: "copilot"
+    case .`antigravity`: "antigravity"
+    case .`opencode_go`: "opencode-go"
     case .unknown(let rawValue): rawValue
     }
   }
 
   /// Providers that store secrets via service configuration.
   static var configurableCases: [ProviderID] {
-    [.`openrouter`, .`deepseek`, .`kimi`, .`litellm`]
+    [.`openrouter`, .`deepseek`, .`kimi`, .`litellm`, .`opencode_go`]
   }
 
   var isConfigurable: Bool {
@@ -79,6 +85,8 @@ extension ProviderID {
     case .`cursor`: false
     case .`gemini`: false
     case .`copilot`: false
+    case .`antigravity`: false
+    case .`opencode_go`: false
     case .unknown: false
     }
   }
@@ -95,6 +103,8 @@ extension ProviderID {
     case .`cursor`: false
     case .`gemini`: false
     case .`copilot`: false
+    case .`antigravity`: false
+    case .`opencode_go`: false
     case .unknown: false
     }
   }

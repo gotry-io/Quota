@@ -11,6 +11,8 @@ enum AgentDisplay {
     case .cursor: "Cursor"
     case .gemini: "Gemini CLI"
     case .copilot: "GitHub Copilot"
+    case .kilo: "Kilo"
+    case .antigravity: "Antigravity"
     case .unknown: "Unknown"
     }
   }

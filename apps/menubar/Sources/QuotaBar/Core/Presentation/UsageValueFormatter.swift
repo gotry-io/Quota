@@ -97,6 +97,8 @@ enum UsageValueFormatter {
     case .cursor: "Cursor"
     case .gemini: "Gemini CLI"
     case .copilot: "GitHub Copilot"
+    case .kilo: "Kilo"
+    case .antigravity: "Antigravity"
     // An agent this build has never heard of is named as what it is.
     case .unknown: "Unknown"
     }

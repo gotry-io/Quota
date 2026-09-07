@@ -83,7 +83,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 8,
+          "maxItems": 10,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema30"
@@ -110,7 +110,7 @@
           "type": "boolean"
         },
         "agents": {
-          "maxItems": 8,
+          "maxItems": 10,
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema30"
@@ -137,7 +137,18 @@
     },
     "__schema3": {
       "type": "string",
-      "enum": ["codex", "claude_code", "grok", "opencode", "pi", "cursor", "gemini", "copilot"]
+      "enum": [
+        "codex",
+        "claude_code",
+        "grok",
+        "opencode",
+        "pi",
+        "cursor",
+        "gemini",
+        "copilot",
+        "kilo",
+        "antigravity"
+      ]
     },
     "__schema4": {
       "maxItems": 256,

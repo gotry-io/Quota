@@ -2,10 +2,15 @@
 
 ## Lobe Icons
 
-The OpenAI, Claude, Grok, Cursor, OpenRouter, Azure AI, AWS Bedrock, Google Vertex AI, OpenCode, and Pi
-monochrome SVG assets are from
+The OpenAI, Claude, Grok, Cursor, OpenRouter, Azure AI, AWS Bedrock, Google Vertex AI, OpenCode,
+OpenCode Go, and Pi monochrome SVG assets are from
 `@lobehub/icons-static-svg` / [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)
 (https://lobehub.com/icons). Paths are used as template marks and tinted by QuotaBar.
+OpenCode Go uses the same OpenCode mark.
+
+The Antigravity and Kilo monochrome marks are the paths from
+[steipete/CodexBar](https://github.com/steipete/CodexBar) `ProviderIcon-antigravity.svg` and
+`ProviderIcon-kilo.svg`, recolored to `currentColor`.
 
 MIT License
 

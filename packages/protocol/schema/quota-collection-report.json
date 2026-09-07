@@ -9,7 +9,7 @@
       "$ref": "#/$defs/__schema0"
     },
     "results": {
-      "maxItems": 10,
+      "maxItems": 12,
       "type": "array",
       "items": {
         "$ref": "#/$defs/__schema1"
@@ -81,7 +81,9 @@
         "litellm",
         "cursor",
         "gemini",
-        "copilot"
+        "copilot",
+        "antigravity",
+        "opencode_go"
       ]
     },
     "__schema4": {

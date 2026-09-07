@@ -25,6 +25,10 @@ pub enum ProviderId {
     Gemini,
     #[serde(rename = "copilot")]
     Copilot,
+    #[serde(rename = "antigravity")]
+    Antigravity,
+    #[serde(rename = "opencode_go")]
+    OpencodeGo,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,6 +330,47 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         base_url_environment_key: None,
         status_page: None,
     },
+    ProviderCatalogEntry {
+        id: ProviderId::Antigravity,
+        display_name: "Antigravity",
+        order: 10,
+        default_visible: false,
+        setup_action: "agy",
+        brand_icon_asset: "antigravity",
+        account_sync: true,
+        environment_keys: &["GOOGLE_CLOUD_PROJECT"],
+        credential_config: None,
+        browser_session: None,
+        default_base_url: None,
+        base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: Some("https://www.google.com/appsstatus/dashboard/"),
+        }),
+    },
+    ProviderCatalogEntry {
+        id: ProviderId::OpencodeGo,
+        display_name: "OpenCode Go",
+        order: 11,
+        default_visible: false,
+        setup_action: "Configure in QuotaBar",
+        brand_icon_asset: "opencode-go",
+        account_sync: true,
+        environment_keys: &["OPENCODE_API_KEY"],
+        credential_config: Some(ApiKeyConfig {
+            supports_base_url: false,
+            requires_base_url: false,
+            allow_private_http: false,
+            mask_label: "OpenCode Go",
+        }),
+        browser_session: None,
+        default_base_url: Some("https://opencode.ai/zen/go/v1"),
+        base_url_environment_key: None,
+        status_page: Some(StatusPageConfig {
+            kind: StatusPageKind::None,
+            url: None,
+        }),
+    },
 ];
 
 impl ProviderId {
@@ -341,6 +386,8 @@ impl ProviderId {
         Self::Cursor,
         Self::Gemini,
         Self::Copilot,
+        Self::Antigravity,
+        Self::OpencodeGo,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -355,6 +402,8 @@ impl ProviderId {
             Self::Cursor => "cursor",
             Self::Gemini => "gemini",
             Self::Copilot => "copilot",
+            Self::Antigravity => "antigravity",
+            Self::OpencodeGo => "opencode_go",
         }
     }
 
@@ -370,6 +419,8 @@ impl ProviderId {
             "cursor" => Some(Self::Cursor),
             "gemini" => Some(Self::Gemini),
             "copilot" => Some(Self::Copilot),
+            "antigravity" => Some(Self::Antigravity),
+            "opencode_go" => Some(Self::OpencodeGo),
             _ => None,
         }
     }
@@ -386,6 +437,8 @@ impl ProviderId {
             Self::Cursor => &PROVIDER_CATALOG[7],
             Self::Gemini => &PROVIDER_CATALOG[8],
             Self::Copilot => &PROVIDER_CATALOG[9],
+            Self::Antigravity => &PROVIDER_CATALOG[10],
+            Self::OpencodeGo => &PROVIDER_CATALOG[11],
         }
     }
 

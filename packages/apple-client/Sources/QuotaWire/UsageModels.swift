@@ -10,6 +10,8 @@ public enum BillingAgent: String, CaseIterable, Codable, Sendable, TolerantWireE
   case cursor
   case gemini
   case copilot
+  case kilo
+  case antigravity
   case unknown
 }
 

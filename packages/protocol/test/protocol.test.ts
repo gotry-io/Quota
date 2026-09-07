@@ -49,6 +49,8 @@ describe("quota protocol", () => {
     expect(PROVIDER_IDS).toContain("cursor");
     expect(PROVIDER_IDS).toContain("gemini");
     expect(PROVIDER_IDS).toContain("copilot");
+    expect(PROVIDER_IDS).toContain("antigravity");
+    expect(PROVIDER_IDS).toContain("opencode_go");
     expect(ProviderIdSchema.safeParse("cursor").success).toBe(true);
     expect(LOCAL_PROVIDER_IDS).toEqual(expect.arrayContaining([...PROVIDER_IDS]));
     expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
@@ -66,6 +68,8 @@ describe("quota protocol", () => {
     expect(protocol.BILLING_AGENTS).toContain("cursor");
     expect(protocol.BILLING_AGENTS).toContain("gemini");
     expect(protocol.BILLING_AGENTS).toContain("copilot");
+    expect(protocol.BILLING_AGENTS).toContain("kilo");
+    expect(protocol.BILLING_AGENTS).toContain("antigravity");
     const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
     expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
     // The shared fixture owns the retired managed-data version; this pins the control one,

@@ -4,8 +4,9 @@ use super::{
     MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_PROJECTS, MAX_USAGE_ROWS_PER_HOUR,
     NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions,
     aggregate_hour_rows, build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other,
-    fold_usage_rows, scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage,
-    scan_local_usage, scan_opencode_usage, scan_pi_usage, session_project_key,
+    fold_usage_rows, scan_antigravity_usage, scan_claude_usage, scan_codex_usage,
+    scan_cursor_usage, scan_grok_usage, scan_kilo_usage, scan_local_usage, scan_opencode_usage,
+    scan_pi_usage, session_project_key,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -212,7 +213,7 @@ fn parser_fixtures_preserve_normalized_fields_and_coverage() {
                 assert_eq!(claude.input_tokens, 95);
                 assert_eq!(claude.output_tokens, 30);
             }
-            UsageAgent::OpenCode => unreachable!(),
+            UsageAgent::OpenCode | UsageAgent::Kilo | UsageAgent::Antigravity => unreachable!(),
         }
         let _ = fs::remove_dir_all(path);
     }
@@ -2267,6 +2268,84 @@ fn pricing_rates() -> PricingRates {
 }
 
 #[test]
+fn kilo_sqlite_messages_normalize_like_opencode() {
+    let path = root("kilo-sqlite");
+    let database_path = path.join("kilo.db");
+    let connection = Connection::open(&database_path).expect("open");
+    connection
+        .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
+        .expect("schema");
+    connection
+        .execute(
+            "INSERT INTO message(id, session_id, data) VALUES (?1, ?2, ?3)",
+            params![
+                "row-1",
+                "session-a",
+                format!(
+                    r#"{{"id":"msg-1","role":"assistant","providerID":"anthropic","modelID":"claude-sonnet-4-20250514","time":{{"created":{}}},"tokens":{{"input":100,"output":50,"reasoning":5,"cache":{{"read":10,"write":20}}}},"cost":0.02,"directory":"/Users/kyle/Code/Quota"}}"#,
+                    epoch_millis("2026-08-02T10:01:00Z")
+                )
+            ],
+        )
+        .expect("insert");
+    connection.close().expect("close");
+    let result = scan_kilo_usage(&options(&path)).expect("scan kilo");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(result.records.len(), 1);
+    let event = &result.records[0].event;
+    assert_eq!(event.agent, UsageAgent::Kilo);
+    assert_eq!(event.model, "claude-sonnet-4-20250514");
+    assert_eq!(event.billing_channel, BillingChannel::AnthropicDirect);
+    assert_eq!(event.input_tokens, 130);
+    assert_eq!(event.cache_read_tokens, 10);
+    assert_eq!(event.cache_write_inferred_tokens, 20);
+    assert_eq!(event.output_tokens, 50);
+    assert_eq!(event.reasoning_tokens, 5);
+    assert_eq!(event.source_cost_microusd.as_deref(), Some("20000"));
+    assert_eq!(event.project_key.as_deref(), Some("Quota"));
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn antigravity_conversation_db_emits_usage_facts() {
+    let path = root("antigravity-db");
+    let database_path = path.join("session.db");
+    let connection = Connection::open(&database_path).expect("open");
+    connection
+        .execute_batch("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB NOT NULL);")
+        .expect("schema");
+    let blob = super::antigravity::encode_generation_blob(
+        "gemini-3-pro",
+        100,
+        40,
+        10,
+        5,
+        8,
+        (epoch_millis("2026-08-02T10:01:00Z") / 1000) as u64,
+    );
+    connection
+        .execute(
+            "INSERT INTO gen_metadata(idx, data) VALUES (1, ?1)",
+            params![blob],
+        )
+        .expect("insert");
+    connection.close().expect("close");
+    let result = scan_antigravity_usage(&options(&path)).expect("scan antigravity");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert_eq!(result.records.len(), 1);
+    let event = &result.records[0].event;
+    assert_eq!(event.agent, UsageAgent::Antigravity);
+    assert_eq!(event.model, "gemini-3-pro");
+    assert_eq!(event.input_tokens, 115);
+    assert_eq!(event.cache_read_tokens, 10);
+    assert_eq!(event.cache_write_inferred_tokens, 5);
+    assert_eq!(event.output_tokens, 40);
+    assert_eq!(event.reasoning_tokens, 8);
+    assert_eq!(event.billing_channel, BillingChannel::Unknown);
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
 fn session_project_key_is_a_basename_never_a_path() {
     assert_eq!(
         session_project_key(Path::new(
@@ -2289,6 +2368,10 @@ fn session_project_key_is_a_basename_never_a_path() {
     assert_eq!(
         session_project_key(Path::new("/Users/kyle/.local/share/opencode/opencode.db")),
         "opencode"
+    );
+    assert_eq!(
+        session_project_key(Path::new("/Users/kyle/.local/share/kilo/kilo.db")),
+        "kilo"
     );
     assert!(!session_project_key(Path::new("a/b/c.jsonl")).contains('/'));
 }
