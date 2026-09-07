@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import Observation
+import UIKit
 import QuotaAccount
 import QuotaAlerts
 import QuotaPresentation
@@ -134,6 +135,12 @@ final class AppModel {
   var linkFailure: String?
   /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
   var providerStatus: [ProviderID: ProviderStatusReading] = [:]
+  /// How often the foreground app polls official status pages. The helper uses the same interval.
+  static let providerStatusInterval: TimeInterval = 600
+  @ObservationIgnored
+  private var providerStatusTimer: Timer?
+  @ObservationIgnored
+  private var sceneObservers: [any NSObjectProtocol] = []
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -677,9 +684,74 @@ final class AppModel {
     updateBackgroundRefreshAsk()
   }
 
+  /// Start or stop the ten-minute status-page timer with the scene. A background refresh still
+  /// polls through `refresh()`; this is the independent foreground cadence.
+  func setForeground(_ isForeground: Bool) async {
+    if isForeground {
+      await startProviderStatusPolling()
+    } else {
+      stopProviderStatusPolling()
+    }
+  }
+
+  /// Follow the app into the background and back. Visual fixtures never call this, so they
+  /// stay offline and do not observe the scene.
+  func observeApplicationLifecycle() {
+    #if DEBUG
+      if skipsRestore { return }
+    #endif
+    guard sceneObservers.isEmpty else { return }
+    let center = NotificationCenter.default
+    sceneObservers.append(
+      center.addObserver(
+        forName: UIApplication.didEnterBackgroundNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in
+          await self?.setForeground(false)
+        }
+      }
+    )
+    sceneObservers.append(
+      center.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in
+          await self?.setForeground(true)
+        }
+      }
+    )
+  }
+
   func refreshProviderStatus() async {
+    #if DEBUG
+      if skipsRestore { return }
+    #endif
     let readings = await providerStatusClient.refresh()
     providerStatus = Dictionary(uniqueKeysWithValues: readings.map { ($0.provider, $0) })
+  }
+
+  private func startProviderStatusPolling() async {
+    #if DEBUG
+      if skipsRestore { return }
+    #endif
+    guard providerStatusTimer == nil else { return }
+    await refreshProviderStatus()
+    let timer = Timer(timeInterval: Self.providerStatusInterval, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        await self?.refreshProviderStatus()
+      }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    providerStatusTimer = timer
+  }
+
+  private func stopProviderStatusPolling() {
+    providerStatusTimer?.invalidate()
+    providerStatusTimer = nil
   }
 
   func logout() async {
