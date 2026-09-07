@@ -15,6 +15,7 @@ import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import ProviderMark from "$lib/components/ProviderMark.svelte";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
+import { fetchProviderStatus, showsProviderStatusDot } from "$lib/provider-status";
 import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } from "$lib/format";
 import {
   DEVICES_PATH,
@@ -34,6 +35,18 @@ let deviceNames = $derived(
 const showSyncOff = $derived(
   store.summary !== null && !isPaidSyncStatus(store.summary.entitlement.status),
 );
+let providerStatus = $state<Map<string, { indicator: string; description: string }>>(new Map());
+
+$effect(() => {
+  let cancelled = false;
+  void fetchProviderStatus().then((rows) => {
+    if (cancelled) return;
+    providerStatus = new Map(rows.map((row) => [row.id, row]));
+  });
+  return () => {
+    cancelled = true;
+  };
+});
 
 function deviceName(deviceId: string): string {
   return deviceNames.get(deviceId) ?? "Device";
@@ -92,12 +105,22 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
           {@const snapshot = subscription.snapshot}
           {@const sel = store.subscriptionSelectors[subscription.key]}
           {@const plan = planDisplayName(snapshot.account.plan)}
+          {@const status = providerStatus.get(subscription.provider)}
           <article class="quota-card">
             {#snippet card()}
               <div class="quota-card-heading">
                 <ProviderMark provider={subscription.provider} />
                 <div class="quota-card-identity">
-                  <p class="quota-card-provider">{providerDisplayName(subscription.provider)}</p>
+                  <p class="quota-card-provider">
+                    {providerDisplayName(subscription.provider)}
+                    {#if status && showsProviderStatusDot(status.indicator)}
+                      <span
+                        class="provider-status-dot provider-status-dot-{status.indicator}"
+                        title={status.description}
+                        aria-hidden="true"
+                      ></span>
+                    {/if}
+                  </p>
                   <p class="quota-card-account">{snapshot.account.label || "Account"}</p>
                 </div>
                 {#if plan}

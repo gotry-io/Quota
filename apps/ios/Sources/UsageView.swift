@@ -315,9 +315,12 @@ struct UsageTotalsSection: View {
         .font(.body)
         .foregroundStyle(Color.primary)
         .accessibilityIdentifier("section.footer.\(identifier)")
-        Text(QuotaFormat.costBasis(cost))
+        Text("\(QuotaFormat.costBasis(cost)) · \(QuotaFormat.costPriced(cost))")
           .font(.body)
           .foregroundStyle(Color.primary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+          .accessibilityIdentifier("\(identifier).priced")
         if let saved = cacheSaved.flatMap(QuotaFormat.cacheSaved) {
           Text("Cache hit \(cacheHitLabel) · \(saved)")
             .font(.body)
@@ -341,7 +344,7 @@ struct UsageTotalsSection: View {
   }
 
   private var footerAccessibilityLabel: String {
-    "\(QuotaFormat.accessibleCount(totals.inputTokens)) in · \(QuotaFormat.accessibleCount(totals.outputTokens)) out. Cost basis, \(QuotaFormat.costBasis(cost))"
+    "\(QuotaFormat.accessibleCount(totals.inputTokens)) in · \(QuotaFormat.accessibleCount(totals.outputTokens)) out. Cost basis, \(QuotaFormat.costBasis(cost)). \(QuotaFormat.costPriced(cost))"
       + (partial ? ". \(partialCopy)" : "")
   }
 }

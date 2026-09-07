@@ -111,6 +111,7 @@ it("shows the cache hit rate, what it saved, and reasoning beside the totals", a
     messages: 4,
   };
   period.cache_saved = { amount_microusd: "1500000", status: "complete", unpriced_rows: 0 };
+  period.cost = { ...cost(), amount_microusd: "5000", calculated_rows: 4, unpriced_rows: 0 };
   mockFetch((url) => {
     if (url.includes("/account/summary")) return jsonResponse(payload);
     const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
@@ -126,6 +127,9 @@ it("shows the cache hit rate, what it saved, and reasoning beside the totals", a
   });
   expect(view.container.querySelector("#cache-saved")?.textContent?.trim()).toBe("saved $1.50");
   expect(view.container.querySelector("#reasoning-total")?.textContent?.trim()).toBe("150");
+  expect(view.container.querySelector("#cost-priced")?.textContent?.trim()).toBe(
+    "Priced 4 of 4 rows",
+  );
 });
 
 it("rolls the Usage activity range once when the shell clock crosses UTC midnight", async () => {

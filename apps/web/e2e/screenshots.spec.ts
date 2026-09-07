@@ -20,6 +20,29 @@ mkdirSync(outputDir, { recursive: true });
 
 async function mockV6(page: Page): Promise<void> {
   await page.route(
+    (url) => new URL(url).pathname === "/api/v2/providers/status",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "claude",
+              indicator: "minor",
+              description: "Partial System Outage",
+              checked_at: "2026-09-06T00:00:00Z",
+            },
+          ],
+        }),
+      });
+    },
+  );
+  await page.route(
     (url) => new URL(url).pathname === "/api/v2/account",
     async (route) => {
       if (route.request().method() !== "GET") {

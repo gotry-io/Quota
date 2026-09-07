@@ -697,6 +697,20 @@
     {
       "type": "object",
       "properties": {
+        "providers": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema55"
+          }
+        }
+      },
+      "required": ["providers"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
         "protocol_version": {
           "type": "number",
           "const": 2
@@ -705,7 +719,7 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema55"
+              "$ref": "#/$defs/__schema56"
             },
             "enabled": {
               "type": "boolean"
@@ -735,16 +749,16 @@
           "type": "object",
           "properties": {
             "handle": {
-              "$ref": "#/$defs/__schema56"
-            },
-            "enabled": {
               "$ref": "#/$defs/__schema57"
             },
-            "show_models": {
+            "enabled": {
               "$ref": "#/$defs/__schema58"
             },
-            "show_cost": {
+            "show_models": {
               "$ref": "#/$defs/__schema59"
+            },
+            "show_cost": {
+              "$ref": "#/$defs/__schema60"
             }
           },
           "required": ["handle", "enabled", "show_models", "show_cost"],
@@ -762,7 +776,7 @@
           "const": 6
         },
         "handle": {
-          "$ref": "#/$defs/__schema55"
+          "$ref": "#/$defs/__schema56"
         },
         "published_at": {
           "$ref": "#/$defs/__schema3"
@@ -771,16 +785,16 @@
           "$ref": "#/$defs/__schema3"
         },
         "last_30_days": {
-          "$ref": "#/$defs/__schema60"
+          "$ref": "#/$defs/__schema61"
         },
         "all": {
-          "$ref": "#/$defs/__schema60"
+          "$ref": "#/$defs/__schema61"
         },
         "activity": {
           "maxItems": 365,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema63"
+            "$ref": "#/$defs/__schema64"
           }
         }
       },
@@ -1603,21 +1617,39 @@
       "additionalProperties": false
     },
     "__schema55": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema19"
+        },
+        "indicator": {
+          "type": "string",
+          "enum": ["none", "minor", "major", "critical", "unknown"]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "checked_at": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": ["id", "indicator", "description", "checked_at"],
+      "additionalProperties": false
+    },
+    "__schema56": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{2,29}$"
     },
-    "__schema56": {
+    "__schema57": {
       "anyOf": [
         {
-          "$ref": "#/$defs/__schema55"
+          "$ref": "#/$defs/__schema56"
         },
         {
           "type": "null"
         }
       ]
-    },
-    "__schema57": {
-      "type": "boolean"
     },
     "__schema58": {
       "type": "boolean"
@@ -1626,6 +1658,9 @@
       "type": "boolean"
     },
     "__schema60": {
+      "type": "boolean"
+    },
+    "__schema61": {
       "type": "object",
       "properties": {
         "totals": {
@@ -1673,21 +1708,21 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema61"
+            "$ref": "#/$defs/__schema62"
           }
         },
         "models": {
           "maxItems": 12,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema62"
+            "$ref": "#/$defs/__schema63"
           }
         }
       },
       "required": ["totals", "providers"],
       "additionalProperties": false
     },
-    "__schema61": {
+    "__schema62": {
       "type": "object",
       "properties": {
         "provider": {
@@ -1705,7 +1740,7 @@
       "required": ["provider", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema62": {
+    "__schema63": {
       "type": "object",
       "properties": {
         "provider": {
@@ -1726,7 +1761,7 @@
       "required": ["provider", "model", "total_tokens", "share_permille"],
       "additionalProperties": false
     },
-    "__schema63": {
+    "__schema64": {
       "type": "object",
       "properties": {
         "date": {

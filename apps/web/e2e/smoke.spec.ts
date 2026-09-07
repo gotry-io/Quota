@@ -1,11 +1,45 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { AccountResponseSchema } from "@gotry-io/quota-protocol";
 import {
   accountActivity,
   accountActivityDay,
   accountReadFromSummary,
   accountSummary,
+  screenshotAccountSummary,
 } from "./account-fixture.ts";
+
+async function mockProviderStatus(
+  page: Page,
+  providers: Array<{
+    id: string;
+    indicator: string;
+    description: string;
+    checked_at: string;
+  }> = [
+    {
+      id: "codex",
+      indicator: "minor",
+      description: "Partial System Outage",
+      checked_at: "2026-09-06T00:00:00Z",
+    },
+  ],
+): Promise<void> {
+  await page.route(
+    (url) => new URL(url).pathname === "/api/v2/providers/status",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ providers }),
+      });
+    },
+  );
+}
 
 async function mockAccountRead(page: Page, summary: unknown = accountSummary): Promise<void> {
   await page.route(
@@ -412,6 +446,80 @@ test("Settings shows a one-time notice when a link was already taken", async ({ 
     }),
   ).toBeVisible();
   await expect(page).not.toHaveURL(/linked=taken/);
+});
+
+test("screenshot account fixture matches AccountResponse", () => {
+  expect(
+    AccountResponseSchema.safeParse(accountReadFromSummary(screenshotAccountSummary())).success,
+  ).toBe(true);
+  expect(AccountResponseSchema.safeParse(accountReadFromSummary()).success).toBe(true);
+});
+
+test("landing provider marks resolve to files", async ({ page }) => {
+  await page.goto("/");
+  const providers = page.locator(".catalog-grid .name-list").first();
+  await expect(providers.locator("li")).toHaveCount(10);
+  await expect(providers.locator("img.provider-mark")).toHaveCount(10);
+  for (const img of await providers.locator("img.provider-mark").all()) {
+    expect(await img.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(
+      0,
+    );
+  }
+});
+
+test("Overview draws a status dot for minor and above", async ({ page }) => {
+  await mockV6(page);
+  await mockProviderStatus(page);
+  await page.goto("/my");
+  const codex = page.locator(".quota-card").filter({ hasText: "Codex" });
+  await expect(codex).toBeVisible();
+  const dot = codex.locator(".provider-status-dot");
+  await expect(dot).toBeVisible();
+  await expect(dot).toHaveAttribute("title", "Partial System Outage");
+});
+
+test("Usage states how many rows the catalog priced", async ({ page }) => {
+  await mockV6(page);
+  await page.goto("/my/usage");
+  await expect(page.locator("#cost-priced")).toHaveText(/Priced \d+ of \d+ rows/);
+});
+
+test("sign-in with intent=link lists bindable channels when signed in", async ({ page }) => {
+  await mockAccountIdentities(page, [
+    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
+  ]);
+  await page.goto("/sign-in?intent=link");
+  await expect(page.getByRole("heading", { name: "Link a sign-in method" })).toBeVisible();
+  await expect(
+    page.getByText(/Linking adds a way to sign in to the account you're already using/),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign-in methods" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Link", exact: true })).toHaveAttribute(
+    "href",
+    "/api/auth/apple/start?intent=link&return_to=%2Fmy%2Fsettings",
+  );
+  await expect(page.getByRole("link", { name: /Continue as/ })).toHaveCount(0);
+});
+
+test.describe("signed-out sign-in", () => {
+  test.use({ extraHTTPHeaders: { "x-quota-dev-signed-out": "1" } });
+
+  test("sign-in with intent=link signs in the usual way then Settings", async ({ page }) => {
+    await page.goto("/sign-in?intent=link");
+    await expect(page.getByRole("heading", { name: "Link a sign-in method" })).toBeVisible();
+    await expect(
+      page.getByText(/Linking adds a way to sign in to the account you're already using/),
+    ).toBeVisible();
+    const apple = page.getByRole("link", { name: "Continue with Apple" });
+    const github = page.getByRole("link", { name: "Continue with GitHub" });
+    await expect(apple).toBeVisible();
+    await expect(github).toBeVisible();
+    await expect(apple).toHaveAttribute("href", "/api/auth/apple/start?return_to=%2Fmy%2Fsettings");
+    await expect(github).toHaveAttribute(
+      "href",
+      "/api/auth/github/start?return_to=%2Fmy%2Fsettings",
+    );
+  });
 });
 
 test("sign-in asks to continue as the signed-in Account", async ({ page }) => {

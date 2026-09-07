@@ -13,7 +13,8 @@ import type { WebDocumentPort } from "./document-port.ts";
  */
 export function devDocumentPort(): WebDocumentPort {
   return {
-    async getViewer() {
+    async getViewer(headers) {
+      if (headers.get("x-quota-dev-signed-out") === "1") return null;
       const label = env.QUOTA_DEV_VIEWER?.trim();
       return label ? { displayLabel: label } : null;
     },

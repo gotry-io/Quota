@@ -29,6 +29,8 @@ import {
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
   PROVIDER_IDS,
+  ProviderStatusResponseReadSchema,
+  ProviderStatusResponseSchema,
   PricingCatalogSchema,
   PublicProfileHandleSchema,
   PublicProfileUpdateRequestSchema,
@@ -379,6 +381,42 @@ describe("quota protocol", () => {
       "Apple",
       "Email",
     ]);
+  });
+
+  it("states the public provider status page as one row per polled catalog id", () => {
+    const body = {
+      providers: [
+        {
+          id: "codex",
+          indicator: "minor",
+          description: "Partial System Outage",
+          checked_at: "2026-09-06T00:00:00Z",
+        },
+        {
+          id: "claude",
+          indicator: "unknown",
+          description: "",
+          checked_at: "2026-09-06T00:00:00Z",
+        },
+      ],
+    };
+    expect(ProviderStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(
+      ProviderStatusResponseSchema.safeParse({
+        protocol_version: 2,
+        ...body,
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderStatusResponseSchema.safeParse({
+        providers: [{ ...body.providers[0], indicator: "maintenance" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderStatusResponseReadSchema.safeParse({
+        providers: [{ ...body.providers[0], extra: true }],
+      }).success,
+    ).toBe(true);
   });
 
   it("states what Sign in with Apple posts from inside the app", () => {

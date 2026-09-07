@@ -35,6 +35,7 @@ import {
   ModelCatalogSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  ProviderStatusResponseSchema,
   type PricingCatalog,
   PricingCatalogSchema,
   PublicProfileResponseSchema,
@@ -114,6 +115,7 @@ import {
 } from "./entitlement.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
+import { readProviderStatus } from "./provider-status.ts";
 import { PUBLIC_PROFILE_MAX_AGE_SECONDS, readPublicProfile } from "./public-profile.ts";
 import { bearerToken, canonicalDigest, constantTimeEqual, type SecretHasher } from "./security.ts";
 import { buildAccountUsage, buildActivityDays, UsageSummaryLimitError } from "./usage-summary.ts";
@@ -218,6 +220,10 @@ export interface RelayAppOptions {
   billing?: BillingBindings;
   /** Test override for the Usage fold/representation version in the activity ETag. */
   usageFoldVersion?: number;
+  /** Test override for official status-page fetches. Production uses global `fetch`. */
+  providerStatusFetch?: typeof fetch;
+  /** Test override for last-good status-page readings. Production uses `caches.default`. */
+  providerStatusCache?: Cache;
 }
 
 export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
@@ -1387,6 +1393,37 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     return context.json(modelCatalog);
   });
 
+  /**
+   * Official provider status pages, as public JSON.
+   *
+   * Catalog rows with `status_page.kind = statuspage_v2` are polled for `status.indicator` and
+   * `status.description` only. The request carries no credential and names no Account. A failed
+   * poll keeps the last reading in `caches.default`, or answers `unknown`.
+   */
+  app.get("/api/v2/providers/status", async (context) => {
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const checkedAt = now();
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "provider-status-read",
+      anonymousClientSubject(context),
+      rateLimits.publicRead,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const body = ProviderStatusResponseSchema.parse(
+      await readProviderStatus({
+        fetch: options.providerStatusFetch ?? globalThis.fetch,
+        cache: options.providerStatusCache ?? workerCaches().default,
+        now: checkedAt,
+      }),
+    );
+    context.header("Cache-Control", "public, max-age=600");
+    return context.json(body);
+  });
+
   // A request naming an API version this deployment does not serve comes from a caller
   // speaking a contract that has been retired, and telling it only that a resource was missing
   // leaves it retrying a route that will never return. A path naming a version this deployment
@@ -1947,6 +1984,11 @@ async function parseRawJSON(context: Context): Promise<unknown | Response> {
 
 function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean {
   return hasOnlyKeys(new URL(context.req.url).searchParams, allowed);
+}
+
+/** Workers `caches.default`. The DOM CacheStorage type this check also loads has no such field. */
+function workerCaches(): { default: Cache } {
+  return caches as unknown as { default: Cache };
 }
 
 /** Each key at most once, and every key one this route names. */
