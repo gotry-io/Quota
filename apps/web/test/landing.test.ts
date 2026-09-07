@@ -113,7 +113,7 @@ test("works-with names come from the catalog and billing agents", () => {
 });
 
 test("every catalog provider mark resolves to a file", () => {
-  assert.equal(catalog.providers.length, 10);
+  assert.equal(catalog.providers.length, 12);
   for (const provider of catalog.providers) {
     const asset = join(root, `../static/providers/${provider.brand_icon_asset}.svg`);
     assert.equal(existsSync(asset), true, provider.brand_icon_asset);
