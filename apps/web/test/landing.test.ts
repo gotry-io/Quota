@@ -215,6 +215,8 @@ test("the dashboard leads with subscriptions and one usage headline", () => {
   assert.doesNotMatch(settings, /Sign out/);
   assert.match(settings, /id="appearance-title"/);
   assert.match(settings, /id="sync-title"/);
+  assert.match(settings, />Quota Pro</);
+  assert.match(settings, /RedeemCodeForm/);
   assert.match(settings, /id="sign-in-methods-title"/);
   assert.match(settings, /id="account-title"/);
   assert.match(settings, /id="legal-title"/);
