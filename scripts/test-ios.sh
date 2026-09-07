@@ -89,6 +89,13 @@ fi
 
 destination="platform=iOS Simulator,id=$udid"
 
+# QUOTA_IOS_ONLY_TESTING names one test target (QuotaTests or QuotaUITests) so CI can run the
+# two on separate runners; unset, the whole scheme runs as before.
+only_testing=()
+if [ -n "${QUOTA_IOS_ONLY_TESTING:-}" ]; then
+  only_testing=("-only-testing:${QUOTA_IOS_ONLY_TESTING}")
+fi
+
 xcodebuild \
   -project apps/ios/Quota.xcodeproj \
   -scheme Quota \
@@ -96,4 +103,5 @@ xcodebuild \
   -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
+  "${only_testing[@]}" \
   test
