@@ -3848,6 +3848,75 @@
             }
           ]
         }
+      },
+      {
+        "name": "a range with its hour-of-day rhythm",
+        "accepted": true,
+        "payload": {
+          "protocol_version": 6,
+          "days": [
+            {
+              "date": "2026-08-10",
+              "totals": {
+                "total_tokens": 1550,
+                "input_tokens": 1200,
+                "output_tokens": 350,
+                "cache_read_input_tokens": 400,
+                "cache_write_input_tokens": 100,
+                "reasoning_tokens": 120,
+                "messages": 4
+              },
+              "cost": {
+                "mode": "auto",
+                "basis": "calculated",
+                "status": "complete",
+                "amount_microusd": "18450",
+                "catalog_revision": "2026-08-01",
+                "calculated_rows": 1,
+                "reported_rows": 0,
+                "unpriced_rows": 0,
+                "assumptions": ["wildcard_speed"],
+                "unpriced": []
+              },
+              "partial": false
+            }
+          ],
+          "hours_of_day": [
+            { "hour": 0, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 1, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 2, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 3, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 4, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 5, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 6, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 7, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 8, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 9, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 10, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 11, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 12, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 13, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 14, "total_tokens": 100, "cost_microusd": "5000" },
+            { "hour": 15, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 16, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 17, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 18, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 19, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 20, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 21, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 22, "total_tokens": 0, "cost_microusd": null },
+            { "hour": 23, "total_tokens": 0, "cost_microusd": null }
+          ],
+          "weekday_hours": [
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          ]
+        }
       }
     ],
     "account_response": [

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AccountResponseSchema,
   AccountSummaryReadSchema,
   AccountUsageActivityResponseReadSchema,
 } from "@gotry-io/quota-protocol";
@@ -120,13 +121,18 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
   purchase: { web_url: string };
 } {
   const body = summary as { account: { account_id: string }; entitlement: unknown };
-  return {
-    protocol_version: 2,
+  const payload = {
+    protocol_version: 2 as const,
     account: body.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
     entitlement: body.entitlement,
     purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
   };
+  const parsed = AccountResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`accountReadFromSummary failed schema: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
@@ -480,7 +486,9 @@ export function screenshotAccountSummary(): unknown {
       product_id: "quota_sync_monthly",
       store: "app_store",
       stale: false,
+      checked_at: studioObserved,
     },
+    purchase: { web_url: `https://pay.rev.cat/token/account_visual_octocat` },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);
@@ -559,6 +567,32 @@ export function screenshotAccountActivity(from: string, to: string, detailed = f
   const parsed = AccountUsageActivityResponseReadSchema.safeParse(payload);
   if (!parsed.success) {
     throw new Error(`screenshotAccountActivity failed schema: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+const hourWeights = [0, 0, 0, 0, 0, 1, 3, 6, 9, 12, 14, 13, 8, 11, 15, 13, 10, 7, 5, 4, 3, 2, 1, 0];
+
+export function screenshotAccountRhythm(from: string, to: string): unknown {
+  const days = screenshotAccountActivity(from, to) as {
+    protocol_version: number;
+    days: Array<{ totals: { total_tokens: number } }>;
+  };
+  const total = days.days.reduce((sum, day) => sum + day.totals.total_tokens, 0);
+  const sum = hourWeights.reduce((left, right) => left + right, 0);
+  const hours_of_day = hourWeights.map((weight, hour) => ({
+    hour,
+    total_tokens: sum > 0 ? Math.floor((total * weight) / sum) : 0,
+    cost_microusd: null as string | null,
+  }));
+  const weekdayWeights = [0.15, 1, 1.1, 1.05, 0.95, 0.55, 0.2];
+  const weekday_hours = weekdayWeights.map((weight) =>
+    hours_of_day.map((hour) => Math.floor(hour.total_tokens * weight)),
+  );
+  const payload = { ...days, hours_of_day, weekday_hours };
+  const parsed = AccountUsageActivityResponseReadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`screenshotAccountRhythm failed schema: ${parsed.error.message}`);
   }
   return parsed.data;
 }

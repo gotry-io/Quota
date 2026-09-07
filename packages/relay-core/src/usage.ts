@@ -2,7 +2,7 @@ import type {
   UsageRow as ProtocolUsageRow,
   UsageUpload as ProtocolUsageUpload,
 } from "@gotry-io/quota-protocol";
-import type { DeviceWriterPrincipal } from "./account.ts";
+import type { DeviceWriterPrincipal, LeaderboardRow } from "./account.ts";
 
 export type UsageRow = ProtocolUsageRow;
 export type UsageUpload = ProtocolUsageUpload;
@@ -42,6 +42,30 @@ export interface UsageDailyResult {
   truncated: boolean;
 }
 
+/**
+ * One identity's Usage over one stored UTC hour, rolled up across devices.
+ *
+ * `partial_hours` counts the scans behind this row that came up short, so a clock hour
+ * reports incompleteness the same way a day does.
+ */
+export interface StoredUsageHourlyRow extends UsageRow {
+  bucket_start_utc: string;
+  partial_hours: number;
+}
+
+export interface UsageHourlyQuery {
+  /** Inclusive `bucket_start_utc`. */
+  from: string;
+  /** Exclusive `bucket_start_utc`. */
+  to: string;
+  limit: number;
+}
+
+export interface UsageHourlyResult {
+  rows: StoredUsageHourlyRow[];
+  truncated: boolean;
+}
+
 /** A half-open range of whole UTC hours, named the way `usage_hourly` keys them. */
 export interface UsageHourRange {
   /** Inclusive `bucket_start_utc`. */
@@ -68,6 +92,13 @@ export interface UsageBoundaryResult {
   truncated: boolean;
 }
 
+/** What the board asks the rollup for: one bounded window, and at most this many places. */
+export interface LeaderboardQuery {
+  /** Inclusive UTC date the window starts on. */
+  from: string;
+  limit: number;
+}
+
 export interface UsageState {
   recordUsage(
     principal: DeviceWriterPrincipal,
@@ -75,6 +106,16 @@ export interface UsageState {
     receivedAt: string,
   ): Promise<UsageWriteResult>;
   queryDailyUsage(accountId: string, query: UsageDailyQuery): Promise<UsageDailyResult>;
+  queryHourlyUsage(accountId: string, query: UsageHourlyQuery): Promise<UsageHourlyResult>;
+  /**
+   * The whole leaderboard, in one statement.
+   *
+   * The board is a ranking, so it is folded where the rows already are rather than read
+   * profile by profile: a hundred places would otherwise be a hundred rollup scans, and the
+   * answer is the same bytes for every reader
+   * ([ADR 0045](../../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
+   */
+  queryLeaderboard(query: LeaderboardQuery): Promise<LeaderboardRow[]>;
   queryBoundaryHours(accountId: string, query: UsageBoundaryQuery): Promise<UsageBoundaryResult>;
   readUsageFold(accountId: string, foldKey: string): Promise<string | null>;
   storeUsageFold(

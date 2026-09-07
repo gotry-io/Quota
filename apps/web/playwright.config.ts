@@ -16,7 +16,8 @@ export default defineConfig({
   },
   webServer: {
     // Signed-in header only. Usage APIs still 401; the smoke fulfills /api/v6 on the page.
-    command: `QUOTA_DEV_VIEWER=octocat vite dev --host 127.0.0.1 --port ${port} --strictPort`,
+    // The published handle is the same name, so the sample board can point out the reader's row.
+    command: `QUOTA_DEV_VIEWER=octocat QUOTA_DEV_PUBLIC_HANDLE=octocat vite dev --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

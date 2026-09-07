@@ -202,13 +202,14 @@ struct SettingsView: View {
   private func signInMethodRow(_ provider: IdentityProvider) -> some View {
     let bound = model.identities.identities.first { $0.provider == provider }
     HStack {
-      // The state line is the opaque label colour rather than the hierarchical `.primary` a
-      // Providers row uses: as the second Text of a grouped-Form row, `.primary` resolves
-      // against the level the row's content configuration already set, and the contrast auditor
-      // reads what that resolves to rather than the label colour.
+      // Both lines take the opaque label colour rather than the hierarchical `.primary` a
+      // Providers row uses: inside a grouped-Form row, `.primary` resolves against the level the
+      // row's content configuration already set, and the contrast auditor reads what that
+      // resolves to rather than the label colour. It is the same rule `PaywallView` states.
       VStack(alignment: .leading, spacing: 3) {
         Text(provider.displayName)
           .font(.subheadline.weight(.medium))
+          .foregroundStyle(Color(uiColor: .label))
         Text(signInMethodState(provider, bound: bound))
           .font(.footnote)
           .foregroundStyle(Color(uiColor: .label))

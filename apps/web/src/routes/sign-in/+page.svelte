@@ -1,7 +1,16 @@
 <script lang="ts">
-import { signOut } from "$lib/account-client";
-import { DELETE_ACCOUNT_SIGN_IN_COPY } from "$lib/account-errors";
+import type { AccountResponse } from "@gotry-io/quota-protocol";
+import { fetchAccount, signOut } from "$lib/account-client";
+import {
+  type AccountError,
+  accountNoticeActionLabel,
+  accountNoticeRetry,
+  DELETE_ACCOUNT_SIGN_IN_COPY,
+} from "$lib/account-errors";
+import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import RetryNotice from "$lib/components/RetryNotice.svelte";
 import SignInMethods from "$lib/components/SignInMethods.svelte";
+import SignInMethodSettings from "$lib/components/SignInMethodSettings.svelte";
 import { isDeleteAccountReturn, SIGN_IN_PATH } from "$lib/routes";
 import type { WebDocumentViewer } from "$lib/server/document-port";
 import type { PageData } from "./$types";
@@ -10,7 +19,37 @@ let { data }: { data: PageData & { viewer: WebDocumentViewer | null } } = $props
 
 const viewer = $derived(data.viewer);
 const deletingAccount = $derived(isDeleteAccountReturn(data.returnTo));
+const linking = $derived(data.linking);
 let error = $state<string | null>(null);
+let account = $state<AccountResponse | null>(null);
+let accountError = $state<AccountError | null>(null);
+
+async function loadAccount(): Promise<void> {
+  const result = await fetchAccount();
+  if (result.status === "ok") {
+    account = result.account;
+    accountError = null;
+    return;
+  }
+  accountError = result;
+}
+
+$effect(() => {
+  if (!linking || !viewer || deletingAccount) return;
+  let cancelled = false;
+  void fetchAccount().then((result) => {
+    if (cancelled) return;
+    if (result.status === "ok") {
+      account = result.account;
+      accountError = null;
+      return;
+    }
+    accountError = result;
+  });
+  return () => {
+    cancelled = true;
+  };
+});
 
 /** Signing out here lands back here, as nobody, with the same return target. */
 async function onUseAnotherAccount(event: SubmitEvent): Promise<void> {
@@ -24,7 +63,7 @@ async function onUseAnotherAccount(event: SubmitEvent): Promise<void> {
 </script>
 
 <svelte:head>
-  <title>Sign in · Quota</title>
+  <title>{linking ? "Link a sign-in method" : "Sign in"} · Quota</title>
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
@@ -35,6 +74,31 @@ async function onUseAnotherAccount(event: SubmitEvent): Promise<void> {
       Quota needs a recent sign-in before it can delete this Account and its data.
     </p>
     <SignInMethods returnTo={data.returnTo} />
+  {:else if linking}
+    <h1 id="page-title">Link a sign-in method</h1>
+    <p class="hero-summary">
+      Linking adds a way to sign in to the account you're already using; it never merges two
+      accounts.
+    </p>
+    {#if viewer}
+      {#if accountError}
+        <RetryNotice
+          message={accountError.message}
+          actionLabel={accountNoticeActionLabel(accountError)}
+          onRetry={accountNoticeRetry(accountError, () => void loadAccount())}
+        />
+      {:else if account}
+        <SignInMethodSettings
+          identities={account.identities}
+          onChanged={loadAccount}
+          onError={(next) => (accountError = next)}
+        />
+      {:else}
+        <LoadingBlock lines={3} label="Loading sign-in methods" />
+      {/if}
+    {:else}
+      <SignInMethods returnTo={data.returnTo} />
+    {/if}
   {:else if viewer}
     <h1 id="page-title">You're signed in</h1>
     <p class="hero-summary">Continue as this Account, or sign in as a different one.</p>

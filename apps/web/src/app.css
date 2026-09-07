@@ -1348,6 +1348,14 @@ footer {
   font-size: var(--fs-caption);
 }
 
+.usage-priced {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  color: var(--body);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
 .usage-totals strong {
   font-size: 20px;
   font-weight: 500;
@@ -1489,6 +1497,79 @@ footer {
   color: var(--body);
   font-weight: 400;
   text-align: left;
+}
+
+.usage-rhythm {
+  padding: var(--space-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.usage-rhythm-heat {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.usage-rhythm-weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  gap: 3px;
+  color: var(--body);
+  font-size: 10px;
+  line-height: 12px;
+}
+
+.usage-rhythm-grid {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  grid-template-rows: repeat(7, 12px);
+  gap: 3px;
+}
+
+.usage-rhythm-cell {
+  display: block;
+  min-width: 0;
+  border-radius: 2px;
+  background: var(--activity-0);
+}
+
+.usage-rhythm-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 36px;
+  margin-top: 12px;
+}
+
+.usage-rhythm-column {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.usage-rhythm-bar {
+  display: block;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+.usage-rhythm-bar.empty {
+  opacity: 0.12;
+}
+
+.usage-rhythm-hours {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  margin-top: 4px;
+  color: var(--body);
+  font-size: 10px;
 }
 
 /* Models: the three largest, and each provider's share of the period. */
@@ -1735,9 +1816,28 @@ footer {
 }
 
 .quota-card-provider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+}
+
+.provider-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.provider-status-dot-minor {
+  background: var(--meter-warn);
+}
+
+.provider-status-dot-major,
+.provider-status-dot-critical {
+  background: var(--meter-critical);
 }
 
 .quota-card-account {
@@ -2944,6 +3044,64 @@ button:focus-visible {
   margin: 0;
   color: var(--mute);
   font-size: var(--fs-caption);
+}
+
+.leaderboard-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.leaderboard {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+
+.leaderboard th,
+.leaderboard td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.leaderboard th {
+  color: var(--charcoal);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.leaderboard-rank,
+.leaderboard-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-rank {
+  width: 3em;
+  color: var(--mute);
+}
+
+/* The reader's own row, which is the only thing on this page that differs per reader. */
+.leaderboard-you {
+  background: var(--brand-surface);
+}
+
+.leaderboard-you .leaderboard-rank {
+  color: var(--brand-emerald);
+}
+
+.leaderboard-you-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-emerald);
+  color: var(--on-inverted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .share-dialog {

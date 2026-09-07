@@ -34,6 +34,11 @@ hour named). `all` carries neither: it is every retained day, and the per-day sh
 what the activity chart answers. An hour nothing reached states no amount, because there is no
 priced row behind it to state one.
 
+Updated 2026-09-07: Account answers the same `hours_of_day[24]` (and `weekday_hours[7][24]` of
+tokens) on `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=`. The asked UTC dates
+select the stored hours; `tz` (default UTC) places each `bucket_start_utc` on the caller's clock.
+The fold is one rule, `rhythm_cases` in `packages/protocol/fixtures/usage-metrics-conformance.json`.
+
 ## Why
 
 Cache efficiency is the number a person checks first, and it was the one number Quota collected and
@@ -49,11 +54,10 @@ counts, and a stored rate would be a second thing to keep true.
 
 ## What was given up
 
-The rhythm is local only. Relay stores hours on UTC keys and resolves a caller's zone at the four
-period edges (ADR 0024), so answering `hours_of_day` for a managed account would mean folding every
-retained hour per timezone — the read the fold in ADR 0031 exists to avoid. The website and the iOS
-app therefore show Daily and Models but no Rhythm, and their Daily table is UTC, as the activity
-chart already is.
+The default activity read stays on `usage_daily`. A rhythm is an opt-in `detail=hours` fold of the
+asked range, so the summary still does not open hourly history. The website and Quota iOS draw that
+rhythm on the signed-in Usage page; a public profile does not. Their Daily table remains UTC, as
+the activity chart already is.
 
 A saving is clamped at zero per row. A catalog that priced a cache read above uncached input saved
 nothing on that row, which is what "saved" means; the cost outcome beside it already carries what
@@ -61,5 +65,6 @@ it actually cost.
 
 ## When to revisit
 
-If a managed rhythm is wanted, the thing to change is what Relay stores, not what it folds on read:
-an `usage_hourly` rollup keyed by local hour for the zones an account actually asks in.
+A managed rhythm is now an opt-in activity read rather than a stored local-hour rollup. Revisit
+this if folding the asked range's hours on read exceeds the Worker CPU budget the daily rollup
+exists to keep closed.

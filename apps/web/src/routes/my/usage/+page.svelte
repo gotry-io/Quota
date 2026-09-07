@@ -13,10 +13,16 @@ import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsageBudgetBar from "$lib/components/UsageBudgetBar.svelte";
 import UsageDaily from "$lib/components/UsageDaily.svelte";
+import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import UsagePeriodBar from "$lib/components/UsagePeriodBar.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
-import { cacheHitLabel, cacheSavedLabel, usageDailyRows } from "$lib/usage-metrics";
+import {
+  cacheHitLabel,
+  cacheSavedLabel,
+  costPricedLabel,
+  usageDailyRows,
+} from "$lib/usage-metrics";
 import {
   budgetMonth,
   budgetProgress,
@@ -95,8 +101,12 @@ const dailyRange = $derived(
     : null,
 );
 const dailyRows = $derived(activityDays ? usageDailyRows(activityDays, dailyRange) : []);
+const rhythmKey = $derived(selectedRange ? activityRangeKey(selectedRange) : null);
+const rhythmEntry = $derived(rhythmKey ? store.rhythm[rhythmKey] : undefined);
+const rhythm = $derived(rhythmEntry?.data ?? null);
 const cacheHit = $derived(period ? cacheHitLabel(period.totals) : null);
 const cacheSaved = $derived(period ? cacheSavedLabel(period.cache_saved) : null);
+const priced = $derived(period ? costPricedLabel(period.cost) : null);
 const detailLoading = $derived(
   selectedDay !== null &&
     (detailEntry === undefined ||
@@ -106,6 +116,11 @@ const detailLoading = $derived(
 
 $effect(() => {
   void store.ensureActivity(activityRange);
+});
+
+$effect(() => {
+  if (selection.segment === "all" || !selectedRange) return;
+  void store.ensureRhythm(selectedRange);
 });
 
 $effect(() => {
@@ -212,6 +227,9 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
       <strong id="reasoning-total">{formatCount(period.totals.reasoning_tokens)}</strong>
       <small>tokens of output</small>
     </article>
+    {#if priced}
+      <p class="usage-priced" id="cost-priced">{priced}</p>
+    {/if}
   </div>
 
   {#if dailyRows.length > 0}
@@ -220,6 +238,15 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
         <h2 id="usage-daily-title">Daily</h2>
       </div>
       <UsageDaily rows={dailyRows} />
+    </section>
+  {/if}
+
+  {#if selection.segment !== "all" && rhythm}
+    <section class="usage-daily-panel" aria-labelledby="usage-rhythm-title">
+      <div class="usage-panel-heading">
+        <h2 id="usage-rhythm-title">Rhythm</h2>
+      </div>
+      <UsageRhythm hoursOfDay={rhythm.hours_of_day} weekdayHours={rhythm.weekday_hours} />
     </section>
   {/if}
 

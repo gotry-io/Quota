@@ -38,7 +38,12 @@ The v6 data contract is four routes
   day's `totals` carries `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
   `cache_write_input_tokens`, `reasoning_tokens`, and `messages` beside `total_tokens`, and its
   `cost` is priced the same way a period's is — so a per-day table needs no second read. A
-  single-day read may take `detail=agents` and then carries that day's agent tree.
+  single-day read may take `detail=agents` and then carries that day's agent tree. Any range may
+  take `detail=hours` and optional `tz` (IANA, default UTC) and then carries `hours_of_day[24]`
+  and `weekday_hours[7][24]` of tokens: the asked UTC dates select the stored hours, and `tz`
+  places each `bucket_start_utc` on that clock. An hour nothing reached states no amount. The
+  ETag rule is the same as the days-only read: the query string, including `detail` and `tz`, is
+  part of the validator.
 
 The four periods in a summary are the four every client opens on. Any other period a Usage page
 offers — a week, a month, a range someone picked — is these same days added up by the client, which
@@ -51,18 +56,26 @@ Each period of `usage` also carries `cache_saved`: what its cache reads saved ag
 uncached input price for the same tokens, folded from the rows it already priced and therefore
 costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache
 hit rate is not on the wire; every client derives it from the totals beside it.
-One more v6 route answers with no principal at all
-([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)):
+Two more v6 routes answer with no principal at all
+([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md),
+[ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)):
 
 - `GET /api/v6/public/<handle>/usage` answers the page an Account publishes at
   `quota.gotry.io/u/<handle>`: tokens, messages, an optional API-equivalent cost, provider and
   model shares, and a year of heatmap bands, all on UTC dates. A handle that is malformed,
-  unclaimed, or switched off is one 404 with one body. It is the only route answered
+  unclaimed, or switched off is one 404 with one body. It is answered
   `Cache-Control: public, max-age=300`, because its answer is the same for every reader, and its
   `ETag` is computed from the Usage version stamp before any row is folded, so a held answer costs
   no rollup read. `GET` and `PUT /api/v2/account/profile` are how the owner reads and writes the
-  handle and its two display switches; the write is browser-only and same-origin, and a handle
-  another Account holds is `409 conflict`.
+  handle and its three switches; the write is browser-only and same-origin, and a handle another
+  Account holds is `409 conflict`.
+- `GET /api/v6/public/leaderboard` answers the board at `quota.gotry.io/leaderboard`: the hundred
+  listed profiles with the most tokens over the last 30 UTC days, each a handle, a token and
+  message total, and a rank. `period` accepts only `30d`. A profile is on it only while
+  `on_leaderboard = 1` and `enabled = 1`, and the whole board is one grouped statement over
+  `usage_daily` rather than one read per profile. It is cached the same way and for the same
+  reason as a page, and its `ETag` comes from the listed set and the summed upload revision of the
+  devices behind it, computed before the rollup is read.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such
@@ -122,6 +135,7 @@ an Account owns the channels it is reached through
 | `GET /api/auth/email/verify?token=` | Spends the token once and finishes the sealed `sign_in` or `link`. No handoff cookie: a `sign_in` may be opened on another device. Failure is the browser error page (`expired` / `invalid_request`) except `identity_taken`, which is a 302 to `return_to?linked=taken`. |
 | `POST /api/auth/logout` | Revokes the browser session and clears its cookie. |
 | `GET /api/v2/account` | The Account and `identities[]`: provider, label, and when each was bound. |
+| `GET /api/v2/providers/status` | Public catalog status-page readings: `{ providers: [{ id, indicator, description, checked_at }] }`. No session. |
 | `DELETE /api/v2/account/identities/:provider` | Unbinds one channel. `409 conflict` when it is the last one. |
 | `DELETE /api/v2/account` | Removes the Account and everything stored for it in one D1 batch. |
 | `GET /oauth/v2/authorize` | Redirects to `/sign-in?return_to=/oauth/v2/complete?login_token=…` rather than to a provider, so a native login confirms which Account it is. |

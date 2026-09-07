@@ -13,6 +13,7 @@ function profileResponse(
     enabled: boolean;
     show_models: boolean;
     show_cost: boolean;
+    on_leaderboard: boolean;
   }> = {},
 ) {
   return {
@@ -22,6 +23,7 @@ function profileResponse(
       enabled: false,
       show_models: true,
       show_cost: false,
+      on_leaderboard: false,
       ...overrides,
     },
   };
@@ -65,7 +67,13 @@ it("fills the form from the Account's own profile and writes all four values bac
     method: "PUT",
     body: {
       protocol_version: 2,
-      profile: { handle: "kyle", enabled: true, show_models: true, show_cost: true },
+      profile: {
+        handle: "kyle",
+        enabled: true,
+        show_models: true,
+        show_cost: true,
+        on_leaderboard: false,
+      },
     },
   });
   expect(await screen.findByText(/Published at https:\/\/quota.gotry.io\/u\/kyle/)).toBeTruthy();

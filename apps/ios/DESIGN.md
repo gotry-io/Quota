@@ -230,12 +230,26 @@ The title is the provider display name. An inset-grouped `List`:
   freshness is the Section footer.
 - Quota: one `QuotaWindowBlock` per window as native rows. Remaining is the strongest text. Empty:
   **No quota windows yet.**
+- Today: one native row per window of the reading's own cadence that the reader's day already
+  holds — the local clock times it ran between, and its peak used percent — with the Section footer
+  naming the day in one line, **Today: 3 windows · 82% / 40% / 12%**. The section is absent unless
+  this phone read the subscription itself.
 - Readings: one native row per source. Leading column is display name, primary remaining, then
   freshness; trailing text is **Reporting** only on the selected source. Empty: **No device
   readings yet.**
 
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
+
+A window this phone has read more than once draws a 44pt pace line above its reset row: solid over
+the samples it took inside the running window, dashed from the last of them to where the ADR 0035
+projection lands at the reset, with the vertical axis the whole window from 0 to 100 percent used.
+Only a reading this phone took itself gets one — a reading Relay resolved was taken by some Mac,
+which keeps its own samples and never sends them — and the same rule governs the Today section. The
+fold is `packages/protocol/fixtures/quota-history-conformance.json`, answered here by
+`QuotaHistory`; samples are kept 30 days in the app's own container and are never uploaded
+([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)). Widgets draw no line:
+the space belongs to the number.
 
 Each device row is that device's display name — **This iPhone** for what this device read itself,
 or **Device** when a name is missing — the primary remaining figure from that source, and
@@ -333,7 +347,9 @@ Body, in order:
 4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
    **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
    **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
-   section is `{input} in · {output} out`, the cost-basis line, `Cache hit {percent} · saved $X.XX`
+   section is `{input} in · {output} out`, then one line `{cost-basis} · Priced N of M rows`
+   from that period's cost row counts (the priced sentence shares the cost-basis row so later
+   List sections stay on screen), `Cache hit {percent} · saved $X.XX`
    when the period's cache reads could be priced, and **Some hours in this period were scanned
    incompletely.** when `partial` is true. Cache hit and its saving follow
    [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text
@@ -352,9 +368,12 @@ Body, in order:
    drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
    days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
    messages` beneath. The section footer names the calendar: **UTC days.** The All period has no
-   Daily section, and neither has any period a Rhythm — Relay stores hours on UTC keys and does not
-   fold a local clock, so the hour-of-day view is QuotaBar's alone
-   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+   Daily section.
+6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
+   and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
+   same five emerald Activity steps; 24 bars under it are the hour-of-day totals. The read is
+   `detail=hours` on the period's dates in this iPhone's zone
+   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
 7. Activity section, headed **Activity**:
    - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
      activity**.
@@ -869,7 +888,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
-| `local-only` | No account, two subscriptions this phone read for itself: Overview titled **Quota**, no Today section, and **This iPhone** as the only reading on subscription detail |
+| `local-only` | No account, two subscriptions this phone read for itself: Overview titled **Quota**, no Today Usage section, and **This iPhone** as the only reading on subscription detail. Its sample journal is filled in, so each window draws a pace line and the detail page carries the **Today** windows section |
 | `merged` | The `content` account plus a newer local reading of the same Codex subscription: one row, three sources, **This iPhone** reporting |
 | `providers` | Signed-in Settings with the Providers group in its three states: Codex with two connected accounts, Claude Code with one, and Grok with none. The second Codex account was refused on the last collection, so it shows **Sign in again**. The stored fixture cookie is not a session and reaches no provider |
 | `activity-loading` | Signed-in Usage with populated period totals and the Activity skeleton |

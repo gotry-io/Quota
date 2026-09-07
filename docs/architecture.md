@@ -33,9 +33,12 @@ links to it rather than restating it.
 
 The bundled Rust executable is not a separate product; QuotaBar is its parent, transport peer,
 scheduler lifetime, and release boundary. `packages/service` holds the shared provider, Usage,
-pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only entry point: the
-private macOS stdio binary. The crate itself stays platform-neutral, and its owner-only
-configuration and state live under `~/.config/quota/`.
+pricing, persistence, and Relay logic, and `apps/menubar/helper` is its only writing entry point:
+the private macOS stdio binary. The crate's second binary, `quota`, is the public command shipped
+beside it in the same bundle; it opens the disposable cache read-only, collects nothing, and
+touches no credential, so it is a reader over the same state rather than a second service
+([ADR 0046](decisions/0046-a-read-only-quota-command.md)). The crate itself stays platform-neutral,
+and its owner-only configuration and state live under `~/.config/quota/`.
 
 An Account owns the channels it is reached through — GitHub today, with Apple and Email registering
 against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the
@@ -127,6 +130,15 @@ reading and nothing else ([ADR 0035](decisions/0035-quota-pace-is-derived-from-t
 QuotaBar is handed each window's pace on the IPC state its service publishes, while Quota iOS and
 the website derive their own, and Relay neither stores nor carries one.
 
+Drawing that rate as a line needs more than one reading, so the device that takes them keeps them
+([ADR 0042](decisions/0042-quota-history-is-local-samples.md)). QuotaBar's service writes one
+`quota_samples` row per window per collection into `cache.sqlite`; Quota iOS keeps the same journal
+as a file in its own container. Both are kept thirty days, both are folded by one rule —
+`history` in `packages/service` and `QuotaHistory` in `packages/apple-shared`, judged by
+`packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
+contract names a sample, Relay gains no route, and the website shows no history. A reading that
+arrived from another device carries no history, because this device has no samples of it.
+
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
 `{device_id, observed_at}` behind it. That rule is stated once in
@@ -207,7 +219,8 @@ marks truncated unpriced-model detail with `unpriced_truncated`. Exact totals st
 clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
-no version of its own and moves with `ipc_version`. State snapshots separately carry the Today,
+no version of its own and moves with `ipc_version`, which is 3. Each window of a locally collected
+reading also carries `history`, the fold of that window's own samples. State snapshots separately carry the Today,
 7 Days, 30 Days, and All summaries with exact totals, cost, `agents[].providers[].models[]`
 detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
 ([ADR 0039](decisions/0039-project-attribution-stays-local.md)). `total_tokens` is input plus output; cache-read and cache-write tokens are named input
@@ -216,7 +229,9 @@ and is not a session count. Each summary also carries
 `cache_saved` — what its cache reads saved against the uncached input price — and, for the three
 periods bounded by two local midnights, `days[]` on local dates and `hours_of_day[24]` on the local
 clock; `all` carries neither, because the per-day shape of every retained day is what the activity
-chart answers ([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
+chart answers. Account answers the same `hours_of_day[24]` (and `weekday_hours[7][24]` of tokens)
+when the activity read is asked with `detail=hours` and `tz`
+([ADR 0036](decisions/0036-usage-derived-metrics.md)). The cache hit rate is not
 carried at all: every reader derives it from the two counts it already holds, by the one rule that
 ADR states. Sessions are a separate local view of source files
 ([ADR 0038](decisions/0038-sessions-are-a-local-view-of-files.md)): the report carries
@@ -347,7 +362,9 @@ and model catalog revisions, and — for the summary — the caller's local date
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
 and observation rows the response projects, plus `entitlements.updated_at`; the activity stamp is usage-only (device count, usage
 revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
-keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. The summary's Usage fold is stored keyed by what it depends on
+keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+is the same rule: `tz` is in the query string, so a different clock is a different validator.
+The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
 its ETag in one transaction keyed by Account and treating a 304 as that stored response rather than a
@@ -387,7 +404,10 @@ normalization never creates a pricing alias or changes a cost outcome. Relay
 publishes the model catalog at `GET /api/v2/model/catalog` with ETag validation and `public,
 max-age=300, must-revalidate`; summaries carry its revision, the Rust client stores payload and ETag
 atomically with a last-known-good cache, and a fetch failure never blocks collection, upload, totals,
-or a report.
+or a report. Official Statuspage v2 feeds are a separate public read, `GET /api/v2/providers/status`,
+with no principal and no cookie: the Worker polls catalog `statuspage_v2` URLs, caches last-good
+readings for ten minutes, and answers `unknown` when a poll fails with nothing stored
+([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
 
 ## Source and dependency rules
 

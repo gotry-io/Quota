@@ -35,6 +35,34 @@ struct UsageMetricsConformanceTests {
     #expect(UsageMetrics.cacheHitPercentLabel(basisPoints: 9_450) == "95%")
     #expect(UsageMetrics.cacheHitPercentLabel(basisPoints: nil) == nil)
   }
+
+  @Test func rhythmMatchesTheSharedFixture() throws {
+    let cases = try UsageMetricsFixture.rhythmCases()
+    #expect(cases.count > 1)
+    for testCase in cases {
+      let observed = UsageRhythm.fold(testCase.hours)
+      #expect(observed.hoursOfDay.count == UsageRhythm.hoursOfDayCount, "\(testCase.name)")
+      #expect(observed.weekdayHours.count == UsageRhythm.weekdayCount, "\(testCase.name)")
+      for hour in 0..<UsageRhythm.hoursOfDayCount {
+        let expected = testCase.hoursOfDay[hour]
+        #expect(observed.hoursOfDay[hour].hour == hour, "\(testCase.name)")
+        #expect(observed.hoursOfDay[hour].totalTokens == expected.totalTokens, "\(testCase.name) hour \(hour)")
+        #expect(
+          observed.hoursOfDay[hour].costMicrousd == expected.costMicrousd,
+          "\(testCase.name) hour \(hour) cost"
+        )
+      }
+      for weekday in 0..<UsageRhythm.weekdayCount {
+        #expect(observed.weekdayHours[weekday].count == UsageRhythm.hoursOfDayCount, "\(testCase.name)")
+        for hour in 0..<UsageRhythm.hoursOfDayCount {
+          #expect(
+            observed.weekdayHours[weekday][hour] == testCase.weekdayHours[weekday][hour],
+            "\(testCase.name) weekday \(weekday) hour \(hour)"
+          )
+        }
+      }
+    }
+  }
 }
 
 enum UsageMetricsFixture {
@@ -54,6 +82,50 @@ enum UsageMetricsFixture {
         cacheReadInputTokens: (totals["cache_read_input_tokens"] as! NSNumber).intValue,
         inputTokens: (totals["input_tokens"] as! NSNumber).intValue,
         expectedBasisPoints: (entry["expected_basis_points"] as? NSNumber)?.intValue
+      )
+    }
+  }
+
+  struct RhythmCase {
+    let name: String
+    let hours: [UsageRhythmHourFact]
+    let hoursOfDay: [UsageHourOfDay]
+    let weekdayHours: [[Int]]
+  }
+
+  static func rhythmCases() throws -> [RhythmCase] {
+    let entries = try root()["rhythm_cases"] as! [[String: Any]]
+    return entries.map { entry in
+      let hours = (entry["hours"] as! [[String: Any]]).map { fact in
+        UsageRhythmHourFact(
+          date: fact["date"] as! String,
+          hour: (fact["hour"] as! NSNumber).intValue,
+          totalTokens: (fact["total_tokens"] as! NSNumber).intValue,
+          costMicrousd: fact["cost_microusd"] as? String
+        )
+      }
+      let expected = entry["expected"] as! [String: Any]
+      let namedHours = expected["hours_of_day"] as! [String: Any]
+      let hoursOfDay = (0..<UsageRhythm.hoursOfDayCount).map { hour in
+        let cell = namedHours[String(hour)] as? [String: Any]
+        return UsageHourOfDay(
+          hour: hour,
+          totalTokens: (cell?["total_tokens"] as? NSNumber)?.intValue ?? 0,
+          costMicrousd: cell?["cost_microusd"] as? String
+        )
+      }
+      let namedWeekdays = expected["weekday_hours"] as! [String: Any]
+      let weekdayHours = (0..<UsageRhythm.weekdayCount).map { weekday in
+        let row = namedWeekdays[String(weekday)] as? [String: Any] ?? [:]
+        return (0..<UsageRhythm.hoursOfDayCount).map { hour in
+          (row[String(hour)] as? NSNumber)?.intValue ?? 0
+        }
+      }
+      return RhythmCase(
+        name: entry["name"] as! String,
+        hours: hours,
+        hoursOfDay: hoursOfDay,
+        weekdayHours: weekdayHours
       )
     }
   }

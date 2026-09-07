@@ -1,6 +1,6 @@
-import type { PublicUsageResponse } from "@gotry-io/quota-protocol";
+import type { LeaderboardResponse, PublicUsageResponse } from "@gotry-io/quota-protocol";
 import { env } from "$env/dynamic/private";
-import type { WebDocumentPort } from "./document-port.ts";
+import type { WebDocumentPort, WebLeaderboardView } from "./document-port.ts";
 
 /**
  * The document port `pnpm dev:web` runs against, where there is no Worker and so no D1.
@@ -8,12 +8,14 @@ import type { WebDocumentPort } from "./document-port.ts";
  * `QUOTA_DEV_VIEWER` is the header stub described in
  * [ADR 0011](../../../../../docs/decisions/0011-sveltekit-document-worker.md);
  * `QUOTA_DEV_PUBLIC_HANDLE` is the same idea for a public page, and answers that one handle
- * with a fixed sample so the page and its share card can be looked at. Both exist only while
+ * with a fixed sample so the page and its share card can be looked at; it is also the handle
+ * the sample leaderboard treats as the reader's own. All of this exists only while
  * `dev === true`: in production the port comes from Relay and this module is never reached.
  */
 export function devDocumentPort(): WebDocumentPort {
   return {
-    async getViewer() {
+    async getViewer(headers) {
+      if (headers.get("x-quota-dev-signed-out") === "1") return null;
       const label = env.QUOTA_DEV_VIEWER?.trim();
       return label ? { displayLabel: label } : null;
     },
@@ -21,6 +23,40 @@ export function devDocumentPort(): WebDocumentPort {
       const published = env.QUOTA_DEV_PUBLIC_HANDLE?.trim();
       return published && published === handle ? devPublicProfile(handle) : null;
     },
+    async readLeaderboard(): Promise<WebLeaderboardView> {
+      const published = env.QUOTA_DEV_PUBLIC_HANDLE?.trim();
+      return {
+        board: devLeaderboard(),
+        viewerHandle: published ? published : null,
+      };
+    },
+  };
+}
+
+/** A board with a plausible spread, so the page can be looked at without a D1 behind it. */
+function devLeaderboard(): LeaderboardResponse {
+  const handles = [
+    "octocat",
+    "kyle",
+    "mira",
+    "tsuki",
+    "devon",
+    "ana-b",
+    "quiet-fox",
+    "rk",
+    "sam-p",
+    "hal9000",
+  ];
+  return {
+    protocol_version: 6,
+    period: "30d",
+    generated_at: "2026-09-06T12:00:00.000Z",
+    entries: handles.map((handle, index) => ({
+      handle,
+      total_tokens: Math.round(38_400_000 / (index + 1.35)),
+      messages: Math.round(12_800 / (index + 1.35)),
+      rank: index + 1,
+    })),
   };
 }
 

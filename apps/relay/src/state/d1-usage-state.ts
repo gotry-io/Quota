@@ -1,10 +1,15 @@
 import type {
   DeviceWriterPrincipal,
+  LeaderboardQuery,
+  LeaderboardRow,
   StoredUsageDailyRow,
+  StoredUsageHourlyRow,
   UsageBoundaryQuery,
   UsageBoundaryResult,
   UsageDailyQuery,
   UsageDailyResult,
+  UsageHourlyQuery,
+  UsageHourlyResult,
   UsageState,
   UsageUpload,
   UsageWriteResult,
@@ -41,6 +46,10 @@ interface DeviceUsageControlRow {
 }
 
 interface StoredDailyRow extends Omit<StoredUsageDailyRow, "source_cost_microusd"> {
+  source_cost_microusd: string | null;
+}
+
+interface StoredHourlyRow extends Omit<StoredUsageHourlyRow, "source_cost_microusd"> {
   source_cost_microusd: string | null;
 }
 
@@ -167,6 +176,80 @@ export class D1UsageState implements UsageState {
       rows: rows.results.slice(0, query.limit).map(dailyRow),
       truncated: rows.results.length > query.limit,
     };
+  }
+
+  /**
+   * The stored hours an activity rhythm folds, rolled up across devices to one row per hour
+   * identity. Path, device name, and any dimension besides agent and the billing identity stay
+   * off this read.
+   */
+  async queryHourlyUsage(accountId: string, query: UsageHourlyQuery): Promise<UsageHourlyResult> {
+    const rows = await this.database
+      .prepare(
+        `SELECT hourly.bucket_start_utc, hourly.agent,
+                ${identityColumns.map((column) => `hourly.${column}`).join(", ")},
+                ${countColumns.map((column) => `SUM(hourly.${column}) AS ${column}`).join(", ")},
+                CASE
+                  WHEN SUM(hourly.source_cost_covered_requests) > 0
+                    THEN CAST(
+                      SUM(CAST(COALESCE(hourly.source_cost_microusd, '0') AS INTEGER)) AS TEXT
+                    )
+                  ELSE NULL
+                END AS source_cost_microusd,
+                SUM(hourly.source_cost_covered_requests) AS source_cost_covered_requests,
+                SUM(hourly.partial) AS partial_hours
+         FROM usage_hourly AS hourly
+         INNER JOIN devices ON devices.id = hourly.device_id
+         WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
+           AND hourly.bucket_start_utc >= ?2 AND hourly.bucket_start_utc < ?3
+         GROUP BY hourly.bucket_start_utc, hourly.agent,
+                  ${identityColumns.map((column) => `hourly.${column}`).join(", ")}
+         ORDER BY hourly.bucket_start_utc ASC, hourly.agent ASC,
+                  ${identityColumns.map((column) => `hourly.${column} ASC`).join(", ")}
+         LIMIT ?4`,
+      )
+      .bind(accountId, query.from, query.to, query.limit + 1)
+      .all<StoredHourlyRow>();
+    return {
+      rows: rows.results.slice(0, query.limit).map(hourlyRow),
+      truncated: rows.results.length > query.limit,
+    };
+  }
+
+  /**
+   * The whole board, in one aggregate over the rollup.
+   *
+   * Ranking is what `usage_daily` is already keyed for, so the board is grouped and ordered in
+   * SQLite rather than folded here: one statement bounded by the window and the number of
+   * places, instead of one scan per listed profile. Tokens are input plus output, the same
+   * total a public page prints, and `messages` is the request count, so a handle's place on
+   * the board and the numbers on its own page cannot disagree.
+   */
+  async queryLeaderboard(query: LeaderboardQuery): Promise<LeaderboardRow[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT public_profiles.handle AS handle,
+                SUM(daily.input_tokens + daily.output_tokens) AS total_tokens,
+                SUM(daily.requests) AS messages
+           FROM usage_daily AS daily
+           INNER JOIN devices ON devices.id = daily.device_id
+           INNER JOIN public_profiles ON public_profiles.account_id = devices.account_id
+          WHERE public_profiles.on_leaderboard = 1
+            AND public_profiles.enabled = 1
+            AND devices.deleted_at IS NULL
+            AND daily.utc_date >= ?1
+          GROUP BY public_profiles.handle
+          HAVING total_tokens > 0
+          ORDER BY total_tokens DESC, public_profiles.handle ASC
+          LIMIT ?2`,
+      )
+      .bind(query.from, query.limit)
+      .all<{ handle: string; total_tokens: number; messages: number }>();
+    return rows.results.map((row) => ({
+      handle: row.handle,
+      total_tokens: Number(row.total_tokens),
+      messages: Number(row.messages),
+    }));
   }
 
   /**
@@ -437,6 +520,10 @@ function noNewerScan(version: string): string {
 }
 
 function dailyRow({ source_cost_microusd, ...row }: StoredDailyRow): StoredUsageDailyRow {
+  return { ...row, ...(source_cost_microusd === null ? {} : { source_cost_microusd }) };
+}
+
+function hourlyRow({ source_cost_microusd, ...row }: StoredHourlyRow): StoredUsageHourlyRow {
   return { ...row, ...(source_cost_microusd === null ? {} : { source_cost_microusd }) };
 }
 

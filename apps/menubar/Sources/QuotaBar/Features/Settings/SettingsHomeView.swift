@@ -22,6 +22,8 @@ struct SettingsHomeView: View {
     MenuBarArrangementPreference.fallback
   @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
     ResetCopyStylePreference.fallback
+  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
+    PaceLinePreference.fallback
 
   var body: some View {
     ScrollView {
@@ -87,6 +89,13 @@ struct SettingsHomeView: View {
               trailing: resetCopyStyle.label,
               accessibilityLabel: MenuBarRoute.resetCopy.title,
               action: onOpenResetCopy
+            )
+            settingsToggleRow(
+              title: "Show pace lines",
+              systemImage: "chart.xyaxis.line",
+              isOn: $showsPaceLines,
+              accessibilityLabel: "Show pace lines",
+              accessibilityHint: "Draw each window's usage curve and where it lands at reset"
             )
           }
         }

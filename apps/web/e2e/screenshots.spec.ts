@@ -6,6 +6,7 @@ import {
   accountReadFromSummary,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
+  screenshotAccountRhythm,
   screenshotAccountSummary,
 } from "./account-fixture.ts";
 
@@ -19,6 +20,29 @@ test.skip(!enabled, "gated by SCREENSHOTS=1");
 mkdirSync(outputDir, { recursive: true });
 
 async function mockV6(page: Page): Promise<void> {
+  await page.route(
+    (url) => new URL(url).pathname === "/api/v2/providers/status",
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "claude",
+              indicator: "minor",
+              description: "Partial System Outage",
+              checked_at: "2026-09-06T00:00:00Z",
+            },
+          ],
+        }),
+      });
+    },
+  );
   await page.route(
     (url) => new URL(url).pathname === "/api/v2/account",
     async (route) => {
@@ -48,11 +72,16 @@ async function mockV6(page: Page): Promise<void> {
       const from = asked.searchParams.get("from") ?? "2026-08-12";
       const to = asked.searchParams.get("to") ?? from;
       const detailed = asked.searchParams.get("detail") === "agents";
+      const hours = asked.searchParams.get("detail") === "hours";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          detailed ? screenshotAccountActivityDay(from) : screenshotAccountActivity(from, to),
+          detailed
+            ? screenshotAccountActivityDay(from)
+            : hours
+              ? screenshotAccountRhythm(from, to)
+              : screenshotAccountActivity(from, to),
         ),
       });
       return;
@@ -108,9 +137,20 @@ for (const appearance of appearances) {
       await expect(page.locator("#message-total")).toBeVisible();
       await expect(page.locator(".usage-columns")).toBeVisible();
       await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Rhythm" })).toBeVisible();
+      await expect(page.locator(".usage-rhythm-heat")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
+      await page.getByRole("heading", { name: "Rhythm" }).scrollIntoViewIfNeeded();
       await shot(page, `web-usage-${appearance}-desktop.png`);
+    });
+
+    test(`leaderboard ${appearance} desktop`, async ({ page }) => {
+      await page.goto("/leaderboard");
+      await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+      await expect(page.locator("table.leaderboard tbody tr")).toHaveCount(10);
+      await expect(page.locator("tr.leaderboard-you")).toHaveCount(1);
+      await shot(page, `web-leaderboard-${appearance}-desktop.png`);
     });
   });
 

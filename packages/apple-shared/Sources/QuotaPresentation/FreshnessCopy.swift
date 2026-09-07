@@ -10,7 +10,7 @@ import Foundation
 /// `packages/protocol/fixtures/freshness-copy-conformance.json` is the shared statement of these
 /// thresholds, phrases, and when the no-reset phrase prints. How a future refill is named is
 /// `reset-copy-conformance.json`. This type, `packages/quota-model`, and `apps/web/src/lib/format.ts`
-/// all answer those files.
+/// all answer those files, and `packages/service` answers the reset one for the `quota` command.
 public enum FreshnessCopy: Sendable {
   /// Stands in for an age before anything has been read at all.
   public static let notChecked = "Not checked"

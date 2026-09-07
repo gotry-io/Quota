@@ -60,6 +60,9 @@ export function memoizeWebDocumentPort(inner: WebDocumentPort): {
       readPublicProfile(handle) {
         return inner.readPublicProfile(handle);
       },
+      readLeaderboard(headers) {
+        return inner.readLeaderboard(headers);
+      },
     },
     async hasViewer() {
       if (!viewer) return false;

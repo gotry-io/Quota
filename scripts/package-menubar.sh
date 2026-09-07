@@ -26,13 +26,15 @@ fi
 
 cd "$ROOT_DIR"
 QUOTABAR_VERSION="$VERSION" cargo build --locked --release --package quota-menubar-helper
+cargo build --locked --release --package quota-service --bin quota
 swift build --package-path apps/menubar --configuration release --arch arm64 --product QuotaBar
 
 SWIFT_BIN_DIR="$(swift build --package-path apps/menubar --configuration release --arch arm64 --show-bin-path)"
 APP_BINARY="${SWIFT_BIN_DIR}/QuotaBar"
 HELPER_BINARY="${ROOT_DIR}/target/release/quota-menubar-helper"
+COMMAND_BINARY="${ROOT_DIR}/target/release/quota"
 
-for binary in "$APP_BINARY" "$HELPER_BINARY"; do
+for binary in "$APP_BINARY" "$HELPER_BINARY" "$COMMAND_BINARY"; do
   if [[ ! -x "$binary" ]]; then
     echo "missing executable: $binary" >&2
     exit 1
@@ -51,6 +53,9 @@ mkdir -p \
 
 cp "$APP_BINARY" "$APP_PATH/Contents/MacOS/QuotaBar"
 cp "$HELPER_BINARY" "$APP_PATH/Contents/Helpers/quota-service"
+# The public command ships beside the private service, in the same bundle and signed the same
+# way, so what a person symlinks onto their PATH is the build QuotaBar is running.
+cp "$COMMAND_BINARY" "$APP_PATH/Contents/Helpers/quota"
 chmod +x "${ROOT_DIR}/scripts/embed-sparkle-framework.sh"
 "${ROOT_DIR}/scripts/embed-sparkle-framework.sh" "$APP_PATH"
 cp apps/menubar/Support/Info.plist "$APP_PATH/Contents/Info.plist"
@@ -63,7 +68,8 @@ cp LICENSE "$APP_PATH/Contents/Resources/LICENSE"
 
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_PATH/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_PATH/Contents/Info.plist"
-chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"
+chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service" \
+  "$APP_PATH/Contents/Helpers/quota"
 
 # Keep local packages launchable. A release workflow replaces these signatures with Developer ID.
 # An ad-hoc signature's designated requirement is the build's cdhash, so macOS treats every
@@ -75,6 +81,8 @@ chmod +x "${ROOT_DIR}/scripts/sign-sparkle-framework.sh"
 "${ROOT_DIR}/scripts/sign-sparkle-framework.sh" "$APP_PATH" "$CODESIGN_IDENTITY"
 codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH/Contents/Helpers/quota-service"
 codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota-service"
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH/Contents/Helpers/quota"
+codesign --verify --strict --verbose=2 "$APP_PATH/Contents/Helpers/quota"
 codesign --force --sign "$CODESIGN_IDENTITY" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 

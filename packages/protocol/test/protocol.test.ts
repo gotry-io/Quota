@@ -21,6 +21,7 @@ import {
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
+  LeaderboardResponseSchema,
   LOCAL_PROVIDER_IDS,
   LocalProviderIdSchema,
   LocalUsageReportSchema,
@@ -29,6 +30,8 @@ import {
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
   PROVIDER_IDS,
+  ProviderStatusResponseReadSchema,
+  ProviderStatusResponseSchema,
   PricingCatalogSchema,
   PublicProfileHandleSchema,
   PublicProfileUpdateRequestSchema,
@@ -379,6 +382,42 @@ describe("quota protocol", () => {
       "Apple",
       "Email",
     ]);
+  });
+
+  it("states the public provider status page as one row per polled catalog id", () => {
+    const body = {
+      providers: [
+        {
+          id: "codex",
+          indicator: "minor",
+          description: "Partial System Outage",
+          checked_at: "2026-09-06T00:00:00Z",
+        },
+        {
+          id: "claude",
+          indicator: "unknown",
+          description: "",
+          checked_at: "2026-09-06T00:00:00Z",
+        },
+      ],
+    };
+    expect(ProviderStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(
+      ProviderStatusResponseSchema.safeParse({
+        protocol_version: 2,
+        ...body,
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderStatusResponseSchema.safeParse({
+        providers: [{ ...body.providers[0], indicator: "maintenance" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderStatusResponseReadSchema.safeParse({
+        providers: [{ ...body.providers[0], extra: true }],
+      }).success,
+    ).toBe(true);
   });
 
   it("states what Sign in with Apple posts from inside the app", () => {
@@ -850,6 +889,48 @@ describe("quota protocol", () => {
         ],
       }).success,
     ).toBe(true);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(true);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay().slice(0, 23),
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(false);
+    const unordered = emptyHoursOfDay();
+    unordered.reverse();
+    expect(
+      AccountUsageActivityResponseSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: unordered,
+        weekday_hours: emptyWeekdayHours(),
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsageActivityResponseReadSchema.safeParse({
+        protocol_version: 6,
+        days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+        hours_of_day: emptyHoursOfDay(),
+        weekday_hours: emptyWeekdayHours(),
+        extra: true,
+      }).success,
+    ).toBe(true);
     const summary = accountSummary();
     expect(
       AccountSummarySchema.safeParse({
@@ -1124,7 +1205,13 @@ describe("quota protocol", () => {
   });
 
   it("cannot state a public page with no address, and refuses a key the page does not publish", () => {
-    const profile = { handle: "kyle", enabled: true, show_models: true, show_cost: false };
+    const profile = {
+      handle: "kyle",
+      enabled: true,
+      show_models: true,
+      show_cost: false,
+      on_leaderboard: false,
+    };
     expect(
       PublicProfileUpdateRequestSchema.safeParse({ protocol_version: PROTOCOL_VERSION, profile })
         .success,
@@ -1171,6 +1258,54 @@ describe("quota protocol", () => {
       expect(
         PublicUsageResponseSchema.safeParse({ ...page, ...extra }).success,
         JSON.stringify(extra),
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a page that would be listed without being published", () => {
+    const listed = {
+      handle: "kyle",
+      enabled: false,
+      show_models: true,
+      show_cost: false,
+      on_leaderboard: true,
+    };
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: listed,
+      }).success,
+    ).toBe(false);
+    expect(
+      PublicProfileUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        profile: { ...listed, enabled: true },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps cost, models, providers, and agents off the board", () => {
+    const board = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      period: "30d",
+      generated_at: "2026-09-06T12:00:00Z",
+      entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1 }],
+    };
+    expect(LeaderboardResponseSchema.safeParse(board).success).toBe(true);
+
+    for (const broken of [
+      { period: "7d" },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 0 }] },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 101 }] },
+      { entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1, cost: null }] },
+      {
+        entries: [{ handle: "kyle", total_tokens: 12, messages: 1, rank: 1, models: [] }],
+      },
+      { entries: Array.from({ length: 101 }, () => board.entries[0]) },
+    ]) {
+      expect(
+        LeaderboardResponseSchema.safeParse({ ...board, ...broken }).success,
+        JSON.stringify(broken),
       ).toBe(false);
     }
   });
@@ -1259,6 +1394,20 @@ function emptyCost() {
     assumptions: [],
     unpriced: [],
   };
+}
+
+function emptyHoursOfDay() {
+  return Array.from({ length: protocol.HOURS_OF_DAY }, (_, hour) => ({
+    hour,
+    total_tokens: 0,
+    cost_microusd: null,
+  }));
+}
+
+function emptyWeekdayHours() {
+  return Array.from({ length: protocol.WEEKDAYS_OF_WEEK }, () =>
+    Array.from({ length: protocol.HOURS_OF_DAY }, () => 0),
+  );
 }
 
 function emptySaving() {

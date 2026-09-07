@@ -147,6 +147,78 @@ struct SubscriptionDetailContentTests {
     #expect(!content.sources[1].isReporting)
   }
 
+  /// The reading this phone took draws its own curve; the same reading arriving from a Mac
+  /// does not, because this phone kept no samples of it (ADR 0042).
+  @Test
+  func onlyThisPhonesOwnReadingCarriesAHistory() {
+    let observed = now.addingTimeInterval(-60)
+    let reading = snapshot(usedPercent: 58, observedAt: observed, durationSeconds: 18_000)
+    let local = QuotaSubscription(
+      key: key,
+      provider: .codex,
+      snapshot: reading,
+      sources: [
+        QuotaSubscriptionSource(
+          deviceID: ThisDevice.sourceID, observedAt: observed, snapshot: reading)
+      ]
+    )
+    var samples = LocalQuotaSamples()
+    let start = now.addingTimeInterval(2_700 - 18_000)
+    for (offset, used) in [(3_600.0, 20.0), (7_200.0, 38.0), (12_540.0, 58.0)] {
+      samples.windows.append(
+        LocalQuotaSamples.Entry(
+          provider: .codex,
+          windowID: "five_hour",
+          samples: [
+            QuotaSample(
+              resetsAt: now.addingTimeInterval(2_700),
+              observedAt: start.addingTimeInterval(offset),
+              usedPercent: used
+            )
+          ]
+        )
+      )
+    }
+    samples.windows = [
+      LocalQuotaSamples.Entry(
+        provider: .codex,
+        windowID: "five_hour",
+        samples: samples.windows.flatMap(\.samples)
+      )
+    ]
+
+    let mine = SubscriptionDetailContent.make(
+      subscription: local,
+      deviceNames: [:],
+      samples: samples,
+      now: now,
+      utcOffsetSeconds: 0
+    )
+    let history = try! #require(mine.histories["five_hour"])
+    #expect(history.points.count == 3)
+    #expect(history.projection != nil)
+    #expect(mine.todayLine != nil)
+    #expect(mine.displayedStrings.contains(mine.todayLine ?? ""))
+
+    let fromAMac = QuotaSubscription(
+      key: key,
+      provider: .codex,
+      snapshot: reading,
+      sources: [
+        QuotaSubscriptionSource(deviceID: studioID, observedAt: observed, snapshot: reading)
+      ]
+    )
+    let theirs = SubscriptionDetailContent.make(
+      subscription: fromAMac,
+      deviceNames: deviceNames(),
+      samples: samples,
+      now: now,
+      utcOffsetSeconds: 0
+    )
+    #expect(theirs.histories.isEmpty)
+    #expect(theirs.todayLine == nil)
+  }
+
   private func kitchenThenStudio() -> [QuotaSubscriptionSource] {
     let studio = snapshot(usedPercent: 32, observedAt: now.addingTimeInterval(-90))
     let kitchen = snapshot(usedPercent: 41, observedAt: now.addingTimeInterval(-360))
@@ -169,7 +241,11 @@ struct SubscriptionDetailContentTests {
     )
   }
 
-  private func snapshot(usedPercent: Double, observedAt: Date) -> QuotaSnapshot {
+  private func snapshot(
+    usedPercent: Double,
+    observedAt: Date,
+    durationSeconds: Int? = nil
+  ) -> QuotaSnapshot {
     QuotaSnapshot(
       provider: .codex,
       account: QuotaAccount(
@@ -183,7 +259,8 @@ struct SubscriptionDetailContentTests {
           id: "five_hour",
           title: "5 Hours",
           usedPercent: usedPercent,
-          resetsAt: now.addingTimeInterval(2_700)
+          resetsAt: now.addingTimeInterval(2_700),
+          durationSeconds: durationSeconds
         )
       ],
       status: .available,
