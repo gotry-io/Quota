@@ -77,6 +77,15 @@ jobs:
           config.propagate_tool_errors: "true"
           config.ai_timeout: "180"
 
+          # Reviewed 2026-09-07 over PR #1–181: bump/chore/docs PRs produced 3 findings in 30
+          # reviews, and PRs stacked on wp/* or integrate/* were all closed unmerged, so their
+          # reviews sank with them and the same code was reviewed again against main.
+          config.ignore_pr_title: '["^\\[Auto\\]", "^Auto", "^chore\\(", "^chore:", "^docs\\(", "^docs:", "(?i)bump version"]'
+          config.ignore_pr_source_branches: '["^chore/", "^docs/", "^release/"]'
+          config.ignore_pr_target_branches: '["^wp/", "^integrate/"]'
+          # This repository has no issues: every #NNN in a body or branch is another PR.
+          config.extract_issue_from_branch: "false"
+
           github_action_config.auto_review: "true"
           # The PR body is authored before opening the PR. Generating it again doubles the model
           # work and can exhaust the review window before the actual review starts on large diffs.
@@ -90,6 +99,41 @@ jobs:
           # Still re-run and edit the persistent review on each push; do not post
           # extra "updated to latest commit" timeline comments.
           PR_REVIEWER.FINAL_UPDATE_MESSAGE: "false"
+          PR_REVIEWER.PERSISTENT_COMMENT: "true"
+          # Ticket analysis judged 58 of 68 PRs "not compliant" against other PRs and changed
+          # nothing; the effort score was flat across 1–5. Neither earns its prompt budget.
+          PR_REVIEWER.REQUIRE_TICKET_ANALYSIS_REVIEW: "false"
+          PR_REVIEWER.REQUIRE_ESTIMATE_EFFORT_TO_REVIEW: "false"
+          # 40% of reviews said only "No major issues detected"; say nothing instead.
+          PR_REVIEWER.PUBLISH_OUTPUT_NO_SUGGESTIONS: "false"
+          PR_REVIEWER.ENABLE_INTRO_TEXT: "false"
+          PR_REVIEWER.NUM_MAX_FINDINGS: "3"
+          PR_REVIEWER.EXTRA_INSTRUCTIONS: >-
+            This repository has no issues; every `#NNN` in a PR body is another pull request
+            (usually a stacked base or a sibling work package). Never treat it as a requirement
+            ticket and never report that work belonging to a stacked base is missing.
+
+            Follow AGENTS.md. In particular:
+            (1) Compatibility discipline: do NOT ask for tolerant decoding defaults, optional
+            fields, dual read/write paths, migration scaffolding, or legacy aliases unless the
+            schema or interface has SHIPPED in a production release or deployment (menubar-v*,
+            ios-v*, or a deployed Relay). Strict writes, tolerant reads: adding a field or enum
+            member to a read path is not a breaking change. When you do flag a compatibility
+            break, name the concrete shipped artifact that would break.
+            (2) Wire JSON is snake_case; quota values always represent REMAINING quota.
+            (3) Protocol changes start in packages/protocol and must keep the Zod schema, exported
+            JSON Schema, Rust, and Swift decoding aligned; flag a change that touches only some.
+            (4) Persistence changes need a new explicit migration, never a rewritten applied one.
+            D1 (Relay), identity.sqlite, and cache.sqlite have separate ladders.
+            (5) Prefer direct implementations; do not ask for defensive retries, wrappers, or
+            fallbacks without a concrete failure mode.
+
+            Report only defects a reader can trigger: state the input or interleaving that
+            produces the wrong result. Do NOT emit findings that merely restate the design,
+            ask the author to "confirm"/"verify"/"ensure" something, or describe residual risk
+            with no trigger. If you have fewer than three such defects, report fewer.
+            The same rule applies to the security section: describe an exploitable path or say
+            there are no security concerns.
           PR_DESCRIPTION.ENABLE_HELP_TEXT: "false"
           PR_DESCRIPTION.FINAL_UPDATE_MESSAGE: "false"
           config.publish_output_progress: "false"
