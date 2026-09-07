@@ -1432,7 +1432,10 @@ final class QuotaUITests: XCTestCase {
       }
 
       if isDynamicType, let control = issue.element {
-        let haystack = "\(control) \(control.identifier) \(control.label)"
+        // The auditor names the inner text, which carries no identifier of its own; the row it
+        // sits in does, so the row's path is part of what a token can match.
+        let haystack =
+          "\(control) \(control.identifier) \(control.label) \(parentIdentifier(of: control))"
         if haystack.contains("\"Done\" Button") {
           return true
         }
@@ -1489,6 +1492,8 @@ final class QuotaUITests: XCTestCase {
             "usage.empty",
             "subscription.account",
             "subscription.plan",
+            "\"Account\" StaticText",
+            "\"Plan\" StaticText",
             "settings.about.version",
             "settings.about.license",
             "settings.notifications",
