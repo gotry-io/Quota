@@ -3,7 +3,6 @@ import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   ACTIVITY_DAYS,
   type AccountActivityResult,
-  type AccountRead,
   type AccountResult,
   type AccountSummaryResult,
   accountActivityPath,
@@ -20,13 +19,7 @@ import {
 } from "./account-reads.ts";
 import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
 
-export type {
-  AccountActivityResult,
-  AccountError,
-  AccountRead,
-  AccountResult,
-  AccountSummaryResult,
-};
+export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
 export {
   ACTIVITY_DAYS,
   accountActivityPath,

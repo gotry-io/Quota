@@ -18,34 +18,16 @@ import { type AccountError, classifyAccountError } from "./account-errors.ts";
 /** How far back the activity chart asks, ending today. */
 export const ACTIVITY_DAYS = 365;
 
-export type AccountRead = Pick<AccountResponse, "protocol_version" | "account" | "identities">;
-
 export type AccountSummaryResult = { status: "ok"; summary: AccountSummaryRead } | AccountError;
 
-export type AccountResult = { status: "ok"; account: AccountRead } | AccountError;
+export type AccountResult = { status: "ok"; account: AccountResponse } | AccountError;
 
 export type AccountActivityResult =
   | { status: "ok"; activity: AccountUsageActivityResponseRead }
   | AccountError;
 
-const AccountResponseReadSchema = AccountResponseSchema.pick({
-  protocol_version: true,
-  account: true,
-  identities: true,
-})
-  .extend({
-    account: AccountResponseSchema.shape.account.loose(),
-  })
-  .loose();
-
-const AccountSummaryViewSchema = AccountSummaryReadSchema.pick({
-  protocol_version: true,
-  account: true,
-  devices: true,
-  subscriptions: true,
-  usage: true,
-  pricing_revision: true,
-  model_catalog_revision: true,
+const AccountResponseReadSchema = AccountResponseSchema.extend({
+  account: AccountResponseSchema.shape.account.loose(),
 }).loose();
 
 type CachedSummary = { etag: string; summary: AccountSummaryRead };
@@ -107,7 +89,7 @@ export function parseAccountResponse(status: number, body: unknown): AccountResu
 }
 
 export function parseAccountSummaryBody(body: unknown): AccountSummaryRead | null {
-  const parsed = AccountSummaryViewSchema.safeParse(body);
+  const parsed = AccountSummaryReadSchema.safeParse(body);
   return parsed.success ? (parsed.data as AccountSummaryRead) : null;
 }
 

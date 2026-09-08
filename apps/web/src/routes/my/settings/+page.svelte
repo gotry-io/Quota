@@ -2,7 +2,8 @@
 import { onMount } from "svelte";
 import { replaceState } from "$app/navigation";
 import { page } from "$app/state";
-import { type AccountRead, deleteAccount, fetchAccount } from "$lib/account-client";
+import type { AccountResponse } from "@gotry-io/quota-protocol";
+import { deleteAccount, fetchAccount } from "$lib/account-client";
 import {
   type AccountError,
   accountNoticeActionLabel,
@@ -22,7 +23,7 @@ import type { WebDocumentViewer } from "$lib/server/document-port";
 const store = getAccountStore();
 const viewer = $derived((page.data.viewer as WebDocumentViewer | null | undefined) ?? null);
 const initial = $derived(viewerInitial(viewer?.displayLabel));
-let account = $state<AccountRead | null>(null);
+let account = $state<AccountResponse | null>(null);
 let accountError = $state<AccountError | null>(null);
 let deleteHeading = $state<HTMLHeadingElement | null>(null);
 let linkedTakenNotice = $state(isLinkedTaken(page.url));

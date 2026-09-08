@@ -73,7 +73,7 @@ function makeSummary(
     pricing_revision: "price_1",
     model_catalog_revision: "model_1",
     ...overrides,
-  } as unknown as AccountSummaryRead;
+  } as AccountSummaryRead;
 }
 
 function codexSubscription(): AccountSummaryRead["subscriptions"][number] {
