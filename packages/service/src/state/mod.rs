@@ -4018,7 +4018,6 @@ fn error_code_key(value: ErrorCode) -> &'static str {
         ErrorCode::AuthenticationRequired => "authentication_required",
         ErrorCode::DeviceDeleted => "device_deleted",
         ErrorCode::StaleGeneration => "stale_generation",
-        ErrorCode::SubscriptionRequired => "subscription_required",
         ErrorCode::Unavailable => "unavailable",
         ErrorCode::ProviderError => "provider_error",
         ErrorCode::NetworkError => "network_error",
@@ -4038,7 +4037,6 @@ fn parse_error_code(value: &str) -> Option<ErrorCode> {
         "authentication_required" => ErrorCode::AuthenticationRequired,
         "device_deleted" => ErrorCode::DeviceDeleted,
         "stale_generation" => ErrorCode::StaleGeneration,
-        "subscription_required" => ErrorCode::SubscriptionRequired,
         "unavailable" => ErrorCode::Unavailable,
         "provider_error" => ErrorCode::ProviderError,
         "network_error" => ErrorCode::NetworkError,
@@ -4631,7 +4629,6 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::SubscriptionRequired => "subscription_required",
     }
 }
 
@@ -4652,7 +4649,6 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
-        "subscription_required" => Ok(DiagnosticAttemptCode::SubscriptionRequired),
         _ => Err(invalid_diagnostic_column(9, value)),
     }
 }

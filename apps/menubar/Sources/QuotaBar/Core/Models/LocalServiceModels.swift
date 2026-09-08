@@ -90,7 +90,6 @@ enum LocalServiceErrorCode: String, Decodable, Sendable {
   case authenticationRequired = "authentication_required"
   case deviceDeleted = "device_deleted"
   case staleGeneration = "stale_generation"
-  case subscriptionRequired = "subscription_required"
   case unavailable
   case providerError = "provider_error"
   case networkError = "network_error"
@@ -156,67 +155,6 @@ extension LocalServiceComponent {
   }
 }
 
-/// The paid-sync entitlement as Relay states it, carried through IPC unchanged.
-///
-/// A status this build does not know reads as `unknown`, which syncs nothing and offers the
-/// purchase link, because only `active` and `grace` are entitlements Relay lets write.
-enum LocalServiceEntitlementStatus: String, Codable, Sendable, TolerantWireEnum {
-  case active
-  case grace
-  case expired
-  case none
-  case unknown
-}
-
-/// Whether this account may sync, until when, and how old that answer is.
-///
-/// `stale` means Relay could not refresh the entitlement from the billing system and answered
-/// with the row it still had; `checkedAt` is when that row was last written, so a stale answer
-/// can say its age instead of leaving the reader to guess.
-struct LocalServiceEntitlement: Decodable, Equatable, Sendable {
-  let status: LocalServiceEntitlementStatus
-  let expiresAt: Date?
-  let willRenew: Bool
-  let stale: Bool
-  let checkedAt: Date?
-
-  var allowsSync: Bool { status == .active || status == .grace }
-
-  private enum CodingKeys: String, CodingKey {
-    case status
-    case expiresAt
-    case willRenew
-    case stale
-    case checkedAt
-  }
-
-  init(
-    status: LocalServiceEntitlementStatus,
-    expiresAt: Date?,
-    willRenew: Bool,
-    stale: Bool,
-    checkedAt: Date?
-  ) {
-    self.status = status
-    self.expiresAt = expiresAt
-    self.willRenew = willRenew
-    self.stale = stale
-    self.checkedAt = checkedAt
-  }
-
-  init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys([
-      "status", "expiresAt", "willRenew", "stale", "checkedAt",
-    ])
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    status = try container.decode(LocalServiceEntitlementStatus.self, forKey: .status)
-    expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
-    willRenew = try container.decode(Bool.self, forKey: .willRenew)
-    stale = try container.decode(Bool.self, forKey: .stale)
-    checkedAt = try container.decodeIfPresent(Date.self, forKey: .checkedAt)
-  }
-}
-
 /// What this Mac knows about the account it is signed in to.
 ///
 /// `displayLabel` is what the sign-in itself said the account is called. It arrives with the
@@ -229,10 +167,6 @@ struct LocalServiceAccountState: Decodable, Sendable {
   let deviceID: String?
   let deviceGeneration: Int?
   let accountSummary: AccountSummary?
-  /// The paid-sync entitlement from the account read, absent until this Mac has made one.
-  let entitlement: LocalServiceEntitlement?
-  /// Where this account buys the subscription, as Relay stated it.
-  let purchaseURL: URL?
 
   private enum CodingKeys: String, CodingKey {
     case authStatus
@@ -241,8 +175,6 @@ struct LocalServiceAccountState: Decodable, Sendable {
     case deviceID = "deviceId"
     case deviceGeneration
     case accountSummary
-    case entitlement
-    case purchaseURL = "purchaseUrl"
   }
 
 }
@@ -251,7 +183,6 @@ extension LocalServiceAccountState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "authStatus", "accountId", "displayLabel", "deviceId", "deviceGeneration", "accountSummary",
-      "entitlement", "purchaseUrl",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     authStatus = try container.decode(LocalServiceAuthStatus.self, forKey: .authStatus)
@@ -260,8 +191,6 @@ extension LocalServiceAccountState {
     deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
     deviceGeneration = try container.decodeIfPresent(Int.self, forKey: .deviceGeneration)
     accountSummary = try container.decodeIfPresent(AccountSummary.self, forKey: .accountSummary)
-    entitlement = try container.decodeIfPresent(LocalServiceEntitlement.self, forKey: .entitlement)
-    purchaseURL = try container.decodeIfPresent(URL.self, forKey: .purchaseURL)
   }
 }
 
