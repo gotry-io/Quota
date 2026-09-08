@@ -15,8 +15,8 @@ public enum WidgetAppGroup {
 
   public static let widgetKind = "io.gotry.quota.overview"
 
-  /// `nil` when this build is not entitled to the group — an ad-hoc signed local QuotaBar, for
-  /// one, whose entitlements the re-signature drops.
+  /// `nil` when this build is not a member of the group — an ad-hoc signed local QuotaBar, for
+  /// one, whose App Group capability the re-signature drops.
   public static func containerURL(
     fileManager: FileManager = .default
   ) -> URL? {

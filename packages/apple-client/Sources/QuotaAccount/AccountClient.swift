@@ -11,23 +11,12 @@ public enum AccountClientError: Error, Equatable, Sendable {
   case missingAuthorizationCode
   case unexpectedCallbackToken
   case accountMismatch
-  /// Relay refused a write this Account's entitlement does not cover: 402 `subscription_required`.
-  /// It is a state of the account rather than a transport failure, so it is named here instead of
-  /// reaching callers as one more rejected status.
-  case subscriptionRequired
   /// This session registered no Device, so there is nothing for it to write.
   case notADevice
   case relay(RelayClientError)
 
   init(_ error: RelayClientError) {
-    if case .rejected(let code, let status) = error,
-      status == 402,
-      code == RelayErrorCode.subscriptionRequired.rawValue
-    {
-      self = .subscriptionRequired
-    } else {
-      self = .relay(error)
-    }
+    self = .relay(error)
   }
 }
 
@@ -242,9 +231,7 @@ public actor AccountClient {
 
   /// Send what this device read to the Account it belongs to.
   ///
-  /// The control document is read first: it answers the generation the envelope must name, and
-  /// it is where a 402 says paid sync is off, so nothing is sent before this Account is known to
-  /// accept it ([ADR 0033](../../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
+  /// The control document is read first: it answers the generation the envelope must name.
   /// A session that names no Device has nothing to upload with and says so rather than asking.
   public func uploadSnapshots(_ snapshots: [QuotaSnapshot]) async -> AccountClientError? {
     do {
@@ -453,10 +440,6 @@ public actor AccountClient {
 }
 
 extension AccountClientError {
-  /// What a client says when Relay answers 402: the Macs are still collecting, but nothing they
-  /// send reaches this Account until Quota Pro is on.
-  public static let subscriptionRequiredMessage = "Sync is off: Quota Pro is required."
-
   /// Copy a Connect Account failure can show. Cancel is handled before this is read.
   public var userFacingMessage: String {
     switch self {
@@ -466,8 +449,6 @@ extension AccountClientError {
       "Couldn't reach quota.gotry.io."
     case .relay(.invalidGrant), .relay(.unauthorized), .sessionExpired:
       AuthorizationError.expiredSignInMessage
-    case .subscriptionRequired:
-      Self.subscriptionRequiredMessage
     case .relay(.rejected(code: _, status: let status)) where (400...499).contains(status):
       AuthorizationError.expiredSignInMessage
     default:

@@ -76,8 +76,6 @@ final class AppModel {
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
   /// the rows; the sessions themselves are the Keychain store's.
   let providers: ProvidersModel
-  /// The store side of paid sync. It buys; Relay's `entitlement` is what says sync is on.
-  let subscription: SubscriptionModel
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -113,10 +111,6 @@ final class AppModel {
   /// The Device this phone's session speaks for, or nil when it registered none. Devices lists
   /// that row as the Account's rather than synthesizing a second one beside it.
   var sessionDeviceID: String?
-  /// Whether Relay refused this phone's last upload because paid sync is off. The entitlement on
-  /// the summary usually says the same thing; this is the write boundary saying it
-  /// ([ADR 0033](../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
-  private(set) var uploadRefusedAsUnpaid = false
   /// The nonce the Sign in with Apple request in flight is bound to. Apple was handed its digest.
   private var appleNonce: AppleSignInNonce?
   /// Whether the sign-in sheet — the one page that offers every way in — is showing.
@@ -165,7 +159,6 @@ final class AppModel {
     localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
     sampleStore: any LocalQuotaSampleStoring = MemoryLocalQuotaSampleStore(),
     localCollector: LocalCollector? = nil,
-    purchases: any PurchasesFacade = UnconfiguredPurchases(),
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
     budgetStore: UsageBudgetStore = UsageBudgetStore(),
     installation: any InstallationIdentifying = KeychainInstallationIdentity(),
@@ -204,11 +197,6 @@ final class AppModel {
     }
     self.activity = activity ?? AccountClientActivityLoading(client: account)
     self.providerStatusClient = providerStatusClient
-    let subscription = SubscriptionModel(purchases: purchases)
-    self.subscription = subscription
-    subscription.onStoreChange = { [weak self] in
-      await self?.refresh()
-    }
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
@@ -227,35 +215,14 @@ final class AppModel {
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       sampleStore: FileLocalQuotaSampleStore.applicationSupport()
         ?? MemoryLocalQuotaSampleStore(),
-      purchases: RevenueCatPurchases.apiKey().map { RevenueCatPurchases(apiKey: $0) }
-        ?? UnconfiguredPurchases(),
       providerStatusClient: ProviderStatusClient()
     )
-  }
-
-  /// The Overview title. Without an account there is no label to print, and the app is still
-  /// showing quota, so it says what it is showing.
-  /// What Relay last said paid sync is worth to this Account. An Account read that has not
-  /// happened yet is `none`: nothing has been bought until a summary says so.
-  var entitlement: AccountEntitlement {
-    summary?.entitlement ?? .unsubscribed
-  }
-
-  var isSyncOn: Bool {
-    entitlement.status.allowsSync && !uploadRefusedAsUnpaid
   }
 
   /// What this phone presents when it signs in, so its session names a Device and what it reads
   /// can reach the Macs ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
   private var deviceRegistration: IosDeviceRegistration? {
     ThisIPhone.registration(identity: installation)
-  }
-
-  /// The Overview banner a signed-in Account without paid sync gets. Its Macs keep collecting;
-  /// none of what they send reaches this Account until sync is on.
-  var syncBanner: String? {
-    guard phase == .signedIn, summary != nil, !isSyncOn else { return nil }
-    return ProCopy.offBanner
   }
 
   /// The Overview title. Without an account there is no label to print, and the app is still
@@ -524,13 +491,11 @@ final class AppModel {
   private func apply(_ session: AccountSession) {
     sessionActivation = session.activation
     sessionDeviceID = session.deviceID
-    uploadRefusedAsUnpaid = false
   }
 
   private func forgetSession() {
     sessionActivation = nil
     sessionDeviceID = nil
-    uploadRefusedAsUnpaid = false
   }
 
   private func presentConnectFailure(_ message: String) {
@@ -643,23 +608,15 @@ final class AppModel {
     await refresh()
   }
 
-  /// Send what this phone just read to the Account, when it is a Device and sync is paid for.
+  /// Send what this phone just read to the Account, when it is a Device.
   ///
   /// Only the readings go: the provider sessions behind them stay in this device's Keychain, and
   /// Usage is a Mac's, because this phone has none
-  /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)). A 402 is
-  /// the boundary saying sync is off, and it stops this phone uploading until a summary says
-  /// otherwise.
+  /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
   private func uploadLocalReadings(_ collection: LocalCollection?) async {
-    // Each refresh asks again: an entitlement that has just been bought is not still refused.
-    uploadRefusedAsUnpaid = false
     guard let collection, !collection.snapshots.isEmpty else { return }
-    guard sessionDeviceID != nil, sessionActivation == .active,
-      entitlement.status.allowsSync
-    else { return }
-    if await account.uploadSnapshots(collection.snapshots) == .subscriptionRequired {
-      uploadRefusedAsUnpaid = true
-    }
+    guard sessionDeviceID != nil, sessionActivation == .active else { return }
+    _ = await account.uploadSnapshots(collection.snapshots)
   }
 
   /// Keep what this pass read, and let Settings say which sessions the provider refused.
@@ -1150,7 +1107,6 @@ final class AppModel {
       phase = .signedIn
       publishWidget()
       evaluateAlerts()
-      await identifySubscriber()
     case .sessionExpired:
       applyExpired()
     case .notSignedIn:
@@ -1285,7 +1241,6 @@ final class AppModel {
     // The providers this phone signed in to are not the account's, so what it collects for
     // itself survives losing the account — and so does the background window that refreshes it.
     updateBackgroundRefreshAsk()
-    Task { await subscription.signOut() }
     try? selectionSaltStore.clear()
     resetScheduler.removeAll()
     if localCollection?.snapshots.isEmpty != false {
@@ -1337,15 +1292,6 @@ final class AppModel {
       catalog: catalog,
       now: instant
     )
-  }
-
-  /// Bind store purchases to this Account, and let the paywall know Relay has caught up.
-  private func identifySubscriber() async {
-    guard let accountID = summary?.account.accountID else { return }
-    if isSyncOn {
-      subscription.entitlementConfirmed()
-    }
-    await subscription.identify(accountID: accountID)
   }
 
   /// Republish the widget snapshot from the merged readings. The widget does not distinguish
