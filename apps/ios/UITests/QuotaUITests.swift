@@ -266,7 +266,7 @@ final class QuotaUITests: XCTestCase {
       "product sentence"
     )
     XCTAssertTrue(
-      app.staticTexts["This iPhone does not upload anything it reads."].exists,
+      app.staticTexts["This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."].exists,
       "privacy sentence"
     )
     XCTAssertTrue(app.staticTexts["Version"].exists, "Version")

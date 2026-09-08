@@ -42,7 +42,7 @@ enum SettingsCopy {
   static let productSentence =
     "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
     + "and usage QuotaBar reports from your Macs."
-  static let privacySentence = "This iPhone does not upload anything it reads."
+  static let privacySentence = "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
   static let manageDevices = "Manage Devices on Web"
