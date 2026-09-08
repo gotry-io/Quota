@@ -117,16 +117,12 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
   protocol_version: 2;
   account: unknown;
   identities: { provider: string; label: string | null; linked_at: string }[];
-  entitlement: unknown;
-  purchase: { web_url: string };
 } {
-  const body = summary as { account: { account_id: string }; entitlement: unknown };
+  const body = summary as { account: { account_id: string } };
   const payload = {
     protocol_version: 2 as const,
     account: body.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-    entitlement: body.entitlement,
-    purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
   };
   const parsed = AccountResponseSchema.safeParse(payload);
   if (!parsed.success) {
@@ -479,16 +475,6 @@ export function screenshotAccountSummary(): unknown {
     },
     pricing_revision: PRICING_REVISION,
     model_catalog_revision: "models_visual_fixture",
-    entitlement: {
-      status: "active",
-      expires_at: isoFrom(now, 30 * 86_400_000),
-      will_renew: true,
-      product_id: "quota_pro_monthly",
-      store: "app_store",
-      stale: false,
-      checked_at: studioObserved,
-    },
-    purchase: { web_url: `https://pay.rev.cat/token/account_visual_octocat` },
   };
 
   const parsed = AccountSummaryReadSchema.safeParse(payload);

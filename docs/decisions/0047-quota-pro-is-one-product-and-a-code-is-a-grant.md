@@ -1,5 +1,8 @@
 # ADR 0047: Quota Pro is one product, and a code is a grant
 
+> Superseded by [ADR 0048](0048-sync-is-free-and-billing-is-gone.md): there is no product and no
+> code, because sync is free.
+
 - Status: Accepted
 - Date: 2026-09-07
 - Updates [ADR 0033](0033-entitlement-is-read-from-revenuecat.md)

@@ -28,8 +28,7 @@ The v6 data contract is four routes
   body. The same D1 batch rewrites `usage_daily` for the UTC dates it touched.
 - `GET /api/v6/account/summary?tz=` answers the account, its devices, `subscriptions[]` resolved
   once here rather than by every client, `usage` as Today / last 7 days / last 30 days / all time,
-  the pricing and model-catalog revisions, and the Quota Pro `entitlement` object. The summary ETag
-  includes `entitlements.updated_at`. A local day begins at local midnight, so `tz` decides
+  and the pricing and model-catalog revisions. A local day begins at local midnight, so `tz` decides
   where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
@@ -103,25 +102,11 @@ The Worker requires these secrets:
 - `QUOTA_INSTALLATION_KEY`
 - `QUOTA_SESSION_HASH_KEY`
 - `RESEND_API_KEY`
-- `REVENUECAT_WEBHOOK_SECRET` — the Authorization header value configured on the RevenueCat
-  webhook
-- `REVENUECAT_SECRET_KEY` — RevenueCat REST API v1 secret key
-- `REVENUECAT_WEB_PURCHASE_URL` — Web Purchase Link base (`https://pay.rev.cat/<token>`), also
-  acceptable as a Cloudflare var
-- `REDEMPTION_ADMIN_SECRET` — Bearer token for `POST /api/admin/redemption-codes`
 
-`POST /api/billing/revenuecat/webhook` is the RevenueCat webhook. It compares the `Authorization`
-header to `REVENUECAT_WEBHOOK_SECRET`, records the event, and folds the `pro` entitlement.
-`GET /api/v2/account` carries `entitlement` and `purchase.web_url` (the base with the Account id
-appended). `PUT /api/v6/device/snapshots`, `PUT /api/v6/device/usage`, `GET /api/v2/device/sync`,
-and `PUT /api/v2/device/profile` answer 402 `subscription_required` unless that entitlement is
-`active` or `grace`. `POST /api/admin/redemption-codes` issues codes under
-`REDEMPTION_ADMIN_SECRET`. `POST /api/v2/account/redeem` spends one: Relay checks the code, grants
-the `pro` promotional entitlement through RevenueCat, and then records the redemption. Issue codes
-from the repo root with `pnpm issue-codes --campaign <name> --duration monthly --count <n>`
-(`REDEMPTION_ADMIN_SECRET` in the environment). See
-[ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md) and
-[ADR 0047](../../docs/decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md).
+`PUT /api/v6/device/snapshots`, `PUT /api/v6/device/usage`, `GET /api/v2/device/sync`, and
+`PUT /api/v2/device/profile` are open to any signed-in Device: sync is free, and Relay has no
+billing system, no entitlement, and no 402
+([ADR 0048](../../docs/decisions/0048-sync-is-free-and-billing-is-gone.md)).
 
 The extra signing secret the retired browser-auth framework required is
 not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is

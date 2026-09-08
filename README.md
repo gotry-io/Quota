@@ -189,10 +189,6 @@ Production GitHub OAuth, email sign-in, and D1 deployment require the Worker sec
 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`,
 `QUOTA_SESSION_HASH_KEY`, and `RESEND_API_KEY`, each at least 32 random characters and documented
 by [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
-Production GitHub OAuth, RevenueCat (`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_SECRET_KEY`,
-`REVENUECAT_WEB_PURCHASE_URL`), redemption codes (`REDEMPTION_ADMIN_SECRET`), and D1 deployment
-require the secrets documented by the managed Relay configuration. The checked-in deployment
-workflow is the only authorized production path.
 
 ## License
 

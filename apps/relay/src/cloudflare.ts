@@ -31,10 +31,6 @@ export interface CloudflareBindings {
   QUOTA_INSTALLATION_KEY: string;
   QUOTA_SESSION_HASH_KEY: string;
   RESEND_API_KEY: string;
-  REVENUECAT_WEBHOOK_SECRET?: string;
-  REVENUECAT_SECRET_KEY?: string;
-  REVENUECAT_WEB_PURCHASE_URL?: string;
-  REDEMPTION_ADMIN_SECRET?: string;
 }
 
 export default {
@@ -88,12 +84,6 @@ export default {
       }),
       hasher,
       emailSender: new ResendEmailSender({ apiKey: environment.RESEND_API_KEY }),
-      billing: {
-        webhookSecret: environment.REVENUECAT_WEBHOOK_SECRET ?? "",
-        restSecret: environment.REVENUECAT_SECRET_KEY ?? "",
-        webPurchaseUrl: environment.REVENUECAT_WEB_PURCHASE_URL ?? "",
-        redemptionAdminSecret: environment.REDEMPTION_ADMIN_SECRET ?? "",
-      },
     });
 
     if (isRelayApiPath(pathname)) {

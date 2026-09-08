@@ -1,5 +1,9 @@
 # ADR 0041: The phone is a Device, and paid sync is what its readings are worth
 
+> Updated by [ADR 0048](0048-sync-is-free-and-billing-is-gone.md): the phone is still a Device,
+> but there is no write gate on what it uploads. `GET /api/v2/device/sync` answers the generation
+> and nothing else; there is no 402 and no sync-off banner.
+
 - Status: Accepted
 - Date: 2026-09-06
 - Updates [ADR 0013](0013-readonly-ios-account-client.md), which decided `quota-ios` never

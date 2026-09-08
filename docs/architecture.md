@@ -16,11 +16,9 @@ links to it rather than restating it.
   two are merged into one row per subscription by the rule below. Either way it publishes the
   non-secret App Group snapshot its widgets render. Signing in presents this phone's installation,
   so its session names a Device on platform `ios` and its own readings are uploaded on each
-  refresh while sync is paid for; the provider sessions behind them stay in this device's
+  refresh; the provider sessions behind them stay in this device's
   Keychain, and it uploads no Usage because it runs no agent
-  ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). It is also where paid sync is bought:
-  the RevenueCat SDK lives in `apps/ios` alone, bound to the Account id, while what sync is worth
-  to an Account is read from the Relay `entitlement` rather than from the store on the device.
+  ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
   one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
   wire decoding only. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
@@ -288,26 +286,11 @@ provider ids that resolve each channel.
 
 ## Managed account and sync
 
-Multi-device sync is paid. RevenueCat is the billing system of record: iOS purchases through
-the RevenueCat SDK, Mac opens a RevenueCat Web Purchase Link, and Relay neither verifies Apple
-receipts nor talks to Stripe. The Account id is the RevenueCat `app_user_id`. Relay stores the
-`pro` entitlement from the webhook and, when that row is older than 24 hours or an
-`active`/`grace` grant has expired, from `GET /v1/subscribers/{app_user_id}`. A redemption code
-is a grant Relay issues and RevenueCat records as a promotional entitlement
-([ADR 0047](decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md)). Writes of snapshots,
-Usage, the device profile, and device sync answer 402 `subscription_required` unless status is
-`active` or `grace`; Account and summary reads are not gated and both carry the entitlement —
-`status`, `expires_at`, `will_renew`, `stale`, and `checked_at`, the instant the stored row was
-last written — beside `purchase.web_url`, so a client can show the paywall and say how old a
-stale answer is. Expired rows are kept.
-
-QuotaBar carries what Relay states rather than deriving it: the account read hands the
-entitlement and the purchase link to the `account` IPC component, whose Account page shows a
-**Sync** row and a Subscribe or Manage button and disables Sync Usage while nothing is paid. A
-refused write is not a failed one — the session stands, the refresh writes nothing more, and
-the attempt journal keeps a `subscription_required` row that the diagnostic report reads as
-`Sync is off: no active subscription.` See
-[ADR 0033](decisions/0033-entitlement-is-read-from-revenuecat.md).
+Multi-device sync is free for every Account. Relay has no billing system: no entitlement, no
+store integration, no redemption code, and no 402. Writes of snapshots, Usage, the device
+profile, and device sync are decided by the session alone — a current Device generation and the
+`device:write` scope — and the Account and summary reads carry nothing about payment
+([ADR 0048](decisions/0048-sync-is-free-and-billing-is-gone.md)).
 
 The shared Rust service is the collection OAuth public client behind QuotaBar, and Authorization
 Code with PKCE over a temporary loopback callback is the only grant it uses. Device `display_name`
@@ -339,7 +322,7 @@ are not; the Device half is the path QuotaBar's exchange already takes
 ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Quota iOS consumes that session
 through `packages/apple-client`, fetches `GET /api/v6/account/summary`, and — when its session
 names a Device — sends what it read on the phone through `GET /api/v2/device/sync` and
-`PUT /api/v6/device/snapshots`, which answer 402 until paid sync is on. Connect with GitHub presents
+`PUT /api/v6/device/snapshots`. Connect with GitHub presents
 `ASWebAuthenticationSession` with shared Safari cookies (`prefersEphemeralWebBrowserSession =
 false`) so a GitHub login already in Safari can finish the Relay round trip; that GitHub session
 stays in the system browser, not in the app. `/sign-in` now asks which Account this is before the
@@ -369,7 +352,7 @@ resolved, clearing it when there is nothing to show.
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
-and observation rows the response projects, plus `entitlements.updated_at`; the activity stamp is usage-only (device count, usage
+and observation rows the response projects; the activity stamp is usage-only (device count, usage
 revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
 keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
 is the same rule: `tz` is in the query string, so a different clock is a different validator.
@@ -512,9 +495,7 @@ by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cooki
 `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the QuotaBar
 `.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a client-rendered dashboard: the browser requests
-`GET /api/v6/account/summary` once with its own IANA timezone. Settings also reads
-`GET /api/v2/account` for the RevenueCat Web Purchase Link and shows the paid-sync status;
-Overview and Devices say when sync is off. The document layer does not
+`GET /api/v6/account/summary` once with its own IANA timezone. The document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none
 anonymously, and `/app` redirects to `/my`. Every sign-in starts at `/sign-in`, which asks a

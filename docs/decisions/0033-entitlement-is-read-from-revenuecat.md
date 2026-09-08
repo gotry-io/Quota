@@ -1,5 +1,8 @@
 # ADR 0033: Entitlement is read from RevenueCat
 
+> Superseded by [ADR 0048](0048-sync-is-free-and-billing-is-gone.md): sync is free, and every
+> route, table, and field this record describes has been removed.
+
 - Status: Accepted
 - Date: 2026-09-05
 - Updated 2026-09-07 by [ADR 0042](0042-quota-history-is-local-samples.md): quota history is

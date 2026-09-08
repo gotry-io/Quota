@@ -3,7 +3,6 @@ import type {
   ProviderId,
   QuotaSnapshot,
   QuotaSnapshotEnvelope,
-  RedemptionGrantDuration,
 } from "@gotry-io/quota-protocol";
 
 /**
@@ -353,46 +352,6 @@ export interface AccountVersionStamp {
   device_signed_out_at: string | null;
   snapshots: number;
   snapshot_updated_at: string | null;
-  /** When the Quota Pro entitlement row last changed, or null when none is stored. */
-  entitlement_updated_at: string | null;
-}
-
-export type EntitlementStatus = "active" | "grace" | "expired" | "none";
-export type EntitlementSource = "webhook" | "rest";
-
-export interface StoredEntitlement {
-  account_id: string;
-  status: EntitlementStatus;
-  product_id: string | null;
-  store: string | null;
-  expires_at: string | null;
-  will_renew: boolean;
-  source: EntitlementSource;
-  last_event_id: string | null;
-  updated_at: string;
-}
-
-export interface ApplyRevenueCatWebhookInput {
-  event_id: string;
-  account_id: string;
-  type: string;
-  received_at: string;
-  payload_json: string;
-  /** Folded entitlement for this account, or null when the account is unknown. */
-  entitlement: StoredEntitlement | null;
-  /** Accounts that lost the subscription in a TRANSFER. */
-  transfer_sources: StoredEntitlement[];
-}
-
-export interface RedemptionCodeRow {
-  code: string;
-  campaign: string;
-  grant_duration: RedemptionGrantDuration;
-  max_redemptions: number;
-  redeemed_count: number;
-  expires_at: string | null;
-  note: string | null;
-  created_at: string;
 }
 
 /**
@@ -625,23 +584,6 @@ export interface AccountState {
   leaderboardVersionStamp(): Promise<LeaderboardVersionStamp>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
-  getEntitlement(accountId: string): Promise<StoredEntitlement | null>;
-  putEntitlement(row: StoredEntitlement): Promise<void>;
-  applyRevenueCatWebhook(input: ApplyRevenueCatWebhookInput): Promise<"applied" | "duplicate">;
-  createRedemptionCodes(rows: RedemptionCodeRow[]): Promise<void>;
-  getRedemptionCode(code: string): Promise<RedemptionCodeRow | null>;
-  hasRedeemedCode(code: string, accountId: string): Promise<boolean>;
-  /**
-   * Reserve one redemption: increment the count and write code_redemptions atomically, so two
-   * concurrent redeems of a one-use code cannot both pass. Excess or a repeat is a result.
-   */
-  recordRedemption(
-    code: string,
-    accountId: string,
-    redeemedAt: string,
-  ): Promise<"recorded" | "exhausted" | "already_redeemed">;
-  /** Give a reservation back when the grant it was made for did not happen. */
-  releaseRedemption(code: string, accountId: string): Promise<void>;
   deleteDeviceData(
     accountId: string,
     deviceId: string,

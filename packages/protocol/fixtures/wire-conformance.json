@@ -1100,19 +1100,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -1429,19 +1417,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -1778,19 +1754,7 @@
           },
           "pricing_revision": "2026-08-01",
           "model_catalog_revision": "2026-08-01",
-          "a_field_from_a_newer_relay": true,
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "a_field_from_a_newer_relay": true
         }
       },
       {
@@ -2110,19 +2074,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -2439,19 +2391,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -2768,19 +2708,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -3299,19 +3227,7 @@
             }
           },
           "pricing_revision": "2026-08-01",
-          "model_catalog_revision": "2026-08-01",
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          "model_catalog_revision": "2026-08-01"
         }
       },
       {
@@ -3621,19 +3537,7 @@
                 "observed_at": "2026-08-12T09:30:00Z"
               }
             }
-          ],
-          "entitlement": {
-            "status": "active",
-            "expires_at": "2026-09-12T00:00:00Z",
-            "will_renew": true,
-            "product_id": "quota_pro_monthly",
-            "store": "app_store",
-            "stale": false,
-            "checked_at": "2026-09-05T00:00:00Z"
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_01"
-          }
+          ]
         }
       }
     ],
@@ -3941,19 +3845,7 @@
               "label": null,
               "linked_at": "2026-02-04T12:00:00Z"
             }
-          ],
-          "entitlement": {
-            "status": "none",
-            "expires_at": null,
-            "will_renew": false,
-            "product_id": null,
-            "store": null,
-            "stale": false,
-            "checked_at": null
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_1"
-          }
+          ]
         }
       },
       {
@@ -3972,19 +3864,7 @@
               "label": "octocat",
               "linked_at": "2026-01-04T12:00:00Z"
             }
-          ],
-          "entitlement": {
-            "status": "none",
-            "expires_at": null,
-            "will_renew": false,
-            "product_id": null,
-            "store": null,
-            "stale": false,
-            "checked_at": null
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_1"
-          }
+          ]
         }
       },
       {
@@ -4004,19 +3884,7 @@
               "label": null,
               "linked_at": "2026-01-04T12:00:00Z"
             }
-          ],
-          "entitlement": {
-            "status": "none",
-            "expires_at": null,
-            "will_renew": false,
-            "product_id": null,
-            "store": null,
-            "stale": false,
-            "checked_at": null
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_1"
-          }
+          ]
         }
       },
       {
@@ -4037,19 +3905,7 @@
               "linked_at": "2026-01-04T12:00:00Z",
               "subject": "5b2c9f0a"
             }
-          ],
-          "entitlement": {
-            "status": "none",
-            "expires_at": null,
-            "will_renew": false,
-            "product_id": null,
-            "store": null,
-            "stale": false,
-            "checked_at": null
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_1"
-          }
+          ]
         }
       },
       {
@@ -4063,19 +3919,7 @@
             "display_label": "octocat",
             "created_at": "2026-01-04T12:00:00Z"
           },
-          "identities": [],
-          "entitlement": {
-            "status": "none",
-            "expires_at": null,
-            "will_renew": false,
-            "product_id": null,
-            "store": null,
-            "stale": false,
-            "checked_at": null
-          },
-          "purchase": {
-            "web_url": "https://pay.rev.cat/testtoken/account_1"
-          }
+          "identities": []
         }
       }
     ]

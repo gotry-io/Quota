@@ -11,7 +11,6 @@ import type {
   AccountState,
   AccountUsageVersionStamp,
   AccountVersionStamp,
-  ApplyRevenueCatWebhookInput,
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
   ConsumeAccountLoginGrantInput,
@@ -39,14 +38,12 @@ import type {
   QuotaSnapshotSubmission,
   RateLimitInput,
   RateLimitResult,
-  RedemptionCodeRow,
   RefreshSessionInput,
   ResolveSignInIdentityInput,
   RevokeRefreshSessionInput,
   SessionClientKind,
   SessionPrincipal,
   SnapshotWriteResult,
-  StoredEntitlement,
   StoredQuotaSnapshot,
   UnlinkIdentityOutcome,
 } from "@gotry-io/relay-core";
@@ -1146,9 +1143,7 @@ export class D1AccountState implements AccountState {
   }
 
   async accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp> {
-    const [devices, snapshots, account, entitlement] = await this.database.batch<
-      Record<string, unknown>
-    >([
+    const [devices, snapshots, account] = await this.database.batch<Record<string, unknown>>([
       this.database
         .prepare(
           `SELECT COUNT(*) AS devices,
@@ -1175,17 +1170,11 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
         .bind(accountId),
-      this.database
-        .prepare(
-          "SELECT updated_at AS entitlement_updated_at FROM entitlements WHERE account_id = ?1",
-        )
-        .bind(accountId),
     ]);
     const merged = {
       ...(devices?.results[0] ?? {}),
       ...(snapshots?.results[0] ?? {}),
       ...(account?.results[0] ?? {}),
-      ...(entitlement?.results[0] ?? {}),
     };
     return {
       account_updated_at: stampInstant(merged.account_updated_at),
@@ -1198,7 +1187,6 @@ export class D1AccountState implements AccountState {
       device_signed_out_at: stampInstant(merged.device_signed_out_at),
       snapshots: stampCount(merged.snapshots),
       snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
-      entitlement_updated_at: stampInstant(merged.entitlement_updated_at),
     };
   }
 
@@ -1265,169 +1253,6 @@ export class D1AccountState implements AccountState {
       profile_updated_at: stampInstant(merged.profile_updated_at),
       usage_revision: stampCount(merged.usage_revision),
     };
-  }
-
-  async getEntitlement(accountId: string): Promise<StoredEntitlement | null> {
-    const row = await this.database
-      .prepare(
-        `SELECT account_id, status, product_id, store, expires_at, will_renew, source,
-                last_event_id, updated_at
-         FROM entitlements WHERE account_id = ?1`,
-      )
-      .bind(accountId)
-      .first<EntitlementRow>();
-    return row ? storedEntitlement(row) : null;
-  }
-
-  async putEntitlement(row: StoredEntitlement): Promise<void> {
-    await this.database
-      .prepare(upsertEntitlementSql)
-      .bind(
-        row.account_id,
-        row.status,
-        row.product_id,
-        row.store,
-        row.expires_at,
-        row.will_renew ? 1 : 0,
-        row.source,
-        row.last_event_id,
-        row.updated_at,
-      )
-      .run();
-  }
-
-  async createRedemptionCodes(rows: RedemptionCodeRow[]): Promise<void> {
-    if (rows.length === 0) return;
-    await this.database.batch(
-      rows.map((row) =>
-        this.database
-          .prepare(
-            `INSERT INTO redemption_codes (
-               code, campaign, grant_duration, max_redemptions, redeemed_count,
-               expires_at, note, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-          )
-          .bind(
-            row.code,
-            row.campaign,
-            row.grant_duration,
-            row.max_redemptions,
-            row.redeemed_count,
-            row.expires_at,
-            row.note,
-            row.created_at,
-          ),
-      ),
-    );
-  }
-
-  async getRedemptionCode(code: string): Promise<RedemptionCodeRow | null> {
-    const row = await this.database
-      .prepare(
-        `SELECT code, campaign, grant_duration, max_redemptions, redeemed_count,
-                expires_at, note, created_at
-         FROM redemption_codes WHERE code = ?1`,
-      )
-      .bind(code)
-      .first<RedemptionCodeSqlRow>();
-    return row ? storedRedemptionCode(row) : null;
-  }
-
-  async hasRedeemedCode(code: string, accountId: string): Promise<boolean> {
-    const row = await this.database
-      .prepare("SELECT 1 AS present FROM code_redemptions WHERE code = ?1 AND account_id = ?2")
-      .bind(code, accountId)
-      .first();
-    return row !== null;
-  }
-
-  async recordRedemption(
-    code: string,
-    accountId: string,
-    redeemedAt: string,
-  ): Promise<"recorded" | "exhausted" | "already_redeemed"> {
-    try {
-      const results = await this.database.batch([
-        this.database
-          .prepare(
-            `UPDATE redemption_codes
-             SET redeemed_count = redeemed_count + 1
-             WHERE code = ?1 AND redeemed_count < max_redemptions`,
-          )
-          .bind(code),
-        this.database
-          .prepare(
-            `INSERT INTO code_redemptions (code, account_id, redeemed_at)
-             SELECT ?1, ?2, ?3 WHERE changes() = 1`,
-          )
-          .bind(code, accountId, redeemedAt),
-      ]);
-      return resultChanged(results[0]) && resultChanged(results[1]) ? "recorded" : "exhausted";
-    } catch (error) {
-      if (String(error).includes("UNIQUE constraint failed")) {
-        return "already_redeemed";
-      }
-      throw error;
-    }
-  }
-
-  async releaseRedemption(code: string, accountId: string): Promise<void> {
-    await this.database.batch([
-      this.database
-        .prepare("DELETE FROM code_redemptions WHERE code = ?1 AND account_id = ?2")
-        .bind(code, accountId),
-      this.database
-        .prepare(
-          `UPDATE redemption_codes
-           SET redeemed_count = MAX(redeemed_count - 1, 0)
-           WHERE code = ?1 AND changes() = 1`,
-        )
-        .bind(code),
-    ]);
-  }
-
-  async applyRevenueCatWebhook(
-    input: ApplyRevenueCatWebhookInput,
-  ): Promise<"applied" | "duplicate"> {
-    const statements: D1PreparedStatement[] = [
-      this.database
-        .prepare(
-          `INSERT INTO entitlement_events (id, account_id, type, received_at, payload_json)
-           VALUES (?1, ?2, ?3, ?4, ?5)`,
-        )
-        .bind(input.event_id, input.account_id, input.type, input.received_at, input.payload_json),
-    ];
-    if (input.entitlement) {
-      statements.push(this.bindEntitlement(input.entitlement));
-    }
-    for (const source of input.transfer_sources) {
-      statements.push(this.bindEntitlement(source));
-    }
-    try {
-      await this.database.batch(statements);
-      return "applied";
-    } catch (error) {
-      if (String(error).includes("UNIQUE constraint failed")) {
-        return "duplicate";
-      }
-      throw error;
-    }
-  }
-
-  private bindEntitlement(row: StoredEntitlement): D1PreparedStatement {
-    return this.database
-      .prepare(upsertEntitlementSql)
-      .bind(
-        row.account_id,
-        row.status,
-        row.product_id,
-        row.store,
-        row.expires_at,
-        row.will_renew ? 1 : 0,
-        row.source,
-        row.last_event_id,
-        row.updated_at,
-      );
   }
 
   async deleteDeviceData(
@@ -1516,9 +1341,6 @@ export class D1AccountState implements AccountState {
         .prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
         .bind(accountId),
       this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
-      this.database.prepare("DELETE FROM entitlements WHERE account_id = ?1").bind(accountId),
-      this.database.prepare("DELETE FROM entitlement_events WHERE account_id = ?1").bind(accountId),
-      this.database.prepare("DELETE FROM code_redemptions WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
@@ -1843,69 +1665,6 @@ function displayLabelRow(result: D1Result<unknown> | undefined): string | null {
 
 function stampCount(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
-}
-
-interface EntitlementRow {
-  account_id: string;
-  status: string;
-  product_id: string | null;
-  store: string | null;
-  expires_at: string | null;
-  will_renew: number;
-  source: string;
-  last_event_id: string | null;
-  updated_at: string;
-}
-
-const upsertEntitlementSql = `INSERT INTO entitlements (
-     account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
-   ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-   ON CONFLICT(account_id) DO UPDATE SET
-     status = excluded.status,
-     product_id = excluded.product_id,
-     store = excluded.store,
-     expires_at = excluded.expires_at,
-     will_renew = excluded.will_renew,
-     source = excluded.source,
-     last_event_id = excluded.last_event_id,
-     updated_at = excluded.updated_at`;
-
-interface RedemptionCodeSqlRow {
-  code: string;
-  campaign: string;
-  grant_duration: string;
-  max_redemptions: number;
-  redeemed_count: number;
-  expires_at: string | null;
-  note: string | null;
-  created_at: string;
-}
-
-function storedRedemptionCode(row: RedemptionCodeSqlRow): RedemptionCodeRow {
-  return {
-    code: row.code,
-    campaign: row.campaign,
-    grant_duration: row.grant_duration as RedemptionCodeRow["grant_duration"],
-    max_redemptions: row.max_redemptions,
-    redeemed_count: row.redeemed_count,
-    expires_at: row.expires_at,
-    note: row.note,
-    created_at: row.created_at,
-  };
-}
-
-function storedEntitlement(row: EntitlementRow): StoredEntitlement {
-  return {
-    account_id: row.account_id,
-    status: row.status as StoredEntitlement["status"],
-    product_id: row.product_id,
-    store: row.store,
-    expires_at: row.expires_at,
-    will_renew: row.will_renew === 1,
-    source: row.source as StoredEntitlement["source"],
-    last_event_id: row.last_event_id,
-    updated_at: row.updated_at,
-  };
 }
 
 function stampInstant(value: unknown): string | null {
