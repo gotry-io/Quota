@@ -617,7 +617,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.sign-in-methods.manage"].exists, "Manage on Web")
     attachScreenshot(app, name: "settings-sign-in-methods")
-    settle(app)
+    settleScroll(app, anchor: github)
     try audit(app)
   }
 
@@ -1007,6 +1007,24 @@ final class QuotaUITests: XCTestCase {
     usleep(900_000)
   }
 
+  /// After a run of swipes, wait until a row has stopped moving before the contrast pass samples
+  /// the screen: a list still decelerating, or bouncing back from its end, reads as low contrast
+  /// for whatever the sampler catches mid-motion ("Privacy" on Settings, twice in CI). Two
+  /// frames 300 ms apart that agree are a list at rest; a fixed delay is a guess at how long
+  /// that takes on a loaded runner.
+  private func settleScroll(_ app: XCUIApplication, anchor: XCUIElement) {
+    settle(app)
+    let element = anchor.firstMatch
+    let deadline = Date().addingTimeInterval(4)
+    var last = element.frame
+    while Date() < deadline {
+      usleep(300_000)
+      let now = element.frame
+      if now == last { return }
+      last = now
+    }
+  }
+
   /// Back to the top of a list, whatever it was scrolled to. One swipe is not the top of a hub
   /// longer than a couple of screens.
   private func scrollToTop(_ app: XCUIApplication) {
@@ -1257,6 +1275,19 @@ final class QuotaUITests: XCTestCase {
       if description.localizedCaseInsensitiveContains("Contrast"),
         identifier.hasPrefix("settings.sign-in-methods.")
           || element.contains("settings.sign-in-methods.")
+      {
+        return true
+      }
+
+      // The Privacy and Support rows are `Link`s drawn with `.buttonStyle(.plain)` and an opaque
+      // `Color.primary` label on the grouped row (see SettingsView). The Xcode 26.6 auditor
+      // reports "Contrast failed" on "Privacy" in three CI runs out of four with the list at
+      // rest, and passes the same pixels on the fourth and on Xcode 26.3; an opaque label colour
+      // does not fail by 4.5:1 on one run and pass on the next. Scoped to those two rows on the
+      // Settings hub only — an exception to remove when a 26.x auditor stops reporting it.
+      if description.localizedCaseInsensitiveContains("Contrast"),
+        screen == "settings.root",
+        element.contains("\"Privacy\" Button") || element.contains("\"Support\" Button")
       {
         return true
       }

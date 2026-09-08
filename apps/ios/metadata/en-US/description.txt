@@ -1,24 +1,22 @@
 # Draft — pending owner review
-Quota is the iPhone companion to QuotaBar.
+Quota shows how much coding-agent quota you have left, on the phone that is in your pocket.
 
-See remaining coding-agent quota and Today Usage for the GitHub Account you already use on a Mac. Quota on iPhone is a read-only viewer. It does not collect local logs, store provider credentials, or upload snapshots. Collection happens on a Mac running QuotaBar.
-
-WHAT YOU NEED
-
-• A Mac with QuotaBar collecting quota and Usage
-• The same GitHub Account on this iPhone — tap Connect Account to sign in
+Sign in to Codex, Claude Code, or Grok right on this iPhone and Quota reads your remaining quota from the provider itself. Add a Quota Account and your Macs running QuotaBar report their quota and Usage into it too; Overview is both, merged into one row per subscription.
 
 WHAT YOU SEE
 
-• Remaining quota for each subscription, with reset times
-• Collection Devices marked Active, Idle, or Not reporting — never Device IDs or remote credentials
-• Today Usage: tokens and API-equivalent cost
-• Home Screen and Lock Screen widgets
-• Optional notifications when remaining quota crosses a threshold you set
+• Remaining quota for every subscription, with reset times and a pace line that says whether you will run out before the reset
+• Today Usage: tokens and API-equivalent cost, with a daily breakdown, model share, cache hit rate, and a weekday-by-hour rhythm
+• Your Devices, marked Active, Idle, or Not reporting
+• Provider status, so an outage reads as the provider's problem rather than yours
+• Home Screen and Lock Screen widgets, in three sizes
+• Optional notifications when remaining quota crosses a threshold you set, when a window resets, or when your pace says you will run out
 
-WHAT QUOTA NEVER COLLECTS
+WHAT STAYS ON THIS IPHONE
 
-QuotaBar reads provider sessions and agent logs on your Mac and uploads only the numbers. This iPhone never sees, stores, or uploads:
+A provider sign-in is the provider's own page, shown in the app. Quota keeps only the sign-in cookie it leaves, in this iPhone's Keychain, and sends it only to that provider. It is never uploaded to Quota, and Remove deletes it.
+
+What Quota uploads, when you are signed in to a Quota Account, is the numbers: remaining quota, reset times, and token totals. Never:
 
 • Provider credentials, cookies, or API keys
 • Prompts, completions, tool payloads, or raw events
@@ -26,16 +24,16 @@ QuotaBar reads provider sessions and agent logs on your Mac and uploads only the
 
 PROVIDERS AND AGENTS
 
-Quota collection: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, and Cursor.
+On this iPhone: Codex, Claude Code, and Grok.
 
-Usage analytics: Codex, Claude Code, Grok, OpenCode, Pi, and Cursor.
+From a Mac running QuotaBar: Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM, Cursor, Gemini CLI, GitHub Copilot, Antigravity, and OpenCode Go quota, and Usage analytics for Codex, Claude Code, Grok, OpenCode, Pi, Cursor, Gemini CLI, GitHub Copilot, Kilo, and Antigravity.
 
-SIGN-IN
+QUOTA ACCOUNT
 
-Connect Account signs in with GitHub — the same identity QuotaBar uses. Quota does not create a separate account system. GitHub is the account, not a convenience login on top of one.
+A Quota Account is optional. Without one, the tabs still open on whatever this phone read for itself. With one, every device you sign in reports into the same place, and the website shows the same Overview. Sign in with Apple, with GitHub, or with an emailed link; one Account can hold more than one way in.
 
 ACCOUNT DELETION
 
-Delete the Account from Settings › Delete Account. That continues on the website after you sign in with GitHub again. Deletion requires a session authenticated within the last ten minutes.
+Delete the Account from Settings › Delete Account. That continues on the website after you sign in again, and removes the Account, its Devices, and everything they reported.
 
-Requires iOS 17 or later. QuotaBar for Mac is available at https://quota.gotry.io
+Requires iOS 17 or later. QuotaBar for Mac is free and open source at https://quota.gotry.io

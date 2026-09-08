@@ -1,2 +1,2 @@
 # Draft — pending owner review
-Quota is the iPhone companion to QuotaBar. See remaining coding-agent quota and Today Usage from a Mac that already collects it — never prompts, credentials, or raw logs.
+Remaining coding-agent quota on your iPhone. Sign in to Codex, Claude Code, or Grok here, add your Macs, read it all in one place. Never prompts or credentials.

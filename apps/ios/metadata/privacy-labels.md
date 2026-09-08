@@ -3,7 +3,7 @@
 # App Privacy labels (Quota iOS)
 
 Fill App Store Connect › App Privacy from this table. It is the account data Relay holds
-for a signed-in `quota-ios` client, per `docs/security.md`. It matches
+for a signed-in iPhone, per `docs/security.md`. It matches
 `PrivacyInfo.xcprivacy` (WP-3.10b): **User ID** and **Other Usage Data** only; linked; not
 used for tracking; purpose App Functionality. The widget extension collects nothing.
 
@@ -18,11 +18,11 @@ Third-party sharing for tracking or advertising: **None**.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | User ID | Yes. A GitHub numeric subject or an Apple `sub`, HMAC’d with `IDENTITY_SUBJECT_KEY` into the identity’s subject; the Account id is opaque and derived from none of it; the channel’s label (a GitHub login, or the address Apple states) is stored as `display_label`. | Yes | No | App Functionality (sign-in, Account summary, session) | Until Delete Account. Native session in Keychain (`WhenUnlockedThisDeviceOnly`) until Log Out, expiry, or revoke. Expired/revoked Relay sessions remain 7 days so logout retries stay diagnosable, then sweep. | QuotaRelay (`quota.gotry.io`, Cloudflare Workers + D1). GitHub and Apple are IdPs only: the public id and label at sign-in; no provider access token is stored, and Apple’s identity token is verified and discarded. | Settings › Delete Account → website (re-auth within 10 minutes). Log Out on this device clears Keychain, last-good cache, and the widget snapshot. |
 | Email Address | Yes, when Sign in with Apple states one — which may be Apple’s private relay address. It is the label of the Apple channel on the Account and is shown as the Account’s name; the app asks for it and never asks any other way. | Yes | No | App Functionality (naming the Account) | Until Delete Account, or until the Apple channel is unbound. | QuotaRelay. | Settings › Delete Account → website. |
-| Other Usage Data | Yes. Normalized remaining-quota observations (provider, plan/label, windows, reset, observed-at) and sparse hourly Usage (token totals, derived API-equivalent cost, completeness). No prompts, completions, paths, credentials, or conversation ids. | Yes | No | App Functionality (Overview, Today Usage, widgets) | Quota observations: 7 days after the instant they describe (readers stop treating them as current after 1 day). Usage hours: 400 days. Daily rollup: 800 days (`all` answers at most 730 days). Usage folds: 2 days. | QuotaRelay. Written by QuotaBar, read by this app. | Delete Account (all rows). Delete Device (that Device’s rows, watermark). iOS last-good cache and widget snapshot clear on Log Out. |
+| Other Usage Data | Yes. Normalized remaining-quota observations (provider, plan/label, windows, reset, observed-at) — the ones this iPhone reads from providers it is signed in to, and the ones Macs running QuotaBar report — and sparse hourly Usage from Macs (token totals, derived API-equivalent cost, completeness). No prompts, completions, paths, credentials, or conversation ids. | Yes | No | App Functionality (Overview, Today Usage, widgets, multi-device sync) | Quota observations: 7 days after the instant they describe (readers stop treating them as current after 1 day). Usage hours: 400 days. Daily rollup: 800 days (`all` answers at most 730 days). Usage folds: 2 days. | QuotaRelay. Written by this iPhone (quota only) and by QuotaBar (quota and Usage), read by both and by the website. | Delete Account (all rows). Delete Device (that Device’s rows, watermark). iOS last-good cache and widget snapshot clear on Log Out. |
 
-The iOS app transmits the OAuth grant and then reads the Account summary. It does not
-collect those Usage rows from the iPhone; they are the Account data the viewer displays.
-Declare them here because Relay holds them for this App Store product’s signed-in user.
+The iOS app signs in, registers as a Device, uploads the remaining-quota readings it takes,
+and reads the Account summary. It never uploads Usage: it runs no coding agent. Declare the
+rows here because Relay holds them for this App Store product’s signed-in user.
 
 ## Not collected
 
@@ -40,8 +40,8 @@ categories to `PrivacyInfo.xcprivacy`.
 | User Content | Emails or Text Messages, Photos or Videos, Audio Data, Gameplay Content, Customer Support, Other User Content |
 | Browsing History | Browsing History |
 | Search History | Search History |
-| Identifiers | Device ID (QuotaBar’s installation id is an account-scoped HMAC on Relay; this iPhone is not a Device and does not send one) |
-| Purchases | Purchase History |
+| Identifiers | Device ID (this iPhone presents an installation id it generated itself at random — not IDFV, IDFA, or any hardware identifier — and Relay stores only an account-scoped HMAC of it) |
+| Purchases | Purchase History (there is no purchase in the app) |
 | Usage Data | Product Interaction, Advertising Data |
 | Diagnostics | Crash Data, Performance Data, Other Diagnostic Data (local `diagnose` stays on the Mac; this app has no analytics or crash reporter) |
 | Surroundings | Environment Scanning |
