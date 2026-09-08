@@ -1982,8 +1982,6 @@ impl LocalService {
                             device_id: None,
                             device_generation: None,
                             account_summary: None,
-                            entitlement: None,
-                            purchase_url: None,
                         })),
                         Some(now_rfc3339()),
                     )
@@ -2185,8 +2183,6 @@ impl LocalService {
                         device_id: None,
                         device_generation: None,
                         account_summary: None,
-                        entitlement: None,
-                        purchase_url: None,
                     })),
                     None,
                     Some(error.error),
@@ -2316,8 +2312,6 @@ impl LocalService {
             device_id: None,
             device_generation: None,
             account_summary: None,
-            entitlement: None,
-            purchase_url: None,
         };
         self.update_component(
             ComponentName::Account,
@@ -2469,7 +2463,6 @@ fn diagnostic_attempt_code(code: ErrorCode) -> DiagnosticAttemptCode {
             DiagnosticAttemptCode::AuthenticationRequired
         }
         ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
-        ErrorCode::SubscriptionRequired => DiagnosticAttemptCode::SubscriptionRequired,
         ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
         ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
         ErrorCode::InvalidState | ErrorCode::ClientUpgradeRequired => {
@@ -2514,8 +2507,6 @@ fn account_value_from(
             device_id: None,
             device_generation: None,
             account_summary: None,
-            entitlement: None,
-            purchase_url: None,
         };
     };
     let Some(object) = value.as_object() else {
@@ -2526,8 +2517,6 @@ fn account_value_from(
             device_id: None,
             device_generation: None,
             account_summary: None,
-            entitlement: None,
-            purchase_url: None,
         };
     };
     AccountComponentValue {
@@ -2549,14 +2538,6 @@ fn account_value_from(
             .get("account_summary")
             .cloned()
             .filter(|v| !v.is_null()),
-        entitlement: object
-            .get("entitlement")
-            .filter(|value| !value.is_null())
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        purchase_url: object
-            .get("purchase_url")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
     }
 }
 
@@ -4000,8 +3981,6 @@ mod tests {
             device_id: Some("device_1".into()),
             device_generation: Some(1),
             account_summary: summary,
-            entitlement: None,
-            purchase_url: None,
         }
     }
 
@@ -4592,8 +4571,6 @@ mod tests {
                     device_id: None,
                     device_generation: None,
                     account_summary: None,
-                    entitlement: None,
-                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,
@@ -4633,8 +4610,6 @@ mod tests {
                     device_id: None,
                     device_generation: None,
                     account_summary: None,
-                    entitlement: None,
-                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,
@@ -4676,8 +4651,6 @@ mod tests {
                     device_id: Some("device_test".into()),
                     device_generation: Some(1),
                     account_summary: None,
-                    entitlement: None,
-                    purchase_url: None,
                 })),
                 Some(now_rfc3339()),
                 None,

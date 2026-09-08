@@ -101,8 +101,6 @@ enum AccountDisconnectReason: Equatable {
     let overview: [LocalServiceOverviewItem]
     var cache: LocalServiceCacheState = .settled
     var providerStatus: [LocalServiceProviderStatus] = []
-    var entitlement: LocalServiceEntitlement? = nil
-    var purchaseURL: URL? = nil
   }
 #endif
 
@@ -112,10 +110,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var report: QuotaCollectionReport?
   private(set) var localUsage: LocalUsageReport?
   private(set) var accountSummary: AccountSummary?
-  /// What Relay last said this account may sync, and where a subscription is bought. Both are
-  /// stated by the account read; QuotaBar renders them and derives neither.
-  private(set) var syncEntitlement: LocalServiceEntitlement?
-  private(set) var purchaseURL: URL?
   /// The name the sign-in gave, held until an account read carries one of its own.
   private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
@@ -213,30 +207,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       ?? "Quota account"
   }
 
-  /// Whether this account's writes are the ones Relay accepts. An account that has not been
-  /// read yet is not called inactive: the Quota Pro row says it is still checking.
-  var syncIsPaid: Bool { syncEntitlement?.allowsSync == true }
-
-  /// The status line under **Quota Pro** on the Account page.
-  var syncStatusLabel: String { ProStatusCopy.status(syncEntitlement) }
-
-  /// What the Quota Pro row's trailing Subscribe/Manage button says.
-  var syncActionLabel: String { ProStatusCopy.action(syncEntitlement) }
-
-  /// Where that button goes: the account's own purchase link while there is nothing to manage,
-  /// and the web account otherwise.
-  var syncActionURL: URL? {
-    syncIsPaid ? AppMetadata.manageSubscriptionURL : purchaseURL
-  }
-
-  /// The website Settings grouping where a signed-in account redeems a Quota Pro code.
-  var redeemCodeURL: URL? {
-    accountState == .signedIn ? AppMetadata.redeemCodeURL : nil
-  }
-
   /// Why Sync Usage cannot be turned on, or nil when it can.
   var syncUsageDisabledReason: String? {
-    syncEntitlement == nil || syncIsPaid ? nil : ProStatusCopy.uploadNeedsSubscription
+    accountState == .signedIn ? nil : "Sign in to your Quota account"
   }
 
   var accountDeviceSummary: String {
@@ -501,8 +474,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       providerStatus = Dictionary(
         uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
       )
-      syncEntitlement = visualTestState.entitlement
-      purchaseURL = visualTestState.purchaseURL
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals
@@ -1623,8 +1594,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     report = state.quota.value
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
-    syncEntitlement = state.account.value?.entitlement
-    purchaseURL = state.account.value?.purchaseURL
     signInDisplayLabel = state.account.value?.displayLabel
     let incomingAuth =
       state.account.value?.authStatus

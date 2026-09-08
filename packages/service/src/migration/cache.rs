@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 6;
+const CURRENT_SCHEMA: i64 = 7;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -39,6 +39,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
             4 => migration_v4(&tx)?,
             5 => migration_v5(&tx)?,
             6 => migration_v6(&tx)?,
+            7 => migration_v7(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -264,9 +265,8 @@ fn migration_v2(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
-/// A write Relay refused for want of a subscription is evidence like any other refusal
-/// (ADR 0028, ADR 0033). SQLite cannot widen a CHECK, so the table is rebuilt; the cache is
-/// disposable.
+/// A write Relay refused for want of a subscription was evidence like any other refusal
+/// (ADR 0028). The code is gone again in v7; this migration is left as it was applied.
 fn migration_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     tx.execute_batch(
         "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v2;
@@ -419,6 +419,62 @@ fn migration_v6(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Sync is free, so no write is refused for want of one and `subscription_required` is not a
+/// code the journal can hold. SQLite cannot narrow a CHECK, so the table is rebuilt; the rows
+/// carrying the retired code go with it, and the cache is disposable.
+fn migration_v7(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "DELETE FROM diagnostic_attempts WHERE code = 'subscription_required';
+         ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v3;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'quota_upload', 'account_sync', 'pricing_refresh'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change'
+            )),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source',
+                'device_deleted'
+            ))
+         );
+         INSERT INTO diagnostic_attempts(
+            id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+            duration_ms, outcome, code
+         )
+         SELECT id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+                duration_ms, outcome, code
+         FROM diagnostic_attempts_v3
+         ORDER BY id;
+         DROP TABLE diagnostic_attempts_v3;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,26 +528,49 @@ mod tests {
         assert_eq!(kinds, ["usage_upload", "quota_upload"]);
     }
 
+    /// Sync is free: the retired code is refused, and a cache that already holds a row
+    /// carrying it comes out of the ladder without that row.
     #[test]
-    fn a_refusal_for_want_of_a_subscription_is_a_code_the_journal_can_hold() {
+    fn a_cache_below_v7_loses_the_retired_subscription_code() {
         let mut conn = Connection::open_in_memory().expect("memory");
-        apply(&mut conn, 0).expect("schema");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        migration_v2(&tx).expect("v2");
+        migration_v3(&tx).expect("v3");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at)
+             VALUES (1, '2026-08-25T00:00:00Z'), (2, '2026-08-25T00:00:00Z'),
+                    (3, '2026-08-25T00:00:00Z');
+             INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome, code)
+             VALUES ('account_sync', 'scheduled', '2026-09-05T00:00:00Z', 'failed',
+                     'subscription_required'),
+                    ('account_sync', 'scheduled', '2026-09-05T01:00:00Z', 'failed',
+                     'network_error');",
+        )
+        .expect("v3 rows");
+        tx.commit().expect("commit");
+
+        apply(&mut conn, 0).expect("upgrade");
+
+        let codes: Vec<String> = conn
+            .prepare("SELECT code FROM diagnostic_attempts ORDER BY id")
+            .expect("select")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("codes");
+        assert_eq!(codes, ["network_error"]);
         conn.execute(
             "INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome, code)
-             VALUES ('account_sync', 'scheduled', '2026-09-05T00:00:00Z', 'failed',
+             VALUES ('account_sync', 'scheduled', '2026-09-08T00:00:00Z', 'failed',
                      'subscription_required')",
             [],
         )
-        .expect("refusal row");
-        assert_eq!(
-            conn.query_row(
-                "SELECT code FROM diagnostic_attempts ORDER BY id DESC LIMIT 1",
-                [],
-                |row| row.get::<_, String>(0)
-            )
-            .expect("code"),
-            "subscription_required"
-        );
+        .expect_err("the retired code no longer fits the journal");
     }
 
     #[test]

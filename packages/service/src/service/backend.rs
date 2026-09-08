@@ -26,9 +26,9 @@ use crate::protocol::{
     DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticAttention,
     DiagnosticClient, DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery,
     DiagnosticReport, DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary,
-    DiagnosticSurface, EntitlementView, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL,
-    MAXIMUM_DIAGNOSTIC_SOURCES, QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource,
-    RecoveryAction, UsagePeriod, UsageSource,
+    DiagnosticSurface, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES,
+    QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
+    UsageSource,
 };
 use crate::providers::claude;
 use crate::providers::codex;
@@ -155,7 +155,6 @@ fn backend_attempt_error(error: &IpcError) -> (DiagnosticAttemptOutcome, Diagnos
             DiagnosticAttemptCode::AuthenticationRequired
         }
         ErrorCode::DeviceDeleted => DiagnosticAttemptCode::DeviceDeleted,
-        ErrorCode::SubscriptionRequired => DiagnosticAttemptCode::SubscriptionRequired,
         ErrorCode::NetworkError => DiagnosticAttemptCode::NetworkError,
         ErrorCode::InvalidResponse => DiagnosticAttemptCode::InvalidResponse,
         ErrorCode::InvalidState => DiagnosticAttemptCode::InvalidState,
@@ -188,7 +187,6 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
-        DiagnosticAttemptCode::SubscriptionRequired => "subscription_required",
     }
 }
 
@@ -529,18 +527,6 @@ impl NativeBackend {
                 .and_then(Value::as_str)
                 == Some("signed_in")
         });
-        // What Relay last said this Account may sync. Without a paid entitlement the writing
-        // half of a refresh is refused at its boundary, so the upload surfaces have nothing to
-        // report and the Account line is where the reason belongs.
-        let entitlement = account
-            .as_ref()
-            .and_then(|record| record.value.as_ref())
-            .and_then(|value| value.get("entitlement"))
-            .filter(|value| !value.is_null())
-            .and_then(|value| serde_json::from_value::<EntitlementView>(value.clone()).ok());
-        let sync_paused = (account_active || account_signed_in)
-            && entitlement.is_some_and(|value| !value.allows_sync());
-
         let explicit_providers = snapshot
             .providers
             .iter()
@@ -842,7 +828,6 @@ impl NativeBackend {
             .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
             .map_err(|_| BackendError::unavailable())?;
         let account_attempt_failed = account_active
-            && account_facts.unresolved_code != Some(DiagnosticAttemptCode::SubscriptionRequired)
             && matches!(
                 account_facts.last_outcome,
                 Some(DiagnosticAttemptOutcome::Failed | DiagnosticAttemptOutcome::Interrupted)
@@ -866,10 +851,10 @@ impl NativeBackend {
             sources.push(DiagnosticSourceState {
                 subject: "account".into(),
                 source_id: None,
-                status: match (account_degraded, sync_paused) {
-                    (true, _) => DiagnosticStatus::Degraded,
-                    (false, true) => DiagnosticStatus::Inactive,
-                    (false, false) => DiagnosticStatus::Ok,
+                status: if account_degraded {
+                    DiagnosticStatus::Degraded
+                } else {
+                    DiagnosticStatus::Ok
                 },
                 last_attempt_at: account_facts.last_attempt_at.clone(),
                 last_success_at: account_facts.last_success_at.clone(),
@@ -879,19 +864,16 @@ impl NativeBackend {
                             .map(|value| error_code_wire(value.code))
                             .unwrap_or_else(|| "account_unavailable".into()),
                     )
-                } else if sync_paused {
-                    Some("subscription_required".into())
                 } else {
                     None
                 },
-                message: match (account_degraded, account_needs_login, sync_paused) {
-                    (false, _, true) => "Sync is off: no active subscription.",
-                    (false, _, false) => "Account data is up to date.",
-                    (true, true, _) => {
+                message: match (account_degraded, account_needs_login) {
+                    (false, _) => "Account data is up to date.",
+                    (true, true) => {
                         "This Mac is no longer signed in to the account. Reconnect Account in \
                          Settings, then recheck."
                     }
-                    (true, false, _) => {
+                    (true, false) => {
                         "Account data could not be refreshed. QuotaBar will try again at the next \
                          refresh."
                     }
@@ -942,7 +924,7 @@ impl NativeBackend {
             _ if upload_waiting => upload_facts.unresolved_code,
             _ => None,
         };
-        let upload_active = account_active && usage_upload_enabled && !sync_paused;
+        let upload_active = account_active && usage_upload_enabled;
         let upload_failed = upload_active && upload_problem.is_some();
         let upload_blocked =
             upload_failed && upload_problem == Some(DiagnosticAttemptCode::InvalidState);
@@ -998,7 +980,7 @@ impl NativeBackend {
                 .or(Some(crate::protocol::DiagnosticAttemptCode::Unavailable)),
             _ => None,
         };
-        let quota_upload_failed = account_active && !sync_paused && quota_upload_problem.is_some();
+        let quota_upload_failed = account_active && quota_upload_problem.is_some();
         let quota_upload_blocked = quota_upload_failed
             && quota_upload_problem == Some(DiagnosticAttemptCode::InvalidState);
         // ADR 0028's consequence check, beside the journal's cause records: the Account's
@@ -1006,10 +988,9 @@ impl NativeBackend {
         // local reading the Account has not held for half an hour means uploads are not
         // landing — however new the way they found to fail.
         let quota_upload_behind = account_active
-            && !sync_paused
             && !quota_upload_failed
             && account_observation_behind(account.as_ref(), quota.as_ref(), Utc::now());
-        if account_active && !sync_paused {
+        if account_active {
             sources.push(DiagnosticSourceState {
                 subject: "quota_upload".into(),
                 source_id: None,
@@ -3600,9 +3581,7 @@ impl LocalBackend for NativeBackend {
                         }
                     }
                     Err(error) => {
-                        if error.error.code == ErrorCode::SubscriptionRequired {
-                            self.record_subscription_refusal();
-                        } else if error.sign_out_epoch().is_some() {
+                        if error.sign_out_epoch().is_some() {
                             self.clear_session_if_rejected(&error);
                             account_value = Some(Err(error));
                         }
@@ -3906,15 +3885,6 @@ impl NativeBackend {
     /// Relay answers the sync half 402 before any of it runs, so nothing was written and
     /// nothing is retried: the journal keeps the reason (ADR 0028), the session stands, and
     /// the next refresh asks again.
-    fn record_subscription_refusal(&self) {
-        let attempt = self.begin_attempt(DiagnosticAttemptKind::AccountSync, None);
-        self.finish_attempt(
-            attempt,
-            DiagnosticAttemptOutcome::Failed,
-            Some(DiagnosticAttemptCode::SubscriptionRequired),
-        );
-    }
-
     /// Uploads this collection's quota and records the `quota_upload` journal row it earns.
     fn upload_quota_recorded(
         &self,
@@ -4934,17 +4904,7 @@ mod tests {
                 "all": period
             },
             "pricing_revision": "2026-08-01",
-            "model_catalog_revision": "2026-08-01",
-            "entitlement": {
-                "status": "active",
-                "expires_at": "2026-10-05T00:00:00Z",
-                "will_renew": true,
-                "product_id": "quota_sync_monthly",
-                "store": "app_store",
-                "stale": false,
-                "checked_at": "2026-09-05T00:00:00Z"
-            },
-            "purchase": { "web_url": "https://pay.rev.cat/testtoken/account_1" }
+            "model_catalog_revision": "2026-08-01"
         })
     }
 
@@ -6806,82 +6766,6 @@ mod tests {
             .expect("account source");
         assert_eq!(source.code.as_deref(), Some("unavailable"));
         drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    /// An account with no subscription is not a broken account. Relay refuses the writes at
-    /// their boundary (ADR 0028), the journal keeps the reason, and the report says the one
-    /// thing a person can act on rather than reporting every silent upload as a failure.
-    #[test]
-    fn an_account_without_a_subscription_reports_sync_as_off_rather_than_failing() {
-        let root = std::env::temp_dir().join(format!("quota-unpaid-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        state
-            .set_component(
-                crate::protocol::ComponentName::Account,
-                crate::protocol::ComponentStatus::Ready,
-                Some(serde_json::json!({
-                    "auth_status": "signed_in",
-                    "account_id": "account_1",
-                    "display_label": "octocat",
-                    "device_id": "device_1",
-                    "device_generation": 1,
-                    "account_summary": null,
-                    "entitlement": {
-                        "status": "expired",
-                        "expires_at": "2026-08-01T00:00:00Z",
-                        "will_renew": false,
-                        "stale": false,
-                        "checked_at": "2026-09-05T00:00:00Z"
-                    },
-                    "purchase_url": "https://pay.rev.cat/testtoken/account_1"
-                })),
-                Some(now_rfc3339()),
-                None,
-                false,
-            )
-            .expect("account component");
-        let mut backend = NativeBackend::new(
-            state.clone(),
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        backend.home = root.join("home");
-        backend.environment.clear();
-
-        backend.record_subscription_refusal();
-
-        let facts = state
-            .diagnostic_attempt_facts(DiagnosticAttemptKind::AccountSync, None)
-            .expect("journal");
-        assert_eq!(
-            facts.unresolved_code,
-            Some(DiagnosticAttemptCode::SubscriptionRequired)
-        );
-
-        let report = backend.diagnostic_report().expect("diagnostics");
-        let source = report
-            .sources
-            .iter()
-            .find(|source| source.subject == "account")
-            .expect("account source");
-        assert_eq!(source.status, DiagnosticStatus::Inactive);
-        assert_eq!(source.code.as_deref(), Some("subscription_required"));
-        assert_eq!(source.message, "Sync is off: no active subscription.");
-        assert_eq!(source.recovery, DiagnosticRecovery::None);
-        // Nothing is uploading, so no upload surface claims it failed to.
-        assert!(
-            !report
-                .sources
-                .iter()
-                .any(|source| source.subject == "usage_upload" || source.subject == "quota_upload"),
-            "{:?}",
-            report.sources
-        );
-        drop(backend);
-        drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
