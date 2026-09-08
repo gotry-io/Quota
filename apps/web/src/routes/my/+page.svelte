@@ -3,13 +3,7 @@ import { observedSnapshotStatus } from "@gotry-io/quota-model";
 import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
 import { providerDisplayName } from "@gotry-io/quota-protocol";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
-import {
-  devicesSummaryLine,
-  isPaidSyncStatus,
-  subscriptionCardMeta,
-  SYNC_OFF_COPY,
-  topUsageModel,
-} from "$lib/account-overview";
+import { devicesSummaryLine, subscriptionCardMeta, topUsageModel } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import ProviderMark from "$lib/components/ProviderMark.svelte";
@@ -17,13 +11,7 @@ import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import { fetchProviderStatus, showsProviderStatusDot } from "$lib/provider-status";
 import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } from "$lib/format";
-import {
-  DEVICES_PATH,
-  planDisplayName,
-  SETTINGS_PATH,
-  subscriptionPath,
-  USAGE_PATH,
-} from "$lib/routes";
+import { DEVICES_PATH, planDisplayName, subscriptionPath, USAGE_PATH } from "$lib/routes";
 
 const store = getAccountStore();
 const now = $derived(store.now);
@@ -31,9 +19,6 @@ let today = $derived(store.summary?.usage.today ?? null);
 let topModel = $derived(topUsageModel(today));
 let deviceNames = $derived(
   new Map(store.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
-);
-const showSyncOff = $derived(
-  store.summary !== null && !isPaidSyncStatus(store.summary.entitlement.status),
 );
 let providerStatus = $state<Map<string, { indicator: string; description: string }>>(new Map());
 
@@ -81,13 +66,6 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
     actionLabel={accountNoticeActionLabel(store.loadError)}
     onRetry={accountNoticeRetry(store.loadError, () => void store.refresh())}
   />
-{/if}
-
-{#if showSyncOff}
-  <p class="notice sync-off-notice" role="status">
-    <span>{SYNC_OFF_COPY}</span>
-    <a href={SETTINGS_PATH}>Settings</a>
-  </p>
 {/if}
 
 <section class="overview-section" aria-labelledby="quota-title">
@@ -173,9 +151,7 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
 {#if store.summary && (store.summary.devices.length > 0 || store.summary.subscriptions.length > 0)}
   <section class="overview-section overview-devices">
     <a class="devices-strip" href={DEVICES_PATH}
-      >{devicesSummaryLine(store.summary.devices, now, {
-        subscribed: isPaidSyncStatus(store.summary.entitlement.status),
-      })}</a
+      >{devicesSummaryLine(store.summary.devices, now)}</a
     >
   </section>
 {/if}

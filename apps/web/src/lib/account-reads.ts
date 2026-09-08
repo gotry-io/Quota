@@ -4,8 +4,7 @@ import {
   type AccountSummaryRead,
   type AccountUsageActivityResponseRead,
   AccountUsageActivityResponseReadSchema,
-  type RedemptionGrantDuration,
-  RedeemCodeResponseSchema,
+  AccountSummaryReadSchema,
 } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 
@@ -19,36 +18,35 @@ import { type AccountError, classifyAccountError } from "./account-errors.ts";
 /** How far back the activity chart asks, ending today. */
 export const ACTIVITY_DAYS = 365;
 
+export type AccountRead = Pick<AccountResponse, "protocol_version" | "account" | "identities">;
+
 export type AccountSummaryResult = { status: "ok"; summary: AccountSummaryRead } | AccountError;
 
-export type AccountResult = { status: "ok"; account: AccountResponse } | AccountError;
+export type AccountResult = { status: "ok"; account: AccountRead } | AccountError;
 
 export type AccountActivityResult =
   | { status: "ok"; activity: AccountUsageActivityResponseRead }
   | AccountError;
 
-const AccountResponseReadSchema = AccountResponseSchema.extend({
-  account: AccountResponseSchema.shape.account.loose(),
-  entitlement: AccountResponseSchema.shape.entitlement.loose(),
-  purchase: AccountResponseSchema.shape.purchase.loose(),
+const AccountResponseReadSchema = AccountResponseSchema.pick({
+  protocol_version: true,
+  account: true,
+  identities: true,
+})
+  .extend({
+    account: AccountResponseSchema.shape.account.loose(),
+  })
+  .loose();
+
+const AccountSummaryViewSchema = AccountSummaryReadSchema.pick({
+  protocol_version: true,
+  account: true,
+  devices: true,
+  subscriptions: true,
+  usage: true,
+  pricing_revision: true,
+  model_catalog_revision: true,
 }).loose();
-
-const RedeemCodeResponseReadSchema = RedeemCodeResponseSchema.extend({
-  entitlement: RedeemCodeResponseSchema.shape.entitlement.loose(),
-  granted: RedeemCodeResponseSchema.shape.granted.loose(),
-}).loose();
-
-export type RedeemErrorCode =
-  | "code_invalid"
-  | "code_expired"
-  | "code_already_redeemed"
-  | "code_exhausted"
-  | "billing_unavailable"
-  | "rate_limited";
-
-export type RedeemResult =
-  | { status: "ok"; duration: RedemptionGrantDuration; campaign: string }
-  | { status: "error"; code: RedeemErrorCode };
 
 type CachedSummary = { etag: string; summary: AccountSummaryRead };
 
@@ -95,53 +93,9 @@ export function accountSummaryPath(timezone: string): string {
   return `/api/v6/account/summary?${new URLSearchParams({ tz: timezone }).toString()}`;
 }
 
-/** Account metadata, paid-sync entitlement, and the Web Purchase Link. */
+/** Account metadata and the identities this browser signed in with. */
 export function accountPath(): string {
   return "/api/v2/account";
-}
-
-/** Spend a community code for Quota Pro. */
-export function redeemCodePath(): string {
-  return "/api/v2/account/redeem";
-}
-
-function relayErrorCode(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
-  if (!("error" in body)) return null;
-  const error = body.error;
-  if (typeof error !== "object" || error === null) return null;
-  if (!("code" in error)) return null;
-  return typeof error.code === "string" ? error.code : null;
-}
-
-export function parseRedeemResponse(status: number, body: unknown): RedeemResult | null {
-  if (status >= 200 && status < 300) {
-    const parsed = RedeemCodeResponseReadSchema.safeParse(body);
-    if (!parsed.success) return null;
-    return {
-      status: "ok",
-      duration: parsed.data.granted.duration,
-      campaign: parsed.data.granted.campaign,
-    };
-  }
-  if (status === 429) return { status: "error", code: "rate_limited" };
-  const code = relayErrorCode(body);
-  if (status === 404 && code === "code_invalid") {
-    return { status: "error", code: "code_invalid" };
-  }
-  if (status === 410 && code === "code_expired") {
-    return { status: "error", code: "code_expired" };
-  }
-  if (status === 409 && code === "code_already_redeemed") {
-    return { status: "error", code: "code_already_redeemed" };
-  }
-  if (status === 409 && code === "code_exhausted") {
-    return { status: "error", code: "code_exhausted" };
-  }
-  if ((status === 502 || status === 503) && code === "billing_unavailable") {
-    return { status: "error", code: "billing_unavailable" };
-  }
-  return null;
 }
 
 export function parseAccountResponse(status: number, body: unknown): AccountResult {
@@ -150,6 +104,11 @@ export function parseAccountResponse(status: number, body: unknown): AccountResu
   }
   const parsed = AccountResponseReadSchema.safeParse(body);
   return parsed.success ? { status: "ok", account: parsed.data } : classifyAccountError(null);
+}
+
+export function parseAccountSummaryBody(body: unknown): AccountSummaryRead | null {
+  const parsed = AccountSummaryViewSchema.safeParse(body);
+  return parsed.success ? (parsed.data as AccountSummaryRead) : null;
 }
 
 export function browserTimezone(): string {

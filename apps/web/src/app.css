@@ -2601,26 +2601,6 @@ tbody tr:last-child td {
   padding-inline: 8px;
 }
 
-.sync-off-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 16px;
-}
-
-.sync-off-notice span {
-  flex: 1 1 16rem;
-}
-
-.sync-off-notice a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 42px;
-  color: var(--ink);
-  font-weight: 500;
-}
-
 .loading-block {
   display: grid;
   gap: 10px;

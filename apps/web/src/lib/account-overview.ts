@@ -2,12 +2,10 @@ import { remainingPercent } from "@gotry-io/quota-model";
 import type {
   AccountDeviceRead,
   AccountSummaryRead,
-  RedemptionGrantDuration,
   UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
-import type { RedeemErrorCode } from "./account-reads.ts";
 import { deviceActivity } from "./device-activity.ts";
-import { relativeAge, usageModelDisplayName, WEB_LOCALE } from "./format.ts";
+import { relativeAge, usageModelDisplayName } from "./format.ts";
 
 export type MeterTone = "good" | "warn" | "critical";
 
@@ -74,97 +72,8 @@ function newestSubscriptionObservedAt(summary: AccountSummaryRead): string | nul
   return newest;
 }
 
-export const SYNC_OFF_COPY = "Sync is off. Your Macs stop uploading until you get Quota Pro.";
-
-/** Paid sync is the write gate: `active` and `grace` may upload; anything else may not. */
-export function isPaidSyncStatus(status: string): boolean {
-  return status === "active" || status === "grace";
-}
-
-export function subscribeActionLabel(status: string): "Get Quota Pro" | "Manage Quota Pro" {
-  return isPaidSyncStatus(status) ? "Manage Quota Pro" : "Get Quota Pro";
-}
-
-export const REDEEM_DURATION_COPY: Record<RedemptionGrantDuration, string> = {
-  weekly: "one week",
-  monthly: "one month",
-  two_month: "two months",
-  three_month: "three months",
-  six_month: "six months",
-  yearly: "one year",
-  lifetime: "lifetime",
-};
-
-export const REDEEM_ERROR_COPY: Record<RedeemErrorCode, string> = {
-  code_invalid: "That code isn't valid.",
-  code_expired: "That code has expired.",
-  code_already_redeemed: "You've already used this code.",
-  code_exhausted: "That code has been fully used.",
-  billing_unavailable: "Couldn't reach billing. Try again in a minute.",
-  rate_limited: "Too many attempts. Try again later.",
-};
-
-export function redeemGrantedCopy(duration: RedemptionGrantDuration, campaign: string): string {
-  return `Quota Pro is on: ${REDEEM_DURATION_COPY[duration]} from ${campaign}`;
-}
-
-type EntitlementView = {
-  status: string;
-  expires_at: string | null;
-  will_renew: boolean;
-  stale: boolean;
-  updated_at?: unknown;
-};
-
-/** Local calendar day of an RFC 3339 instant, English month and day, no year. */
-export function formatEntitlementDay(
-  instant: string,
-  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
-): string {
-  return new Intl.DateTimeFormat(WEB_LOCALE, {
-    month: "short",
-    day: "numeric",
-    timeZone,
-  }).format(new Date(instant));
-}
-
-function entitlementCheckedAt(entitlement: EntitlementView): string | null {
-  return typeof entitlement.updated_at === "string" &&
-    Number.isFinite(Date.parse(entitlement.updated_at))
-    ? entitlement.updated_at
-    : null;
-}
-
-/** Settings Quota Pro status. Stale appends last-checked only when `updated_at` is a readable instant. */
-export function entitlementStatusLine(
-  entitlement: EntitlementView,
-  now: Date = new Date(),
-  timeZone?: string,
-): string {
-  const day =
-    entitlement.expires_at !== null && Number.isFinite(Date.parse(entitlement.expires_at))
-      ? formatEntitlementDay(entitlement.expires_at, timeZone)
-      : null;
-  let line: string;
-  if (entitlement.status === "active" && entitlement.expires_at === null) {
-    line = "Quota Pro · Lifetime";
-  } else if (entitlement.status === "active") {
-    line = day ? `Active · ${entitlement.will_renew ? "renews" : "ends"} ${day}` : "Active";
-  } else if (entitlement.status === "grace") {
-    line = "Grace period · update your payment";
-  } else {
-    line = "No Quota Pro";
-  }
-  if (!entitlement.stale) return line;
-  const checkedAt = entitlementCheckedAt(entitlement);
-  if (checkedAt === null) return line;
-  return `${line} · last checked ${relativeAge(checkedAt, now)}`;
-}
-
-function reportingCount(devices: readonly DeviceRow[], now?: Date, subscribed = true): number {
-  return devices.filter(
-    (device) => deviceActivity(device, now, { subscribed }).tone !== "unavailable",
-  ).length;
+function reportingCount(devices: readonly DeviceRow[], now?: Date): number {
+  return devices.filter((device) => deviceActivity(device, now).tone !== "unavailable").length;
 }
 
 export function accountStatusLine(summary: AccountSummaryRead, now?: Date): string {
@@ -172,8 +81,7 @@ export function accountStatusLine(summary: AccountSummaryRead, now?: Date): stri
   const quota = observed
     ? `Latest quota updated ${relativeAge(observed, now)}`
     : "Latest quota not checked";
-  const subscribed = isPaidSyncStatus(summary.entitlement.status);
-  const reporting = reportingCount(summary.devices, now, subscribed);
+  const reporting = reportingCount(summary.devices, now);
   const noun = reporting === 1 ? "device" : "devices";
   return `${quota} · ${reporting} ${noun} reporting`;
 }
@@ -191,12 +99,11 @@ function activitySeverity(tone: "available" | "offline" | "unavailable", label: 
 function oldestDevice(
   devices: readonly DeviceRow[],
   now?: Date,
-  subscribed = true,
 ): { display_name: string; label: string } | null {
   let worst: { display_name: string; label: string; severity: number; sinceMs: number } | null =
     null;
   for (const device of devices) {
-    const activity = deviceActivity(device, now, { subscribed });
+    const activity = deviceActivity(device, now);
     const severity = activitySeverity(activity.tone, activity.label);
     const sinceMs = activity.since ? Date.parse(activity.since) : Number.NEGATIVE_INFINITY;
     if (
@@ -210,15 +117,10 @@ function oldestDevice(
   return worst;
 }
 
-export function devicesSummaryLine(
-  devices: readonly DeviceRow[],
-  now?: Date,
-  options: { subscribed?: boolean } = {},
-): string {
+export function devicesSummaryLine(devices: readonly DeviceRow[], now?: Date): string {
   if (devices.length === 0) return "No devices yet";
-  const subscribed = options.subscribed ?? true;
-  const reporting = reportingCount(devices, now, subscribed);
-  const oldest = oldestDevice(devices, now, subscribed);
+  const reporting = reportingCount(devices, now);
+  const oldest = oldestDevice(devices, now);
   const count =
     reporting === devices.length
       ? `${devices.length} ${devices.length === 1 ? "device" : "devices"} · all reporting`

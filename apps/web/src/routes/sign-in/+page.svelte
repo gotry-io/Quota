@@ -1,6 +1,5 @@
 <script lang="ts">
-import type { AccountResponse } from "@gotry-io/quota-protocol";
-import { fetchAccount, signOut } from "$lib/account-client";
+import { type AccountRead, fetchAccount, signOut } from "$lib/account-client";
 import {
   type AccountError,
   accountNoticeActionLabel,
@@ -21,7 +20,7 @@ const viewer = $derived(data.viewer);
 const deletingAccount = $derived(isDeleteAccountReturn(data.returnTo));
 const linking = $derived(data.linking);
 let error = $state<string | null>(null);
-let account = $state<AccountResponse | null>(null);
+let account = $state<AccountRead | null>(null);
 let accountError = $state<AccountError | null>(null);
 
 async function loadAccount(): Promise<void> {

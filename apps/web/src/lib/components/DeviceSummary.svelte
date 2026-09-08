@@ -6,14 +6,12 @@ import { lastReadingCopy } from "$lib/format";
 let {
   devices,
   now = new Date(),
-  subscribed = true,
 }: {
   devices: readonly Pick<
     AccountDeviceRead,
     "id" | "display_name" | "last_seen_at" | "last_observed_at"
   >[];
   now?: Date;
-  subscribed?: boolean;
 } = $props();
 </script>
 
@@ -22,7 +20,7 @@ let {
 {:else}
   <ul class="device-summary-list">
     {#each devices as device (device.id)}
-      {@const activity = deviceActivity(device, now, { subscribed })}
+      {@const activity = deviceActivity(device, now)}
       <li>{device.display_name} · {activity.label} · {lastReadingCopy(activity.since, now)}</li>
     {/each}
   </ul>

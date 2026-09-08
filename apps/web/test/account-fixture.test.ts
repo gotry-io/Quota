@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AccountResponseSchema } from "@gotry-io/quota-protocol";
+import { parseAccountResponse } from "../src/lib/account-reads.ts";
 import { accountReadFromSummary, screenshotAccountSummary } from "../e2e/account-fixture.ts";
 
-test("screenshot account fixture matches AccountResponse", () => {
-  const visual = AccountResponseSchema.safeParse(
-    accountReadFromSummary(screenshotAccountSummary()),
-  );
-  assert.equal(visual.success, true, visual.success ? "" : visual.error.message);
-  const smoke = AccountResponseSchema.safeParse(accountReadFromSummary());
-  assert.equal(smoke.success, true, smoke.success ? "" : smoke.error.message);
+test("screenshot account fixture matches the Account read", () => {
+  const visual = parseAccountResponse(200, accountReadFromSummary(screenshotAccountSummary()));
+  assert.equal(visual.status, "ok", visual.status === "ok" ? "" : visual.message);
+  const smoke = parseAccountResponse(200, accountReadFromSummary());
+  assert.equal(smoke.status, "ok", smoke.status === "ok" ? "" : smoke.message);
 });

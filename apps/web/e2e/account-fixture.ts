@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  AccountResponseSchema,
-  AccountSummaryReadSchema,
-  AccountUsageActivityResponseReadSchema,
-} from "@gotry-io/quota-protocol";
+import { AccountUsageActivityResponseReadSchema } from "@gotry-io/quota-protocol";
+import { parseAccountResponse, parseAccountSummaryBody } from "../src/lib/account-reads.ts";
 
 type WireCase = { name: string; accepted: boolean; payload: unknown };
 type WireConformance = { contracts: { account_summary: WireCase[] } };
@@ -117,22 +114,18 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
   protocol_version: 2;
   account: unknown;
   identities: { provider: string; label: string | null; linked_at: string }[];
-  entitlement: unknown;
-  purchase: { web_url: string };
 } {
-  const body = summary as { account: { account_id: string }; entitlement: unknown };
+  const body = summary as { account: { account_id: string } };
   const payload = {
     protocol_version: 2 as const,
     account: body.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-    entitlement: body.entitlement,
-    purchase: { web_url: `https://pay.rev.cat/token/${body.account.account_id}` },
   };
-  const parsed = AccountResponseSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new Error(`accountReadFromSummary failed schema: ${parsed.error.message}`);
+  const parsed = parseAccountResponse(200, payload);
+  if (parsed.status !== "ok") {
+    throw new Error(`accountReadFromSummary failed schema: ${parsed.message}`);
   }
-  return parsed.data;
+  return parsed.account;
 }
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
@@ -479,23 +472,13 @@ export function screenshotAccountSummary(): unknown {
     },
     pricing_revision: PRICING_REVISION,
     model_catalog_revision: "models_visual_fixture",
-    entitlement: {
-      status: "active",
-      expires_at: isoFrom(now, 30 * 86_400_000),
-      will_renew: true,
-      product_id: "quota_pro_monthly",
-      store: "app_store",
-      stale: false,
-      checked_at: studioObserved,
-    },
-    purchase: { web_url: `https://pay.rev.cat/token/account_visual_octocat` },
   };
 
-  const parsed = AccountSummaryReadSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new Error(`screenshotAccountSummary failed schema: ${parsed.error.message}`);
+  const parsed = parseAccountSummaryBody(payload);
+  if (!parsed) {
+    throw new Error("screenshotAccountSummary failed schema");
   }
-  return parsed.data;
+  return parsed;
 }
 
 function daySeed(date: string): number {
