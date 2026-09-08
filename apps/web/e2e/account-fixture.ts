@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  AccountResponseSchema,
-  AccountSummaryReadSchema,
-  AccountUsageActivityResponseReadSchema,
-} from "@gotry-io/quota-protocol";
+import { AccountUsageActivityResponseReadSchema } from "@gotry-io/quota-protocol";
+import { parseAccountResponse, parseAccountSummaryBody } from "../src/lib/account-reads.ts";
 
 type WireCase = { name: string; accepted: boolean; payload: unknown };
 type WireConformance = { contracts: { account_summary: WireCase[] } };
@@ -124,11 +121,11 @@ export function accountReadFromSummary(summary: unknown = accountSummary): {
     account: body.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
   };
-  const parsed = AccountResponseSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new Error(`accountReadFromSummary failed schema: ${parsed.error.message}`);
+  const parsed = parseAccountResponse(200, payload);
+  if (parsed.status !== "ok") {
+    throw new Error(`accountReadFromSummary failed schema: ${parsed.message}`);
   }
-  return parsed.data;
+  return parsed.account;
 }
 accountSummary.usage.today = retoken(accountSummary.usage.last_30_days, 80, 20, "5000");
 accountSummary.usage.last_7_days = retoken(accountSummary.usage.last_30_days, 2400, 700, "36900");
@@ -477,11 +474,11 @@ export function screenshotAccountSummary(): unknown {
     model_catalog_revision: "models_visual_fixture",
   };
 
-  const parsed = AccountSummaryReadSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new Error(`screenshotAccountSummary failed schema: ${parsed.error.message}`);
+  const parsed = parseAccountSummaryBody(payload);
+  if (!parsed) {
+    throw new Error("screenshotAccountSummary failed schema");
   }
-  return parsed.data;
+  return parsed;
 }
 
 function daySeed(date: string): number {

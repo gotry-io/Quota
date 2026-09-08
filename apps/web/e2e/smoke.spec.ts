@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { AccountResponseSchema } from "@gotry-io/quota-protocol";
+import { parseAccountResponse } from "../src/lib/account-reads.ts";
 import {
   accountActivity,
   accountActivityDay,
@@ -220,9 +220,6 @@ test("/my shows overview, Usage period switch, and Devices", async ({ page }) =>
   );
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
-  await expect(
-    page.getByText("Sync is off. Your Macs stop uploading until you get Quota Pro."),
-  ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
@@ -330,28 +327,10 @@ test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
   expect(stacked).toBe(true);
 });
 
-test("Settings groups Appearance, Quota Pro, Sign-in methods, Account, and Legal", async ({
-  page,
-}) => {
+test("Settings groups Appearance, Sign-in methods, Account, and Legal", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my/settings");
   await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Quota Pro" })).toBeVisible();
-  await expect(page.locator("#sync-title")).toHaveText("Quota Pro");
-  await expect(page.getByText(/Active · renews /)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Manage Quota Pro" })).toHaveAttribute(
-    "target",
-    "_blank",
-  );
-  await expect(page.getByRole("link", { name: "Manage Quota Pro" })).toHaveAttribute(
-    "rel",
-    "noopener",
-  );
-  await expect(page.getByLabel("Redemption code")).toHaveAttribute(
-    "placeholder",
-    "QUOTA-XXXX-XXXX-XXXX-XXXX",
-  );
-  await expect(page.getByRole("button", { name: "Redeem" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Notifications" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Sign-in methods" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
@@ -366,27 +345,6 @@ test("Settings groups Appearance, Quota Pro, Sign-in methods, Account, and Legal
     page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
   ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
-});
-
-test("Settings redeem form shows an error for an invalid code", async ({ page }) => {
-  await mockV6(page);
-  await page.route(
-    (url) => new URL(url).pathname === "/api/v2/account/redeem",
-    async (route) => {
-      await route.fulfill({
-        status: 404,
-        contentType: "application/json",
-        body: JSON.stringify({
-          error: { code: "code_invalid", message: "This code is not valid." },
-        }),
-      });
-    },
-  );
-  await page.goto("/my/settings");
-  await expect(page.getByRole("link", { name: "Manage Quota Pro" })).toBeVisible();
-  await page.getByLabel("Redemption code").fill("QUOTA-AAAA-BBBB-CCCC-DDDD");
-  await page.getByRole("button", { name: "Redeem" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "That code isn't valid." })).toBeVisible();
 });
 
 function accountReadWithIdentities(
@@ -494,11 +452,11 @@ test("Settings shows a one-time notice when a link was already taken", async ({ 
   await expect(page).not.toHaveURL(/linked=taken/);
 });
 
-test("screenshot account fixture matches AccountResponse", () => {
-  expect(
-    AccountResponseSchema.safeParse(accountReadFromSummary(screenshotAccountSummary())).success,
-  ).toBe(true);
-  expect(AccountResponseSchema.safeParse(accountReadFromSummary()).success).toBe(true);
+test("screenshot account fixture matches the Account read", () => {
+  expect(parseAccountResponse(200, accountReadFromSummary(screenshotAccountSummary())).status).toBe(
+    "ok",
+  );
+  expect(parseAccountResponse(200, accountReadFromSummary()).status).toBe("ok");
 });
 
 test("landing provider marks resolve to files", async ({ page }) => {
@@ -588,48 +546,6 @@ test("sign-in for Delete Account asks to sign in again", async ({ page }) => {
   expect(await apple.evaluate((node) => node.getBoundingClientRect().top)).toBeLessThan(
     await github.evaluate((node) => node.getBoundingClientRect().top),
   );
-});
-
-function unsubscribedSummary(): unknown {
-  const summary = structuredClone(accountSummary) as {
-    entitlement: {
-      status: string;
-      expires_at: string | null;
-      will_renew: boolean;
-      stale: boolean;
-    };
-  };
-  summary.entitlement = {
-    ...summary.entitlement,
-    status: "none",
-    expires_at: null,
-    will_renew: false,
-    stale: false,
-  };
-  return summary;
-}
-
-test("Overview warns when sync is off and Settings offers Get Quota Pro", async ({ page }) => {
-  await mockV6(page, unsubscribedSummary());
-  await page.goto("/my");
-  const notice = page.getByRole("status").filter({
-    hasText: "Sync is off. Your Macs stop uploading until you get Quota Pro.",
-  });
-  await expect(notice).toBeVisible();
-  await expect(notice.getByRole("link", { name: "Settings" })).toHaveAttribute(
-    "href",
-    "/my/settings",
-  );
-
-  await page.goto("/my/settings");
-  await expect(page.getByText("No Quota Pro")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Get Quota Pro" })).toHaveAttribute(
-    "target",
-    "_blank",
-  );
-
-  await page.goto("/my/devices");
-  await expect(page.getByText("Paused (no Quota Pro)").first()).toBeVisible();
 });
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {

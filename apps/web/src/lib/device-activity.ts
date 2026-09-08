@@ -8,7 +8,6 @@ type DeviceActivityPresentation = {
 };
 
 export const NOT_REPORTING_COPY = "Not reporting";
-export const PAUSED_NO_SUBSCRIPTION_COPY = "Paused (no Quota Pro)";
 
 const activeWithinMilliseconds = 30 * 60 * 1000;
 const idleWithinMilliseconds = 24 * 60 * 60 * 1000;
@@ -21,15 +20,12 @@ const idleWithinMilliseconds = 24 * 60 * 60 * 1000;
 export function deviceActivity(
   device: Pick<AccountDeviceRead, "last_seen_at" | "last_observed_at">,
   now: Date = new Date(),
-  options: { subscribed?: boolean } = {},
 ): DeviceActivityPresentation {
-  const subscribed = options.subscribed ?? true;
-  const quietLabel = subscribed ? NOT_REPORTING_COPY : PAUSED_NO_SUBSCRIPTION_COPY;
   const instants = [device.last_seen_at, device.last_observed_at]
     .filter((value): value is string => value !== null)
     .filter((value) => Number.isFinite(Date.parse(value)));
   if (instants.length === 0) {
-    return { label: quietLabel, tone: "unavailable", since: null };
+    return { label: NOT_REPORTING_COPY, tone: "unavailable", since: null };
   }
   const since = instants.reduce((newest, value) =>
     Date.parse(value) > Date.parse(newest) ? value : newest,
@@ -41,7 +37,7 @@ export function deviceActivity(
   if (age < idleWithinMilliseconds) {
     return { label: "Idle", tone: "offline", since };
   }
-  return { label: quietLabel, tone: "unavailable", since };
+  return { label: NOT_REPORTING_COPY, tone: "unavailable", since };
 }
 
 /** The glyph a Device is drawn with, or a generic device for a platform this build cannot name. */

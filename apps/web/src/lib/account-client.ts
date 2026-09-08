@@ -1,11 +1,11 @@
-import { AccountSummaryReadSchema, type IdentityProvider } from "@gotry-io/quota-protocol";
+import type { IdentityProvider } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   ACTIVITY_DAYS,
   type AccountActivityResult,
+  type AccountRead,
   type AccountResult,
   type AccountSummaryResult,
-  type RedeemResult,
   accountActivityPath,
   accountActivityRange,
   accountPath,
@@ -13,8 +13,7 @@ import {
   browserTimezone,
   parseAccountActivityResponse,
   parseAccountResponse,
-  parseRedeemResponse,
-  redeemCodePath,
+  parseAccountSummaryBody,
   storedSummary,
   storedSummaryETag,
   storeSummary,
@@ -24,9 +23,9 @@ import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
 export type {
   AccountActivityResult,
   AccountError,
+  AccountRead,
   AccountResult,
   AccountSummaryResult,
-  RedeemResult,
 };
 export {
   ACTIVITY_DAYS,
@@ -35,7 +34,6 @@ export {
   accountPath,
   accountSummaryPath,
   browserTimezone,
-  redeemCodePath,
 };
 
 const jsonRequest = {
@@ -135,11 +133,11 @@ export async function fetchAccountSummary(): Promise<AccountSummaryResult> {
       return cached ? { status: "ok", summary: cached } : classifyAccountError(response);
     }
     if (!response.ok) return classifyAccountError(response);
-    const parsed = AccountSummaryReadSchema.safeParse(await response.json());
-    if (!parsed.success) return classifyAccountError(null);
+    const summary = parseAccountSummaryBody(await response.json());
+    if (!summary) return classifyAccountError(null);
     const nextETag = response.headers.get("ETag");
-    if (nextETag) storeSummary(nextETag, parsed.data);
-    return { status: "ok", summary: parsed.data };
+    if (nextETag) storeSummary(nextETag, summary);
+    return { status: "ok", summary };
   } catch {
     return classifyAccountError(null);
   }
@@ -195,24 +193,5 @@ export async function deleteAccount(
     return classifyAccountError(response, { destructive: true, currentPath });
   } catch {
     return classifyAccountError(null, { currentPath });
-  }
-}
-
-export async function redeemCode(code: string): Promise<RedeemResult | AccountError> {
-  try {
-    const response = await fetch(redeemCodePath(), {
-      method: "POST",
-      credentials: "same-origin",
-      redirect: "error",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    const body: unknown = await response.json().catch(() => null);
-    return (
-      parseRedeemResponse(response.status, body) ??
-      classifyAccountError(response, { currentPath: SETTINGS_PATH })
-    );
-  } catch {
-    return classifyAccountError(null, { currentPath: SETTINGS_PATH });
   }
 }

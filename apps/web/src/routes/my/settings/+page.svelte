@@ -1,20 +1,18 @@
 <script lang="ts">
-import type { AccountResponse } from "@gotry-io/quota-protocol";
 import { onMount } from "svelte";
 import { replaceState } from "$app/navigation";
 import { page } from "$app/state";
-import { deleteAccount, fetchAccount } from "$lib/account-client";
+import { type AccountRead, deleteAccount, fetchAccount } from "$lib/account-client";
 import {
   type AccountError,
   accountNoticeActionLabel,
   accountNoticeRetry,
   IDENTITY_TAKEN_COPY,
 } from "$lib/account-errors";
-import { entitlementStatusLine, subscribeActionLabel, viewerInitial } from "$lib/account-overview";
+import { viewerInitial } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import PublicProfileSettings from "$lib/components/PublicProfileSettings.svelte";
-import RedeemCodeForm from "$lib/components/RedeemCodeForm.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import SignInMethodSettings from "$lib/components/SignInMethodSettings.svelte";
 import ThemeToggle from "$lib/components/ThemeToggle.svelte";
@@ -24,23 +22,19 @@ import type { WebDocumentViewer } from "$lib/server/document-port";
 const store = getAccountStore();
 const viewer = $derived((page.data.viewer as WebDocumentViewer | null | undefined) ?? null);
 const initial = $derived(viewerInitial(viewer?.displayLabel));
-const now = $derived(store.now);
-const entitlement = $derived(store.summary?.entitlement ?? null);
-let account = $state<AccountResponse | null>(null);
-let purchaseError = $state<AccountError | null>(null);
+let account = $state<AccountRead | null>(null);
+let accountError = $state<AccountError | null>(null);
 let deleteHeading = $state<HTMLHeadingElement | null>(null);
 let linkedTakenNotice = $state(isLinkedTaken(page.url));
-
-const purchaseUrl = $derived(account?.purchase.web_url ?? null);
 
 async function loadAccount(): Promise<void> {
   const result = await fetchAccount();
   if (result.status === "ok") {
     account = result.account;
-    purchaseError = null;
+    accountError = null;
     return;
   }
-  purchaseError = result;
+  accountError = result;
 }
 
 onMount(() => {
@@ -60,10 +54,10 @@ $effect(() => {
     if (cancelled) return;
     if (result.status === "ok") {
       account = result.account;
-      purchaseError = null;
+      accountError = null;
       return;
     }
-    purchaseError = result;
+    accountError = result;
   });
   return () => {
     cancelled = true;
@@ -111,12 +105,12 @@ async function onDeleteAccount(event: Event): Promise<void> {
   />
 {/if}
 
-{#if purchaseError}
+{#if accountError}
   <RetryNotice
-    id="purchase-error"
-    message={purchaseError.message}
-    actionLabel={accountNoticeActionLabel(purchaseError)}
-    onRetry={accountNoticeRetry(purchaseError, () => void loadAccount())}
+    id="identities-error"
+    message={accountError.message}
+    actionLabel={accountNoticeActionLabel(accountError)}
+    onRetry={accountNoticeRetry(accountError, () => void loadAccount())}
   />
 {/if}
 
@@ -128,39 +122,13 @@ async function onDeleteAccount(event: Event): Promise<void> {
   </div>
 </section>
 
-<section class="settings-group" aria-labelledby="sync-title">
-  <h2 id="sync-title">Quota Pro</h2>
-  {#if entitlement}
-    <div class="settings-row">
-      <p>{entitlementStatusLine(entitlement, now)}</p>
-      {#if purchaseUrl}
-        <a
-          class="button button-secondary"
-          href={purchaseUrl}
-          target="_blank"
-          rel="noopener">{subscribeActionLabel(entitlement.status)}</a
-        >
-      {/if}
-    </div>
-  {:else if !store.loadError}
-    <LoadingBlock lines={1} label="Loading Quota Pro" />
-  {/if}
-  <RedeemCodeForm
-    onGranted={async () => {
-      await loadAccount();
-      await store.refresh();
-    }}
-    onError={(error) => store.setError(error)}
-  />
-</section>
-
 {#if account}
   <SignInMethodSettings
     identities={account.identities}
     onChanged={loadAccount}
     onError={(error) => store.setError(error)}
   />
-{:else if !purchaseError}
+{:else if !accountError}
   <section class="settings-group" aria-labelledby="sign-in-methods-title">
     <h2 id="sign-in-methods-title">Sign-in methods</h2>
     <LoadingBlock lines={3} label="Loading sign-in methods" />
