@@ -617,7 +617,7 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.sign-in-methods.manage"].exists, "Manage on Web")
     attachScreenshot(app, name: "settings-sign-in-methods")
-    settle(app)
+    settleScroll(app, anchor: github)
     try audit(app)
   }
 
@@ -1005,6 +1005,24 @@ final class QuotaUITests: XCTestCase {
   private func settle(_ app: XCUIApplication) {
     _ = app.wait(for: .runningForeground, timeout: 1)
     usleep(900_000)
+  }
+
+  /// After a run of swipes, wait until a row has stopped moving before the contrast pass samples
+  /// the screen: a list still decelerating, or bouncing back from its end, reads as low contrast
+  /// for whatever the sampler catches mid-motion ("Privacy" on Settings, twice in CI). Two
+  /// frames 300 ms apart that agree are a list at rest; a fixed delay is a guess at how long
+  /// that takes on a loaded runner.
+  private func settleScroll(_ app: XCUIApplication, anchor: XCUIElement) {
+    settle(app)
+    let element = anchor.firstMatch
+    let deadline = Date().addingTimeInterval(4)
+    var last = element.frame
+    while Date() < deadline {
+      usleep(300_000)
+      let now = element.frame
+      if now == last { return }
+      last = now
+    }
   }
 
   /// Back to the top of a list, whatever it was scrolled to. One swipe is not the top of a hub
