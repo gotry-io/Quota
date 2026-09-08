@@ -254,7 +254,7 @@ describe("quota-ios account and device client", () => {
     ).toBe(1);
   });
 
-  it("writes snapshots from the phone only while sync is paid", async () => {
+  it("writes snapshots from the phone", async () => {
     const harness = await createHarness();
     const tokens = await loginIos(harness, iPhone);
     if (!("device_id" in tokens)) throw new Error("expected a Device session");
@@ -276,19 +276,6 @@ describe("quota-ios account and device client", () => {
       ],
     });
 
-    // Nothing is bought, so the write boundary is where the phone is told so.
-    const unpaidSync = await harness.app.request("https://quota.gotry.io/api/v2/device/sync", {
-      headers,
-    });
-    expect(unpaidSync.status).toBe(402);
-    expect(await unpaidSync.json()).toMatchObject({ error: { code: "subscription_required" } });
-    const unpaidUpload = await harness.app.request(
-      "https://quota.gotry.io/api/v6/device/snapshots",
-      { method: "PUT", headers, body: envelope },
-    );
-    expect(unpaidUpload.status).toBe(402);
-
-    await paySync(harness.accountId);
     const sync = await harness.app.request("https://quota.gotry.io/api/v2/device/sync", {
       headers,
     });
@@ -822,21 +809,6 @@ async function exchangeIos(
       ...(input.registration ?? {}),
     }),
   });
-}
-
-/** Paid sync, stored the way the RevenueCat fold stores it. */
-async function paySync(accountId: string) {
-  await env.DB.prepare(
-    `INSERT INTO entitlements (
-       account_id, status, product_id, store, expires_at, will_renew, source, last_event_id, updated_at
-     ) VALUES (?1, 'active', 'quota_pro_monthly', 'app_store', ?2, 1, 'webhook', NULL, ?3)`,
-  )
-    .bind(
-      accountId,
-      new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      now.toISOString(),
-    )
-    .run();
 }
 
 async function deviceCount(accountId: string) {

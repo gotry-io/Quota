@@ -64,9 +64,7 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil,
-        entitlement: nil,
-        purchaseURL: nil
+        accountSummary: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -219,9 +217,7 @@ func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil,
-        entitlement: nil,
-        purchaseURL: nil
+        accountSummary: nil
       ),
       updatedAt: nil,
       lastError: nil,
@@ -417,30 +413,10 @@ func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
   #expect(model.accountDisplayLabel == "Quota account")
 }
 
-@Test @MainActor
-func aSignedInAccountOffersTheWebsiteRedeemLink() async throws {
-  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: "octocat")))
-  await model.refreshIfNeeded()
-
-  #expect(model.accountState == .signedIn)
-  #expect(model.redeemCodeURL == AppMetadata.redeemCodeURL)
-}
-
-@Test @MainActor
-func aSignedOutAccountDoesNotOfferTheWebsiteRedeemLink() async throws {
-  let model = MenuBarViewModel(client: StubLocalService(state: signedOutWithSessionEndedState()))
-  await model.refreshIfNeeded()
-
-  #expect(model.accountState == .signedOut)
-  #expect(model.redeemCodeURL == nil)
-}
-
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,
-  overview: [LocalServiceOverviewItem] = [],
-  entitlement: LocalServiceEntitlement? = nil,
-  purchaseURL: URL? = nil
+  overview: [LocalServiceOverviewItem] = []
 ) -> LocalServiceState {
   LocalServiceState(
     ipcVersion: 3,
@@ -459,9 +435,7 @@ func justSignedInState(
         displayLabel: label,
         deviceID: "device_1",
         deviceGeneration: 1,
-        accountSummary: nil,
-        entitlement: entitlement,
-        purchaseURL: purchaseURL
+        accountSummary: nil
       ),
       updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
       lastError: nil,
@@ -976,9 +950,7 @@ func signedOutWithSessionEndedState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil,
-        entitlement: nil,
-        purchaseURL: nil
+        accountSummary: nil
       ),
       updatedAt: nil,
       lastError: LocalServiceRemoteError(
@@ -1014,9 +986,7 @@ func loggingInState() -> LocalServiceState {
         displayLabel: nil,
         deviceID: nil,
         deviceGeneration: nil,
-        accountSummary: nil,
-        entitlement: nil,
-        purchaseURL: nil
+        accountSummary: nil
       ),
       updatedAt: nil,
       lastError: nil,

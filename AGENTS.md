@@ -36,8 +36,7 @@ Read the relevant source before changing that area:
 | A rotation whose successor was never presented did not happen | `docs/decisions/0030-a-rotation-never-received-did-not-happen.md` |
 | The Usage fold of an Account summary is stored, keyed by what it depends on | `docs/decisions/0031-the-usage-fold-is-stored.md` |
 | An Account owns its identities, and every sign-in confirms which Account it is | `docs/decisions/0032-an-account-owns-its-identities.md` |
-| Paid-sync entitlement is read from RevenueCat, not from a store receipt | `docs/decisions/0033-entitlement-is-read-from-revenuecat.md` |
-| Quota Pro is one product, and a redemption code is a grant | `docs/decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md` |
+| Sync is free for every Account, and Relay has no billing system | `docs/decisions/0048-sync-is-free-and-billing-is-gone.md` |
 | Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
 | What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
 | The opt-in leaderboard, and what a place on it carries | `docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md` |
@@ -49,7 +48,7 @@ Read the relevant source before changing that area:
 | Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
 | Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
 | In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
-| The phone as a Device, and the paid-sync gate on what it uploads | `docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md` |
+| The phone as a Device | `docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md` |
 | Relay's public provider status-page read | `docs/decisions/0044-relay-publishes-provider-status.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |

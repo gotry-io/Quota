@@ -1315,23 +1315,6 @@ enum Fixtures {
     return formatter.date(from: value)!
   }
 
-  /// The paid-sync entitlement a summary carries. Defaults to active so the tests that are not
-  /// about sync keep reading a signed-in Account with sync on.
-  static func entitlement(
-    status: String = "active",
-    expiresAt: String? = "2026-09-14T12:00:00Z",
-    willRenew: Bool = true
-  ) -> [String: Any] {
-    [
-      "status": status,
-      "expires_at": expiresAt as Any? ?? NSNull(),
-      "will_renew": willRenew,
-      "product_id": "quota_pro_monthly",
-      "store": "app_store",
-      "stale": false,
-    ]
-  }
-
   static func accountIdentitiesJSON() throws -> Data {
     try JSONSerialization.data(withJSONObject: [
       "protocol_version": 2,
@@ -1344,17 +1327,13 @@ enum Fixtures {
         ["provider": "github", "label": "octocat", "linked_at": "2026-01-04T12:00:00Z"],
         ["provider": "apple", "label": NSNull(), "linked_at": "2026-02-04T12:00:00Z"],
       ],
-      "entitlement": entitlement(status: "none", expiresAt: nil, willRenew: false),
-      "purchase": ["web_url": "https://pay.rev.cat/testtoken/account_01"],
     ])
   }
 
   static func accountSummaryJSON(
     accountID: String = "account_01",
-    entitlement: [String: Any]? = nil,
     devices: [[String: Any]] = []
   ) throws -> Data {
-    let entitlement = entitlement ?? Self.entitlement()
     let period: [String: Any] = [
       "totals": [
         "total_tokens": 1200,
@@ -1403,7 +1382,6 @@ enum Fixtures {
         ],
         "pricing_revision": "pricing_1",
         "model_catalog_revision": "models_1",
-        "entitlement": entitlement,
       ] as [String: Any]
     )
   }

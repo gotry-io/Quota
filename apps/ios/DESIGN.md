@@ -180,12 +180,7 @@ Body, in order:
    standard list-row background. Cached: **Showing saved data. Couldn't refresh.** No cache:
    **Couldn't refresh. Pull to try again.** Keep provider-state and freshness vocabulary from the
    shared formatters unchanged.
-2. Sync-off row, when the Account read carries an `entitlement` that is not `active` or `grace`:
-   a tappable `StatusMessage` with `arrow.trianglehead.2.clockwise.rotate.90` and a trailing
-   chevron, reading **Sync is off: Quota Pro is required.** It presents the paywall as
-   a sheet with **Done**. The sentence is the one Relay's own 402 `subscription_required` is
-   spoken as, so a refused write and this row never disagree.
-3. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
+2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
    name with an 8pt incident dot after the name when this device's last-good status-page reading
    is `minor` or worse (VoiceOver speaks the status-page description; there is no tooltip),
    masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
@@ -202,17 +197,17 @@ Body, in order:
    use `71%`, and balance-only windows use **Balance** plus the unit amount. Empty windows: **No
    quota windows yet.** The canonical
    **Updated** age is the quota Section footer; it wraps and is spoken in full.
-4. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
+3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
    `gauge.with.dots.needle.33percent`, and the two ways to change that as buttons. Without an
    account the description is **Connect a provider to read your quota on this iPhone, or sign in to
    Quota to see what your Macs report.** with **Connect a provider** (switches to Settings, where
    the Providers group is) and **Sign in to Quota**. With one it is **Set up QuotaBar on a Mac to
    start reporting, or connect a provider to read it on this iPhone.** and only **Connect a
    provider**.
-5. Today, only when an account answered, before setup or device support: Tokens, API-equivalent
+4. Today, only when an account answered, before setup or device support: Tokens, API-equivalent
    cost, Input, and Output, with monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
    Empty: **No usage today.**
-6. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
+5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
@@ -446,17 +441,6 @@ About are pushed destinations that share `SettingsModel`. Account actions sit on
 are reachable without scrolling through alert groups. Every control is a standard Form toggle,
 picker, link, or button. Settings has no custom loading state.
 
-**Quota Pro.** The first group, and the only place a subscription is bought or read. Without one —
-`entitlement.status` of `expired`, `none`, or a member this build cannot name — one NavigationLink
-**Get Quota Pro** to the paywall. With one, a `LabeledContent` **Quota Pro** whose value is the
-state Relay reports, and a Link **Manage** to `https://apps.apple.com/account/subscriptions`; the
-system owns cancelling and changing a plan and Quota does not reimplement it. Footer: **Quota Pro is
-billed through the App Store and managed in your Apple Account.**
-
-Status values are derived from the Relay entitlement, never from the store SDK on the device:
-`active` and renewing is **Active · renews `<date>`**, `active` and not renewing is
-**Expires `<date>`**, `active` without an expiry is **Lifetime**, and `grace` is **Grace period**.
-
 **Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
 value **System**, **Light**, or **Dark** trailing.
 
@@ -535,30 +519,6 @@ remains; this device forgets the session and its saved overview, and keeps every
 Without an account the group is one button, **Sign in to Quota**, with the footer **Sign in to see
 what QuotaBar reports from your Macs, and your usage across them.** There are no devices to manage
 and nothing to delete, so those rows are absent rather than disabled.
-
-#### Quota Pro
-
-The paywall, pushed from Settings › Quota Pro and presented as a sheet from the Overview sync-off row.
-Quota draws it rather than rendering a remote RevenueCat Paywalls template, so its copy is
-reviewed here, the offline fixtures can render it, and the accessibility audit covers it. An
-inset-grouped `List`:
-
-1. Headline **Quota Pro** and **Quota Pro carries what your Macs collect to this iPhone,
-   the website, and your widgets.**
-2. Three checkmark `Label` benefits: **Every Mac you run QuotaBar on reports into one Account.**,
-   **The website and your Home Screen widgets read that same account.**, **Usage history and a
-   year of Activity are kept for you.**
-3. Plans, one Button row per term with the price the store localized and the trial before it:
-   **Monthly** and **Yearly**, detail **`<n>` days free, then `<price>`** or the price alone.
-   Quota never composes a currency amount of its own.
-4. **Restore Purchases**, **Redeem Offer Code** (Apple's Offer Code sheet; hidden when purchases
-   are unavailable in this build), Link **Terms** (`https://quota.gotry.io/terms`), Link **Privacy**,
-   and the same billing footer as the Settings group. There is no typed license-key field.
-
-A purchase the store accepts does not turn sync on by itself. The entitlement belongs to Relay,
-which learns the purchase from a RevenueCat webhook, so the paywall says **Purchase complete.
-Turning sync on…** and dismisses when the next Account read reports `active`. A build with no
-RevenueCat API key states that in place of the plans: **Purchases unavailable in this build.**
 
 #### Notifications
 
@@ -674,15 +634,6 @@ Rules:
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
 | Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
-| Sync off | Overview sync-off row **Sync is off: Quota Pro is required.**, and Settings › Quota Pro offering the paywall |
-| Loading plans | **Loading plans…** with progress, accessibility value **Loading plans** |
-| Plans failed | **Couldn't load subscription options.** with **Retry** |
-| Purchase running | **Working…** with progress, plan rows disabled |
-| Purchase made, Relay behind | **Purchase complete. Turning sync on…** |
-| Purchase deferred | **Waiting for the App Store to confirm this purchase.** |
-| Purchase failed | **Couldn't complete the purchase. Try again.** |
-| Restore failed | **Couldn't restore purchases. Try again.** |
-| No store in this build | **Purchases unavailable in this build.** |
 | Notification permission denied | **Allow notifications for Quota in Settings.** with **Open Settings** |
 | No quota alerts | **No quota alerts are available yet.** below the Notifications master controls |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
@@ -769,6 +720,8 @@ provider and support, and no custom card chrome beyond the system widget contain
     dims what is behind it, and that dimming is the system's;
   - contrast on `usage.activity.selected-day`: the date label shares its row container with the
     selected heatmap cell, whose accent ring the auditor reads as the label's background;
+  - contrast on `settings.sign-in-methods.` rows: they already use the opaque label colour; the
+    auditor still samples them as failing when they sit in the middle of the Settings hub;
   - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which
     iOS 26.3 passes and the 26.5 simulator reports as failing for the second row only — an
     exception to remove once that report reproduces
@@ -801,8 +754,7 @@ provider and support, and no custom card chrome beyond the system widget contain
     About **License** and **Version** labels, the
     Notifications **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
     **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
-    Mac**, **Download QuotaBar**, and the paywall **Redeem Offer Code** row
-    (`paywall.redeem-offer-code`).
+    Mac**, and **Download QuotaBar**.
 - A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
   without contrast; the run attaches which screen did not complete contrast. That is a deadline,
   not a type skip.
@@ -837,8 +789,7 @@ only; they must never contain access tokens, refresh tokens, or production data.
 `overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
 `overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
 `usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
-`usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `overview-sync-off`,
-`settings-sync-active`, `paywall`, `paywall-unavailable`, `settings-main`,
+`usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
 `settings-notifications`, `settings-appearance`, `settings-about`, and `settings-providers`
 fixture screenshots to
 `dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
@@ -869,11 +820,6 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture activity-failed
 --visual-fixture activity-day-empty
 --visual-fixture activity-day-failed
---visual-fixture sync-off
---visual-fixture sync-active
---visual-fixture sync-lifetime
---visual-fixture paywall
---visual-fixture paywall-unavailable
 --visual-fixture sign-in
 --visual-fixture sign-in-methods
 ```
@@ -899,11 +845,6 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `activity-failed` | Signed-in Usage with populated period totals, **Couldn't load activity.**, and **Retry** |
 | `activity-day-empty` | Signed-in Usage presenting a day sheet with **No usage on this day.** |
 | `activity-day-failed` | Signed-in Usage presenting a day sheet with **Couldn't load this day's usage.** and **Retry** |
-| `sync-off` | Signed-in Overview whose entitlement is `none`: the sync-off row above Quota |
-| `sync-active` | Settings with the Quota Pro group showing **Active · renews `<date>`** and **Manage** |
-| `sync-lifetime` | Settings with the Quota Pro group showing **Lifetime** and **Manage** |
-| `paywall` | Settings with the paywall's two plans priced from a fixture store, no network |
-| `paywall-unavailable` | The same screen in a build with no RevenueCat key: **Purchases unavailable in this build.** |
 | `sign-in-methods` | Signed-in Settings with the Sign-in methods group in every row state: GitHub bound as **octocat**, Apple bound with no label (**Linked**), Email **Not linked** with **Link on Web** |
 
 Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed

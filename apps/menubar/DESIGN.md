@@ -534,24 +534,11 @@ The page uses the same Settings list rows as the rest of this panel.
 ### Account
 
 The Account page is reachable only while signed in, and it holds everything that belongs to the
-account, top to bottom: the account label, **Quota Pro**, the native mini **Sync Usage** switch,
-**Devices**, **Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its
-copy — it is on this page because what it uploads is account data, not a general preference.
-
-**Quota Pro** is the subscription multi-device sync is paid for, exactly as Relay states it. Its
-subtitle is one line: **Active · renews Oct 5**, **Active · ends Oct 5**, **Lifetime** when status
-is active and there is no expiry, **Grace period · update payment**, or **Not active**; a stale
-answer — one Relay could not refresh — spends the line on its age instead, as **Active · checked
-2h ago**, and a Mac that has not read the account yet says **Checking…**. The line never wraps, so
-the age replaces the renewal date rather than following it. The trailing action is one small
-bordered split button: its face reads **Get Quota Pro…**, which opens the account's own purchase
-link, or **Manage…** once there is a subscription, which opens `quota.gotry.io/my/settings`; its
-chevron holds **Redeem a code…**, which opens `quota.gotry.io/my/settings#sync-title`. The
-purchase keeps the face because it is the action a reader came for, and the 320pt row cannot
-hold two full labels. There is no button while there is nothing to open. Without Quota Pro
-the Sync Usage switch is off-limits and its subtitle says **Needs Quota Pro**. The panel says none
-of this at its top: an unpaid account is a state, not an alarm, so it is stated where the account
-is managed and nowhere else.
+account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
+**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
+this page because what it uploads is account data, not a general preference. Multi-device sync is
+free for every account, so the page states nothing about paying for it and the switch is bound by
+nothing but being signed in.
 
 **Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
 popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced

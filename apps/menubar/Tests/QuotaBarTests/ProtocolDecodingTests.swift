@@ -95,15 +95,7 @@ private func accountSummaryJSON() -> Data {
         "all": \(usagePeriodJSON(cost: completeCostJSON))
       },
       "pricing_revision": "pricing_1",
-      "model_catalog_revision": "models_1",
-      "entitlement": {
-        "status": "active",
-        "expires_at": "2026-09-14T12:00:00Z",
-        "will_renew": true,
-        "product_id": "quota_sync_monthly",
-        "store": "app_store",
-        "stale": false
-      }
+      "model_catalog_revision": "models_1"
     }
     """.utf8
   )

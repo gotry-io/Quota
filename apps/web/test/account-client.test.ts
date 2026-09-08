@@ -21,21 +21,18 @@ import {
 } from "../src/lib/account-reads.ts";
 import { SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
 
-test("asks for the Account purchase URL at /api/v2/account", () => {
+test("asks for the Account at /api/v2/account", () => {
   assert.equal(accountPath(), "/api/v2/account");
 });
 
-test("reads the Account purchase URL", async () => {
+test("reads the Account identities", async () => {
   const summary = acceptedSummaryPayload() as {
     account: unknown;
-    entitlement: unknown;
   };
   const payload = {
     protocol_version: 2,
     account: summary.account,
     identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-    entitlement: summary.entitlement,
-    purchase: { web_url: "https://pay.rev.cat/token/account_1" },
   };
   let requested = "";
   const originalFetch = globalThis.fetch;
@@ -51,7 +48,7 @@ test("reads the Account purchase URL", async () => {
     assert.equal(requested, "/api/v2/account");
     assert.equal(result.status, "ok");
     if (result.status === "ok") {
-      assert.equal(result.account.purchase.web_url, "https://pay.rev.cat/token/account_1");
+      assert.equal(result.account.identities[0]?.label, "octocat");
     }
   } finally {
     globalThis.fetch = originalFetch;

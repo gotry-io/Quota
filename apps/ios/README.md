@@ -52,22 +52,12 @@ and `QuotaPresentation`. It reads the App Group protected snapshot and never imp
 Relay, session, Security, or network APIs. See
 [ADR 0014](../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md).
 
-Quota Pro is bought here. `apps/ios` is the only target that depends on the
-RevenueCat `purchases-ios` SDK (SPM, pinned to an exact version in `project.yml`);
-`packages/apple-client` does not, so QuotaBar and the widget extension link no store code.
-`RevenueCatPurchases` is the one file that imports it, behind the app-local `PurchasesFacade`, and
-`Purchases.logIn` binds a purchase to the Quota Account id so RevenueCat's `app_user_id` is the
-`accounts.id` Relay gates writes on. What Quota Pro is *worth* is never read from the SDK: the
-`entitlement` on the Account summary is, because that is the same row the Relay write routes
-refuse a Device with. See [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
-
 Quota iOS is a Device. Signing in presents this phone's installation — one Keychain item,
 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and not synchronized, so a restored backup is
 not a second phone claiming the same Device — with the name the system gives this device and
 `platform: ios`, and the session it gets names that Device. Each refresh that read something then
 asks `GET /api/v2/device/sync` for the generation an envelope must name and sends the readings to
-`PUT /api/v6/device/snapshots`; a 402 stops that refresh and shows the sync-off banner, and the
-next refresh asks again. Only readings go: the provider cookies stay in this device's Keychain,
+`PUT /api/v6/device/snapshots`. Only readings go: the provider cookies stay in this device's Keychain,
 and no Usage is uploaded because this phone runs no agent. See
 [ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md).
 
@@ -105,41 +95,6 @@ App and extension entitlements both declare `group.io.gotry.quota` with
 `CODE_SIGN_ENTITLEMENTS` set in `project.yml`. Production signing profiles for
 `io.gotry.quota` and `io.gotry.quota.widgets` must include that App Group. Local simulator builds
 may run with signing disabled for verification scripts.
-
-## RevenueCat key
-
-The SDK is configured from the Info.plist key `REVENUECAT_IOS_API_KEY`, which the build setting of
-the same name fills. Local builds get it from `apps/ios/Local.xcconfig` (gitignored; see
-`Local.xcconfig.example`), and the release workflow writes it into that file from the
-`REVENUECAT_IOS_API_KEY` repository secret. Only the **public** iOS SDK key belongs here; the
-secret REST key and the webhook authorization value are Relay's, listed in
-[`apps/relay/README.md`](../relay/README.md).
-
-A build with no key does not configure the SDK at all. `AppModel` gets `UnconfiguredPurchases`
-instead, Settings › Quota Pro still shows what Relay says the Account is entitled to, and the paywall
-says **Purchases unavailable in this build.** in place of the plans. That is what
-`pnpm build:ios`, `pnpm check:ios`, `pnpm test:ios`, and every unsigned pull-request build are.
-
-## StoreKit configuration
-
-`apps/ios/Quota.storekit` stands in for App Store Connect while the products do not exist there
-yet. It declares one subscription group, **Quota Pro**, with `quota_pro_monthly` ($0.99) and
-`quota_pro_yearly` ($2.99), each with a seven-day free introductory offer. `project.yml` sets it as the
-Quota scheme's `storeKitConfiguration`, so running the app from Xcode buys against it instead of
-the App Store; delete the app from the simulator to reset the test store. The paywall also offers
-Apple's **Redeem Offer Code** sheet; there is no typed license-key field.
-
-`QuotaTests` ships the same file as a bundle resource, and `StoreKitConfigurationTests` reads it:
-one group, the two product ids `SubscriptionTerm` names, the durations they are sold for, the
-seven-day free trial on each, and nothing else for sale. That runs in `pnpm test:ios` with no App
-Store account and no network.
-
-Buying is not exercised there. `SKTestSession` cannot be used under `xcodebuild test` on Xcode
-26.3: every call answers `Error Domain=SKInternalErrorDomain Code=3` and no product resolves,
-because the configuration never reaches the simulator's `storekitd`. Exercise a purchase by
-running the Quota scheme from Xcode, which does hand it over — buy monthly, then use the
-Transactions inspector to refund or expire it. RevenueCat itself is not exercised either way; an
-SDK-level purchase needs a RevenueCat project and key.
 
 ## Background refresh
 
@@ -236,7 +191,7 @@ Keychain restore):
 
 ```bash
 # Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sync-off | sync-active | sync-lifetime | paywall | paywall-unavailable
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed
 ```
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.
@@ -274,7 +229,6 @@ Repository secrets, all required before export:
 | `ASC_KEY_ID` | App Store Connect API key id |
 | `ASC_ISSUER_ID` | App Store Connect issuer id |
 | `ASC_KEY_P8` | App Store Connect API key `.p8` PEM |
-| `REVENUECAT_IOS_API_KEY` | RevenueCat public iOS SDK key (`appl_…`) |
 
 The workflow imports those into a temporary keychain, writes `Local.xcconfig` from the profile
 metadata, archives, exports with `apps/ios/ExportOptions.plist` (`method` `app-store-connect`,

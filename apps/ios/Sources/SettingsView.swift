@@ -15,7 +15,6 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
-      syncSection
       Section {
         NavigationLink {
           SettingsNotificationsView(model: model, settings: settings)
@@ -180,6 +179,8 @@ struct SettingsView: View {
         Button(SettingsCopy.manageSignInMethods) {
           Task { await model.presentSignInMethodsOnWeb() }
         }
+        .foregroundStyle(Color.primary)
+        .buttonStyle(.plain)
         .accessibilityIdentifier("settings.sign-in-methods.manage")
       } header: {
         Text(SettingsCopy.signInMethods)
@@ -205,7 +206,7 @@ struct SettingsView: View {
       // Both lines take the opaque label colour rather than the hierarchical `.primary` a
       // Providers row uses: inside a grouped-Form row, `.primary` resolves against the level the
       // row's content configuration already set, and the contrast auditor reads what that
-      // resolves to rather than the label colour. It is the same rule `PaywallView` states.
+      // resolves to rather than the label colour.
       VStack(alignment: .leading, spacing: 3) {
         Text(provider.displayName)
           .font(.subheadline.weight(.medium))
@@ -329,33 +330,5 @@ struct SettingsView: View {
 
   private var removeDialogBinding: Binding<Bool> {
     Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
-  }
-
-  /// Quota Pro is one row: the paywall when the Account has not bought it, the state Relay
-  /// reports plus the system's own management when it has.
-  @ViewBuilder
-  private var syncSection: some View {
-    Section {
-      if let status = ProCopy.status(model.entitlement) {
-        LabeledContent(ProCopy.section, value: status)
-          .accessibilityIdentifier("settings.sync.status")
-        Link(ProCopy.manage, destination: QuotaWebLinks.appleSubscriptions)
-          .accessibilityIdentifier("settings.sync.manage")
-      } else {
-        NavigationLink {
-          PaywallView(model: model)
-        } label: {
-          Text(ProCopy.subscribeRow)
-        }
-        .accessibilityIdentifier("settings.sync.subscribe")
-      }
-    } header: {
-      Text(ProCopy.section)
-        .accessibilityIdentifier("section.header.sync")
-    } footer: {
-      Text(ProCopy.sectionFooter)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("section.footer.sync")
-    }
   }
 }

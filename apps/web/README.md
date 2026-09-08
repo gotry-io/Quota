@@ -50,7 +50,7 @@ quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today st
 `/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
 same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
 Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
-below 620 px. Settings groups Appearance, Sync, Sign-in methods, Account, Public profile, and Legal.
+below 620 px. Settings groups Appearance, Sign-in methods, Account, Public profile, and Legal.
 The header **Sign in** is a link to `/sign-in`. That page offers **Continue with Apple**, **Continue
 with GitHub**, and **Send sign-in link** (`POST /api/auth/email/start`) in that order. Sign-out posts
 to `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes, Device deletion,

@@ -42,7 +42,7 @@ enum SettingsCopy {
   static let productSentence =
     "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
     + "and usage QuotaBar reports from your Macs."
-  static let privacySentence = "This iPhone does not upload anything it reads."
+  static let privacySentence = "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
   static let manageDevices = "Manage Devices on Web"
@@ -102,10 +102,6 @@ enum QuotaWebLinks {
   static let website = URL(string: origin)!
   static let githubRepository = URL(string: "https://github.com/gotry-io/Quota")!
   static let privacy = URL(string: "\(origin)/privacy")!
-  static let terms = URL(string: "\(origin)/terms")!
-  /// The system's own subscription management, which is where an App Store subscription is
-  /// cancelled or changed. Quota does not reimplement it.
-  static let appleSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
   static let support = URL(string: "\(origin)/support")!
   static let manageDevices = URL(string: "\(origin)/my/devices")!
   static let deleteAccountReturnTo = "/my/settings?delete=account"

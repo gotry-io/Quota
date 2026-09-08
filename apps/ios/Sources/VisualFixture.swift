@@ -29,11 +29,6 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case activityFailed = "activity-failed"
   case activityDayEmpty = "activity-day-empty"
   case activityDayFailed = "activity-day-failed"
-  case syncOff = "sync-off"
-  case syncActive = "sync-active"
-  case syncLifetime = "sync-lifetime"
-  case paywall
-  case paywallUnavailable = "paywall-unavailable"
   case signIn = "sign-in"
   case signInMethods = "sign-in-methods"
 
@@ -62,8 +57,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
       case .confirmAccount, .connectRefreshFailed:
         .pending
       case .content, .cachedError, .empty, .noDevices, .merged, .providers, .activityLoading,
-        .activityFailed, .activityDayEmpty, .activityDayFailed, .syncOff, .syncActive,
-        .syncLifetime, .paywall, .paywallUnavailable, .signInMethods:
+        .activityFailed, .activityDayEmpty, .activityDayFailed, .signInMethods:
         .active
       }
     }
@@ -95,8 +89,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.expiredMessage = nil
         Self.applyLocal(VisualFixtureContent.localCollection(at: now), to: model)
       case .merged:
-        applySignedInContent(
-          to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
+        applySignedInContent(to: model, now: now)
         Self.applyLocal(VisualFixtureContent.mergedLocalCollection(at: now), to: model)
       case .connecting:
         model.phase = .connecting
@@ -201,8 +194,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.expiredMessage = nil
         model.activityChart = .loaded([])
       case .providers:
-        applySignedInContent(
-          to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
+        applySignedInContent(to: model, now: now)
         Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
         model.selectedTab = .settings
       case .signIn:
@@ -217,8 +209,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         Self.applyLocal(VisualFixtureContent.localCollection(at: now), to: model)
         model.presentsSignIn = true
       case .signInMethods:
-        applySignedInContent(
-          to: model, now: now, entitlement: VisualFixtureContent.activeEntitlement(at: now))
+        applySignedInContent(to: model, now: now)
         model.selectedTab = .settings
         // Two channels bound and one still open, which is every state a row has.
         model.identities = .loaded([
@@ -233,35 +224,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
             linkedAt: now.addingTimeInterval(-86_400 * 30)
           ),
         ])
-      case .syncOff:
-        applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
-      case .syncActive:
-        applySignedInContent(
-          to: model,
-          now: now,
-          entitlement: VisualFixtureContent.activeEntitlement(at: now)
-        )
-        model.selectedTab = .settings
-      case .syncLifetime:
-        applySignedInContent(
-          to: model,
-          now: now,
-          entitlement: VisualFixtureContent.lifetimeEntitlement()
-        )
-        model.selectedTab = .settings
-      case .paywall:
-        applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
-        model.selectedTab = .settings
-        model.subscription.offers = .loaded(VisualFixtureContent.offers())
-      case .paywallUnavailable:
-        applySignedInContent(to: model, now: now, entitlement: .unsubscribed)
-        model.selectedTab = .settings
       case .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed:
-        applySignedInContent(
-          to: model,
-          now: now,
-          entitlement: VisualFixtureContent.activeEntitlement(at: now)
-        )
+        applySignedInContent(to: model, now: now)
         model.selectedTab = .usage
         switch self {
         case .activityLoading:
@@ -311,11 +275,10 @@ enum VisualFixture: String, CaseIterable, Sendable {
     @MainActor
     private func applySignedInContent(
       to model: AppModel,
-      now: Date,
-      entitlement: AccountEntitlement
+      now: Date
     ) {
       model.phase = .signedIn
-      model.summary = VisualFixtureContent.summary(at: now, entitlement: entitlement)
+      model.summary = VisualFixtureContent.summary(at: now)
       model.fetchedAt = now.addingTimeInterval(-90)
       model.fromCache = false
       model.isRefreshing = false
@@ -383,50 +346,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       ]
     }
 
-    /// Quota Pro as a signed-in fixture has it: active, renewing in a fortnight.
-    static func activeEntitlement(at date: Date) -> AccountEntitlement {
-      AccountEntitlement(
-        status: .active,
-        expiresAt: date.addingTimeInterval(14 * 86_400),
-        willRenew: true,
-        productID: SubscriptionTerm.monthly.productID,
-        store: "app_store",
-        stale: false
-      )
-    }
-
-    /// Quota Pro as a lifetime grant: active, no expiry, not renewing.
-    static func lifetimeEntitlement() -> AccountEntitlement {
-      AccountEntitlement(
-        status: .active,
-        expiresAt: nil,
-        willRenew: false,
-        productID: nil,
-        store: "app_store",
-        stale: false
-      )
-    }
-
-    static func offers() -> [SubscriptionOffer] {
-      [
-        SubscriptionOffer(
-          term: .monthly,
-          productID: SubscriptionTerm.monthly.productID,
-          displayPrice: "$0.99",
-          freeTrialDays: 7
-        ),
-        SubscriptionOffer(
-          term: .yearly,
-          productID: SubscriptionTerm.yearly.productID,
-          displayPrice: "$2.99",
-          freeTrialDays: 7
-        ),
-      ]
-    }
-
     static func summary(
-      at date: Date,
-      entitlement: AccountEntitlement? = nil
+      at date: Date
     ) -> AccountSummary {
       let studioID = studioDeviceID
       let kitchenID = kitchenDeviceID
@@ -477,15 +398,13 @@ enum VisualFixture: String, CaseIterable, Sendable {
         subscriptions: subscriptions,
         usage: usage(),
         pricingRevision: "pricing_visual_fixture",
-        modelCatalogRevision: "models_visual_fixture",
-        entitlement: entitlement ?? activeEntitlement(at: date)
+        modelCatalogRevision: "models_visual_fixture"
       )
     }
 
     static func emptySummary(
       at date: Date,
-      devices: [AccountDevice] = [],
-      entitlement: AccountEntitlement? = nil
+      devices: [AccountDevice] = []
     ) -> AccountSummary {
       AccountSummary(
         account: QuotaUserAccount(
@@ -497,8 +416,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         subscriptions: [],
         usage: emptyUsage(),
         pricingRevision: "pricing_visual_fixture",
-        modelCatalogRevision: "models_visual_fixture",
-        entitlement: entitlement ?? activeEntitlement(at: date)
+        modelCatalogRevision: "models_visual_fixture"
       )
     }
 
@@ -1100,8 +1018,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
       let days: [UsageActivityDay]
       switch fixture {
       case .content, .cachedError, .activityLoading, .activityFailed, .activityDayEmpty,
-        .activityDayFailed, .syncOff, .syncActive, .syncLifetime, .paywall, .paywallUnavailable,
-        .signInMethods:
+        .activityDayFailed, .signInMethods:
         days = VisualFixtureContent.activityDays(ending: now)
       case .signedOut, .connecting, .connectError, .expired, .confirmAccount, .connectRefreshFailed,
         .loading, .empty, .noDevices, .localOnly, .providers, .signIn:
@@ -1131,44 +1048,12 @@ enum VisualFixture: String, CaseIterable, Sendable {
           collectors: { _, _ in nil },
           now: { now }
         ),
-        purchases: fixture == .paywallUnavailable
-          ? UnconfiguredPurchases()
-          : FixturePurchases(catalog: VisualFixtureContent.offers()),
         budgetStore: budgetStore,
         now: { now }
       )
       fixture.apply(to: model, now: now)
       model.resolvePendingSubscriptionSelection()
       return model
-    }
-  }
-
-  /// A store that is configured and sells the two fixture plans, so a paywall screenshot does
-  /// not need RevenueCat, a network, or an App Store account. Buying refuses: a fixture never
-  /// leaves the state it was launched in.
-  private struct FixturePurchases: PurchasesFacade {
-    let isConfigured = true
-    let catalog: [SubscriptionOffer]
-
-    func logIn(accountID: String) async {}
-    func logOut() async {}
-
-    func offers() async throws -> [SubscriptionOffer] {
-      catalog
-    }
-
-    func purchase(_ offer: SubscriptionOffer) async throws -> SubscriptionPurchaseOutcome {
-      .cancelled
-    }
-
-    func restorePurchases() async throws {
-      throw SubscriptionError.purchasesUnavailable
-    }
-
-    func presentOfferCodeRedemption() async {}
-
-    func customerChanges() -> AsyncStream<Void> {
-      AsyncStream { $0.finish() }
     }
   }
 

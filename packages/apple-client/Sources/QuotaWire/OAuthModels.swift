@@ -283,7 +283,7 @@ public enum AccountSessionActivation: String, Codable, Equatable, Sendable {
 public struct AccountSession: Codable, Equatable, Sendable {
   public let accountID: String
   /// The Device this session speaks for, or nil when it registered none. A session that names
-  /// one may write it; whether that write is accepted is the Account's entitlement to answer
+  /// one may write it
   /// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
   public let deviceID: String?
   public let accessToken: String

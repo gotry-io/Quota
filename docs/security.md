@@ -45,7 +45,7 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   header the catalog declares, and keeps it only if the provider validates it. Cookies stay in this
   device's Keychain, one item per provider and account fingerprint, and reach only that provider's
   fixed endpoints — never Relay, the App Group snapshot, a file, a log, or a diagnostic. What that
-  session *reads* does reach Relay once the phone is a Device and sync is paid for
+  session *reads* does reach Relay once the phone is a Device
   ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)): the quota snapshot goes, the
   cookie behind it never does.
 
@@ -405,10 +405,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
   appear only in the one successful issuance response, never in D1, and browser session tokens only
   in their `Set-Cookie`.
-- Retained business data is limited to Account and Device lifecycle metadata, the paid-sync
-  entitlement cache and webhook event log, one optional public profile row per Account,
-  normalized quota observations, sparse hourly Usage rows, the daily rollup, and bounded rate
-  limits. Nothing is kept
+- Retained business data is limited to Account and Device lifecycle metadata, one optional
+  public profile row per Account, normalized quota observations, sparse hourly Usage rows, the
+  daily rollup, and bounded rate limits. Nothing is kept
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject, and an anonymous

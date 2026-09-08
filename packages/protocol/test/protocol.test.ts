@@ -21,7 +21,6 @@ import {
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
-  IssueRedemptionCodesRequestSchema,
   LeaderboardResponseSchema,
   LOCAL_PROVIDER_IDS,
   LocalProviderIdSchema,
@@ -34,8 +33,6 @@ import {
   ProviderStatusResponseReadSchema,
   ProviderStatusResponseSchema,
   PricingCatalogSchema,
-  RedeemCodeRequestSchema,
-  RedeemCodeResponseSchema,
   PublicProfileHandleSchema,
   PublicProfileUpdateRequestSchema,
   PublicUsageResponseSchema,
@@ -347,16 +344,6 @@ describe("quota protocol", () => {
         { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
         { provider: "apple", label: null, linked_at: "2026-02-04T12:00:00Z" },
       ],
-      entitlement: {
-        status: "none",
-        expires_at: null,
-        will_renew: false,
-        product_id: null,
-        store: null,
-        checked_at: null,
-        stale: false,
-      },
-      purchase: { web_url: "https://pay.rev.cat/token/account_01" },
     };
     expect(AccountResponseSchema.safeParse(account).success).toBe(true);
     // The channels are a closed vocabulary, and the subject a provider proved is never answered.
@@ -795,79 +782,6 @@ describe("quota protocol", () => {
     expect(protocol.exceedsContractBound(wrong.error)).toBe(false);
     expect(protocol.exceedsContractBound(new Error("D1_ERROR"))).toBe(false);
     expect(protocol.exceedsContractBound(undefined)).toBe(false);
-  });
-
-  it("states the Quota Pro entitlement on the Account read and the summary", () => {
-    const summary = accountSummary();
-    expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
-    expect(AccountSummarySchema.safeParse({ ...summary, entitlement: undefined }).success).toBe(
-      false,
-    );
-    expect(
-      AccountSummarySchema.safeParse({
-        ...summary,
-        entitlement: { ...summary.entitlement, status: "complimentary" },
-      }).success,
-    ).toBe(false);
-
-    const account = {
-      protocol_version: 2 as const,
-      account: summary.account,
-      identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-      entitlement: summary.entitlement,
-      purchase: summary.purchase,
-    };
-    expect(AccountResponseSchema.safeParse(account).success).toBe(true);
-    // A stale answer has to say how old it is, so the instant the row was written is part of
-    // the contract rather than something a reader may or may not find.
-    expect(
-      AccountResponseSchema.safeParse({
-        ...account,
-        entitlement: { ...summary.entitlement, checked_at: undefined },
-      }).success,
-    ).toBe(false);
-    expect(
-      AccountResponseSchema.safeParse({
-        ...account,
-        entitlement: { ...summary.entitlement, stale: true, checked_at: null },
-      }).success,
-    ).toBe(true);
-    expect(AccountResponseSchema.safeParse({ ...account, purchase: undefined }).success).toBe(
-      false,
-    );
-    // The summary answers the same pair, so a Mac that reads it needs no second request to
-    // say what Quota Pro costs.
-    expect(AccountSummarySchema.safeParse({ ...summary, purchase: undefined }).success).toBe(false);
-  });
-
-  it("accepts a redemption issue request with default max_redemptions and a redeem response", () => {
-    const issued = IssueRedemptionCodesRequestSchema.safeParse({
-      campaign: "beta",
-      duration: "monthly",
-      count: 2,
-    });
-    expect(issued.success).toBe(true);
-    if (issued.success) {
-      expect(issued.data.max_redemptions).toBe(1);
-    }
-    expect(
-      IssueRedemptionCodesRequestSchema.safeParse({
-        campaign: "beta",
-        duration: "forever",
-        count: 1,
-      }).success,
-    ).toBe(false);
-    expect(RedeemCodeRequestSchema.safeParse({ code: "QUOTA-AAAA-BBBB-CCCC-DDDD" }).success).toBe(
-      true,
-    );
-    const summary = accountSummary();
-    expect(
-      RedeemCodeResponseSchema.safeParse({
-        protocol_version: 2,
-        entitlement: { ...summary.entitlement, expires_at: null, will_renew: false },
-        granted: { duration: "lifetime", campaign: "beta" },
-      }).success,
-    ).toBe(true);
   });
 
   it("validates subscriptions and Usage as one normalized read summary", () => {
@@ -1498,16 +1412,6 @@ function accountSummary() {
     },
     pricing_revision: "pricing_2026_08_02",
     model_catalog_revision: "model_2026_08_02",
-    entitlement: {
-      status: "active" as const,
-      expires_at: "2026-09-12T00:00:00Z",
-      will_renew: true,
-      product_id: "quota_pro_monthly",
-      store: "app_store",
-      stale: false,
-      checked_at: "2026-09-05T00:00:00Z",
-    },
-    purchase: { web_url: "https://pay.rev.cat/token/account_01" },
   };
 }
 

@@ -114,7 +114,7 @@ struct SettingsModelTests {
         == "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
         + "and usage QuotaBar reports from your Macs."
     )
-    #expect(SettingsCopy.privacySentence == "This iPhone does not upload anything it reads.")
+    #expect(SettingsCopy.privacySentence == "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account.")
   }
 
   @Test func subscriptionsUseCatalogOrderMaskedLabelsAndDefaultThresholds() {

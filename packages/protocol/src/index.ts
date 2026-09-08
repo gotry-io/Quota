@@ -316,8 +316,7 @@ export type QuotaCollectionReport = z.infer<typeof QuotaCollectionReportSchema>;
  *
  * Both Apple clients register one: QuotaBar always, and Quota iOS when the phone presents an
  * installation of its own ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
- * What a Device may write is decided by the Account's entitlement at the write, not by which
- * platform it names.
+ * Every Device writes on the same terms; the platform it names decides nothing about that.
  */
 export const PlatformSchema = z.enum(["macos", "ios"]);
 export type Platform = z.infer<typeof PlatformSchema>;
@@ -393,45 +392,6 @@ const AccountIdentitySchema = z
   })
   .strict();
 export type AccountIdentity = z.infer<typeof AccountIdentitySchema>;
-export const EntitlementStatusSchema = z.enum(["active", "grace", "expired", "none"]);
-export type EntitlementStatus = z.infer<typeof EntitlementStatusSchema>;
-
-/**
- * The Quota Pro entitlement Relay last observed for this Account.
- *
- * `stale` is a read-time flag: the row could not be refreshed from RevenueCat and the
- * stored values are what Relay still has. `checked_at` is when the stored row last changed,
- * which is what makes a stale answer readable: it says how old the values beside it are, and
- * is null when there is no stored row at all. See
- * [ADR 0033](../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md).
- */
-export const EntitlementSchema = z
-  .object({
-    status: EntitlementStatusSchema,
-    expires_at: Rfc3339InstantSchema.nullable(),
-    will_renew: z.boolean(),
-    product_id: z.string().min(1).max(256).nullable(),
-    store: z.string().min(1).max(64).nullable(),
-    stale: z.boolean(),
-    checked_at: Rfc3339InstantSchema.nullable(),
-  })
-  .strict();
-export type Entitlement = z.infer<typeof EntitlementSchema>;
-
-const EntitlementReadSchema = EntitlementSchema.loose();
-
-/**
- * Where this Account buys Quota Pro.
- *
- * Both Account reads carry it, because the entitlement and the way to change it are one
- * answer: a client that has read either can say what Pro costs it without a second request.
- */
-export const PurchaseSchema = z
-  .object({
-    web_url: z.string().url().max(2_048),
-  })
-  .strict();
-export type Purchase = z.infer<typeof PurchaseSchema>;
 
 export const AccountResponseSchema = z
   .object({
@@ -442,72 +402,9 @@ export const AccountResponseSchema = z
      * an Account always keeps at least one way to sign in to it.
      */
     identities: z.array(AccountIdentitySchema).min(1).max(IDENTITY_PROVIDERS.length),
-    entitlement: EntitlementSchema,
-    purchase: PurchaseSchema,
   })
   .strict();
 export type AccountResponse = z.infer<typeof AccountResponseSchema>;
-
-/**
- * How long a redemption code grants Quota Pro, as RevenueCat names a promotional entitlement.
- *
- * Lifetime is `expires_at: null` on the entitlement row, not a store product
- * ([ADR 0047](../../docs/decisions/0047-quota-pro-is-one-product-and-a-code-is-a-grant.md)).
- */
-export const REDEMPTION_GRANT_DURATIONS = [
-  "weekly",
-  "monthly",
-  "two_month",
-  "three_month",
-  "six_month",
-  "yearly",
-  "lifetime",
-] as const;
-export const RedemptionGrantDurationSchema = z.enum(REDEMPTION_GRANT_DURATIONS);
-export type RedemptionGrantDuration = z.infer<typeof RedemptionGrantDurationSchema>;
-
-export const IssueRedemptionCodesRequestSchema = z
-  .object({
-    campaign: z.string().min(1).max(64),
-    duration: RedemptionGrantDurationSchema,
-    count: z.number().int().min(1).max(500),
-    max_redemptions: z.number().int().min(1).default(1),
-    expires_at: Rfc3339InstantSchema.optional(),
-    note: z.string().min(1).max(200).optional(),
-  })
-  .strict();
-export type IssueRedemptionCodesRequest = z.infer<typeof IssueRedemptionCodesRequestSchema>;
-
-export const IssueRedemptionCodesResponseSchema = z
-  .object({
-    codes: z.array(z.string().min(1).max(32)).min(1).max(500),
-    campaign: z.string().min(1).max(64),
-    duration: RedemptionGrantDurationSchema,
-    expires_at: Rfc3339InstantSchema.nullable(),
-  })
-  .strict();
-export type IssueRedemptionCodesResponse = z.infer<typeof IssueRedemptionCodesResponseSchema>;
-
-export const RedeemCodeRequestSchema = z
-  .object({
-    code: z.string().min(1).max(64),
-  })
-  .strict();
-export type RedeemCodeRequest = z.infer<typeof RedeemCodeRequestSchema>;
-
-export const RedeemCodeResponseSchema = z
-  .object({
-    protocol_version: z.literal(PROTOCOL_VERSION),
-    entitlement: EntitlementSchema,
-    granted: z
-      .object({
-        duration: RedemptionGrantDurationSchema,
-        campaign: z.string().min(1).max(64),
-      })
-      .strict(),
-  })
-  .strict();
-export type RedeemCodeResponse = z.infer<typeof RedeemCodeResponseSchema>;
 
 /**
  * Atlassian Statuspage v2 `status.indicator`, plus `unknown` when Relay has no last reading.
@@ -1580,8 +1477,6 @@ export const AccountSummarySchema = z
     usage: AccountUsageSchema,
     pricing_revision: OpaqueIdSchema,
     model_catalog_revision: OpaqueIdSchema,
-    entitlement: EntitlementSchema,
-    purchase: PurchaseSchema,
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
@@ -2010,8 +1905,6 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   devices: z.array(AccountDeviceReadSchema).max(256),
   subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
   usage: AccountUsageReadSchema,
-  entitlement: EntitlementReadSchema,
-  purchase: PurchaseSchema.loose(),
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
@@ -2167,12 +2060,6 @@ const RelayErrorCodeSchema = z.enum([
   "device_deleted",
   "client_upgrade_required",
   "conflict",
-  "subscription_required",
-  "code_invalid",
-  "code_expired",
-  "code_already_redeemed",
-  "code_exhausted",
-  "billing_unavailable",
   "internal_error",
 ]);
 export type RelayErrorCode = z.infer<typeof RelayErrorCodeSchema>;
