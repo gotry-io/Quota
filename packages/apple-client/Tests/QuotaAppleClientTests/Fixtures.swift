@@ -155,16 +155,6 @@ enum Fixtures {
           ["provider": "github", "label": "octocat", "linked_at": "2026-01-04T12:00:00Z"],
           ["provider": "apple", "label": NSNull(), "linked_at": "2026-02-04T12:00:00Z"],
         ],
-      "entitlement": [
-        "status": "none",
-        "expires_at": NSNull(),
-        "will_renew": false,
-        "product_id": NSNull(),
-        "store": NSNull(),
-        "stale": false,
-        "checked_at": NSNull(),
-      ],
-      "purchase": ["web_url": "https://pay.rev.cat/testtoken/account_01"],
     ]
     for (key, value) in extraRoot {
       object[key] = value
@@ -188,8 +178,7 @@ enum Fixtures {
     extraRoot: [String: Any] = [:],
     usage: [String: Any]? = nil,
     subscriptions: [[String: Any]] = [],
-    devices: [[String: Any]] = [],
-    entitlement: [String: Any]? = nil
+    devices: [[String: Any]] = []
   ) throws -> Data {
     var object: [String: Any] = [
       "protocol_version": 6,
@@ -203,31 +192,11 @@ enum Fixtures {
       "usage": usage ?? accountUsage(),
       "pricing_revision": "pricing_1",
       "model_catalog_revision": "models_1",
-      "entitlement": entitlement ?? self.entitlement(),
     ]
     for (key, value) in extraRoot {
       object[key] = value
     }
     return try JSONSerialization.data(withJSONObject: object)
-  }
-
-  static func entitlement(
-    status: String = "active",
-    expiresAt: String? = "2026-09-14T12:00:00Z",
-    willRenew: Bool = true,
-    productID: String? = "quota_pro_monthly",
-    store: String? = "app_store",
-    stale: Bool = false
-  ) -> [String: Any] {
-    // `as Any?` keeps an explicit null in the object rather than dropping the key.
-    [
-      "status": status,
-      "expires_at": expiresAt as Any? ?? NSNull(),
-      "will_renew": willRenew,
-      "product_id": productID as Any? ?? NSNull(),
-      "store": store as Any? ?? NSNull(),
-      "stale": stale,
-    ]
   }
 
   static func quotaSubscription() -> [String: Any] {

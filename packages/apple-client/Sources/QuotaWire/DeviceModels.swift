@@ -67,9 +67,8 @@ public struct QuotaSnapshotUploadResponse: Decodable, Equatable, Sendable {
 
 /// The Device's own control document: what generation it is at, and what an upload must name.
 ///
-/// Reading it is the first half of an upload, and it is also where a phone is told sync is not
-/// paid for: the route answers 402 before it answers a generation
-/// ([ADR 0033](../../../../docs/decisions/0033-entitlement-is-read-from-revenuecat.md)).
+/// Reading it is the first half of an upload: the route answers the generation an envelope
+/// must name.
 public struct DeviceSyncResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int
   public let accountID: String

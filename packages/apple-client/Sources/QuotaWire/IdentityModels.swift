@@ -68,9 +68,9 @@ public struct AccountIdentity: Codable, Equatable, Sendable {
 
 /// The Account read that answers which channels reach this Account.
 ///
-/// `GET /api/v2/account` also carries the Account itself, its entitlement, and where paid sync is
-/// bought; this app already reads those from the Account summary, so this tolerant read takes the
-/// one thing only this route answers and ignores the rest
+/// `GET /api/v2/account` also carries the Account itself; this app already reads that from the
+/// Account summary, so this tolerant read takes the one thing only this route answers and
+/// ignores the rest
 /// ([ADR 0023](../../../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
 public struct AccountIdentitiesResponse: Decodable, Equatable, Sendable {
   public let protocolVersion: Int

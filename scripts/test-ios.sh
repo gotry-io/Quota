@@ -103,5 +103,5 @@ xcodebuild \
   -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
-  "${only_testing[@]}" \
+  ${only_testing[@]+"${only_testing[@]}"} \
   test

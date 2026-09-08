@@ -23,12 +23,6 @@ packages:
     path: ../../packages/apple-client
   QuotaAppleShared:
     path: ../../packages/apple-shared
-  RevenueCat:
-    # RevenueCat's SPM mirror. The main purchases-ios repository is a ~700 MB clone; this one
-    # carries the same package and tags in a fraction of it, and is what RevenueCat recommends
-    # for Swift Package Manager.
-    url: https://github.com/RevenueCat/purchases-ios-spm.git
-    exactVersion: 5.88.0
 targets:
   Quota:
     type: application
@@ -75,8 +69,6 @@ targets:
       - package: QuotaAppleShared
         product: QuotaAlerts
       - sdk: AuthenticationServices.framework
-      - package: RevenueCat
-        product: RevenueCat
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
       - sdk: WebKit.framework
@@ -88,7 +80,6 @@ targets:
       testTargets:
         - QuotaTests
         - QuotaUITests
-      storeKitConfiguration: Quota.storekit
   QuotaWidgets:
     type: app-extension
     platform: iOS
@@ -126,8 +117,6 @@ targets:
     platform: iOS
     sources:
       - Tests
-      - path: Quota.storekit
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.gotry.quota.tests
@@ -161,8 +150,6 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
-      - package: RevenueCat
-        product: RevenueCat
       - sdk: UserNotifications.framework
   QuotaUITests:
     type: bundle.ui-testing

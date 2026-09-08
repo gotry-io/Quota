@@ -102,10 +102,6 @@ enum QuotaWebLinks {
   static let website = URL(string: origin)!
   static let githubRepository = URL(string: "https://github.com/gotry-io/Quota")!
   static let privacy = URL(string: "\(origin)/privacy")!
-  static let terms = URL(string: "\(origin)/terms")!
-  /// The system's own subscription management, which is where an App Store subscription is
-  /// cancelled or changed. Quota does not reimplement it.
-  static let appleSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
   static let support = URL(string: "\(origin)/support")!
   static let manageDevices = URL(string: "\(origin)/my/devices")!
   static let deleteAccountReturnTo = "/my/settings?delete=account"

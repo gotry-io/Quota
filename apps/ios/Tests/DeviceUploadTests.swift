@@ -8,8 +8,8 @@ import Testing
 
 @testable import Quota
 
-/// This phone as a Device: what it presents when it signs in, what it sends afterwards, and
-/// where paid sync stops it ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+/// This phone as a Device: what it presents when it signs in, and what it sends afterwards
+/// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 @MainActor
 struct DeviceUploadTests {
   @Test
@@ -40,7 +40,7 @@ struct DeviceUploadTests {
   }
 
   @Test
-  func aPaidDeviceUploadsWhatThisPhoneRead() async throws {
+  func aDeviceUploadsWhatThisPhoneRead() async throws {
     let transport = RecordingHTTPTransport([
       .init(status: 200, body: try Fixtures.accountSummaryJSON()),
       .init(status: 200, body: try deviceSyncJSON(generation: 4)),
@@ -65,39 +65,6 @@ struct DeviceUploadTests {
     #expect(snapshots.count == 1)
     #expect(snapshots[0]["provider"] as? String == "codex")
     #expect(snapshots[0]["observed_at"] != nil)
-    #expect(model.isSyncOn)
-  }
-
-  @Test
-  func aRefusedUploadStopsAtTheControlDocumentAndSaysSyncIsOff() async throws {
-    let transport = RecordingHTTPTransport([
-      .init(
-        status: 200,
-        body: try Fixtures.accountSummaryJSON(
-          entitlement: Fixtures.entitlement(status: "expired")
-        )
-      ),
-      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
-      .init(status: 402, body: subscriptionRequiredJSON()),
-    ])
-    let model = collectingModel(transport: transport, deviceID: "device_phone")
-
-    // An Account whose entitlement has expired is not asked to accept a write at all.
-    await model.restore()
-    #expect(transport.requests.map(\.path) == ["/api/v6/account/summary"])
-    #expect(!model.isSyncOn)
-    #expect(model.syncBanner == ProCopy.offBanner)
-
-    // An Account whose summary says sync is on, refused at the boundary, says so too, and
-    // sends no reading after the refusal.
-    await model.refresh()
-    #expect(transport.requests.map(\.path) == [
-      "/api/v6/account/summary",
-      "/api/v6/account/summary",
-      "/api/v2/device/sync",
-    ])
-    #expect(!model.isSyncOn)
-    #expect(model.syncBanner == ProCopy.offBanner)
   }
 
   @Test
@@ -345,12 +312,4 @@ private func uploadResponseJSON(generation: Int) throws -> Data {
     "accepted": ["codex"],
     "ignored": [],
   ])
-}
-
-private func subscriptionRequiredJSON() -> Data {
-  Data(
-    """
-    {"error":{"code":"subscription_required","message":"Sync is off."}}
-    """.utf8
-  )
 }
