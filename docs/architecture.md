@@ -508,3 +508,11 @@ decision is [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification; production Web and Worker deploy together
 only through `.github/workflows/deploy-cloudflare.yml`.
+
+The same Relay source also deploys as a Node process over a local SQLite file
+([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Everything that differs between the two
+runtimes lives in `apps/relay/src/platform/` — the database, the built website's files, the
+last-reading cache, the migration runner, and the caller's address — and in the two entry points,
+`src/cloudflare.ts` and `src/node.ts`; request handling itself is shared and uses only what both
+runtimes offer. The state classes take `RelayDatabase`, which is D1's own `prepare`/`bind`/`batch`
+shape, so their SQL and the migration ladder are the same on either. Both are exercised in CI.

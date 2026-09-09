@@ -8,6 +8,7 @@ import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { WebDocumentPort } from "../../web/src/lib/server/document-port.ts";
 import worker, { type CloudflareBindings } from "../src/cloudflare.ts";
+import { WorkersStaticFiles } from "../src/platform/static-files.ts";
 import { respondWithWebDocument } from "../src/web-document.ts";
 
 declare module "vitest" {
@@ -170,7 +171,7 @@ async function renderDocument(path: string, document: WebDocumentPort): Promise<
   const context = createExecutionContext();
   const response = await respondWithWebDocument(
     new Request(`https://quota.gotry.io${path}`),
-    env,
+    new WorkersStaticFiles(env.ASSETS),
     context,
     { document },
   );

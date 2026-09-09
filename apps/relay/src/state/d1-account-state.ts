@@ -47,6 +47,7 @@ import type {
   StoredQuotaSnapshot,
   UnlinkIdentityOutcome,
 } from "@gotry-io/relay-core";
+import type { RelayDatabase, RelayResult, RelayStatement } from "../platform/database.ts";
 import {
   decodeSessionScopes,
   DEVICE_SESSION_SCOPES,
@@ -101,7 +102,7 @@ function snapshotWriteIsAccepted(
 }
 
 export class D1AccountState implements AccountState {
-  constructor(private readonly database: D1Database) {}
+  constructor(private readonly database: RelayDatabase) {}
 
   async ping(): Promise<void> {
     await this.database.prepare("SELECT 1 AS ready").first();
@@ -294,7 +295,7 @@ export class D1AccountState implements AccountState {
    */
   async consumeLoginGrant(input: ConsumeLoginGrantInput): Promise<LoginGrantConsumeResult> {
     const scopes = encodeScopes(DEVICE_SESSION_SCOPES);
-    let results: D1Result<unknown>[];
+    let results: RelayResult<unknown>[];
     try {
       results = await this.database.batch([
         this.database
@@ -454,7 +455,7 @@ export class D1AccountState implements AccountState {
     input: ConsumeAccountLoginGrantInput,
   ): Promise<AccountLoginGrantConsumeResult> {
     const scopes = encodeScopes(READER_SESSION_SCOPES);
-    let results: D1Result<unknown>[];
+    let results: RelayResult<unknown>[];
     try {
       results = await this.database.batch([
         this.database
@@ -1396,7 +1397,7 @@ export class D1AccountState implements AccountState {
 
     const accepted = new Set<ProviderId>();
     const ignored = new Set<ProviderId>();
-    const statements: D1PreparedStatement[] = [];
+    const statements: RelayStatement[] = [];
     for (const snapshot of envelope.snapshots) {
       const key = `${snapshot.provider}\u0000${snapshot.account.fingerprint}`;
       const current = observed.get(key);
@@ -1650,15 +1651,15 @@ function sessionClientKind(value: string): SessionClientKind {
   return value;
 }
 
-function resultChanged(result: D1Result<unknown> | undefined): boolean {
+function resultChanged(result: RelayResult<unknown> | undefined): boolean {
   return (result?.meta.changes ?? 0) === 1;
 }
 
-function resultRow<T>(result: D1Result<unknown> | undefined): T | null {
+function resultRow<T>(result: RelayResult<unknown> | undefined): T | null {
   return (result?.results[0] as T | undefined) ?? null;
 }
 
-function displayLabelRow(result: D1Result<unknown> | undefined): string | null {
+function displayLabelRow(result: RelayResult<unknown> | undefined): string | null {
   const label = resultRow<{ display_label: string | null }>(result)?.display_label;
   return typeof label === "string" && label.length > 0 ? label : null;
 }

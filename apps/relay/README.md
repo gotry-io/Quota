@@ -4,7 +4,8 @@ QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
 `https://quota.gotry.io`. It serves v2 GitHub account, native-client OAuth, Device control, and
 public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
-There is no self-hosted or SQLite runtime.
+The same source also runs as a Node process over a local SQLite file — see **Running on Node**
+below and [ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md).
 
 QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
 that speaks an older version is refused rather than translated; see
@@ -175,6 +176,41 @@ rendered page states the policy itself: `apps/web/svelte.config.js` declares the
 SvelteKit stamps each response with the nonce its bootstrap script and the theme script in
 `app.html` claim, so nothing is hashed ahead of time. Responses SvelteKit does not render carry the
 same policy without a nonce.
+
+## Running on Node
+
+The Worker and the Node process are one source tree: everything that differs between them lives in
+[`src/platform/`](./src/platform) and in the two entry points, `src/cloudflare.ts` and
+`src/node.ts` ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+
+```bash
+pnpm --filter @gotry-io/quota-web build      # the client files the Node process serves
+pnpm --filter @gotry-io/quota-relay build:node
+pnpm --filter @gotry-io/quota-relay start:node
+```
+
+`build:node` bundles `src/node.ts` to `dist/node/server.mjs` with esbuild, leaving
+`better-sqlite3` external because it is a native module; `start:node` runs it. The process applies
+every pending migration from `migrations/` before it listens, writing the same `d1_migrations`
+ledger wrangler writes, so a database exported from D1 imports as already migrated. `SIGTERM`
+stops the listener and closes the database.
+
+It reads the same secrets the Worker does, from the environment, plus three of its own:
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `RELAY_SQLITE_PATH` | `/data/relay.sqlite` | The SQLite file. WAL, foreign keys on. |
+| `RELAY_STATIC_DIR` | `apps/web/.svelte-kit/output/client` | The built website's client files. |
+| `PORT` | `8787` | The port to listen on. |
+
+Each keyed secret must still contain at least 32 random characters. A missing value, or a
+`QUOTA_SESSION_HASH_KEY` too short to hash with, refuses to start rather than answering every
+request with a 500.
+
+Nothing terminates TLS or states the caller's address for it, so run it behind something that
+does: `CF-Connecting-IP` is read first, then the first `X-Forwarded-For` hop, then the connection's
+own address. `caches.default` has no equivalent here, so the last-good provider status readings
+live in the process and a restart re-polls them.
 
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
