@@ -212,6 +212,13 @@ does: `CF-Connecting-IP` is read first, then the first `X-Forwarded-For` hop, th
 own address. `caches.default` has no equivalent here, so the last-good provider status readings
 live in the process and a restart re-polls them.
 
+## Docker
+
+The Node image, Compose stack (Relay, Cloudflare Tunnel, daily SQLite backup), D1 export/import,
+and the Worker ↔ Docker cutover and rollback are in
+[the self-host runbook](../../docs/relay-self-host.md). The Docker cutover is an owner action
+described there.
+
 Production migration and deployment remain workflow-owned and must not be run manually without
 explicit authorization.
 
