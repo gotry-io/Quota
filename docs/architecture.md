@@ -27,8 +27,9 @@ links to it rather than restating it.
   answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
   ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
-  quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs only as
-  a Cloudflare Worker backed by D1.
+  quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
+  Cloudflare Worker backed by D1, and the same process can run as a Node server with local SQLite
+  ([ADR 0049](decisions/0049-one-relay-two-runtimes.md), [self-host runbook](relay-self-host.md)).
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Worker
   as a separate SvelteKit application and source boundary.
 
@@ -44,7 +45,9 @@ and its owner-only configuration and state live under `~/.config/quota/`.
 An Account owns the channels it is reached through — GitHub today, with Apple and Email registering
 against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the
 managed origin is fixed at `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
-document, self-hosted process, SQLite Relay adapter, or protocol v1 route. The decision records
+document, or protocol v1 route. Self-hosting is that same process on Node and SQLite, not a second
+product ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
+[self-host runbook](relay-self-host.md)). The decision records
 behind each area are indexed by [`AGENTS.md`](../AGENTS.md) and linked where they apply below.
 
 ## Local runtime and IPC
@@ -508,3 +511,14 @@ decision is [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
 use Wrangler dry-run and local D1 migration verification; production Web and Worker deploy together
 only through `.github/workflows/deploy-cloudflare.yml`.
+
+The same Relay source also deploys as a Node process over a local SQLite file
+([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Everything that differs between the two
+runtimes lives in `apps/relay/src/platform/` — the database, the built website's files, the
+last-reading cache, the migration runner, and the caller's address — and in the two entry points,
+`src/cloudflare.ts` and `src/node.ts`; request handling itself is shared and uses only what both
+runtimes offer. The state classes take `RelayDatabase`, which is D1's own `prepare`/`bind`/`batch`
+shape, so their SQL and the migration ladder are the same on either. Both are exercised in CI.
+The Node image is published from `.github/workflows/release-relay-image.yml`, and the cutover
+runbook is [`relay-self-host.md`](relay-self-host.md). Cloudflare stays a supported production
+path — choosing Docker is an operations switch, not a product migration.

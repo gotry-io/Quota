@@ -1,0 +1,64 @@
+name: release-relay-image
+
+# On main, a change under the Relay image inputs builds linux/amd64 and
+# linux/arm64 and does not push. A relay-v* tag builds the same platforms and
+# pushes ghcr.io/gotry-io/quota-relay:<version> and :latest.
+on:
+  push:
+    branches: [main]
+    tags: ["relay-v*"]
+    paths:
+      - "apps/relay/**"
+      - "apps/web/**"
+      - "packages/**"
+      - "deploy/relay/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release-relay-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: relay-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref_type != 'tag' }}
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/gotry-io/quota-relay
+          tags: |
+            type=match,pattern=relay-v(.*),group=1
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=local,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/relay/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.ref_type == 'tag' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

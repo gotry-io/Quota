@@ -1,0 +1,58 @@
+name: quota-relay
+
+services:
+  relay:
+    image: ghcr.io/gotry-io/quota-relay:latest
+    restart: unless-stopped
+    env_file: relay.env
+    environment:
+      PORT: "8787"
+      RELAY_SQLITE_PATH: /data/relay.sqlite
+      RELAY_STATIC_DIR: apps/web/.svelte-kit/output/client
+    volumes:
+      - relay-data:/data
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||'8787')+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared
+    restart: unless-stopped
+    command: tunnel run --token ${TUNNEL_TOKEN}
+    depends_on:
+      relay:
+        condition: service_healthy
+
+  backup:
+    image: alpine:3.21
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      RELAY_SQLITE_PATH: /data/relay.sqlite
+      RELAY_BACKUP_DIR: /backups
+      RELAY_BACKUP_KEEP: "14"
+    volumes:
+      - relay-data:/data
+      - relay-backups:/backups
+      - ../../scripts/relay-sqlite-backup.sh:/usr/local/bin/relay-sqlite-backup.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        apk add --no-cache sqlite tzdata
+        exec /usr/local/bin/relay-sqlite-backup.sh --loop
+
+volumes:
+  relay-data:
+  relay-backups:

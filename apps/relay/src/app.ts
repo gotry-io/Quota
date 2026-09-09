@@ -101,6 +101,8 @@ import {
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
 import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
+import { clientAddress } from "./platform/client-address.ts";
+import { type LastReadingCache, MemoryReadingCache } from "./platform/reading-cache.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
 import { LEADERBOARD_MAX_AGE_SECONDS, readLeaderboard } from "./leaderboard.ts";
 import { readProviderStatus } from "./provider-status.ts";
@@ -214,8 +216,8 @@ export interface RelayAppOptions {
   usageFoldVersion?: number;
   /** Test override for official status-page fetches. Production uses global `fetch`. */
   providerStatusFetch?: typeof fetch;
-  /** Test override for last-good status-page readings. Production uses `caches.default`. */
-  providerStatusCache?: Cache;
+  /** Where the last-good status-page readings live. Each entry point supplies its platform's. */
+  providerStatusCache?: LastReadingCache;
 }
 
 export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInput {
@@ -237,6 +239,14 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
   };
 }
 
+/**
+ * The hour's maintenance, which is one call in both runtimes: the Workers cron trigger and the
+ * Node timer run this same pass ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ */
+export async function runHourlyMaintenance(state: AccountState, now: Date): Promise<void> {
+  await state.performMaintenance(accountMaintenanceInput(now));
+}
+
 function daysBefore(instant: Date, days: number): Date {
   return new Date(instant.getTime() - days * dayMilliseconds);
 }
@@ -252,6 +262,9 @@ function nextUtcDate(date: string): string {
 export function createRelayApp(options: RelayAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
+  // An in-process cache is the answer that needs no platform: an entry point that has a shared
+  // one — the Workers colo cache — hands it over instead.
+  const statusCache = options.providerStatusCache ?? new MemoryReadingCache();
   // Checked-in defaults are schema-constructed by their source modules and semantic-validation
   // tested, so app construction skips the pricing validator's pairwise scan. Costing validates
   // the catalog it is handed, but memoizes by identity, so this one object is scanned at most
@@ -1362,7 +1375,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
    *
    * Catalog rows with `status_page.kind = statuspage_v2` are polled for `status.indicator` and
    * `status.description` only. The request carries no credential and names no Account. A failed
-   * poll keeps the last reading in `caches.default`, or answers `unknown`.
+   * poll keeps the last reading in the deployment's reading cache, or answers `unknown`.
    */
   app.get("/api/v2/providers/status", async (context) => {
     if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
@@ -1380,7 +1393,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const body = ProviderStatusResponseSchema.parse(
       await readProviderStatus({
         fetch: options.providerStatusFetch ?? globalThis.fetch,
-        cache: options.providerStatusCache ?? workerCaches().default,
+        cache: statusCache,
         now: checkedAt,
       }),
     );
@@ -1951,11 +1964,6 @@ function hasOnlyQueryKeys(context: Context, allowed: readonly string[]): boolean
   return hasOnlyKeys(new URL(context.req.url).searchParams, allowed);
 }
 
-/** Workers `caches.default`. The DOM CacheStorage type this check also loads has no such field. */
-function workerCaches(): { default: Cache } {
-  return caches as unknown as { default: Cache };
-}
-
 /** Each key at most once, and every key one this route names. */
 function hasOnlyKeys(parameters: URLSearchParams, allowed: readonly string[]): boolean {
   const keys = [...parameters.keys()];
@@ -1963,7 +1971,7 @@ function hasOnlyKeys(parameters: URLSearchParams, allowed: readonly string[]): b
 }
 
 function anonymousClientSubject(context: Context): string {
-  return context.req.header("CF-Connecting-IP") ?? "managed-global";
+  return clientAddress(context.req.raw.headers) ?? "managed-global";
 }
 
 function requestBodyTooLarge(context: Context): Response {

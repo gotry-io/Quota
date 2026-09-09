@@ -14,15 +14,21 @@
     "d1:migrate:local": "wrangler d1 migrations apply quota --local",
     "d1:migrate:remote": "wrangler d1 migrations apply quota --remote",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "build:node": "esbuild src/node.ts --bundle --platform=node --format=esm --target=node24 --external:better-sqlite3 --alias:quota-sveltekit-server=../web/.svelte-kit/output/server/quota-sveltekit-server.js --outfile=dist/node/server.mjs",
+    "start:node": "node dist/node/server.mjs"
   },
   "dependencies": {
     "@gotry-io/quota-model": "workspace:*",
     "@gotry-io/quota-protocol": "workspace:*",
     "@gotry-io/relay-core": "workspace:*",
+    "@hono/node-server": "2.1.1",
+    "better-sqlite3": "13.0.3",
     "hono": "4.12.33"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.20.3"
+    "@cloudflare/vitest-pool-workers": "0.20.3",
+    "@types/better-sqlite3": "9.6.0",
+    "esbuild": "0.28.2"
   }
 }
