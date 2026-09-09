@@ -1,7 +1,5 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { type LeaderboardResponse, MODEL_CATALOG } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { createRelayApp } from "../src/app.ts";
@@ -10,20 +8,10 @@ import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub, signedOutWebSessions } from "./web-session-stub.ts";
+import type { RelayDatabase, RelayStatement } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-09-06T12:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -33,14 +21,11 @@ const webRequest = {
 };
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
   // The board is one answer over every listed profile at once, so each case needs the store to
   // hold only what it published. Deleting the Accounts takes their devices, rollup rows, and
   // profiles with them.
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM usage_daily"),
-    env.DB.prepare("DELETE FROM accounts"),
-  ]);
+  await db.batch([db.prepare("DELETE FROM usage_daily"), db.prepare("DELETE FROM accounts")]);
 });
 
 describe("the board a listed page appears on", () => {
@@ -142,8 +127,8 @@ describe("the board a listed page appears on", () => {
 function portFor(webSessions: Parameters<typeof createWebDocumentPort>[0]["webSessions"]) {
   return createWebDocumentPort({
     webSessions,
-    state: new D1AccountState(env.DB),
-    usageState: new D1UsageState(env.DB),
+    state: new D1AccountState(db),
+    usageState: new D1UsageState(db),
     catalog: PRICING_CATALOG,
     modelCatalog: MODEL_CATALOG,
     now: () => now,
@@ -162,18 +147,22 @@ async function publish(
   options: ProfileOptions,
   dates: readonly string[],
 ): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO accounts (id, display_label, created_at, updated_at)
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO accounts (id, display_label, created_at, updated_at)
        VALUES ('account_${name}', 'Quota Tester', ?1, ?1)`,
-    ).bind(now.toISOString()),
-    env.DB.prepare(
-      `INSERT INTO devices (
+      )
+      .bind(now.toISOString()),
+    db
+      .prepare(
+        `INSERT INTO devices (
          id, account_id, installation_id_hash, generation, created_at, last_login_at
        ) VALUES ('device_${name}', 'account_${name}', 'installation_${name}', 1, ?1, ?1)`,
-    ).bind(now.toISOString()),
+      )
+      .bind(now.toISOString()),
   ]);
-  await env.DB.batch(dates.map((date) => dailyRow(name, date)));
+  await db.batch(dates.map((date) => dailyRow(name, date)));
   expect((await put(appFor(`account_${name}`), handle, options)).status).toBe(200);
 }
 
@@ -194,9 +183,10 @@ function put(app: ReturnType<typeof createRelayApp>, handle: string, options: Pr
   });
 }
 
-function dailyRow(name: string, date: string): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_daily (
+function dailyRow(name: string, date: string): RelayStatement {
+  return db
+    .prepare(
+      `INSERT INTO usage_daily (
        device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
        service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
        cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
@@ -207,10 +197,11 @@ function dailyRow(name: string, date: string): D1PreparedStatement {
        'le_128k', 'unknown', 'unknown', 'unknown', 10, 0,
        0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
      )`,
-  ).bind(date);
+    )
+    .bind(date);
 }
 
-function appFor(accountId: string, database: D1Database = env.DB) {
+function appFor(accountId: string, database: RelayDatabase = db) {
   const state = new D1AccountState(database);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
@@ -223,8 +214,8 @@ function appFor(accountId: string, database: D1Database = env.DB) {
   });
 }
 
-function recordingD1(statements: string[]): D1Database {
-  return new Proxy(env.DB, {
+function recordingD1(statements: string[]): RelayDatabase {
+  return new Proxy(db, {
     get(target, property, receiver) {
       if (property === "prepare") {
         return (sql: string) => {

@@ -1,6 +1,4 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { describe, expect, inject, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import {
@@ -12,13 +10,8 @@ import {
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { testDatabase } from "./support/database.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
 
 const now = new Date("2026-09-06T12:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -121,12 +114,12 @@ describe("provider status pages", () => {
   });
 
   it("answers GET /api/v2/providers/status with no session", async () => {
-    await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
-    const state = new D1AccountState(env.DB);
+    const db = await testDatabase();
+    const state = new D1AccountState(db);
     const hasher = new SecretHasher(secret);
     const app = createRelayApp({
       state,
-      usageState: new D1UsageState(env.DB),
+      usageState: new D1UsageState(db),
       accountService: new AccountService(state, hasher, secret),
       webSessions: new SignedInWebSessionStub("account_status", now),
       hasher,

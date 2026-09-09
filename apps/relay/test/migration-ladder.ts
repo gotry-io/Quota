@@ -1,5 +1,3 @@
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-
 /**
  * Where the ladder stops for a migration that has to preserve what it carries.
  *
@@ -10,7 +8,10 @@ import type { D1Migration } from "@cloudflare/vitest-pool-workers";
  */
 const ACCOUNT_IDENTITIES_MIGRATION = "0025_account_identities.sql";
 
-export function ladderThroughCutover(migrations: D1Migration[], from: number): D1Migration[] {
+export function ladderThroughCutover<T extends { name: string }>(
+  migrations: T[],
+  from: number,
+): T[] {
   const cutover = migrations.findIndex((migration) =>
     migration.name.endsWith(ACCOUNT_IDENTITIES_MIGRATION),
   );

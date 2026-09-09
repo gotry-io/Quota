@@ -20,6 +20,9 @@ export default defineConfig({
             wrangler: { configPath: "./wrangler.jsonc" },
           }),
         ],
+        define: {
+          "import.meta.env.RELAY_TEST_DRIVER": JSON.stringify("d1"),
+        },
         resolve: {
           alias: {
             "quota-sveltekit-server": fileURLToPath(

@@ -1,28 +1,28 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { describe, expect, inject, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { RelayDatabase } from "../src/platform/database.ts";
 import { ladderThroughCutover } from "./migration-ladder.ts";
+import { applyTestMigrations, testDatabase, testMigrations } from "./support/database.ts";
 
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const ZERO_USAGE_MIGRATION = "0011_drop_zero_usage_facts.sql";
 
 async function seedZeroUsageFacts(): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO accounts(id, identity_subject, created_at, updated_at)
+  await db
+    .prepare(
+      `INSERT INTO accounts(id, identity_subject, created_at, updated_at)
      VALUES ('account-1', 'subject-hash-1', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
-  ).run();
-  await env.DB.prepare(
-    `INSERT INTO devices(id, account_id, installation_id_hash, created_at, last_login_at)
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO devices(id, account_id, installation_id_hash, created_at, last_login_at)
      VALUES ('device-1', 'account-1', 'installation-hash-1', '2026-08-01T00:00:00Z',
              '2026-08-01T00:00:00Z')`,
-  ).run();
+    )
+    .run();
   // Only the columns a case varies are bound; the rest describe one fixed hour.
-  const insert = env.DB.prepare(
+  const insert = db.prepare(
     `INSERT INTO usage_hourly(
        device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
        agent, billing_channel, channel_source, model, context_bucket,
@@ -38,7 +38,7 @@ async function seedZeroUsageFacts(): Promise<void> {
        ?3, 0, 0, 0, 0, ?4, 0, 2, ?5, 0, ?6, 0
      )`,
   );
-  await env.DB.batch([
+  await db.batch([
     // The legacy fact this migration exists to remove.
     insert.bind("anthropic_direct", "synthetic", 0, 0, 0, null),
     insert.bind("anthropic_direct", "claude-opus-5", 1_000, 500, 0, null),
@@ -51,23 +51,23 @@ async function seedZeroUsageFacts(): Promise<void> {
 
 describe("0011 zero-usage fact cleanup", () => {
   it("removes only facts with no tokens, tool requests, or source cost", async () => {
-    const migrations = inject("TEST_MIGRATIONS");
+    const migrations = await testMigrations();
     const cleanupIndex = migrations.findIndex((migration) =>
       migration.name.endsWith(ZERO_USAGE_MIGRATION),
     );
     expect(cleanupIndex).toBeGreaterThan(0);
 
-    await applyD1Migrations(env.DB, migrations.slice(0, cleanupIndex));
+    db = await testDatabase(migrations.slice(0, cleanupIndex));
     await seedZeroUsageFacts();
     expect(
-      await env.DB.prepare("SELECT count(*) AS total FROM usage_hourly").first<{ total: number }>(),
+      await db.prepare("SELECT count(*) AS total FROM usage_hourly").first<{ total: number }>(),
     ).toMatchObject({ total: 4 });
 
-    await applyD1Migrations(env.DB, ladderThroughCutover(migrations, cleanupIndex));
+    await applyTestMigrations(db, ladderThroughCutover(migrations, cleanupIndex));
 
-    const remaining = await env.DB.prepare(
-      "SELECT model, billing_channel FROM usage_hourly ORDER BY model, billing_channel",
-    ).all<{ model: string; billing_channel: string }>();
+    const remaining = await db
+      .prepare("SELECT model, billing_channel FROM usage_hourly ORDER BY model, billing_channel")
+      .all<{ model: string; billing_channel: string }>();
     expect(remaining.results).toEqual([
       { model: "claude-opus-5", billing_channel: "anthropic_direct" },
       { model: "claude-opus-5", billing_channel: "unknown" },

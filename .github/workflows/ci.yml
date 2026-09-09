@@ -50,6 +50,12 @@ jobs:
       - name: Build the Relay Worker and website
         run: pnpm --filter @gotry-io/quota-relay build
 
+      - name: Run Relay tests on Node/SQLite
+        run: |
+          set -euo pipefail
+          pnpm --filter @gotry-io/quota-relay test:node
+          pnpm --filter @gotry-io/quota-relay test:node:integration
+
   verify-web-e2e:
     runs-on: ubuntu-24.04
     steps:

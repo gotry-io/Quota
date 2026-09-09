@@ -1,6 +1,4 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { beforeEach, describe, expect, inject, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeEmailAddress } from "../src/account/email-identity.ts";
 import { ResendEmailSender } from "../src/account/email-sender.ts";
 import { GitHubIdentityProvider } from "../src/account/github-identity.ts";
@@ -11,39 +9,29 @@ import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { hmacSha256Hex, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-08-10T00:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const origin = "https://quota.gotry.io";
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM usage_daily"),
-    env.DB.prepare("DELETE FROM usage_hourly"),
-    env.DB.prepare("DELETE FROM usage_hour_scans"),
-    env.DB.prepare("DELETE FROM quota_snapshots"),
-    env.DB.prepare("DELETE FROM sessions"),
-    env.DB.prepare("DELETE FROM login_grants"),
-    env.DB.prepare("DELETE FROM devices"),
-    env.DB.prepare("DELETE FROM account_identities"),
-    env.DB.prepare("DELETE FROM accounts"),
-    env.DB.prepare("DELETE FROM rate_limit_counters"),
-    env.DB.prepare("DELETE FROM email_challenges"),
+  db = await testDatabase();
+  await db.batch([
+    db.prepare("DELETE FROM usage_daily"),
+    db.prepare("DELETE FROM usage_hourly"),
+    db.prepare("DELETE FROM usage_hour_scans"),
+    db.prepare("DELETE FROM quota_snapshots"),
+    db.prepare("DELETE FROM sessions"),
+    db.prepare("DELETE FROM login_grants"),
+    db.prepare("DELETE FROM devices"),
+    db.prepare("DELETE FROM account_identities"),
+    db.prepare("DELETE FROM accounts"),
+    db.prepare("DELETE FROM rate_limit_counters"),
+    db.prepare("DELETE FROM email_challenges"),
   ]);
 });
 
@@ -88,15 +76,17 @@ describe("browser sign-in through email", () => {
       `${origin}/api/auth/email/verify?token=${encodeURIComponent(token)}`,
     );
 
-    const stored = await env.DB.prepare(
-      "SELECT email_hash, token_hash, intent_json, return_to, consumed_at FROM email_challenges",
-    ).first<{
-      email_hash: string;
-      token_hash: string;
-      intent_json: string;
-      return_to: string;
-      consumed_at: string | null;
-    }>();
+    const stored = await db
+      .prepare(
+        "SELECT email_hash, token_hash, intent_json, return_to, consumed_at FROM email_challenges",
+      )
+      .first<{
+        email_hash: string;
+        token_hash: string;
+        intent_json: string;
+        return_to: string;
+        consumed_at: string | null;
+      }>();
     expect(stored?.email_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(stored?.token_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(stored?.intent_json).toBe('{"kind":"sign_in"}');
@@ -116,9 +106,9 @@ describe("browser sign-in through email", () => {
     expect(session?.attributes).toContain("Secure");
     expect(session?.attributes).toContain("SameSite=Lax");
 
-    const identity = await env.DB.prepare(
-      "SELECT provider, label, subject FROM account_identities",
-    ).first<{ provider: string; label: string; subject: string }>();
+    const identity = await db
+      .prepare("SELECT provider, label, subject FROM account_identities")
+      .first<{ provider: string; label: string; subject: string }>();
     expect(identity).toMatchObject({ provider: "email", label: "person@example.test" });
     expect(identity?.subject).toBe(await hmacSha256Hex(secret, "email:person@example.test"));
     expect(identity?.subject).not.toContain("person@example.test");
@@ -263,7 +253,7 @@ describe("browser sign-in through email", () => {
     );
     expect(verified.status).toBe(302);
     expect(setCookies(verified).get("__Host-quota_session")).toBeUndefined();
-    const accountId = String(await env.DB.prepare("SELECT id FROM accounts").first("id"));
+    const accountId = String(await db.prepare("SELECT id FROM accounts").first("id"));
     expect(await identityProviders(accountId)).toEqual(["email", "github"]);
 
     await seedEmailAccount("account_taken", "taken@example.test");
@@ -326,17 +316,18 @@ describe("browser sign-in through email", () => {
   });
 
   it("sweeps an expired challenge with the other grants", async () => {
-    await env.DB.prepare(
-      `INSERT INTO email_challenges (
+    await db
+      .prepare(
+        `INSERT INTO email_challenges (
          id, email_hash, token_hash, intent_json, return_to, created_at, expires_at
        ) VALUES ('email_old', 'hash', 'token', '{"kind":"sign_in"}', '/my', ?1, ?1)`,
-    )
+      )
       .bind(now.toISOString())
       .run();
-    await new D1AccountState(env.DB).performMaintenance(accountMaintenanceInput(now));
-    expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM email_challenges").first("count"),
-    ).toBe(0);
+    await new D1AccountState(db).performMaintenance(accountMaintenanceInput(now));
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM email_challenges").first("count")).toBe(
+      0,
+    );
   });
 });
 
@@ -404,7 +395,7 @@ function fakeMailbox(): Mailbox {
 }
 
 function harness(mailbox: Mailbox, clock: () => Date = () => now) {
-  const state = new D1AccountState(env.DB);
+  const state = new D1AccountState(db);
   const hasher = new SecretHasher(secret);
   const handoff = new SignInHandoff(hasher);
   const webSessions = new WebSessions({
@@ -425,7 +416,7 @@ function harness(mailbox: Mailbox, clock: () => Date = () => now) {
   return {
     app: createRelayApp({
       state,
-      usageState: new D1UsageState(env.DB),
+      usageState: new D1UsageState(db),
       accountService: new AccountService(state, hasher, secret),
       webSessions,
       hasher,
@@ -482,21 +473,24 @@ async function signInGitHub(relay: ReturnType<typeof harness>, code: string): Pr
 }
 
 async function seedEmailAccount(accountId: string, email: string): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-    ).bind(accountId, email, now.toISOString()),
-    env.DB.prepare(
-      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+  await db.batch([
+    db
+      .prepare(
+        "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+      )
+      .bind(accountId, email, now.toISOString()),
+    db
+      .prepare(
+        `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
        VALUES (?1, 'email', ?2, ?3, ?4)`,
-    ).bind(accountId, await hmacSha256Hex(secret, `email:${email}`), email, now.toISOString()),
+      )
+      .bind(accountId, await hmacSha256Hex(secret, `email:${email}`), email, now.toISOString()),
   ]);
 }
 
 async function identityProviders(accountId: string): Promise<string[]> {
-  const rows = await env.DB.prepare(
-    "SELECT provider FROM account_identities WHERE account_id = ?1 ORDER BY provider",
-  )
+  const rows = await db
+    .prepare("SELECT provider FROM account_identities WHERE account_id = ?1 ORDER BY provider")
     .bind(accountId)
     .all<{ provider: string }>();
   return rows.results.map((row) => row.provider);

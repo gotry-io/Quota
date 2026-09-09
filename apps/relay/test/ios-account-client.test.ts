@@ -1,5 +1,3 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
   IOS_OAUTH_CLIENT_ID,
   IOS_OAUTH_REDIRECT_URI,
@@ -9,7 +7,7 @@ import {
   type OAuthTokenResponse,
   OAuthTokenResponseSchema,
 } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AccountFlowError, AccountService, sanitizeLabel } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
@@ -17,20 +15,10 @@ import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import { signInReturnTo } from "./native-sign-in.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-08-10T00:00:00.000Z");
 /** What the phone presents when it is asking to be a Device. */
@@ -48,7 +36,7 @@ const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 let harnessSequence = 0;
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
 });
 
 describe("quota-ios account and device client", () => {
@@ -168,7 +156,8 @@ describe("quota-ios account and device client", () => {
     // The exchange names the Account it signed in to; it still names no Device.
     expect(tokens.display_label).toBe("iOS Tester");
     expect(
-      await env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+      await db
+        .prepare("SELECT display_label FROM accounts WHERE id = ?1")
         .bind(harness.accountId)
         .first("display_label"),
     ).toBe(tokens.display_label);
@@ -190,7 +179,8 @@ describe("quota-ios account and device client", () => {
     expect(await deviceCount(harness.accountId)).toBe(0);
     expect(await deviceSessionCount(harness.accountId)).toBe(0);
     expect(
-      await env.DB.prepare("SELECT device_id FROM sessions WHERE account_id = ?1")
+      await db
+        .prepare("SELECT device_id FROM sessions WHERE account_id = ?1")
         .bind(harness.accountId)
         .first("device_id"),
     ).toBeNull();
@@ -211,9 +201,8 @@ describe("quota-ios account and device client", () => {
     expect(tokens.device_generation).toBe(1);
     expect(tokens.session.access_token).toMatch(/^qia_/);
 
-    const device = await env.DB.prepare(
-      "SELECT id, display_name, platform FROM devices WHERE account_id = ?1",
-    )
+    const device = await db
+      .prepare("SELECT id, display_name, platform FROM devices WHERE account_id = ?1")
       .bind(harness.accountId)
       .first<{ id: string; display_name: string; platform: string }>();
     // Apostrophes stay: "Kyle's iPhone" is a real device name, and sanitizing them away
@@ -223,9 +212,8 @@ describe("quota-ios account and device client", () => {
       display_name: "Kyle's iPhone",
       platform: "ios",
     });
-    const session = await env.DB.prepare(
-      "SELECT client_kind, device_id, scopes_json FROM sessions WHERE account_id = ?1",
-    )
+    const session = await db
+      .prepare("SELECT client_kind, device_id, scopes_json FROM sessions WHERE account_id = ?1")
       .bind(harness.accountId)
       .first<{ client_kind: string; device_id: string; scopes_json: string }>();
     expect(session).toMatchObject({ client_kind: "ios", device_id: tokens.device_id });
@@ -246,9 +234,10 @@ describe("quota-ios account and device client", () => {
     expect(second.device_id).toBe(tokens.device_id);
     expect(await deviceCount(harness.accountId)).toBe(1);
     expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND revoked_at IS NULL",
-      )
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND revoked_at IS NULL",
+        )
         .bind(harness.accountId)
         .first("count"),
     ).toBe(1);
@@ -294,7 +283,8 @@ describe("quota-ios account and device client", () => {
     // Usage is a Mac's, not a phone's, but nothing about the route says so: what the phone does
     // not upload is what it never sends.
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM quota_snapshots WHERE device_id = ?1")
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM quota_snapshots WHERE device_id = ?1")
         .bind(tokens.device_id)
         .first("count"),
     ).toBe(1);
@@ -626,7 +616,8 @@ describe("quota-ios account and device client", () => {
     expect(tokens.session.access_token).not.toMatch(/^qia_/);
     expect(tokens.session.refresh_token).not.toMatch(/^qiar_/);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
         .bind(tokens.device_id)
         .first("count"),
     ).toBe(1);
@@ -672,24 +663,28 @@ interface TestHarness {
 async function createHarness(): Promise<TestHarness> {
   harnessSequence += 1;
   const accountId = `ios_account_${harnessSequence}`;
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO accounts (id, display_label, created_at, updated_at)
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO accounts (id, display_label, created_at, updated_at)
        VALUES (?1, 'iOS Tester', ?2, ?2)`,
-    ).bind(accountId, now.toISOString()),
+      )
+      .bind(accountId, now.toISOString()),
     // Every Account is reached through at least one channel, and the Account read answers them.
-    env.DB.prepare(
-      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+    db
+      .prepare(
+        `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
        VALUES (?1, 'github', ?2, 'iOS Tester', ?3)`,
-    ).bind(accountId, `subject_${accountId}`, now.toISOString()),
+      )
+      .bind(accountId, `subject_${accountId}`, now.toISOString()),
   ]);
-  const state = new D1AccountState(env.DB);
+  const state = new D1AccountState(db);
   const hasher = new SecretHasher(secret);
   const checked = { at: now };
   const webSessions = new SignedInWebSessionStub(accountId, now);
   const app = createRelayApp({
     state,
-    usageState: new D1UsageState(env.DB),
+    usageState: new D1UsageState(db),
     accountService: new AccountService(state, hasher, secret),
     webSessions,
     hasher,
@@ -812,15 +807,17 @@ async function exchangeIos(
 }
 
 async function deviceCount(accountId: string) {
-  return env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE account_id = ?1")
+  return db
+    .prepare("SELECT COUNT(*) AS count FROM devices WHERE account_id = ?1")
     .bind(accountId)
     .first("count");
 }
 
 async function deviceSessionCount(accountId: string) {
-  return env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND device_id IS NOT NULL",
-  )
+  return db
+    .prepare(
+      "SELECT COUNT(*) AS count FROM sessions WHERE account_id = ?1 AND device_id IS NOT NULL",
+    )
     .bind(accountId)
     .first("count");
 }
