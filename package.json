@@ -28,7 +28,7 @@
     "format:check": "pnpm format:check:js && pnpm format:check:rust",
     "format:check:js": "biome format .",
     "format:check:rust": "cargo fmt --all -- --check",
-    "test": "pnpm -r --if-present test && pnpm test:service && pnpm test:swift",
+    "test": "pnpm -r --if-present test && pnpm --filter @gotry-io/quota-relay test:node && pnpm test:service && pnpm test:swift",
     "test:service": "cargo test --locked --package quota-service --package quota-menubar-helper",
     "test:swift": "./scripts/test-swift.sh",
     "test:menubar:helper": "./scripts/test-menubar-helper.sh",

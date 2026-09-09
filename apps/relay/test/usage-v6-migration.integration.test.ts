@@ -1,13 +1,9 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { describe, expect, inject, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { RelayDatabase } from "../src/platform/database.ts";
 import { ladderThroughCutover } from "./migration-ladder.ts";
+import { applyTestMigrations, testDatabase, testMigrations } from "./support/database.ts";
 
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const HOUR_VERSION_MIGRATION = "0018_hour_versioned_usage_and_daily_rollups.sql";
 
@@ -16,16 +12,20 @@ const HOUR_VERSION_MIGRATION = "0018_hour_versioned_usage_and_daily_rollups.sql"
  * a device projected them through, which is why the same measurement can be here twice.
  */
 async function seedRetainedFacts(): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO accounts(id, identity_subject, created_at, updated_at)
+  await db
+    .prepare(
+      `INSERT INTO accounts(id, identity_subject, created_at, updated_at)
      VALUES ('account-1', 'subject-hash-1', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
-  ).run();
-  await env.DB.prepare(
-    `INSERT INTO devices(id, account_id, installation_id_hash, created_at, last_login_at)
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO devices(id, account_id, installation_id_hash, created_at, last_login_at)
      VALUES ('device-1', 'account-1', 'installation-hash-1', '2026-08-01T00:00:00Z',
              '2026-08-01T00:00:00Z')`,
-  ).run();
-  const insert = env.DB.prepare(
+    )
+    .run();
+  const insert = db.prepare(
     `INSERT INTO usage_hourly(
        device_id, bucket_start_utc, usage_date, usage_hour, aggregation_timezone,
        agent, billing_channel, channel_source, model, context_bucket,
@@ -41,7 +41,7 @@ async function seedRetainedFacts(): Promise<void> {
        ?6, 0, 0, 0, 0, ?7, 0, ?8, 0, 0, ?9, ?10
      )`,
   );
-  await env.DB.batch([
+  await db.batch([
     // The same hour and the same measurement, projected through two timezones.
     insert.bind(
       "2026-08-03T12:00:00Z",
@@ -71,31 +71,35 @@ async function seedRetainedFacts(): Promise<void> {
     ),
     insert.bind("2026-08-04T00:00:00Z", "2026-08-04", 0, "UTC", "gpt-5", 5, 1, 1, null, 0),
   ]);
-  await env.DB.prepare(
-    `INSERT INTO usage_coverage(
+  await db
+    .prepare(
+      `INSERT INTO usage_coverage(
        device_id, agent, start_at, end_at, parser_revision, submission_id, accepted_at, status
      ) VALUES ('device-1', 'codex', '2026-08-03T12:00:00Z', '2026-08-03T13:00:00Z',
                'parser-1', 'submission-1', '2026-08-03T13:00:00Z', 'complete')`,
-  ).run();
+    )
+    .run();
 }
 
 describe("0018 hour-versioned facts and daily rollups", () => {
   it("collapses what only a local projection separated and backfills the days", async () => {
-    const migrations = inject("TEST_MIGRATIONS");
+    const migrations = await testMigrations();
     const index = migrations.findIndex((migration) =>
       migration.name.endsWith(HOUR_VERSION_MIGRATION),
     );
     expect(index).toBeGreaterThan(0);
 
-    await applyD1Migrations(env.DB, migrations.slice(0, index));
+    db = await testDatabase(migrations.slice(0, index));
     await seedRetainedFacts();
-    await applyD1Migrations(env.DB, ladderThroughCutover(migrations, index));
+    await applyTestMigrations(db, ladderThroughCutover(migrations, index));
 
-    const hourly = await env.DB.prepare(
-      `SELECT bucket_start_utc, model, scan_version, partial, input_tokens, output_tokens,
+    const hourly = await db
+      .prepare(
+        `SELECT bucket_start_utc, model, scan_version, partial, input_tokens, output_tokens,
               requests, source_cost_microusd, source_cost_covered_requests
        FROM usage_hourly ORDER BY bucket_start_utc, model`,
-    ).all<Record<string, unknown>>();
+      )
+      .all<Record<string, unknown>>();
     expect(hourly.results).toEqual([
       {
         bucket_start_utc: "2026-08-03T12:00:00Z",
@@ -134,10 +138,12 @@ describe("0018 hour-versioned facts and daily rollups", () => {
       },
     ]);
 
-    const daily = await env.DB.prepare(
-      `SELECT utc_date, model, input_tokens, output_tokens, requests, partial_hours
+    const daily = await db
+      .prepare(
+        `SELECT utc_date, model, input_tokens, output_tokens, requests, partial_hours
        FROM usage_daily ORDER BY utc_date, model`,
-    ).all<Record<string, unknown>>();
+      )
+      .all<Record<string, unknown>>();
     expect(daily.results).toEqual([
       {
         utc_date: "2026-08-03",
@@ -165,15 +171,15 @@ describe("0018 hour-versioned facts and daily rollups", () => {
       },
     ]);
 
-    const tables = await env.DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
-    ).all<{ name: string }>();
+    const tables = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all<{ name: string }>();
     const names = tables.results.map((table) => table.name);
     expect(names).not.toContain("usage_coverage");
     expect(names).not.toContain("usage_submissions");
     expect(names).not.toContain("usage_submission_parts");
 
-    const deviceColumns = await env.DB.prepare("PRAGMA table_info(devices)").all<{
+    const deviceColumns = await db.prepare("PRAGMA table_info(devices)").all<{
       name: string;
     }>();
     const deviceNames = deviceColumns.results.map((column) => column.name);
@@ -182,7 +188,7 @@ describe("0018 hour-versioned facts and daily rollups", () => {
     expect(deviceNames).not.toContain("last_snapshot_digest");
     expect(deviceNames).toContain("usage_sync_revision");
 
-    const snapshotColumns = await env.DB.prepare("PRAGMA table_info(quota_snapshots)").all<{
+    const snapshotColumns = await db.prepare("PRAGMA table_info(quota_snapshots)").all<{
       name: string;
     }>();
     const snapshotNames = snapshotColumns.results.map((column) => column.name);

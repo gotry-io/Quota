@@ -1,11 +1,9 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import {
   MODEL_CATALOG,
   type PublicProfileResponse,
   type PublicUsageResponse,
 } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { createRelayApp } from "../src/app.ts";
@@ -14,20 +12,10 @@ import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub, signedOutWebSessions } from "./web-session-stub.ts";
+import type { RelayDatabase, RelayStatement } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-09-06T12:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -37,7 +25,7 @@ const webRequest = {
 };
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
 });
 
 describe("the public profile an Account may publish", () => {
@@ -104,9 +92,9 @@ describe("the public profile an Account may publish", () => {
     expect((await put(appFor("account_rival"), "owned-handle")).status).toBe(409);
 
     expect(
-      await env.DB.prepare(
-        "SELECT account_id FROM public_profiles WHERE handle = 'owned-handle'",
-      ).first("account_id"),
+      await db
+        .prepare("SELECT account_id FROM public_profiles WHERE handle = 'owned-handle'")
+        .first("account_id"),
     ).toBe("account_owner");
   });
 
@@ -261,8 +249,8 @@ describe("the page a published handle answers", () => {
 
     const port = createWebDocumentPort({
       webSessions: signedOutWebSessions,
-      state: new D1AccountState(env.DB),
-      usageState: new D1UsageState(env.DB),
+      state: new D1AccountState(db),
+      usageState: new D1UsageState(db),
       catalog: PRICING_CATALOG,
       modelCatalog: MODEL_CATALOG,
       now: () => now,
@@ -300,22 +288,26 @@ function put(app: ReturnType<typeof createRelayApp>, handle: string, options: Pr
 }
 
 async function seedAccount(name: string): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO accounts (id, display_label, created_at, updated_at)
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO accounts (id, display_label, created_at, updated_at)
        VALUES ('account_${name}', 'Quota Tester', ?1, ?1)`,
-    ).bind(now.toISOString()),
-    env.DB.prepare(
-      `INSERT INTO devices (
+      )
+      .bind(now.toISOString()),
+    db
+      .prepare(
+        `INSERT INTO devices (
          id, account_id, installation_id_hash, generation, created_at, last_login_at
        ) VALUES ('device_${name}', 'account_${name}', 'installation_${name}', 1, ?1, ?1)`,
-    ).bind(now.toISOString()),
+      )
+      .bind(now.toISOString()),
   ]);
 }
 
 /** Two days inside the trailing 30 and one far outside it, on two providers. */
 async function seedUsage(name: string): Promise<void> {
-  await env.DB.batch([
+  await db.batch([
     dailyRow(name, "2026-09-06", "claude-opus-5", "anthropic_direct"),
     dailyRow(name, "2026-09-05", "gpt-5.6-sol", "openai_direct"),
     dailyRow(name, "2026-03-01", "gpt-5.6-sol", "openai_direct"),
@@ -323,14 +315,16 @@ async function seedUsage(name: string): Promise<void> {
 }
 
 function storedProfiles(accountId: string): Promise<unknown> {
-  return env.DB.prepare("SELECT COUNT(*) AS count FROM public_profiles WHERE account_id = ?1")
+  return db
+    .prepare("SELECT COUNT(*) AS count FROM public_profiles WHERE account_id = ?1")
     .bind(accountId)
     .first("count");
 }
 
-function dailyRow(name: string, date: string, model: string, channel: string): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO usage_daily (
+function dailyRow(name: string, date: string, model: string, channel: string): RelayStatement {
+  return db
+    .prepare(
+      `INSERT INTO usage_daily (
        device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
        service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
        cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
@@ -341,10 +335,11 @@ function dailyRow(name: string, date: string, model: string, channel: string): D
        'unknown', 'unknown', 'unknown', 10, 0,
        0, 0, 0, 2, 0, 1, 0, 0, NULL, 0, 0
      )`,
-  ).bind(date, model, channel);
+    )
+    .bind(date, model, channel);
 }
 
-function appFor(accountId: string, database: D1Database = env.DB) {
+function appFor(accountId: string, database: RelayDatabase = db) {
   const state = new D1AccountState(database);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
@@ -357,8 +352,8 @@ function appFor(accountId: string, database: D1Database = env.DB) {
   });
 }
 
-function recordingD1(statements: string[]): D1Database {
-  return new Proxy(env.DB, {
+function recordingD1(statements: string[]): RelayDatabase {
+  return new Proxy(db, {
     get(target, property, receiver) {
       if (property === "prepare") {
         return (sql: string) => {

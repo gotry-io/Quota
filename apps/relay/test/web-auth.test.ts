@@ -1,7 +1,5 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { GitHubIdentityProvider } from "../src/account/github-identity.ts";
 import { SignInHandoff } from "../src/account/identity.ts";
 import { AccountService } from "../src/account/service.ts";
@@ -12,20 +10,10 @@ import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-08-10T00:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -33,20 +21,20 @@ const origin = "https://quota.gotry.io";
 const githubProfileId = 583_231;
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
   // Every test here signs in as the same GitHub profile, so it must start from no Account at all.
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM usage_daily"),
-    env.DB.prepare("DELETE FROM usage_hourly"),
-    env.DB.prepare("DELETE FROM usage_hour_scans"),
-    env.DB.prepare("DELETE FROM quota_snapshots"),
-    env.DB.prepare("DELETE FROM sessions"),
-    env.DB.prepare("DELETE FROM login_grants"),
-    env.DB.prepare("DELETE FROM devices"),
-    env.DB.prepare("DELETE FROM account_identities"),
-    env.DB.prepare("DELETE FROM accounts"),
-    env.DB.prepare("DELETE FROM rate_limit_counters"),
-    env.DB.prepare("DELETE FROM email_challenges"),
+  await db.batch([
+    db.prepare("DELETE FROM usage_daily"),
+    db.prepare("DELETE FROM usage_hourly"),
+    db.prepare("DELETE FROM usage_hour_scans"),
+    db.prepare("DELETE FROM quota_snapshots"),
+    db.prepare("DELETE FROM sessions"),
+    db.prepare("DELETE FROM login_grants"),
+    db.prepare("DELETE FROM devices"),
+    db.prepare("DELETE FROM account_identities"),
+    db.prepare("DELETE FROM accounts"),
+    db.prepare("DELETE FROM rate_limit_counters"),
+    db.prepare("DELETE FROM email_challenges"),
   ]);
 });
 
@@ -103,9 +91,11 @@ describe("browser sign-in through GitHub", () => {
     expect(github.profileReads).toBe(1);
 
     const sessionCookie = `__Host-quota_session=${session?.value}`;
-    const stored = await env.DB.prepare(
-      "SELECT client_kind, device_id, refresh_token_hash, access_token_hash, authenticated_at FROM sessions",
-    ).all<Record<string, unknown>>();
+    const stored = await db
+      .prepare(
+        "SELECT client_kind, device_id, refresh_token_hash, access_token_hash, authenticated_at FROM sessions",
+      )
+      .all<Record<string, unknown>>();
     expect(stored.results).toHaveLength(1);
     expect(stored.results[0]).toMatchObject({
       client_kind: "web",
@@ -117,7 +107,7 @@ describe("browser sign-in through GitHub", () => {
       await new SecretHasher(secret).hash("web-access", session?.value ?? ""),
     );
 
-    const account = await env.DB.prepare("SELECT id, display_label FROM accounts").first<{
+    const account = await db.prepare("SELECT id, display_label FROM accounts").first<{
       id: string;
       display_label: string;
     }>();
@@ -125,9 +115,9 @@ describe("browser sign-in through GitHub", () => {
     // The Account is its own opaque id, and the identity that opened it is a row of its own
     // holding nothing but the HMAC of what GitHub proved.
     expect(account?.id).toMatch(/^account_[0-9a-f-]{36}$/);
-    const identity = await env.DB.prepare(
-      "SELECT account_id, provider, subject, label FROM account_identities",
-    ).first<{ account_id: string; provider: string; subject: string; label: string }>();
+    const identity = await db
+      .prepare("SELECT account_id, provider, subject, label FROM account_identities")
+      .first<{ account_id: string; provider: string; subject: string; label: string }>();
     expect(identity).toMatchObject({
       account_id: account?.id,
       provider: "github",
@@ -233,8 +223,8 @@ describe("browser sign-in through GitHub", () => {
 
     // Nothing reached GitHub, and no session exists to have been opened.
     expect(github.exchanges).toBe(0);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(0);
   });
 
   it("refuses a handoff whose deadline has passed or cannot be read", async () => {
@@ -252,7 +242,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(expired.status).toBe(400);
     expect(github.exchanges).toBe(0);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
 
     // A deadline nothing can read is not an absent deadline: it must fail closed. This payload is
     // signed the same way Relay signs its own, so only the deadline itself is under test.
@@ -272,7 +262,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(unreadable.status).toBe(400);
     expect(github.exchanges).toBe(0);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
   });
 
   it("maps a code GitHub will not spend twice to a rejected sign-in", async () => {
@@ -285,7 +275,7 @@ describe("browser sign-in through GitHub", () => {
     expect(replayed.status).toBe(400);
     expect(await replayed.json()).toMatchObject({ error: { code: "invalid_request" } });
     expect(github.exchanges).toBe(2);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(1);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(1);
   });
 
   it("keeps the GitHub access token and the session token out of storage and answers", async () => {
@@ -315,11 +305,13 @@ describe("browser sign-in through GitHub", () => {
     expect(logged.join("\n")).not.toContain(session);
     expect(logged.join("\n")).not.toContain(github.accessToken);
 
-    const tables = await env.DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
-    ).all<{ name: string }>();
+    const tables = await db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
+      )
+      .all<{ name: string }>();
     for (const { name } of tables.results) {
-      const rows = JSON.stringify((await env.DB.prepare(`SELECT * FROM "${name}"`).all()).results);
+      const rows = JSON.stringify((await db.prepare(`SELECT * FROM "${name}"`).all()).results);
       expect(rows).not.toContain(github.accessToken);
       expect(rows).not.toContain(session);
     }
@@ -483,7 +475,7 @@ describe("browser sign-in through GitHub", () => {
         })
       ).status,
     ).toBe(403);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
   });
 
   it("refuses a destructive Web action once the sign-in is no longer recent", async () => {
@@ -523,7 +515,7 @@ describe("browser sign-in through GitHub", () => {
     const session = setCookies(await signIn(relay, "delete-code")).get(
       "__Host-quota_session",
     )?.value;
-    const accountId = String(await env.DB.prepare("SELECT id FROM accounts").first("id"));
+    const accountId = String(await db.prepare("SELECT id FROM accounts").first("id"));
     await seedDeviceData(accountId);
 
     const deleted = await relay.app.request(`${origin}/api/v2/account`, {
@@ -548,9 +540,7 @@ describe("browser sign-in through GitHub", () => {
       "usage_daily",
       "login_grants",
     ]) {
-      expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).first("count")).toBe(
-        0,
-      );
+      expect(await db.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).first("count")).toBe(0);
     }
     // The cookie names a session that no longer exists, so it authenticates nothing.
     expect(
@@ -583,19 +573,19 @@ describe("an Account owns the identities that reach it", () => {
       "__Host-quota_session",
     )?.value;
     expect(second).not.toBe(first);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
+      await db.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
     ).toBe(1);
 
     // A renamed GitHub login is the same subject, and the Account is called what that channel
     // calls it now.
     const renamed = harness(fakeGitHub({ id: githubProfileId, login: "octocat-renamed" }));
     expect((await signIn(renamed, "renamed-visit")).status).toBe(302);
-    expect(await env.DB.prepare("SELECT display_label FROM accounts").first("display_label")).toBe(
+    expect(await db.prepare("SELECT display_label FROM accounts").first("display_label")).toBe(
       "octocat-renamed",
     );
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM accounts").first("count")).toBe(1);
   });
 
   it("binds another channel to the Account that asked, and does it once", async () => {
@@ -636,7 +626,7 @@ describe("an Account owns the identities that reach it", () => {
     // Nothing moved: the identity still belongs to the Account that had it.
     expect(await identityProviders("account_taken")).toEqual(["email"]);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
+      await db.prepare("SELECT COUNT(*) AS count FROM account_identities").first("count"),
     ).toBe(2);
 
     const asHtml = await linkGitHub(relay, cookie, "taken-again", {
@@ -653,7 +643,7 @@ describe("an Account owns the identities that reach it", () => {
     const session = setCookies(await signIn(relay, "unlink-code")).get(
       "__Host-quota_session",
     )?.value;
-    const accountId = String(await env.DB.prepare("SELECT id FROM accounts").first("id"));
+    const accountId = String(await db.prepare("SELECT id FROM accounts").first("id"));
     const unlink = (provider: string) =>
       relay.app.request(`${origin}/api/v2/account/identities/${provider}`, {
         method: "DELETE",
@@ -674,10 +664,11 @@ describe("an Account owns the identities that reach it", () => {
     // One it has never heard of is not a channel at all.
     expect((await unlink("carrier-pigeon")).status).toBe(404);
 
-    await env.DB.prepare(
-      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+    await db
+      .prepare(
+        `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
        VALUES (?1, 'email', 'email-subject-unlink', 'person@example.test', ?2)`,
-    )
+      )
       .bind(accountId, new Date(now.getTime() + 1_000).toISOString())
       .run();
     expect((await unlink("github")).status).toBe(204);
@@ -722,28 +713,34 @@ describe("an Account owns the identities that reach it", () => {
 /** An Account reached today by an address, and a browser signed in as it. Returns the cookie. */
 async function seedAccountReachedByEmail(accountId: string, label: string): Promise<string> {
   const token = `qw_${accountId.replaceAll("_", "-").padEnd(43, "x").slice(0, 43)}`;
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-    ).bind(accountId, label, now.toISOString()),
-    env.DB.prepare(
-      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+  await db.batch([
+    db
+      .prepare(
+        "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+      )
+      .bind(accountId, label, now.toISOString()),
+    db
+      .prepare(
+        `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
        VALUES (?1, 'email', ?2, ?3, ?4)`,
-    ).bind(accountId, `email-subject-${accountId}`, label, now.toISOString()),
-    env.DB.prepare(
-      `INSERT INTO sessions (
+      )
+      .bind(accountId, `email-subject-${accountId}`, label, now.toISOString()),
+    db
+      .prepare(
+        `INSERT INTO sessions (
          id, family_id, account_id, device_id, device_generation, client_kind,
          access_token_hash, refresh_token_hash, scopes_json,
          authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
        ) VALUES (?1, ?1, ?2, NULL, NULL, 'web', ?3, NULL,
          '["account:read","account:manage"]', ?4, ?5, ?5, ?4, ?4)`,
-    ).bind(
-      `session_${accountId}`,
-      accountId,
-      await new SecretHasher(secret).hash("web-access", token),
-      now.toISOString(),
-      new Date(now.getTime() + 60 * 60_000).toISOString(),
-    ),
+      )
+      .bind(
+        `session_${accountId}`,
+        accountId,
+        await new SecretHasher(secret).hash("web-access", token),
+        now.toISOString(),
+        new Date(now.getTime() + 60 * 60_000).toISOString(),
+      ),
   ]);
   return token;
 }
@@ -771,16 +768,16 @@ async function linkGitHub(
 }
 
 async function identityProviders(accountId: string): Promise<string[]> {
-  const rows = await env.DB.prepare(
-    "SELECT provider FROM account_identities WHERE account_id = ?1 ORDER BY provider",
-  )
+  const rows = await db
+    .prepare("SELECT provider FROM account_identities WHERE account_id = ?1 ORDER BY provider")
     .bind(accountId)
     .all<{ provider: string }>();
   return rows.results.map((row) => row.provider);
 }
 
 function displayLabel(accountId: string): Promise<unknown> {
-  return env.DB.prepare("SELECT display_label FROM accounts WHERE id = ?1")
+  return db
+    .prepare("SELECT display_label FROM accounts WHERE id = ?1")
     .bind(accountId)
     .first("display_label");
 }
@@ -828,7 +825,7 @@ function fakeGitHub(profile = { id: githubProfileId, login: "octocat" }): GitHub
 }
 
 function harness(github: GitHubStub, clock: () => Date = () => now) {
-  const state = new D1AccountState(env.DB);
+  const state = new D1AccountState(db);
   const hasher = new SecretHasher(secret);
   const handoff = new SignInHandoff(hasher);
   const webSessions = new WebSessions({
@@ -849,7 +846,7 @@ function harness(github: GitHubStub, clock: () => Date = () => now) {
   return {
     app: createRelayApp({
       state,
-      usageState: new D1UsageState(env.DB),
+      usageState: new D1UsageState(db),
       accountService: new AccountService(state, hasher, secret),
       webSessions,
       hasher,
@@ -858,7 +855,7 @@ function harness(github: GitHubStub, clock: () => Date = () => now) {
     document: createWebDocumentPort({
       state,
       webSessions,
-      usageState: new D1UsageState(env.DB),
+      usageState: new D1UsageState(db),
       catalog: PRICING_CATALOG,
       modelCatalog: MODEL_CATALOG,
       now: clock,
@@ -891,25 +888,31 @@ async function signIn(relay: ReturnType<typeof harness>, code: string): Promise<
 
 async function seedDeviceData(accountId: string): Promise<void> {
   const stamp = now.toISOString();
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO devices (id, account_id, installation_id_hash, generation, created_at, last_login_at)
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO devices (id, account_id, installation_id_hash, generation, created_at, last_login_at)
        VALUES ('device_delete', ?1, 'installation_delete', 1, ?2, ?2)`,
-    ).bind(accountId, stamp),
-    env.DB.prepare(
-      `INSERT INTO sessions (
+      )
+      .bind(accountId, stamp),
+    db
+      .prepare(
+        `INSERT INTO sessions (
          id, family_id, account_id, device_id, device_generation, client_kind,
          access_token_hash, refresh_token_hash, scopes_json,
          authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
        ) VALUES ('session_quotabar', 'family_quotabar', ?1, 'device_delete', 1, 'quotabar',
          'access_quotabar', 'refresh_quotabar', '["account:read","device:write"]',
          ?2, ?2, ?2, ?2, ?2)`,
-    ).bind(accountId, stamp),
-    env.DB.prepare(
-      `INSERT INTO quota_snapshots (device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at)
+      )
+      .bind(accountId, stamp),
+    db
+      .prepare(
+        `INSERT INTO quota_snapshots (device_id, provider, account_fingerprint, observed_at, snapshot_json, updated_at)
        VALUES ('device_delete', 'codex', 'fingerprint', ?1, '{}', ?1)`,
-    ).bind(stamp),
-    env.DB.prepare(
+      )
+      .bind(stamp),
+    db.prepare(
       `INSERT INTO usage_hourly (
          device_id, agent, bucket_start_utc, scan_version, partial, billing_channel, channel_source,
          model, context_bucket, service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
@@ -919,11 +922,11 @@ async function seedDeviceData(accountId: string): Promise<void> {
        ) VALUES ('device_delete', 'codex', '2026-08-10T00:00:00Z', 1, 0, 'openai_direct', 'explicit',
          'gpt-5', 'standard', 'default', 'default', 'global', 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, NULL, 0)`,
     ),
-    env.DB.prepare(
+    db.prepare(
       `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
        VALUES ('device_delete', 'codex', '2026-08-10T00:00:00Z', 1)`,
     ),
-    env.DB.prepare(
+    db.prepare(
       `INSERT INTO usage_daily (
          device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
          service_tier, speed, inference_geo, input_tokens, cache_read_tokens, cache_write_5m_tokens,
@@ -933,10 +936,12 @@ async function seedDeviceData(accountId: string): Promise<void> {
        ) VALUES ('device_delete', '2026-08-10', 'codex', 'openai_direct', 'explicit', 'gpt-5',
          'standard', 'default', 'default', 'global', 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, NULL, 0, 0)`,
     ),
-    env.DB.prepare(
-      `INSERT INTO login_grants (id, client_id, account_id, expires_at, created_at)
+    db
+      .prepare(
+        `INSERT INTO login_grants (id, client_id, account_id, expires_at, created_at)
        VALUES ('grant_delete', 'quotabar', ?1, ?2, ?2)`,
-    ).bind(accountId, stamp),
+      )
+      .bind(accountId, stamp),
   ]);
 }
 

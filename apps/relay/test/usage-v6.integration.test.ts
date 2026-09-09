@@ -1,22 +1,14 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { MAXIMUM_USAGE_ROWS_PER_HOUR } from "@gotry-io/quota-protocol";
 import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AccountService } from "../src/account/service.ts";
 import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState, storedScanVersionsSql } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
-
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
 interface Period {
   totals: {
@@ -31,11 +23,7 @@ interface Period {
   agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
 }
 
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-08-10T12:00:00.000Z");
 /** 10:00 on 26 August in Singapore, 19:00 on the 25th in Los Angeles. */
@@ -44,9 +32,9 @@ const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const accountId = "account_v6";
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
   // Migrations are applied once per worker, so each case clears what the last one wrote.
-  await env.DB.batch(
+  await db.batch(
     [
       "account_usage_folds",
       "usage_daily",
@@ -55,16 +43,18 @@ beforeEach(async () => {
       "quota_snapshots",
       "devices",
       "accounts",
-    ].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
+    ].map((table) => db.prepare(`DELETE FROM ${table}`)),
   );
-  await env.DB.prepare(`INSERT INTO accounts (id, created_at, updated_at) VALUES (?1, ?2, ?2)`)
+  await db
+    .prepare(`INSERT INTO accounts (id, created_at, updated_at) VALUES (?1, ?2, ?2)`)
     .bind(accountId, now.toISOString())
     .run();
 });
 
 describe("managed data v6 end to end", () => {
   it("probes the usage_hour_scans primary key for the named hours", async () => {
-    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${storedScanVersionsSql}`)
+    const plan = await db
+      .prepare(`EXPLAIN QUERY PLAN ${storedScanVersionsSql}`)
       .bind("device_alpha", "codex", JSON.stringify(["2026-08-10T09:00:00Z"]))
       .all<{ detail: string }>();
     expect(plan.results.some((row) => row.detail.includes("bucket_start_utc=?"))).toBe(true);
@@ -72,7 +62,7 @@ describe("managed data v6 end to end", () => {
 
   it("keeps only the newest scan of an hour and ignores one already overtaken", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     const hour = "2026-08-10T09:00:00Z";
 
     expect(
@@ -106,7 +96,7 @@ describe("managed data v6 end to end", () => {
 
   it("remembers the scan behind an hour it emptied", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     const hour = "2026-08-10T09:00:00Z";
 
     expect(
@@ -137,15 +127,13 @@ describe("managed data v6 end to end", () => {
       ),
     ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
     expect(await storedModels("device_alpha")).toEqual([]);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_daily").first("count")).toBe(
-      0,
-    );
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM usage_daily").first("count")).toBe(0);
   });
 
   it("refuses inside the batch to overwrite an hour a newer scan already claimed", async () => {
     await addDevice("alpha");
     const hour = "2026-08-10T09:00:00Z";
-    await new D1UsageState(env.DB).recordUsage(
+    await new D1UsageState(db).recordUsage(
       principal("alpha"),
       upload([hourOf(hour, 9, ["claude-opus-5"])]),
       now.toISOString(),
@@ -154,7 +142,7 @@ describe("managed data v6 end to end", () => {
     // The versions an upload compares itself against are read before its batch opens, so a
     // second upload of the same hour can commit in between. Answering that read with nothing is
     // exactly what that race looks like from inside this call.
-    const racing = new D1UsageState(env.DB);
+    const racing = new D1UsageState(db);
     Object.assign(racing, { storedScanVersions: async () => new Map<string, number>() });
     await racing.recordUsage(
       principal("alpha"),
@@ -169,7 +157,7 @@ describe("managed data v6 end to end", () => {
   it("leaves the daily rollup equal to a direct aggregation of the hours", async () => {
     await addDevice("alpha");
     await addDevice("beta");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     await usage.recordUsage(
       principal("alpha"),
       upload([
@@ -196,7 +184,7 @@ describe("managed data v6 end to end", () => {
 
   it("puts an hour in the local day the caller's calendar reads it in", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     // 22:00 UTC is 06:00 on 26 August in Singapore; 15:00 UTC is 23:00 on the 25th.
     await usage.recordUsage(
       principal("alpha"),
@@ -229,7 +217,7 @@ describe("managed data v6 end to end", () => {
   it("totals a local period exactly, and only from the hours its edges cut", async () => {
     await addDevice("alpha");
     await addDevice("beta");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     // Every third hour of the 31 days behind the read, on two devices.
     const hours: string[] = [];
     for (let hour = 0; hour < 31 * 24; hour += 3) {
@@ -267,23 +255,22 @@ describe("managed data v6 end to end", () => {
     // With every hour outside the four days the edges cut deleted, the answer does not move:
     // the rest of the period came from the rollup, and nothing reached past the edges for it.
     const edges = ["2026-07-27", "2026-08-19", "2026-08-25", "2026-08-26"];
-    const removed = await env.DB.prepare(
-      `DELETE FROM usage_hourly WHERE substr(bucket_start_utc, 1, 10) NOT IN (?1, ?2, ?3, ?4)`,
-    )
+    const removed = await db
+      .prepare(
+        `DELETE FROM usage_hourly WHERE substr(bucket_start_utc, 1, 10) NOT IN (?1, ?2, ?3, ?4)`,
+      )
       .bind(...edges)
       .run();
     expect(removed.meta.changes).toBeGreaterThan(0);
     // The first read stored a fold. Drop it so this second read still has to fold from the
     // rollup and the hours the edges still hold, which is what this case is measuring.
-    await env.DB.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
-      .bind(accountId)
-      .run();
+    await db.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1").bind(accountId).run();
     expect(await periods(app, "tz=Asia/Singapore")).toEqual(summary);
   });
 
   it("answers a summary from the daily rollup alone", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
     await usage.recordUsage(
       principal("alpha"),
       upload([
@@ -307,13 +294,9 @@ describe("managed data v6 end to end", () => {
     // With every hour deleted the summary is unchanged, which is the only way to say that the
     // read never reaches for one. Drop the fold the first read stored, or the second would
     // answer from that row and would not prove the rollup is what it folded.
-    await env.DB.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1")
-      .bind(accountId)
-      .run();
-    await env.DB.prepare("DELETE FROM usage_hourly").run();
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM usage_hourly").first("count")).toBe(
-      0,
-    );
+    await db.prepare("DELETE FROM account_usage_folds WHERE account_id = ?1").bind(accountId).run();
+    await db.prepare("DELETE FROM usage_hourly").run();
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM usage_hourly").first("count")).toBe(0);
     const after = await (await app.request("https://quota.gotry.io/api/v6/account/summary")).text();
     expect(after).toBe(before);
 
@@ -334,7 +317,7 @@ describe("managed data v6 end to end", () => {
     for (const name of ["alpha", "beta", "gamma"]) {
       await addDevice(name);
     }
-    const state = new D1AccountState(env.DB);
+    const state = new D1AccountState(db);
     for (const [index, name] of ["alpha", "beta", "gamma"].entries()) {
       const observedAt = new Date(now.getTime() - index * 60_000).toISOString();
       expect(
@@ -394,7 +377,7 @@ describe("managed data v6 end to end", () => {
 
   it("refuses a stale generation, an oversized hour, and a retired contract", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(env.DB);
+    const usage = new D1UsageState(db);
 
     expect(
       await usage.recordUsage(
@@ -452,11 +435,12 @@ describe("managed data v6 end to end", () => {
 });
 
 async function addDevice(name: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO devices (
+  await db
+    .prepare(
+      `INSERT INTO devices (
        id, account_id, installation_id_hash, generation, created_at, last_login_at
      ) VALUES (?1, ?2, ?3, 1, ?4, ?4)`,
-  )
+    )
     .bind(`device_${name}`, accountId, `installation_${name}`, now.toISOString())
     .run();
 }
@@ -517,11 +501,11 @@ function upload(hours: ReturnType<typeof hourOf>[]): UsageUpload {
 }
 
 function signedInApp(readAt: Date = now) {
-  const state = new D1AccountState(env.DB);
+  const state = new D1AccountState(db);
   const hasher = new SecretHasher(secret);
   return createRelayApp({
     state,
-    usageState: new D1UsageState(env.DB),
+    usageState: new D1UsageState(db),
     accountService: new AccountService(state, hasher, secret),
     webSessions: new SignedInWebSessionStub(accountId, readAt),
     hasher,
@@ -548,8 +532,9 @@ function models(period: Period): string[] {
 
 /** The same totals, summed straight from `usage_hourly` over an exact instant range. */
 async function aggregate(from: string, to: string): Promise<Period["totals"]> {
-  const row = await env.DB.prepare(
-    `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+  const row = await db
+    .prepare(
+      `SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
             COALESCE(SUM(output_tokens), 0) AS output_tokens,
             COALESCE(SUM(cache_read_tokens), 0) AS cache_read_input_tokens,
             COALESCE(SUM(cache_write_5m_tokens + cache_write_1h_tokens
@@ -558,7 +543,7 @@ async function aggregate(from: string, to: string): Promise<Period["totals"]> {
             COALESCE(SUM(requests), 0) AS messages
      FROM usage_hourly
      WHERE bucket_start_utc >= ?1 AND bucket_start_utc < ?2`,
-  )
+    )
     .bind(from, to)
     .first<Omit<Period["totals"], "total_tokens">>();
   if (!row) throw new Error("no rows");
@@ -568,13 +553,14 @@ async function aggregate(from: string, to: string): Promise<Period["totals"]> {
 /** A live session for one seeded device, and the bearer token that reaches it. */
 async function bearerFor(name: string): Promise<string> {
   const token = `qb_${name.padEnd(43, "x").slice(0, 43)}`;
-  await env.DB.prepare(
-    `INSERT INTO sessions (
+  await db
+    .prepare(
+      `INSERT INTO sessions (
        id, family_id, account_id, device_id, device_generation, client_kind,
        access_token_hash, refresh_token_hash, scopes_json,
        authenticated_at, expires_at, refresh_expires_at, last_used_at, created_at
      ) VALUES (?1, ?1, ?2, ?3, 1, 'quotabar', ?4, ?5, ?6, ?8, ?7, ?7, ?8, ?8)`,
-  )
+    )
     .bind(
       `session_${name}`,
       accountId,
@@ -590,18 +576,18 @@ async function bearerFor(name: string): Promise<string> {
 }
 
 async function scanVersion(deviceId: string, bucket: string): Promise<number | null> {
-  return env.DB.prepare(
-    `SELECT scan_version FROM usage_hour_scans
+  return db
+    .prepare(
+      `SELECT scan_version FROM usage_hour_scans
      WHERE device_id = ?1 AND agent = 'codex' AND bucket_start_utc = ?2`,
-  )
+    )
     .bind(deviceId, bucket)
     .first<number>("scan_version");
 }
 
 async function storedModels(deviceId: string): Promise<string[]> {
-  const rows = await env.DB.prepare(
-    "SELECT model FROM usage_hourly WHERE device_id = ?1 ORDER BY model",
-  )
+  const rows = await db
+    .prepare("SELECT model FROM usage_hourly WHERE device_id = ?1 ORDER BY model")
     .bind(deviceId)
     .all<{ model: string }>();
   return rows.results.map((item) => item.model);
@@ -614,8 +600,9 @@ async function storedModels(deviceId: string): Promise<string[]> {
  * only thing keeping them in step. This is the assertion that says so.
  */
 async function dailyDisagreements(): Promise<unknown[]> {
-  const expected = await env.DB.prepare(
-    `SELECT device_id, substr(bucket_start_utc, 1, 10) AS utc_date, agent, billing_channel,
+  const expected = await db
+    .prepare(
+      `SELECT device_id, substr(bucket_start_utc, 1, 10) AS utc_date, agent, billing_channel,
             channel_source, model, context_bucket, service_tier, speed, inference_geo,
             SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
             SUM(requests) AS requests, SUM(partial) AS partial_hours
@@ -623,14 +610,17 @@ async function dailyDisagreements(): Promise<unknown[]> {
      GROUP BY device_id, substr(bucket_start_utc, 1, 10), agent, billing_channel,
               channel_source, model, context_bucket, service_tier, speed, inference_geo
      ORDER BY device_id, utc_date, agent, model`,
-  ).all<Record<string, unknown>>();
-  const actual = await env.DB.prepare(
-    `SELECT device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
+    )
+    .all<Record<string, unknown>>();
+  const actual = await db
+    .prepare(
+      `SELECT device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
             service_tier, speed, inference_geo, input_tokens, output_tokens, requests,
             partial_hours
      FROM usage_daily
      ORDER BY device_id, utc_date, agent, model`,
-  ).all<Record<string, unknown>>();
+    )
+    .all<Record<string, unknown>>();
   const rolled = expected.results.map((item) => JSON.stringify(item));
   const stored = actual.results.map((item) => JSON.stringify(item));
   expect(rolled.length).toBeGreaterThan(0);

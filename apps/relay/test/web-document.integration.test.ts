@@ -1,34 +1,68 @@
-import {
-  applyD1Migrations,
-  createExecutionContext,
-  env,
-  waitOnExecutionContext,
-} from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { WebDocumentPort } from "../../web/src/lib/server/document-port.ts";
 import worker, { type CloudflareBindings } from "../src/cloudflare.ts";
+import { respondAsRelay, type RelaySecrets } from "../src/deployment.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { MemoryReadingCache } from "../src/platform/reading-cache.ts";
+import { NodeStaticFiles, WorkersStaticFiles } from "../src/platform/static-files.ts";
 import { respondWithWebDocument } from "../src/web-document.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+const sqliteDriver = import.meta.env.RELAY_TEST_DRIVER === "sqlite";
+const testSecret = "test-secret-that-is-long-enough-for-hmac-and-aes";
+const clientDirectory = fileURLToPath(
+  new URL("../../web/.svelte-kit/output/client", import.meta.url),
+);
+const secrets: RelaySecrets = {
+  GITHUB_CLIENT_ID: "test-github-client-id",
+  GITHUB_CLIENT_SECRET: testSecret,
+  APPLE_SIGNIN_TEAM_ID: "",
+  APPLE_SIGNIN_SERVICES_ID: "",
+  APPLE_SIGNIN_KEY_ID: "",
+  APPLE_SIGNIN_PRIVATE_KEY: "",
+  IDENTITY_SUBJECT_KEY: testSecret,
+  QUOTA_INSTALLATION_KEY: testSecret,
+  QUOTA_SESSION_HASH_KEY: testSecret,
+  RESEND_API_KEY: testSecret,
+};
+
+let db: RelayDatabase;
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
 });
 
 async function fetchDocument(path: string): Promise<Response> {
+  const request = new Request(`https://quota.gotry.io${path}`);
+  if (sqliteDriver) {
+    return respondAsRelay(
+      request,
+      {
+        database: db,
+        assets: new NodeStaticFiles(clientDirectory),
+        statusCache: new MemoryReadingCache(),
+        secrets,
+      },
+      undefined,
+    );
+  }
+  const { createExecutionContext, env, waitOnExecutionContext } = await import("cloudflare:test");
   const context = createExecutionContext();
-  const response = await worker.fetch(new Request(`https://quota.gotry.io${path}`), env, context);
+  const response = await worker.fetch(request, env, context);
   await waitOnExecutionContext(context);
   return response;
 }
 
 describe("composed Worker documents", () => {
-  it("supplies Worker secrets without a local .env file", () => {
+  it("supplies Worker secrets without a local .env file", async () => {
+    if (sqliteDriver) {
+      // Node reads the same names from the process; the Miniflare bindings are a Workers fact.
+      expect(secrets.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
+      expect(secrets.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
+      return;
+    }
+    const { env } = await import("cloudflare:test");
     const bindings = env as CloudflareBindings;
     expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
     expect(bindings.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
@@ -167,10 +201,17 @@ function fakePort(input: { displayLabel: string | null }): WebDocumentPort {
 }
 
 async function renderDocument(path: string, document: WebDocumentPort): Promise<Response> {
+  const request = new Request(`https://quota.gotry.io${path}`);
+  if (sqliteDriver) {
+    return respondWithWebDocument(request, new NodeStaticFiles(clientDirectory), undefined, {
+      document,
+    });
+  }
+  const { createExecutionContext, env, waitOnExecutionContext } = await import("cloudflare:test");
   const context = createExecutionContext();
   const response = await respondWithWebDocument(
-    new Request(`https://quota.gotry.io${path}`),
-    env,
+    request,
+    new WorkersStaticFiles(env.ASSETS),
     context,
     { document },
   );

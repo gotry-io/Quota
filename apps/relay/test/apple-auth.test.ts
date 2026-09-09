@@ -1,7 +1,5 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { IOS_BUNDLE_ID, PROTOCOL_VERSION } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AppleIdentityTokens } from "../src/account/apple-identity-token.ts";
 import { AppleIdentityProvider } from "../src/account/apple-identity.ts";
 import { AppleNativeSignIn } from "../src/account/apple-native.ts";
@@ -13,20 +11,10 @@ import { createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      DB: D1Database;
-    }
-  }
-}
-
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-09-05T00:00:00.000Z");
 const secret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -38,13 +26,13 @@ const signingKid = "apple-signing-key";
 const appleSubject = "001234.6f9a4c1b2d3e4f5a.0917";
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM sessions"),
-    env.DB.prepare("DELETE FROM login_grants"),
-    env.DB.prepare("DELETE FROM account_identities"),
-    env.DB.prepare("DELETE FROM accounts"),
-    env.DB.prepare("DELETE FROM rate_limit_counters"),
+  db = await testDatabase();
+  await db.batch([
+    db.prepare("DELETE FROM sessions"),
+    db.prepare("DELETE FROM login_grants"),
+    db.prepare("DELETE FROM account_identities"),
+    db.prepare("DELETE FROM accounts"),
+    db.prepare("DELETE FROM rate_limit_counters"),
   ]);
 });
 
@@ -103,15 +91,15 @@ describe("browser sign-in through Apple", () => {
     });
     expect(claims?.exp).toBeGreaterThan(Math.floor(now.getTime() / 1000));
 
-    const account = await env.DB.prepare("SELECT id, display_label FROM accounts").first<{
+    const account = await db.prepare("SELECT id, display_label FROM accounts").first<{
       id: string;
       display_label: string;
     }>();
     // Apple states an address only while it is shared, and it may be a private relay address.
     expect(account?.display_label).toBe("quota@privaterelay.appleid.com");
-    const identity = await env.DB.prepare(
-      "SELECT account_id, provider, subject, label FROM account_identities",
-    ).first<{ account_id: string; provider: string; subject: string; label: string }>();
+    const identity = await db
+      .prepare("SELECT account_id, provider, subject, label FROM account_identities")
+      .first<{ account_id: string; provider: string; subject: string; label: string }>();
     expect(identity).toMatchObject({ account_id: account?.id, provider: "apple" });
     expect(identity?.subject).toMatch(/^[0-9a-f]{64}$/);
     expect(identity?.subject).not.toContain(appleSubject);
@@ -123,7 +111,7 @@ describe("browser sign-in through Apple", () => {
     await signIn(relay, apple, { email: null });
     expect(
       (
-        await env.DB.prepare("SELECT display_label FROM accounts").first<{
+        await db.prepare("SELECT display_label FROM accounts").first<{
           display_label: string;
         }>()
       )?.display_label,
@@ -169,7 +157,7 @@ describe("browser sign-in through Apple", () => {
       const failed = await signIn(relay, apple, damage);
       expect(failed.status, name).toBe(400);
       expect(
-        await env.DB.prepare("SELECT COUNT(*) AS rows FROM accounts").first<{ rows: number }>(),
+        await db.prepare("SELECT COUNT(*) AS rows FROM accounts").first<{ rows: number }>(),
       ).toMatchObject({ rows: 0 });
     }
   });
@@ -235,9 +223,9 @@ describe("browser sign-in through Apple", () => {
     );
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: { code: "conflict" } });
-    const identities = await env.DB.prepare(
-      "SELECT account_id, provider FROM account_identities ORDER BY provider",
-    ).all<{ account_id: string; provider: string }>();
+    const identities = await db
+      .prepare("SELECT account_id, provider FROM account_identities ORDER BY provider")
+      .all<{ account_id: string; provider: string }>();
     expect(identities.results).toEqual([
       { account_id: firstAccount, provider: "apple" },
       {
@@ -264,12 +252,12 @@ describe("Sign in with Apple inside the iOS app", () => {
     const body = (await response.json()) as { device_id: string; device_generation: number };
     expect(body.device_generation).toBe(1);
     expect(
-      await env.DB.prepare("SELECT id, platform FROM devices").first<Record<string, unknown>>(),
+      await db.prepare("SELECT id, platform FROM devices").first<Record<string, unknown>>(),
     ).toMatchObject({ id: body.device_id, platform: "ios" });
     expect(
-      await env.DB.prepare("SELECT client_kind, device_id, scopes_json FROM sessions").first<
-        Record<string, unknown>
-      >(),
+      await db
+        .prepare("SELECT client_kind, device_id, scopes_json FROM sessions")
+        .first<Record<string, unknown>>(),
     ).toMatchObject({
       client_kind: "ios",
       device_id: body.device_id,
@@ -285,11 +273,11 @@ describe("Sign in with Apple inside the iOS app", () => {
       },
     });
     expect(((await again.json()) as { device_id: string }).device_id).toBe(body.device_id);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(1);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(1);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions WHERE revoked_at IS NULL").first(
-        "count",
-      ),
+      await db
+        .prepare("SELECT COUNT(*) AS count FROM sessions WHERE revoked_at IS NULL")
+        .first("count"),
     ).toBe(1);
   });
 
@@ -301,7 +289,7 @@ describe("Sign in with Apple inside the iOS app", () => {
       registration: { installation_id: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998" },
     });
     expect(refused.status).toBe(400);
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM devices").first("count")).toBe(0);
   });
 
   it("issues the viewer's one session without a browser round trip", async () => {
@@ -332,9 +320,9 @@ describe("Sign in with Apple inside the iOS app", () => {
     // Apple never reached the token endpoint: the app had already proved this on the device.
     expect(apple.tokenForm).toBeUndefined();
 
-    const stored = await env.DB.prepare(
-      "SELECT client_kind, device_id, scopes_json FROM sessions",
-    ).first<Record<string, unknown>>();
+    const stored = await db
+      .prepare("SELECT client_kind, device_id, scopes_json FROM sessions")
+      .first<Record<string, unknown>>();
     expect(stored).toMatchObject({
       client_kind: "ios",
       device_id: null,
@@ -354,7 +342,7 @@ describe("Sign in with Apple inside the iOS app", () => {
     expect(again.status).toBe(200);
     expect(((await again.json()) as { account_id: string }).account_id).toBe(body.account_id);
     expect(
-      await env.DB.prepare("SELECT COUNT(*) AS rows FROM accounts").first<{ rows: number }>(),
+      await db.prepare("SELECT COUNT(*) AS rows FROM accounts").first<{ rows: number }>(),
     ).toMatchObject({ rows: 1 });
   });
 
@@ -377,7 +365,7 @@ describe("Sign in with Apple inside the iOS app", () => {
       expect(response.status, name).toBe(400);
       expect(await response.json()).toMatchObject({ error: { code: "invalid_grant" } });
       expect(
-        await env.DB.prepare("SELECT COUNT(*) AS rows FROM sessions").first<{ rows: number }>(),
+        await db.prepare("SELECT COUNT(*) AS rows FROM sessions").first<{ rows: number }>(),
       ).toMatchObject({ rows: 0 });
     }
   });
@@ -405,7 +393,7 @@ describe("Sign in with Apple inside the iOS app", () => {
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: { code: "conflict" } });
     expect(
-      await env.DB.prepare("SELECT account_id FROM account_identities").first<{
+      await db.prepare("SELECT account_id FROM account_identities").first<{
         account_id: string;
       }>(),
     ).toMatchObject({ account_id: first.account_id });
@@ -532,7 +520,7 @@ async function fakeApple(): Promise<AppleStub> {
 }
 
 async function harness(apple: AppleStub, options: { withNativeApple?: boolean } = {}) {
-  const state = new D1AccountState(env.DB);
+  const state = new D1AccountState(db);
   const hasher = new SecretHasher(secret);
   const handoff = new SignInHandoff(hasher);
   const tokens = new AppleIdentityTokens({ fetch: apple.fetch });
@@ -566,7 +554,7 @@ async function harness(apple: AppleStub, options: { withNativeApple?: boolean } 
     accountService,
     app: createRelayApp({
       state,
-      usageState: new D1UsageState(env.DB),
+      usageState: new D1UsageState(db),
       accountService,
       webSessions,
       ...(options.withNativeApple === false
@@ -680,15 +668,17 @@ async function openIosSessionFor(
   relay: Awaited<ReturnType<typeof harness>>,
   accountId: string,
 ): Promise<string> {
-  await env.DB.prepare(
-    "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, 'Other', ?2, ?2)",
-  )
+  await db
+    .prepare(
+      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, 'Other', ?2, ?2)",
+    )
     .bind(accountId, now.toISOString())
     .run();
-  await env.DB.prepare(
-    `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
+  await db
+    .prepare(
+      `INSERT INTO account_identities (account_id, provider, subject, label, created_at)
      VALUES (?1, 'github', 'other-subject', 'other', ?2)`,
-  )
+    )
     .bind(accountId, now.toISOString())
     .run();
   const issued = await relay.accountService.openIosSession(accountId, "Other", null, now);
@@ -696,18 +686,18 @@ async function openIosSessionFor(
 }
 
 async function storedLabels(): Promise<{ account: string | null; identity: string | null }> {
-  const account = await env.DB.prepare("SELECT display_label FROM accounts").first<{
+  const account = await db.prepare("SELECT display_label FROM accounts").first<{
     display_label: string | null;
   }>();
-  const identity = await env.DB.prepare(
-    "SELECT label FROM account_identities WHERE provider = 'apple'",
-  ).first<{ label: string | null }>();
+  const identity = await db
+    .prepare("SELECT label FROM account_identities WHERE provider = 'apple'")
+    .first<{ label: string | null }>();
   return { account: account?.display_label ?? null, identity: identity?.label ?? null };
 }
 
 async function accountIdAfter(response: Promise<Response>): Promise<string> {
   expect((await response).status).toBe(302);
-  const account = await env.DB.prepare("SELECT id FROM accounts").first<{ id: string }>();
+  const account = await db.prepare("SELECT id FROM accounts").first<{ id: string }>();
   return account?.id ?? "";
 }
 

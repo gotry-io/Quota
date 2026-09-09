@@ -1,7 +1,5 @@
-import { applyD1Migrations, env } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { type LeaderboardResponse, MODEL_CATALOG } from "@gotry-io/quota-protocol";
-import { beforeEach, describe, expect, inject, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createWebDocumentPort } from "../src/account/web-document-port.ts";
 import { memoizeWebSessionAuthorization } from "../src/account/web-session.ts";
 import { isRelayApiPath } from "../src/relay-paths.ts";
@@ -15,12 +13,10 @@ import {
   withPrivateNoStore,
 } from "../src/web-document-ssr.ts";
 import { SignedInWebSessionStub, signedOutWebSessions } from "./web-session-stub.ts";
+import type { RelayDatabase } from "../src/platform/database.ts";
+import { testDatabase } from "./support/database.ts";
 
-declare module "vitest" {
-  export interface ProvidedContext {
-    TEST_MIGRATIONS: D1Migration[];
-  }
-}
+let db: RelayDatabase;
 
 const now = new Date("2026-08-10T00:00:00.000Z");
 
@@ -33,7 +29,7 @@ const emptyBoard: LeaderboardResponse = {
 };
 
 beforeEach(async () => {
-  await applyD1Migrations(env.DB, inject("TEST_MIGRATIONS"));
+  db = await testDatabase();
 });
 
 describe("document routing helpers", () => {
@@ -82,10 +78,11 @@ describe("document routing helpers", () => {
 
 describe("web document port", () => {
   it("returns a viewer only when the session and domain account both exist", async () => {
-    const state = new D1AccountState(env.DB);
-    await env.DB.prepare(
-      "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-    )
+    const state = new D1AccountState(db);
+    await db
+      .prepare(
+        "INSERT INTO accounts (id, display_label, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+      )
       .bind("account_1", "octocat", now.toISOString())
       .run();
     expect(
@@ -288,7 +285,7 @@ describe("document SSR observability", () => {
 function documentPortInput<Input extends object>(input: Input) {
   return {
     ...input,
-    usageState: new D1UsageState(env.DB),
+    usageState: new D1UsageState(db),
     catalog: PRICING_CATALOG,
     modelCatalog: MODEL_CATALOG,
   };

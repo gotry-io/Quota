@@ -8,6 +8,7 @@ import {
 import catalog from "../../../packages/provider/catalog.json" with { type: "json" };
 import { readBoundedJSON } from "./account/bounded-json.ts";
 import { CANONICAL_ORIGIN } from "./config.ts";
+import type { LastReadingCache } from "./platform/reading-cache.ts";
 
 export const PROVIDER_STATUS_CACHE_MILLISECONDS = 10 * 60 * 1000;
 export const PROVIDER_STATUS_TIMEOUT_MILLISECONDS = 5_000;
@@ -33,7 +34,7 @@ export function statuspageV2Endpoints(): ReadonlyArray<{ id: ProviderId; url: st
 
 export interface ProviderStatusPorts {
   fetch: typeof fetch;
-  cache: Cache;
+  cache: LastReadingCache;
   now: Date;
 }
 
@@ -85,7 +86,7 @@ function cacheRequest(id: string): Request {
   return new Request(`${CANONICAL_ORIGIN}/api/v2/providers/status/upstream/${id}`);
 }
 
-async function readCached(cache: Cache, id: string): Promise<CachedReading | null> {
+async function readCached(cache: LastReadingCache, id: string): Promise<CachedReading | null> {
   const response = await cache.match(cacheRequest(id));
   if (!response) return null;
   try {
@@ -107,7 +108,11 @@ async function readCached(cache: Cache, id: string): Promise<CachedReading | nul
   }
 }
 
-async function writeCached(cache: Cache, id: string, reading: CachedReading): Promise<void> {
+async function writeCached(
+  cache: LastReadingCache,
+  id: string,
+  reading: CachedReading,
+): Promise<void> {
   await cache.put(
     cacheRequest(id),
     new Response(JSON.stringify(reading), {

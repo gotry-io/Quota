@@ -16,6 +16,8 @@ Read the relevant source before changing that area:
 | Collection strategy for all twelve providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
+| One Relay source tree on both Cloudflare Workers and Node/Docker | `docs/decisions/0049-one-relay-two-runtimes.md` |
+| Self-hosted Relay (Docker, Tunnel, backup, cutover) | `docs/relay-self-host.md` |
 | Observation merge that preserves what each device saw | `docs/decisions/0003-observation-preserving-subscription-merge.md` |
 | One private Rust service behind one entry point | `docs/decisions/0007-rust-native-local-service.md` |
 | Report-time model catalog, and why the raw model text is kept | `docs/decisions/0009-versioned-model-catalog.md` |

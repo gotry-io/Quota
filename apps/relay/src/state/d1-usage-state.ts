@@ -14,6 +14,7 @@ import type {
   UsageUpload,
   UsageWriteResult,
 } from "@gotry-io/relay-core";
+import type { RelayDatabase, RelayStatement } from "../platform/database.ts";
 
 /** The identity dimensions of a stored row, in the order both tables key them. */
 const identityColumns = [
@@ -59,7 +60,7 @@ WHERE device_id = ?1 AND agent = ?2
   AND bucket_start_utc IN (SELECT value FROM json_each(?3))`;
 
 export class D1UsageState implements UsageState {
-  constructor(private readonly database: D1Database) {}
+  constructor(private readonly database: RelayDatabase) {}
 
   /**
    * Replace the hours this scan read more recently than the stored one, and rewrite the UTC
@@ -113,7 +114,7 @@ export class D1UsageState implements UsageState {
       return { outcome: "written", accepted: [], ignored };
     }
 
-    const statements: D1PreparedStatement[] = [];
+    const statements: RelayStatement[] = [];
     for (const hour of accepted) {
       statements.push(this.clearHour(principal, upload.agent, hour));
       if (hour.rows.length > 0) {
@@ -357,7 +358,7 @@ export class D1UsageState implements UsageState {
     principal: DeviceWriterPrincipal,
     agent: string,
     hour: UsageUpload["hours"][number],
-  ): D1PreparedStatement {
+  ): RelayStatement {
     return this.database
       .prepare(
         `DELETE FROM usage_hourly
@@ -379,7 +380,7 @@ export class D1UsageState implements UsageState {
     principal: DeviceWriterPrincipal,
     agent: string,
     hour: UsageUpload["hours"][number],
-  ): D1PreparedStatement {
+  ): RelayStatement {
     // One statement, whatever the row count: an hour may carry hundreds of rows and D1 bounds
     // both the parameters a statement may bind and the statements a batch may hold.
     return this.database
@@ -423,7 +424,7 @@ export class D1UsageState implements UsageState {
     principal: DeviceWriterPrincipal,
     agent: string,
     hour: UsageUpload["hours"][number],
-  ): D1PreparedStatement {
+  ): RelayStatement {
     return this.database
       .prepare(
         `INSERT INTO usage_hour_scans (device_id, agent, bucket_start_utc, scan_version)
@@ -443,14 +444,14 @@ export class D1UsageState implements UsageState {
       );
   }
 
-  private clearDay(deviceId: string, agent: string, date: string): D1PreparedStatement {
+  private clearDay(deviceId: string, agent: string, date: string): RelayStatement {
     return this.database
       .prepare("DELETE FROM usage_daily WHERE device_id = ?1 AND utc_date = ?2 AND agent = ?3")
       .bind(deviceId, date, agent);
   }
 
   /** Rebuild one UTC date from the hours that survived this batch's replacements. */
-  private rollUpDay(deviceId: string, agent: string, date: string): D1PreparedStatement {
+  private rollUpDay(deviceId: string, agent: string, date: string): RelayStatement {
     return this.database
       .prepare(
         `INSERT INTO usage_daily (
@@ -477,10 +478,7 @@ export class D1UsageState implements UsageState {
       .bind(deviceId, date, agent, `${date}T00:00:00Z`, `${nextUtcDate(date)}T00:00:00Z`);
   }
 
-  private markDeviceSeen(
-    principal: DeviceWriterPrincipal,
-    receivedAt: string,
-  ): D1PreparedStatement {
+  private markDeviceSeen(principal: DeviceWriterPrincipal, receivedAt: string): RelayStatement {
     return this.database
       .prepare(
         `UPDATE devices

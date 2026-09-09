@@ -6,6 +6,9 @@ const migrations = await readD1Migrations("./migrations");
 const testSecret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 
 export default defineConfig({
+  define: {
+    "import.meta.env.RELAY_TEST_DRIVER": JSON.stringify("d1"),
+  },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
