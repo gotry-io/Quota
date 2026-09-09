@@ -74,7 +74,7 @@ path. `TZ` is for the backup container's clock (default `UTC`); set
 
 `APPLE_SIGNIN_PRIVATE_KEY` is the PKCS#8 PEM Apple issues once. Docker `env_file`
 does not keep real newlines; put the PEM on one line with the two-character
-sequence `\n` between PEM lines, matching however the Node entry decodes it.
+sequence `\n` between PEM lines; the Node entry turns that sequence back into line breaks.
 
 Pull the published image, or build it locally before a `relay-v*` tag exists:
 

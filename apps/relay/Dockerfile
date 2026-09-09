@@ -2,7 +2,7 @@
 # install script still runs node-gyp, so each stage that `pnpm install`s it
 # needs python3/make/g++. The native module is installed in the runtime stage
 # on this platform, not copied from builder.
-FROM node:22-bookworm-slim AS builder
+FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -37,7 +37,7 @@ COPY packages/provider packages/provider
 RUN pnpm --filter @gotry-io/quota-web build \
   && pnpm --filter @gotry-io/quota-relay build:node
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 

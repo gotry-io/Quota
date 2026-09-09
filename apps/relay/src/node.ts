@@ -35,9 +35,15 @@ function readSecrets(environment: NodeJS.ProcessEnv): RelaySecrets {
   if (missing.length > 0) {
     throw new Error(`QuotaRelay is missing required configuration: ${missing.join(", ")}`);
   }
-  return Object.fromEntries(
+  const secrets = Object.fromEntries(
     SECRET_NAMES.map((name) => [name, environment[name] as string]),
   ) as unknown as RelaySecrets;
+  // A Docker env file holds one line per value, so the PEM arrives with the two characters
+  // `\n` where Apple put line breaks; Workers secrets keep the breaks themselves.
+  return {
+    ...secrets,
+    APPLE_SIGNIN_PRIVATE_KEY: secrets.APPLE_SIGNIN_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  };
 }
 
 const database = new SqliteDatabase(process.env.RELAY_SQLITE_PATH ?? "/data/relay.sqlite");
