@@ -71,10 +71,10 @@ must each be at least 32 characters; a shorter value refuses to start.
 ## Deploy an update
 
 1. Tag `relay-v<version>` on `main`; the workflow pushes the image.
-2. The GHCR package is private, so pull with a transient login on the host:
+2. The GHCR package is public; pull it on the host:
 
    ```bash
-   gh auth token | ssh dmit.vps 'docker login ghcr.io -u <github-user> --password-stdin && docker pull ghcr.io/gotry-io/quota-relay:<version>; docker logout ghcr.io'
+   ssh dmit.vps docker pull ghcr.io/gotry-io/quota-relay:<version>
    ```
 
 3. Change the image tag in the Portainer stack and redeploy (Portainer UI, or
