@@ -1,22 +1,14 @@
 name: deploy-cloudflare
 
-# Deploys the managed Worker at quota.gotry.io. The Worker serves both QuotaRelay APIs and the
-# public website Static Assets from apps/web/dist (built inside deploy:cloudflare).
+# Deploys the Worker `quota` over D1. Since 2026-09-14 production is the Node/SQLite Relay on
+# dmit (docs/relay-self-host.md); the Worker is the rollback path. `wrangler deploy` re-creates the
+# quota.gotry.io custom domain from wrangler.jsonc, which takes precedence over the A record at the
+# edge, so this workflow is manual: running it IS the rollback to the Worker and D1.
 #
 # Required repository secrets:
 #   CLOUDFLARE_API_TOKEN   Token with Workers Scripts Edit + D1 Edit on the production account
 #   CLOUDFLARE_ACCOUNT_ID  Cloudflare account id that owns the `quota` Worker/D1 database
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/relay/**"
-      - "apps/web/**"
-      - "packages/protocol/**"
-      - "packages/quota-model/**"
-      - "packages/relay-core/**"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/deploy-cloudflare.yml"
   workflow_dispatch:
 
 permissions:

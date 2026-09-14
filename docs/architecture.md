@@ -28,9 +28,10 @@ links to it rather than restating it.
   ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
-  Cloudflare Worker backed by D1, and the same process can run as a Node server with local SQLite
+  Node server over local SQLite in production, and the same process runs as a Cloudflare Worker
+  over D1, kept as the rollback
   ([ADR 0049](decisions/0049-one-relay-two-runtimes.md), [self-host runbook](relay-self-host.md)).
-- **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Worker
+- **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Relay
   as a separate SvelteKit application and source boundary.
 
 The bundled Rust executable is not a separate product; QuotaBar is its parent, transport peer,
