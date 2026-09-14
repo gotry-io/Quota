@@ -214,13 +214,13 @@ live in the process and a restart re-polls them.
 
 ## Docker
 
-The Node image, Compose stack (Relay, Cloudflare Tunnel, daily SQLite backup), D1 export/import,
-and the Worker ↔ Docker cutover and rollback are in
-[the self-host runbook](../../docs/relay-self-host.md). The Docker cutover is an owner action
-described there.
+Production runs this image on the dmit VPS behind Caddy (Portainer stack, daily SQLite
+backup); the Worker over D1 is the rollback path. The image, the stack files, D1 export/import,
+and the Worker ↔ Node cutover and rollback are in
+[the self-host runbook](../../docs/relay-self-host.md).
 
-Production migration and deployment remain workflow-owned and must not be run manually without
-explicit authorization.
+Deploying a new image to dmit is the runbook's owner action. The `deploy-cloudflare` workflow
+is manual and is the rollback to the Worker; do not run it without explicit authorization.
 
 The checked-in catalog in [`src/pricing-catalog.ts`](./src/pricing-catalog.ts) is a versioned
 snapshot with no runtime pricing network dependency. Model metadata and current rates are traced to

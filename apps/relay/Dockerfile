@@ -1,7 +1,6 @@
-# QuotaRelay Node runtime. Both stages are bookworm-slim. better-sqlite3's
-# install script still runs node-gyp, so each stage that `pnpm install`s it
-# needs python3/make/g++. The native module is installed in the runtime stage
-# on this platform, not copied from builder.
+# QuotaRelay Node runtime. The builder installs the workspace and compiles better-sqlite3
+# (its install script runs node-gyp, hence python3/make/g++ there); the runtime stage copies
+# the bundle and that one module and installs nothing.
 FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
@@ -37,41 +36,31 @@ COPY packages/provider packages/provider
 RUN pnpm --filter @gotry-io/quota-web build \
   && pnpm --filter @gotry-io/quota-relay build:node
 
+# The one module the bundle leaves external. Its npm package carries prebuilt binaries for
+# linux-arm64 and linux-x64, and `lib/binding.js` loads the one for this platform when there is
+# no local build, so the runtime needs its JavaScript, its manifest, and those two files.
+RUN mkdir -p /app/runtime-modules/better-sqlite3/prebuilds \
+  && cd "$(readlink -f apps/relay/node_modules/better-sqlite3)" \
+  && cp -r lib package.json /app/runtime-modules/better-sqlite3/ \
+  && cp prebuilds/linux-arm64.node prebuilds/linux-x64.node /app/runtime-modules/better-sqlite3/prebuilds/
+
 FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
-ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  npm_config_engine_strict=false \
-  npm_config_build_from_source=false \
-  PORT=8787 \
+ENV PORT=8787 \
   RELAY_SQLITE_PATH=/data/relay.sqlite \
   RELAY_STATIC_DIR=apps/web/.svelte-kit/output/client
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
-  && mkdir -p /data \
-  && chown node:node /data
+RUN mkdir -p /data && chown node:node /data
 
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/apps/relay/package.json apps/relay/package.json
-COPY --from=builder /app/apps/web/package.json apps/web/package.json
-COPY --from=builder /app/packages/protocol/package.json packages/protocol/package.json
-COPY --from=builder /app/packages/quota-model/package.json packages/quota-model/package.json
-COPY --from=builder /app/packages/relay-core/package.json packages/relay-core/package.json
-COPY --from=builder /app/scripts/install-git-hooks.sh scripts/install-git-hooks.sh
-
-RUN corepack enable \
-  && corepack prepare pnpm@10.23.0 --activate \
-  && chmod +x scripts/install-git-hooks.sh \
-  && pnpm install --frozen-lockfile --prod --filter @gotry-io/quota-relay \
-  && apt-get purge -y python3 make g++ \
-  && apt-get autoremove -y --purge \
-  && rm -rf /var/lib/apt/lists/*
-
+# `build:node` bundles every dependency but better-sqlite3 into server.mjs, so the runtime
+# carries the bundle, the website's client output, the migrations, and that one native module
+# — its prebuilt binary — and nothing else: no package manager, no compiler, no second install.
 COPY --from=builder --chown=node:node /app/apps/relay/dist/node/server.mjs apps/relay/dist/node/server.mjs
 COPY --from=builder --chown=node:node /app/apps/web/.svelte-kit/output/client apps/web/.svelte-kit/output/client
 COPY --from=builder --chown=node:node /app/apps/relay/migrations apps/relay/migrations
+COPY --from=builder --chown=node:node /app/runtime-modules/better-sqlite3 node_modules/better-sqlite3
 
 VOLUME /data
 EXPOSE 8787
