@@ -1,217 +1,171 @@
 # Self-hosting QuotaRelay
 
-QuotaRelay is one process. Cloudflare Workers plus D1 is the managed path at
-`https://quota.gotry.io`. The same process can run as a Node server with local SQLite
-behind a Cloudflare Tunnel. Switching between the two is an operations action, not a
-product migration: the origin, OAuth callbacks, and data contract stay
-`https://quota.gotry.io`.
+QuotaRelay is one process. It can run as a Cloudflare Worker over D1, or as a Node
+server over a local SQLite file ([ADR 0049](decisions/0049-one-relay-two-runtimes.md)).
+Switching between the two is an operations action, not a product migration: the
+origin, OAuth callbacks, and data contract stay `https://quota.gotry.io`.
 
-This runbook is the host-side procedure. The Node entry, migration runner, and
-`build:node` output live with the Relay package; this file does not restate them.
+Since 2026-09-14 production is the Node runtime on the `dmit` VPS. The Worker and
+its D1 database are kept deployed as the rollback path. This runbook is the
+host-side procedure for that deployment; the Node entry, migration runner, and
+`build:node` output live with the Relay package and are not restated here.
 
-## Prerequisites
+## Topology
 
-- A Mac mini (or any always-on host) with Docker Desktop installed and running.
-- A clone of this repository. Compose bind-mounts
-  `scripts/relay-sqlite-backup.sh` from the clone.
-- Cloudflare access that can create a Tunnel and edit DNS for `gotry.io`.
-- The production Worker secrets listed in [`apps/relay/README.md`](../apps/relay/README.md).
-  The Node process reads the same names, plus `RELAY_SQLITE_PATH`, `RELAY_STATIC_DIR`,
-  and `PORT`. `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
-  `QUOTA_SESSION_HASH_KEY` must each be at least 32 characters (`openssl rand -hex 24`);
-  a shorter value refuses to start.
-- `sqlite3` and `pnpm` on the host for export, import, and a manual backup. The
-  Compose backup service installs `sqlite` itself.
-
-### Cloudflare Tunnel and DNS
-
-1. In Zero Trust → Networks → Tunnels, create a tunnel and copy its token. That
-   token is `TUNNEL_TOKEN`.
-2. Add a public hostname on the tunnel:
-   - Subdomain / domain: `quota.gotry.io`
-   - Type: HTTP
-   - URL: `http://relay:8787` (the Compose service name and the container port)
-3. Create the DNS record `quota.gotry.io` as a CNAME to
-   `<tunnel-id>.cfargotunnel.com`, proxied. Do not point production at the tunnel
-   until the cutover step below; the Worker custom domain owns that name today.
-
-### Mac mini power and Docker Desktop
-
-Docker Desktop on macOS runs only while a user session is logged in. Set the mini
-so it does not sleep, and so Docker starts when that user logs in:
-
-```bash
-sudo pmset -a sleep 0 disksleep 0
+```
+client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-relay:8787
+                                                          └─ quota-relay-backup (nightly .backup)
 ```
 
-In Docker Desktop → Settings → General, enable **Start Docker Desktop when you log
-in**. Give the mini an automatic login for the user that runs Docker Desktop, or
-the Compose stack will stay down until someone signs in at the console.
+- **Image** `ghcr.io/gotry-io/quota-relay:<version>`, built by
+  `.github/workflows/release-relay-image.yml` on a `relay-v*` tag
+  (linux/amd64 + linux/arm64).
+- **Stack** Portainer stack `quota-relay` on the dmit endpoint, file
+  [`deploy/relay/portainer-stack.yml`](../deploy/relay/portainer-stack.yml):
+  `relay` (192 MiB limit, `NODE_OPTIONS=--max-old-space-size=64`, volume
+  `relay-data`) and `backup` (alpine + sqlite, volume `relay-backups`,
+  bind-mounts `/opt/quota-relay/relay-sqlite-backup.sh`, a copy of
+  [`scripts/relay-sqlite-backup.sh`](../scripts/relay-sqlite-backup.sh)).
+- **Edge** Caddy (Portainer stack `caddy`, `/opt/caddy/Caddyfile`) terminates TLS
+  with a Let's Encrypt certificate obtained through Cloudflare DNS-01 and proxies
+  to `quota-relay:8787` on the shared `web` network:
 
-## First deploy (no production traffic)
+  ```caddyfile
+  quota.gotry.io {
+  	import edge
+  	log {
+  		output stdout
+  		format json
+  	}
+  	reverse_proxy http://quota-relay:8787
+  }
+  ```
 
-Work from the repository root.
+- **DNS** `quota.gotry.io` is a proxied A record to the dmit address. The Worker
+  custom domain for that name was removed at cutover; `wrangler.jsonc` still
+  declares it, so `wrangler deploy` would re-bind the Worker (see Rollback).
 
-```bash
-cp deploy/relay/relay.env.example deploy/relay/relay.env
-ln -sf relay.env deploy/relay/.env
-```
+The `deploy/relay/docker-compose.yml` file is the alternative layout for a host
+without a public address (Relay + `cloudflared` Tunnel + backup, `env_file`).
+It is not what production runs.
 
-Fill every secret in `deploy/relay/relay.env`. The example already has sample
-values for `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
-`QUOTA_SESSION_HASH_KEY`; replace them with new `openssl rand -hex 24` output for
-this host (or copy the production Worker secrets — they must stay 32 characters
-or longer). `relay.env` and `deploy/relay/.env` are gitignored. Compose reads
-`.env` to substitute `${TUNNEL_TOKEN}` into the `cloudflared` command, and
-injects `relay.env` into the `relay` container.
+## Secrets
 
-Leave `RELAY_SQLITE_PATH`, `RELAY_STATIC_DIR`, and `PORT` blank in `relay.env`;
-Compose sets them to `/data/relay.sqlite`,
-`apps/web/.svelte-kit/output/client`, and `8787` so they match `VOLUME /data` and
-`EXPOSE 8787`. The image copies the SvelteKit client build to that same relative
-path. `TZ` is for the backup container's clock (default `UTC`); set
-`TZ=Asia/Shanghai` in `.env` if 03:00 should be that local time.
+The Node process reads the same names as the Worker, plus `RELAY_SQLITE_PATH`,
+`RELAY_STATIC_DIR`, and `PORT` (the stack file sets those three).
+`IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and `QUOTA_SESSION_HASH_KEY`
+must each be at least 32 characters; a shorter value refuses to start.
 
-`APPLE_SIGNIN_PRIVATE_KEY` is the PKCS#8 PEM Apple issues once. Docker `env_file`
-does not keep real newlines; put the PEM on one line with the two-character
-sequence `\n` between PEM lines; the Node entry turns that sequence back into line breaks.
+- The canonical copy is `deploy/relay/relay.env` on the operator's machine
+  (mode 600, gitignored; `relay.env.example` lists the names).
+- In Portainer the values are stack **Env** variables, interpolated into
+  `environment:` by the stack file. Portainer resolves `env_file:` inside its own
+  container, so an `env_file` path on the host does not work there.
+- `APPLE_SIGNIN_PRIVATE_KEY` is the PKCS#8 PEM on one line with the two-character
+  sequence `\n` between PEM lines; the Node entry restores the line breaks.
+- The three HMAC keys must be the same on every runtime that shares a database.
+  Cloudflare does not read secrets back, so the operator's `relay.env` is the only
+  place to recover them from. `IDENTITY_SUBJECT_KEY` was rotated at cutover; the
+  identity rows in both SQLite and D1 were recomputed with the new key.
 
-Pull the published image, or build it locally before a `relay-v*` tag exists:
+## Deploy an update
 
-```bash
-docker compose -f deploy/relay/docker-compose.yml pull
-# or:
-docker build -f apps/relay/Dockerfile -t ghcr.io/gotry-io/quota-relay:latest .
-```
-
-Start only Relay first if the tunnel hostname is not ready:
-
-```bash
-docker compose -f deploy/relay/docker-compose.yml up -d relay
-curl -sS http://127.0.0.1:8787/healthz
-curl -sS http://127.0.0.1:8787/api/v2/info
-```
-
-`__Host-` session cookies require HTTPS on `quota.gotry.io`. Sign-in and Usage
-upload are verified on that hostname after cutover, not on loopback HTTP.
-
-## Cutover (Worker → Docker)
-
-Do this at a low-traffic time. The D1 export is a point-in-time copy. Any write
-the Worker accepts after the export is not in the SQLite file, and there is no
-incremental replay.
-
-1. **Freeze writes.** In the Cloudflare dashboard, either:
-   - replace the `quota.gotry.io` Worker route with a response that is 503
-     maintenance, or
-   - cut DNS immediately to the tunnel (shorter freeze, no maintenance page).
-   The first option is the one that leaves D1 still while you export.
-2. **Export D1** from a machine that has `CLOUDFLARE_API_TOKEN` and
-   `CLOUDFLARE_ACCOUNT_ID`:
+1. Tag `relay-v<version>` on `main`; the workflow pushes the image.
+2. The GHCR package is private, so pull with a transient login on the host:
 
    ```bash
-   ./scripts/relay-d1-export.sh /tmp/quota-d1.sql
+   gh auth token | ssh dmit.vps 'docker login ghcr.io -u <github-user> --password-stdin && docker pull ghcr.io/gotry-io/quota-relay:<version>; docker logout ghcr.io'
    ```
 
-   That is `wrangler d1 export quota --remote --output <file>` against
-   `apps/relay/wrangler.jsonc`.
-3. **Import** into a new file (the script refuses to overwrite):
+3. Change the image tag in the Portainer stack and redeploy (Portainer UI, or
+   `PUT /api/stacks/<id>?endpointId=<dmit>` with `pullImage: false`). The process
+   applies any new `apps/relay/migrations` files on start into the same
+   `d1_migrations` table Wrangler uses.
+4. Check `docker logs quota-relay` for `relay_migrations_applied` and
+   `https://quota.gotry.io/api/v2/info` for the new version.
+
+## Cutover procedure (Worker → Node), as run on 2026-09-14
+
+The D1 export is a point-in-time copy; a write the Worker accepts after the export
+is not in the SQLite file and there is no incremental replay. Do it at a low-traffic
+time. The whole window was about 40 seconds.
+
+1. Stop the `relay` container so the hostname answers 502 instead of serving an
+   empty database.
+2. Freeze writes: delete the Worker custom domain
+   (`DELETE /accounts/<id>/workers/domains/<domain-id>`). This also removes the
+   placeholder AAAA record Cloudflare keeps for it.
+3. Export and import:
 
    ```bash
+   ./scripts/relay-d1-export.sh /tmp/quota-d1.sql          # wrangler d1 export --remote
    ./scripts/relay-sqlite-import.sh /tmp/quota-d1.sql /tmp/relay.sqlite
    ```
 
-   The import creates the database, `.read`s the dump, and exits 1 unless
-   `d1_migrations` exists and its row count equals the number of
-   `apps/relay/migrations/*.sql` files. Wrangler records applied migrations in
-   that table, so an export that already ran the ladder is treated as migrated
-   and the Node process will not re-apply those files.
-4. **Place the file on the volume and start the stack.** With the `relay`
-   service stopped:
+   The import refuses to overwrite, and exits 1 unless `d1_migrations` has one row
+   per file in `apps/relay/migrations`.
+4. Place the file on the volume with the container stopped, then start it:
 
    ```bash
-   docker compose -f deploy/relay/docker-compose.yml up -d
-   docker compose -f deploy/relay/docker-compose.yml cp /tmp/relay.sqlite relay:/data/relay.sqlite
-   docker compose -f deploy/relay/docker-compose.yml restart relay
+   scp /tmp/relay.sqlite dmit.vps:/opt/quota-relay/relay-prod.sqlite
+   ssh dmit.vps 'docker run --rm -v quota-relay_relay-data:/data -v /opt/quota-relay:/src:ro alpine sh -c "cp /src/relay-prod.sqlite /data/relay.sqlite && chown 1000:1000 /data/relay.sqlite" && rm /opt/quota-relay/relay-prod.sqlite && docker start quota-relay'
    ```
 
-   If the named volume is empty on first start, copying after `up` and restarting
-   is enough. The process applies any *new* migration files on start.
-5. **Verify on loopback, then through the tunnel hostname:**
+5. Add the proxied A record `quota.gotry.io → <dmit address>`.
+6. Verify: `curl -sD - https://quota.gotry.io/healthz` shows `via: 1.1 Caddy`; a
+   signed-in QuotaBar or Quota iOS device completes an account sync and a
+   snapshot upload (QuotaBar's `diagnostic_attempts` journal shows `success`);
+   the Caddy access log shows authenticated `/api/v6/...` requests answering 200.
+7. Watch for 30 minutes: `docker logs -f quota-relay` free of
+   `relay_request_failed`, `/healthz` answering, memory within the limit.
 
-   ```bash
-   curl -sS http://127.0.0.1:8787/healthz
-   curl -sS http://127.0.0.1:8787/api/v2/info
-   ```
-
-   Then, with DNS or the tunnel already serving `https://quota.gotry.io`: sign in
-   in a browser, and from a signed-in QuotaBar or Quota iOS device confirm a
-   snapshot/Usage upload.
-6. **Cut DNS / Tunnel** if you froze with a 503 instead of moving DNS in step 1:
-   remove the Worker custom domain (or the 503 route) and leave `quota.gotry.io`
-   as the CNAME to `<tunnel-id>.cfargotunnel.com`.
-7. **Watch for 30 minutes.** `docker compose -f deploy/relay/docker-compose.yml logs -f relay`
-   should stay free of unhandled `relay_request_failed` lines; `/healthz` should
-   keep answering; a Device should still upload.
-
-## Rollback (Docker → Worker)
-
-Point `quota.gotry.io` back at the Worker custom domain (or restore the Worker
-route you removed). D1 still holds whatever it held when you froze or last
-wrote through the Worker.
-
-**Rollback discards every write the Docker process accepted after cutover.**
-`sqlite3 .dump` is not an incremental feed back into D1: hour-versioned Usage,
-session rotation, and identity rows do not replay on top of the live Worker
-database. If you must return to the Worker, you accept that loss. That is why
-cutover happens at a low-traffic time.
-
-## Upgrade
+## Rollback (Node → Worker)
 
 ```bash
-docker compose -f deploy/relay/docker-compose.yml pull
-docker compose -f deploy/relay/docker-compose.yml up -d
+cd apps/relay && pnpm exec wrangler deploy
 ```
 
-The Node process applies `apps/relay/migrations` on start, in filename order,
-into the same `d1_migrations` table Wrangler uses. A new image that only adds
-migration files does not need a manual SQLite step.
+re-creates the custom domain from `wrangler.jsonc`, which takes precedence over
+the A record at the Cloudflare edge. D1 holds what it held at the freeze.
+
+**Rollback discards every write the Node process accepted after cutover.**
+`sqlite3 .dump` is not an incremental feed back into D1: hour-versioned Usage,
+session rotation, and identity rows do not replay on top of the live Worker
+database. If you must return to the Worker, you accept that loss.
 
 ## Backup and restore
 
-The `backup` service runs `scripts/relay-sqlite-backup.sh` at 03:00 in the
-container's `TZ`. That script is:
+The `backup` container runs `relay-sqlite-backup.sh --loop`: at 03:00 in its `TZ`
+(`Asia/Shanghai`) it writes `sqlite3 /data/relay.sqlite ".backup /backups/relay-YYYYMMDD.sqlite"`
+and keeps 14 dated files. A second run on the same calendar day overwrites that
+day's file.
+
+Manual snapshot from the host:
 
 ```bash
-sqlite3 /data/relay.sqlite ".backup /backups/relay-YYYYMMDD.sqlite"
+docker exec quota-relay-backup /usr/local/bin/relay-sqlite-backup.sh
 ```
 
-and then deletes dated files so that 14 remain. A second run on the same calendar
-day overwrites that day's file.
+Restore: stop `relay`, replace `/data/relay.sqlite` on the `relay-data` volume with
+the snapshot (same `docker run --rm -v ... alpine cp` pattern as the cutover, then
+`chown 1000:1000`), start `relay`. SQLite `-wal` / `-shm` files beside a snapshot
+are not used; `.backup` writes a single consistent file.
 
-Manual run on the host (the database file copied off the volume):
+## Logs and health
 
 ```bash
-./scripts/relay-sqlite-backup.sh /path/to/relay.sqlite /path/to/backups
+docker logs -f quota-relay
+docker logs -f quota-relay-backup
+docker logs -f caddy | grep '"host":"quota.gotry.io"'
 ```
 
-Restore: stop `relay`, replace `/data/relay.sqlite` with the snapshot, start
-`relay`. SQLite `-wal` / `-shm` files beside a snapshot are not used; `.backup`
-writes a single consistent file.
+Origin health without Cloudflare: `curl --resolve quota.gotry.io:443:<dmit address> https://quota.gotry.io/healthz`.
+The relay container publishes no host port; only Caddy reaches it.
 
-```bash
-docker compose -f deploy/relay/docker-compose.yml stop relay
-docker compose -f deploy/relay/docker-compose.yml cp /path/to/relay-YYYYMMDD.sqlite relay:/data/relay.sqlite
-docker compose -f deploy/relay/docker-compose.yml start relay
-```
+## Host sizing
 
-## Logs
-
-```bash
-docker compose -f deploy/relay/docker-compose.yml logs -f relay
-docker compose -f deploy/relay/docker-compose.yml logs -f cloudflared
-docker compose -f deploy/relay/docker-compose.yml logs -f backup
-```
-
-Loopback health is `http://127.0.0.1:8787/healthz`. Compose publishes 8787 only
-on localhost; public traffic arrives through the tunnel.
+dmit is 1 vCPU / 958 MiB shared with other services. Measured after cutover:
+relay 85 MiB RSS, Caddy 31 MiB, about 210 MiB available. The 192 MiB container
+limit plus the 64 MiB V8 old-space cap keep the process from taking the page cache
+with it; if the limit is hit the container restarts and the SQLite file is
+unaffected.
