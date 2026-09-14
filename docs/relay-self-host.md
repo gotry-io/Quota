@@ -5,10 +5,12 @@ server over a local SQLite file ([ADR 0049](decisions/0049-one-relay-two-runtime
 Switching between the two is an operations action, not a product migration: the
 origin, OAuth callbacks, and data contract stay `https://quota.gotry.io`.
 
-Since 2026-09-14 production is the Node runtime on the `dmit` VPS. The Worker and
-its D1 database are kept deployed as the rollback path. This runbook is the
-host-side procedure for that deployment; the Node entry, migration runner, and
-`build:node` output live with the Relay package and are not restated here.
+Since 2026-09-14 production is the Node runtime on the `dmit` VPS. The production
+Worker and its D1 database were deleted the same day
+([ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md)); the Workers runtime
+remains for local development and tests. This runbook is the host-side procedure
+for the dmit deployment; the Node entry, migration runner, and `build:node` output
+live with the Relay package and are not restated here.
 
 ## Topology
 
@@ -41,9 +43,8 @@ client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-r
   }
   ```
 
-- **DNS** `quota.gotry.io` is a proxied A record to the dmit address. The Worker
-  custom domain for that name was removed at cutover; `wrangler.jsonc` still
-  declares it, so `wrangler deploy` would re-bind the Worker (see Rollback).
+- **DNS** `quota.gotry.io` is a proxied A record to the dmit address. `wrangler.jsonc`
+  declares no route, so nothing can re-bind the name to a Worker by accident.
 
 The `deploy/relay/docker-compose.yml` file is the alternative layout for a host
 without a public address (Relay + `cloudflared` Tunnel + backup, `env_file`).
@@ -84,54 +85,15 @@ must each be at least 32 characters; a shorter value refuses to start.
 4. Check `docker logs quota-relay` for `relay_migrations_applied` and
    `https://quota.gotry.io/api/v2/info` for the new version.
 
-## Cutover procedure (Worker → Node), as run on 2026-09-14
+## How production got here (2026-09-14)
 
-The D1 export is a point-in-time copy; a write the Worker accepts after the export
-is not in the SQLite file and there is no incremental replay. Do it at a low-traffic
-time. The whole window was about 40 seconds.
-
-1. Stop the `relay` container so the hostname answers 502 instead of serving an
-   empty database.
-2. Freeze writes: delete the Worker custom domain
-   (`DELETE /accounts/<id>/workers/domains/<domain-id>`). This also removes the
-   placeholder AAAA record Cloudflare keeps for it.
-3. Export and import:
-
-   ```bash
-   ./scripts/relay-d1-export.sh /tmp/quota-d1.sql          # wrangler d1 export --remote
-   ./scripts/relay-sqlite-import.sh /tmp/quota-d1.sql /tmp/relay.sqlite
-   ```
-
-   The import refuses to overwrite, and exits 1 unless `d1_migrations` has one row
-   per file in `apps/relay/migrations`.
-4. Place the file on the volume with the container stopped, then start it:
-
-   ```bash
-   scp /tmp/relay.sqlite dmit.vps:/opt/quota-relay/relay-prod.sqlite
-   ssh dmit.vps 'docker run --rm -v quota-relay_relay-data:/data -v /opt/quota-relay:/src:ro alpine sh -c "cp /src/relay-prod.sqlite /data/relay.sqlite && chown 1000:1000 /data/relay.sqlite" && rm /opt/quota-relay/relay-prod.sqlite && docker start quota-relay'
-   ```
-
-5. Add the proxied A record `quota.gotry.io → <dmit address>`.
-6. Verify: `curl -sD - https://quota.gotry.io/healthz` shows `via: 1.1 Caddy`; a
-   signed-in QuotaBar or Quota iOS device completes an account sync and a
-   snapshot upload (QuotaBar's `diagnostic_attempts` journal shows `success`);
-   the Caddy access log shows authenticated `/api/v6/...` requests answering 200.
-7. Watch for 30 minutes: `docker logs -f quota-relay` free of
-   `relay_request_failed`, `/healthz` answering, memory within the limit.
-
-## Rollback (Node → Worker)
-
-```bash
-cd apps/relay && pnpm exec wrangler deploy
-```
-
-re-creates the custom domain from `wrangler.jsonc`, which takes precedence over
-the A record at the Cloudflare edge. D1 holds what it held at the freeze.
-
-**Rollback discards every write the Node process accepted after cutover.**
-`sqlite3 .dump` is not an incremental feed back into D1: hour-versioned Usage,
-session rotation, and identity rows do not replay on top of the live Worker
-database. If you must return to the Worker, you accept that loss.
+The Worker → Node cutover ran once and is recorded for the history, not for
+re-use: stop `relay`, delete the Worker custom domain (freeze), `wrangler d1 export`,
+`scripts/relay-sqlite-import.sh` (refuses to overwrite; exits 1 unless
+`d1_migrations` has one row per migration file), place the file on the volume with
+the container stopped, start it, add the proxied A record, verify `via: 1.1 Caddy`
+and a real device sync. The window was about 40 seconds. A final D1 export was
+taken before the database was deleted and is kept by the owner off the repository.
 
 ## Backup and restore
 
@@ -147,7 +109,7 @@ docker exec quota-relay-backup /usr/local/bin/relay-sqlite-backup.sh
 ```
 
 Restore: stop `relay`, replace `/data/relay.sqlite` on the `relay-data` volume with
-the snapshot (same `docker run --rm -v ... alpine cp` pattern as the cutover, then
+the snapshot (a dated file on the `relay-backups` volume, or the owner's off-host copy) (same `docker run --rm -v ... alpine cp` pattern as the cutover, then
 `chown 1000:1000`), start `relay`. SQLite `-wal` / `-shm` files beside a snapshot
 are not used; `.backup` writes a single consistent file.
 

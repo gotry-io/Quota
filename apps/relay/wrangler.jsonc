@@ -7,14 +7,9 @@
   "alias": {
     "quota-sveltekit-server": "../web/.svelte-kit/output/server/quota-sveltekit-server.js"
   },
-  // Production is the Node/SQLite Relay on dmit (docs/relay-self-host.md). This custom domain
-  // was removed at the 2026-09-14 cutover; `wrangler deploy` re-binds it, which is the rollback.
-  "routes": [
-    {
-      "pattern": "quota.gotry.io",
-      "custom_domain": true
-    }
-  ],
+  // No routes: the Workers runtime is for local development and the `workers` test project.
+  // Production is the Node/SQLite Relay on dmit (docs/relay-self-host.md, ADR 0050); the
+  // production Worker and its D1 database were deleted on 2026-09-14.
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",

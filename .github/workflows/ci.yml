@@ -101,7 +101,7 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
         run: >-
           ./scripts/ci-changed-paths.sh all
-          '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(deploy-cloudflare|pr-agent|release-ios|release-menubar)\.yml$)'
+          '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(pr-agent|release-ios|release-menubar|release-relay-image)\.yml$)'
 
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ steps.mac.outputs.run == 'true' }}

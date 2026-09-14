@@ -12,9 +12,9 @@ SvelteKit owns documents, routes, components, and the document-scoped viewer. Re
 OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
 See [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 
-Managed production publishes through the Relay deploy path (`pnpm deploy:cloudflare` / CI workflow
-`deploy-cloudflare.yml`). There is no separate website-only Cloudflare project: website and Relay
-API ship together on `quota.gotry.io`.
+Production publishes through the Relay image (`ghcr.io/gotry-io/quota-relay`, built on a
+`relay-v*` tag; see `docs/relay-self-host.md`). There is no separate website deployment: website
+and Relay API ship together on `quota.gotry.io`.
 
 ## Development
 
