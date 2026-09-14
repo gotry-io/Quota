@@ -1,7 +1,9 @@
 # QuotaRelay
 
-QuotaRelay is the managed Cloudflare Worker + D1 account and usage service for
-`https://quota.gotry.io`. It serves v2 GitHub account, native-client OAuth, Device control, and
+QuotaRelay is the account and usage service for `https://quota.gotry.io`. In production it is
+a Node process over SQLite on the dmit VPS ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md),
+[ADR 0050](../../docs/decisions/0050-the-worker-and-d1-are-retired.md)); the same source runs
+as a Cloudflare Worker over D1 for local development and the `workers` test project. It serves v2 GitHub account, native-client OAuth, Device control, and
 public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 The same source also runs as a Node process over a local SQLite file — see **Running on Node**
@@ -215,12 +217,9 @@ live in the process and a restart re-polls them.
 ## Docker
 
 Production runs this image on the dmit VPS behind Caddy (Portainer stack, daily SQLite
-backup); the Worker over D1 is the rollback path. The image, the stack files, D1 export/import,
-and the Worker ↔ Node cutover and rollback are in
-[the self-host runbook](../../docs/relay-self-host.md).
-
-Deploying a new image to dmit is the runbook's owner action. The `deploy-cloudflare` workflow
-is manual and is the rollback to the Worker; do not run it without explicit authorization.
+backup). The image, the stack files, the deploy procedure, and backup/restore are in
+[the self-host runbook](../../docs/relay-self-host.md). Deploying a new image to dmit is the
+runbook's owner action; there is no production Worker to deploy any more.
 
 The checked-in catalog in [`src/pricing-catalog.ts`](./src/pricing-catalog.ts) is a versioned
 snapshot with no runtime pricing network dependency. Model metadata and current rates are traced to

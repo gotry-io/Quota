@@ -117,9 +117,9 @@ pnpm build:menubar:app
 pnpm test:menubar:helper
 ```
 
-Managed Relay and the website deploy together from `main` through
-`.github/workflows/deploy-cloudflare.yml`. Local Wrangler dry runs are verification; do not apply
-remote migrations or deploy manually without explicit authorization.
+Relay and the website ship together as one image, `ghcr.io/gotry-io/quota-relay`, built on a
+`relay-v*` tag and deployed to the dmit VPS by the owner ([runbook](docs/relay-self-host.md)).
+Local Wrangler dry runs are verification; do not deploy anywhere without explicit authorization.
 
 ## Distribution
 

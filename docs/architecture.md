@@ -28,9 +28,10 @@ links to it rather than restating it.
   ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
-  Node server over local SQLite in production, and the same process runs as a Cloudflare Worker
-  over D1, kept as the rollback
-  ([ADR 0049](decisions/0049-one-relay-two-runtimes.md), [self-host runbook](relay-self-host.md)).
+  Node server over local SQLite in production; the same process runs as a Cloudflare Worker
+  over D1 for local development and tests
+  ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
+  [ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md), [self-host runbook](relay-self-host.md)).
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Relay
   as a separate SvelteKit application and source boundary.
 
@@ -509,9 +510,10 @@ to a provider ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)). Re
 login and browser sessions ([ADR 0025](decisions/0025-one-session-system.md)); the composition
 decision is [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 
-D1 is the only durable Relay store and applied migrations are never rewritten. Local Worker builds
-use Wrangler dry-run and local D1 migration verification; production Web and Worker deploy together
-only through `.github/workflows/deploy-cloudflare.yml`.
+The SQLite file on the production host is the only durable Relay store and applied migrations are
+never rewritten; the Worker runtime's local D1 exists for development and the `workers` test
+project. Production deploys are the owner action in the self-host runbook; there is no deploy
+workflow.
 
 The same Relay source also deploys as a Node process over a local SQLite file
 ([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Everything that differs between the two
