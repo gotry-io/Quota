@@ -43,7 +43,7 @@ struct MenuBarContentView: View {
         showsLeadingIcon: navigation.currentRoute == nil,
         trailing: headerTrailingAction,
         overflowMenuStartsExpanded: overflowMenuStartsExpanded,
-        onOpenDashboard: { DashboardWindowController.shared.show() }
+        onOpenUsage: { MainWindowController.shared.show(page: .usage) }
       ) {
         currentPage(
           now: context.date,
@@ -124,7 +124,7 @@ struct MenuBarContentView: View {
   }
 
   private func openSettings() {
-    SettingsWindowController.shared.show()
+    MainWindowController.shared.show(page: .agents)
   }
 
   private func openProvider(_ provider: ProviderID) {
@@ -148,7 +148,7 @@ struct MenuBarContentView: View {
           title: "No Quota to Show",
           message: "Sign in to a provider CLI or enable an agent in Settings.",
           actionTitle: "Open Settings",
-          action: { SettingsWindowController.shared.show(page: .agents) }
+          action: { MainWindowController.shared.show(page: .agents) }
         )
       }
     case .empty(_):
@@ -157,7 +157,7 @@ struct MenuBarContentView: View {
         title: "No Quota to Show",
         message: "Sign in to a provider CLI or enable an agent in Settings.",
         actionTitle: "Open Settings",
-        action: { SettingsWindowController.shared.show(page: .agents) }
+        action: { MainWindowController.shared.show(page: .agents) }
       )
     case .unavailable(let message):
       QuotaPageStateView(

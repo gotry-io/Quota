@@ -2,7 +2,7 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Agents → selected provider, read top to bottom as three questions: is it
+/// Main window → Settings → Agents → selected provider, read top to bottom as three questions: is it
 /// shown, what is it reporting, and how does this Mac sign in. Source quota and the API key
 /// field are sections in this pane, not pushed pages.
 struct ProviderSettingsView: View {

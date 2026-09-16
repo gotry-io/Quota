@@ -4,26 +4,50 @@ import AppKit
 /// the app — the panel's Quit item, ⌘Q, and logging out — arrives at
 /// `applicationShouldTerminate`. The helper's own exit is asked for there rather than left to
 /// the process dying, so a service that is mid-write finishes before its pipe disappears.
+/// Closing the main window never quits; a Dock click or `open -a` reopens it.
 @MainActor
 final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   private var model: MenuBarViewModel?
   private var statusItems: MenuBarStatusItemController?
+  private var openedAsLoginItem = false
 
   func attach(model: MenuBarViewModel) {
     self.model = model
-    SettingsWindowController.shared.attach(model: model)
-    DashboardWindowController.shared.attach(model: model)
+    MainWindowController.shared.attach(model: model)
+  }
+
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    WindowActivation.shared.applyDockVisibility()
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // The Open Application event is delivered between willFinishLaunching and here, so this is
+    // the first moment `currentAppleEvent` names it; earlier it is nil and every launch would
+    // read as manual.
+    openedAsLoginItem = LaunchAtLoginController.launchedAsLoginItem
     QuotaBarMainMenu.install()
     startStatusItemsIfNeeded()
+    if !openedAsLoginItem {
+      MainWindowController.shared.show()
+    }
+  }
+
+  func applicationShouldHandleReopen(
+    _ sender: NSApplication,
+    hasVisibleWindows _: Bool
+  ) -> Bool {
+    MainWindowController.shared.show()
+    return true
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    false
   }
 
   /// A desktop widget's `quotabar:` link, or `quotabar://dashboard`. Overview opens the panel as
   /// it stands; a subscription opens it scrolled to that subscription's provider. A link this
   /// installation never published — an old salt, a provider since removed — resolves to nothing
-  /// and lands on Overview. Dashboard opens the Dashboard window.
+  /// and lands on Overview. `quotabar://dashboard` opens the main window on Quota.
   func application(_ application: NSApplication, open urls: [URL]) {
     startStatusItemsIfNeeded()
     guard let statusItems, let model else { return }
@@ -35,7 +59,7 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
       case .subscription(let id):
         statusItems.openPanel(revealing: model.provider(forWidgetSelectionID: id))
       case .dashboard:
-        DashboardWindowController.shared.show()
+        MainWindowController.shared.show(page: .quota)
       }
       return
     }
@@ -47,8 +71,7 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
     let closePanel: () -> Void = { [weak self] in
       self?.statusItems?.panel.close()
     }
-    SettingsWindowController.shared.closePanel = closePanel
-    DashboardWindowController.shared.closePanel = closePanel
+    MainWindowController.shared.closePanel = closePanel
   }
 
   /// `terminateLater` is what makes an asynchronous last message possible: AppKit runs the run

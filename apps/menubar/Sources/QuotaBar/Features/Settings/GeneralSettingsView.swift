@@ -3,6 +3,8 @@ import SwiftUI
 enum GeneralSettingsCopy {
   static let launchAtLogin = "Launch at Login"
   static let launchAtLoginHint = "Start QuotaBar when you log in"
+  static let showInDock = "Show in Dock"
+  static let showInDockHint = "Show QuotaBar in the Dock"
   static let refreshInterval = "Refresh Interval"
   static let uploadUsage = "Upload Usage to Account"
   static let uploadUsageHint = "Upload this Mac's Usage to your Quota account"
@@ -13,7 +15,7 @@ enum GeneralSettingsCopy {
     "Deletes collected quota and Usage history on this Mac and refreshes."
 }
 
-/// The confirmation Reset Local Data raises. The Settings window can use a system
+/// The confirmation Reset Local Data raises. The main window can use a system
 /// dialog; these are the words the dialog says, so the row and the confirmation
 /// cannot drift apart.
 enum ResetLocalDataCopy {
@@ -24,12 +26,14 @@ enum ResetLocalDataCopy {
     + "You stay signed in."
 }
 
-/// Settings window → General: launch, collection cadence, Usage upload, project
+/// Main window → Settings → General: launch, Dock, collection cadence, Usage upload, project
 /// grouping, and the local-data reset.
 struct GeneralSettingsView: View {
   @Bindable var model: MenuBarViewModel
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
   @State private var confirmReset = false
+  @AppStorage(DockVisibilityPreference.storageKey) private var dockShown =
+    DockVisibilityPreference.fallback
 
   var body: some View {
     Form {
@@ -46,6 +50,19 @@ struct GeneralSettingsView: View {
         )
         .accessibilityLabel(GeneralSettingsCopy.launchAtLogin)
         .accessibilityHint(GeneralSettingsCopy.launchAtLoginHint)
+
+        Toggle(
+          GeneralSettingsCopy.showInDock,
+          isOn: Binding(
+            get: { dockShown },
+            set: { desired in
+              dockShown = desired
+              WindowActivation.shared.applyDockVisibility()
+            }
+          )
+        )
+        .accessibilityLabel(GeneralSettingsCopy.showInDock)
+        .accessibilityHint(GeneralSettingsCopy.showInDockHint)
 
         Picker(
           GeneralSettingsCopy.refreshInterval,

@@ -148,7 +148,7 @@ final class BrowserAccessWindowController: NSObject, BrowserAccessGrantPresentin
   }
 }
 
-/// Escape and ⌘W close it like any other window; there is no main menu to route them.
+/// Escape and ⌘W close it like any other window; ⌘W is also File › Close.
 private final class BrowserAccessWindow: NSWindow {
   override func cancelOperation(_ sender: Any?) {
     performClose(sender)

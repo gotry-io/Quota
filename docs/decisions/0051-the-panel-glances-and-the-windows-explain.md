@@ -1,6 +1,9 @@
 # ADR 0051: The panel glances, and the windows explain
 
-- Status: Accepted
+- Status: Accepted. Superseded in part by
+  [ADR 0052](0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md): two titled windows
+  (Settings and Dashboard) and the `LSUIElement` / accessory-until-a-window activation policy.
+  The panel-as-glance, local-samples, plan-B `quota_history` IPC, and no-upload rules remain.
 - Date: 2026-09-16
 - Follows [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
   [ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),

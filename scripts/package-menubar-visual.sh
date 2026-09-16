@@ -64,7 +64,6 @@ plutil -replace CFBundleIdentifier -string "io.gotry.quotabar.visualtest" \
 plutil -replace CFBundleName -string "QuotaBar Visual QA" "$APP_PATH/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_PATH/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "1" "$APP_PATH/Contents/Info.plist"
-plutil -replace LSUIElement -bool false "$APP_PATH/Contents/Info.plist"
 
 chmod 755 "$APP_PATH/Contents/MacOS/QuotaBar" "$APP_PATH/Contents/Helpers/quota-service"
 chmod +x "${ROOT_DIR}/scripts/sign-sparkle-framework.sh"

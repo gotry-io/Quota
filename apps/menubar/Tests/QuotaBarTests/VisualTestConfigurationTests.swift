@@ -20,39 +20,44 @@
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--data-source", "unknown"]) == nil)
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route"]) == nil)
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings"]) == nil)
+    #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard"]) == nil)
+    #expect(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-account"]) == nil
+    )
   }
 
   @Test
-  func settingsWindowRouteHostsTheTitledSettingsShell() throws {
+  func mainQuotaRouteHostsTheTitledMainWindow() throws {
     let configuration = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-window"])
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-quota"])
     )
-    #expect(configuration.route == .settingsWindow)
+    #expect(configuration.route == .mainQuota)
     #expect(configuration.initialPath.isEmpty)
-    #expect(configuration.hostsSettingsWindow)
-    #expect(configuration.settingsPage == nil)
+    #expect(configuration.hostsMainWindow)
+    #expect(configuration.mainPage == .quota)
+    #expect(configuration.quotaSelection == nil)
     #expect(!configuration.performsInitialRefresh)
   }
 
   @Test
-  func settingsMenuBarRouteHostsTheMenuBarForm() throws {
+  func mainMenuBarRouteHostsTheMenuBarForm() throws {
     let configuration = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-menu-bar"])
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-menu-bar"])
     )
-    #expect(configuration.route == .settingsMenuBar)
+    #expect(configuration.route == .mainMenuBar)
     #expect(configuration.initialPath.isEmpty)
-    #expect(configuration.hostsSettingsWindow)
-    #expect(configuration.settingsPage == .menuBar)
+    #expect(configuration.hostsMainWindow)
+    #expect(configuration.mainPage == .menuBar)
     #expect(!configuration.performsInitialRefresh)
   }
 
   @Test
-  func settingsWindowDetailRoutesHostTheTitledSettingsPages() throws {
-    let routes: [(String, VisualTestRoute, SettingsPage)] = [
-      ("settings-account", .settingsAccount, .account),
-      ("settings-notifications", .settingsNotifications, .notifications),
-      ("settings-general", .settingsGeneral, .general),
-      ("settings-support", .settingsSupport, .support),
+  func mainWindowDetailRoutesHostEachSettingsGroupPage() throws {
+    let routes: [(String, VisualTestRoute, MainPage)] = [
+      ("main-account", .mainAccount, .account),
+      ("main-notifications", .mainNotifications, .notifications),
+      ("main-general", .mainGeneral, .general),
+      ("main-support", .mainSupport, .support),
     ]
     for (raw, route, page) in routes {
       let configuration = try #require(
@@ -60,64 +65,75 @@
       )
       #expect(configuration.route == route)
       #expect(configuration.initialPath.isEmpty)
-      #expect(configuration.hostsSettingsWindow)
-      #expect(configuration.settingsPage == page)
+      #expect(configuration.hostsMainWindow)
+      #expect(configuration.mainPage == page)
     }
   }
 
   @Test
-  func settingsAgentsRoutesHostTheTitledSettingsShell() throws {
+  func mainAgentsRoutesHostTheAgentsPage() throws {
     let routes: [(String, ProviderID?)] = [
-      ("settings-agents", nil),
-      ("settings-agents-codex", .codex),
-      ("settings-agents-litellm-key", .litellm),
+      ("main-agents", nil),
+      ("main-agents-codex", .codex),
+      ("main-agents-litellm-key", .litellm),
     ]
     for (raw, provider) in routes {
       let configuration = try #require(
         VisualTestConfiguration(arguments: ["QuotaBar", "--route", raw])
       )
-      #expect(configuration.hostsSettingsWindow)
-      #expect(configuration.settingsPage == .agents)
-      #expect(configuration.settingsAgentsProvider == provider)
+      #expect(configuration.hostsMainWindow)
+      #expect(configuration.mainPage == .agents)
+      #expect(configuration.agentsProvider == provider)
       #expect(configuration.initialPath.isEmpty)
     }
   }
 
   @Test
-  func dashboardRoutesHostTheTitledDashboardShell() throws {
+  func mainWindowQuotaRoutesHostQuotaTodayAndUsage() throws {
     let all = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard"])
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-quota"])
     )
-    #expect(all.route == .dashboard)
-    #expect(all.hostsDashboardWindow)
+    #expect(all.route == .mainQuota)
+    #expect(all.hostsMainWindow)
     #expect(all.hostsTitledWindow)
-    #expect(!all.hostsSettingsWindow)
-    #expect(all.dashboardSelection == nil)
-    #expect(all.dashboardUsageSource == .account)
+    #expect(all.mainPage == .quota)
+    #expect(all.quotaSelection == nil)
+    #expect(all.usageSource == .account)
     #expect(all.initialPath.isEmpty)
 
     let codex = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-codex"])
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-quota-codex"])
     )
-    #expect(codex.route == .dashboardCodex)
-    #expect(codex.hostsDashboardWindow)
-    #expect(codex.dashboardSelection == .codex)
+    #expect(codex.route == .mainQuotaCodex)
+    #expect(codex.hostsMainWindow)
+    #expect(codex.mainPage == .quota)
+    #expect(codex.quotaSelection == .codex)
     #expect(codex.initialPath.isEmpty)
 
-    let usage = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-usage"])
+    let today = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-today"])
     )
-    #expect(usage.route == .dashboardUsage)
-    #expect(usage.hostsDashboardWindow)
-    #expect(usage.dashboardUsageSource == .account)
+    #expect(today.route == .mainToday)
+    #expect(today.hostsMainWindow)
+    #expect(today.mainPage == .today)
+    #expect(today.initialPath.isEmpty)
+
+    let usage = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-usage"])
+    )
+    #expect(usage.route == .mainUsage)
+    #expect(usage.hostsMainWindow)
+    #expect(usage.mainPage == .usage)
+    #expect(usage.usageSource == .account)
     #expect(usage.initialPath.isEmpty)
 
     let local = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-usage-local"])
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-usage-local"])
     )
-    #expect(local.route == .dashboardUsageLocal)
-    #expect(local.hostsDashboardWindow)
-    #expect(local.dashboardUsageSource == .local)
+    #expect(local.route == .mainUsageLocal)
+    #expect(local.hostsMainWindow)
+    #expect(local.mainPage == .usage)
+    #expect(local.usageSource == .local)
     #expect(local.initialPath.isEmpty)
   }
 
@@ -126,7 +142,7 @@
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
     let configuration = try #require(
       VisualTestConfiguration(
-        arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+        arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
         referenceDate: referenceDate
       )
     )
@@ -151,19 +167,19 @@
       VisualTestConfiguration(arguments: ["QuotaBar", "--route", "provider-codex"])
     )
     #expect(configuration.initialPath == [.provider(.codex)])
-    #expect(!configuration.hostsSettingsWindow)
+    #expect(!configuration.hostsMainWindow)
   }
 
   @Test
   func liveDataSourceEnablesViewDrivenSync() throws {
     let configuration = try #require(
       VisualTestConfiguration(
-        arguments: ["QuotaBar", "--data-source", "live", "--route", "dashboard-usage"]
+        arguments: ["QuotaBar", "--data-source", "live", "--route", "main-usage"]
       )
     )
 
     #expect(configuration.dataSource == .live)
-    #expect(configuration.hostsDashboardWindow)
+    #expect(configuration.hostsMainWindow)
     #expect(configuration.initialPath.isEmpty)
     #expect(configuration.performsInitialRefresh)
   }
@@ -175,7 +191,7 @@
     )
     #expect(configuration.initialPath == [.provider(.codex)])
     #expect(configuration.initialPath.last?.title == "Codex")
-    #expect(!configuration.hostsDashboardWindow)
+    #expect(!configuration.hostsMainWindow)
     #expect(!configuration.performsInitialRefresh)
   }
 
@@ -185,7 +201,7 @@
     let configuration = try #require(
       VisualTestConfiguration(
         arguments: [
-          "QuotaBar", "--fixture", "content", "--route", "dashboard-usage", "--appearance", "dark",
+          "QuotaBar", "--fixture", "content", "--route", "main-usage", "--appearance", "dark",
           "--text-size", "accessibility",
         ],
         referenceDate: referenceDate
@@ -193,8 +209,8 @@
     )
     let model = configuration.makeModel()
 
-    #expect(configuration.hostsDashboardWindow)
-    #expect(configuration.dashboardUsageSource == .account)
+    #expect(configuration.hostsMainWindow)
+    #expect(configuration.usageSource == .account)
     #expect(configuration.appearance == .dark)
     #expect(configuration.textSize == .accessibility)
     #expect(model.groupUsageByProject)

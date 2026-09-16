@@ -160,11 +160,11 @@ struct MenuBarHeader: View {
     HStack(spacing: 0) {
       Spacer(minLength: 0)
       VStack(alignment: .leading, spacing: 0) {
-        overflowMenuButton(title: "Open Dashboard…") {
-          DashboardWindowController.shared.show()
+        overflowMenuButton(title: "Open QuotaBar") {
+          MainWindowController.shared.show()
         }
-        overflowMenuButton(title: "Settings…") {
-          SettingsWindowController.shared.show()
+        overflowMenuButton(title: "Settings…", shortcut: "⌘,") {
+          MainWindowController.shared.showSettings()
         }
         overflowMenuButton(title: "Check for Updates…") {
           QuotaBarUpdater.checkForUpdates()
@@ -174,7 +174,7 @@ struct MenuBarHeader: View {
           .frame(height: 0.5)
           .padding(.vertical, QuotaDesign.Spacing.xxs)
           .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-        overflowMenuButton(title: "Quit QuotaBar", isQuit: true) {
+        overflowMenuButton(title: "Quit QuotaBar", shortcut: "⌘Q", isQuit: true) {
           NSApplication.shared.terminate(nil)
         }
       }
@@ -188,6 +188,7 @@ struct MenuBarHeader: View {
   @ViewBuilder
   private func overflowMenuButton(
     title: String,
+    shortcut: String? = nil,
     isEnabled: Bool = true,
     isQuit: Bool = false,
     action: @escaping () -> Void
@@ -196,18 +197,28 @@ struct MenuBarHeader: View {
       setOverflowMenuExpanded(false)
       action()
     } label: {
-      Text(title)
-        .quotaSettingsLabelStyle()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-        .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
-        .contentShape(Rectangle())
+      HStack(spacing: QuotaDesign.Spacing.inline) {
+        Text(title)
+          .quotaSettingsLabelStyle()
+        Spacer(minLength: QuotaDesign.Spacing.inline)
+        if let shortcut {
+          Text(shortcut)
+            .quotaMetaStyle()
+        }
+      }
+      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+      .frame(
+        maxWidth: .infinity,
+        minHeight: QuotaDesign.Layout.fieldMinHeight,
+        alignment: .leading
+      )
+      .contentShape(Rectangle())
     }
     .buttonStyle(
       QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
     )
     .disabled(!isEnabled)
-    .accessibilityLabel(title)
+    .accessibilityLabel(shortcut.map { "\(title) \($0)" } ?? title)
     if isQuit {
       button
         .focusable()

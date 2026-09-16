@@ -7,7 +7,7 @@ import Testing
 struct AgentsSettingsViewTests {
   @Test
   func sidebarBadgeNamesHowManyAreShownAndWhoNeedsSignIn() throws {
-    let shownKey = SettingsPage.storageKey
+    let shownKey = MainPage.storageKey
     let previousPage = UserDefaults.standard.object(forKey: shownKey)
     defer {
       if let previousPage {
