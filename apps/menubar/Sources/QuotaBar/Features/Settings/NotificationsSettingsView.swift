@@ -2,103 +2,94 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Settings → Quota → Notifications: local remaining-quota rules this Mac evaluates itself.
+/// Settings window → Notifications: local remaining-quota rules this Mac evaluates itself.
 struct NotificationsSettingsView: View {
   @Bindable var model: MenuBarViewModel
-  @State private var expandedMenu: String?
   /// The amount as it is being typed, which is only a budget once it parses.
   @State private var budgetDraft = ""
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        SettingsSection(title: "Notifications") {
-          VStack(alignment: .leading, spacing: 0) {
-            settingsToggleRow(
-              title: "Notifications",
-              systemImage: "bell",
-              isOn: Binding(
-                get: { model.notificationRules.enabled },
-                set: { desired in Task { await model.setNotificationsEnabled(desired) } }
-              ),
-              accessibilityLabel: "Notifications",
-              accessibilityHint: "Allow QuotaBar to send quota reminders"
-            )
-            settingsToggleRow(
-              title: "Reset reminders",
-              systemImage: "arrow.counterclockwise",
-              isOn: Binding(
-                get: { model.notificationRules.resetReminders },
-                set: { model.setResetReminders($0) }
-              ),
-              accessibilityLabel: "Reset reminders",
-              accessibilityHint: "Notify when a quota window refills"
-            )
-            settingsToggleRow(
-              title: "Pace warnings",
-              systemImage: "gauge.with.dots.needle.67percent",
-              isOn: Binding(
-                get: { model.notificationRules.paceAlerts },
-                set: { model.setPaceAlerts($0) }
-              ),
-              accessibilityLabel: "Pace warnings",
-              accessibilityHint: "Notify when a window stops lasting to its reset"
-            )
-            if model.notificationAuthorizationDenied {
-              permissionDeniedRows
-            }
+    Form {
+      Section {
+        Toggle(
+          "Notifications",
+          isOn: Binding(
+            get: { model.notificationRules.enabled },
+            set: { desired in Task { await model.setNotificationsEnabled(desired) } }
+          )
+        )
+        .accessibilityLabel("Notifications")
+        .accessibilityHint("Allow QuotaBar to send quota reminders")
+
+        Toggle(
+          "Reset reminders",
+          isOn: Binding(
+            get: { model.notificationRules.resetReminders },
+            set: { model.setResetReminders($0) }
+          )
+        )
+        .accessibilityLabel("Reset reminders")
+        .accessibilityHint("Notify when a quota window refills")
+
+        Toggle(
+          "Pace warnings",
+          isOn: Binding(
+            get: { model.notificationRules.paceAlerts },
+            set: { model.setPaceAlerts($0) }
+          )
+        )
+        .accessibilityLabel("Pace warnings")
+        .accessibilityHint("Notify when a window stops lasting to its reset")
+
+        if model.notificationAuthorizationDenied {
+          Text(NotificationsSettingsCopy.permissionDenied)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+          Button(NotificationsSettingsCopy.openSystemSettings) {
+            model.openNotificationSystemSettings()
           }
+          .accessibilityLabel(NotificationsSettingsCopy.openSystemSettings)
         }
-
-        budgetSection
-
-        ForEach(model.notificationSubscriptions()) { subscription in
-          subscriptionGroup(subscription)
-        }
-
-        Text(NotificationsSettingsCopy.footer)
-          .quotaSecondaryStyle()
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+
+      budgetSection
+
+      ForEach(model.notificationSubscriptions()) { subscription in
+        subscriptionSection(subscription)
+      }
+
+      Section {
+        EmptyView()
+      } footer: {
+        Text(NotificationsSettingsCopy.footer)
+      }
     }
+    .formStyle(.grouped)
+    .scrollContentBackground(.hidden)
     .task { await model.refreshNotificationAuthorization() }
     .onAppear { budgetDraft = model.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
   }
 
   /// The monthly spend budget this Mac keeps for itself. It is never uploaded.
   private var budgetSection: some View {
-    SettingsSection(title: "Monthly budget") {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-        HStack(spacing: QuotaDesign.Spacing.sm) {
-          Text("Amount (USD)")
-            .quotaFont(.settingsLabel)
-          TextField("No budget", text: $budgetDraft)
-            .textFieldStyle(.roundedBorder)
-            .onSubmit(applyBudgetAmount)
-            .accessibilityLabel("Monthly budget amount in US dollars")
-          Button("Save", action: applyBudgetAmount)
-            .buttonStyle(QuotaSecondaryButtonStyle())
-        }
-        settingsToggleRow(
-          title: "Budget alerts",
-          systemImage: "chart.pie",
-          isOn: Binding(
-            get: { model.budget.alerts },
-            set: { model.setBudget(UsageBudget(amountUSD: model.budget.amountUSD, alerts: $0)) }
-          ),
-          accessibilityLabel: "Budget alerts",
-          accessibilityHint: "Notify at 80% and 100% of the monthly budget"
+    SwiftUI.Section {
+      TextField("Amount (USD)", text: $budgetDraft, prompt: Text("No budget"))
+        .onSubmit(applyBudgetAmount)
+        .accessibilityLabel("Monthly budget amount in US dollars")
+      Button("Save", action: applyBudgetAmount)
+      Toggle(
+        "Budget alerts",
+        isOn: Binding(
+          get: { model.budget.alerts },
+          set: { model.setBudget(UsageBudget(amountUSD: model.budget.amountUSD, alerts: $0)) }
         )
-        Text(NotificationsSettingsCopy.budgetFooter)
-          .quotaSecondaryStyle()
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      .padding(.vertical, QuotaDesign.Spacing.sm)
+      )
+      .accessibilityLabel("Budget alerts")
+      .accessibilityHint("Notify at 80% and 100% of the monthly budget")
+    } header: {
+      Text("Monthly budget")
+    } footer: {
+      Text(NotificationsSettingsCopy.budgetFooter)
     }
   }
 
@@ -112,123 +103,64 @@ struct NotificationsSettingsView: View {
     budgetDraft = amount.map(UsageBudgetProgress.plain) ?? ""
   }
 
-  private var permissionDeniedRows: some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
-      Text(NotificationsSettingsCopy.permissionDenied)
-        .quotaSecondaryStyle()
-        .fixedSize(horizontal: false, vertical: true)
-      Button(NotificationsSettingsCopy.openSystemSettings) {
-        model.openNotificationSystemSettings()
+  private func subscriptionSection(_ subscription: NotificationSettingsSubscription) -> some View {
+    Section {
+      LabeledContent {
+        EmptyView()
+      } label: {
+        Label {
+          Text(subscription.accountLabel)
+        } icon: {
+          ProviderBrandIcon(
+            provider: subscription.provider,
+            size: QuotaDesign.Layout.settingsIconColumnWidth
+          )
+        }
       }
-      .buttonStyle(QuotaSecondaryButtonStyle())
-      .accessibilityLabel(NotificationsSettingsCopy.openSystemSettings)
-    }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .padding(.vertical, QuotaDesign.Spacing.sm)
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func subscriptionGroup(_ subscription: NotificationSettingsSubscription) -> some View {
-    SettingsSection(title: subscription.providerDisplayName) {
-      VStack(alignment: .leading, spacing: 0) {
-        SettingsListRow(
-          title: subscription.accountLabel,
-          leading: {
-            ProviderBrandIcon(
-              provider: subscription.provider,
-              size: QuotaDesign.Layout.settingsIconColumnWidth
-            )
-          },
-          trailing: { EmptyView() }
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-          "\(subscription.providerDisplayName), \(subscription.accountLabel)"
-        )
-
-        thresholdRow(
-          title: NotificationsSettingsCopy.alertAt,
-          subscription: subscription,
-          slot: .first
-        )
-        thresholdRow(
-          title: NotificationsSettingsCopy.thenAt,
-          subscription: subscription,
-          slot: .second
-        )
-      }
-    }
-  }
-
-  private enum ThresholdSlot {
-    case first
-    case second
-  }
-
-  private func thresholdRow(
-    title: String,
-    subscription: NotificationSettingsSubscription,
-    slot: ThresholdSlot
-  ) -> some View {
-    let menuID = "\(subscription.selector).\(slot == .first ? "first" : "second")"
-    let selected: Int? = slot == .first ? subscription.firstThreshold : subscription.secondThreshold
-    let valueTitle =
-      selected.map(NotificationsSettingsCopy.thresholdLabel) ?? NotificationsSettingsCopy.off
-    return SettingsListRow(title: title, systemImage: "percent") {
-      QuotaChoiceMenu(
-        valueTitle: valueTitle,
-        options: thresholdOptions(slot: slot, first: subscription.firstThreshold),
-        selectedPin: selected.map(String.init) ?? "off",
-        isExpanded: expandedBinding(menuID),
-        onSelect: { pin in
-          applyThreshold(pin, slot: slot, selector: subscription.selector)
-        },
-        accessibilityTitle: title,
-        accessibilityHint: valueTitle
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel(
+        "\(subscription.providerDisplayName), \(subscription.accountLabel)"
       )
-    }
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(title)
-  }
 
-  private func thresholdOptions(
-    slot: ThresholdSlot,
-    first: Int
-  ) -> [QuotaChoiceMenuOption] {
-    var options: [QuotaChoiceMenuOption] = []
-    if slot == .second {
-      options.append(QuotaChoiceMenuOption(pin: "off", title: NotificationsSettingsCopy.off))
-    }
-    for value in NotificationRules.thresholdChoices {
-      if slot == .second, value >= first { continue }
-      options.append(
-        QuotaChoiceMenuOption(
-          pin: String(value),
-          title: NotificationsSettingsCopy.thresholdLabel(value)
+      Picker(
+        NotificationsSettingsCopy.alertAt,
+        selection: Binding(
+          get: { subscription.firstThreshold },
+          set: { model.setNotificationFirstThreshold($0, for: subscription.selector) }
         )
-      )
-    }
-    return options
-  }
-
-  private func applyThreshold(_ pin: String?, slot: ThresholdSlot, selector: String) {
-    switch slot {
-    case .first:
-      guard let pin, let value = Int(pin) else { return }
-      model.setNotificationFirstThreshold(value, for: selector)
-    case .second:
-      if pin == nil || pin == "off" {
-        model.setNotificationSecondThreshold(nil, for: selector)
-      } else if let pin, let value = Int(pin) {
-        model.setNotificationSecondThreshold(value, for: selector)
+      ) {
+        ForEach(NotificationRules.thresholdChoices, id: \.self) { value in
+          Text(NotificationsSettingsCopy.thresholdLabel(value)).tag(value)
+        }
       }
+      .accessibilityLabel(NotificationsSettingsCopy.alertAt)
+
+      Picker(
+        NotificationsSettingsCopy.thenAt,
+        selection: Binding(
+          get: { subscription.secondThreshold.map(String.init) ?? "off" },
+          set: { pin in applySecondThreshold(pin, selector: subscription.selector) }
+        )
+      ) {
+        Text(NotificationsSettingsCopy.off).tag("off")
+        ForEach(
+          NotificationRules.thresholdChoices.filter { $0 < subscription.firstThreshold },
+          id: \.self
+        ) { value in
+          Text(NotificationsSettingsCopy.thresholdLabel(value)).tag(String(value))
+        }
+      }
+      .accessibilityLabel(NotificationsSettingsCopy.thenAt)
+    } header: {
+      Text(subscription.providerDisplayName)
     }
   }
 
-  private func expandedBinding(_ id: String) -> Binding<Bool> {
-    Binding(
-      get: { expandedMenu == id },
-      set: { expandedMenu = $0 ? id : (expandedMenu == id ? nil : expandedMenu) }
-    )
+  private func applySecondThreshold(_ pin: String, selector: String) {
+    if pin == "off" {
+      model.setNotificationSecondThreshold(nil, for: selector)
+    } else if let value = Int(pin) {
+      model.setNotificationSecondThreshold(value, for: selector)
+    }
   }
 }

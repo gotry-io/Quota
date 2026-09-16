@@ -173,7 +173,8 @@ switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closin
 window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
 registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
 and **Support**, matching the current Settings home rows; the selected page persists in
-`settings.page`. Detail pages are filled later.
+`settings.page`. Account, Notifications, General, and Support are grouped Forms in the detail
+column. Agents and Menu Bar remain placeholders until those pages move.
 
 ## Material and color
 
@@ -322,11 +323,7 @@ The header shows:
 
 - Overview: Quota mark, **QuotaBar**, and Settings gear. The gear opens the Settings window.
 - Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
-  edge because the choice changes the whole page. Diagnostics places one icon-only **Recheck**
-  (`arrow.clockwise`) action there only after a report exists; initial loading and full-page failure
-  leave the header action area empty. Recheck starts or joins the real private-service refresh and
-  waits for a newer evaluation; while checking, its icon becomes a small spinner and the action is
-  disabled. If the bounded UI wait ends first, keep the prior completed report on screen.
+  edge because the choice changes the whole page.
 - Settings root: Back, **Settings**, and an overflow menu containing **Open Dashboard…** (disabled
   until Dashboard ships), **Settings…**, **Check for Updates…**, and **Quit QuotaBar**.
 
@@ -351,19 +348,22 @@ Back returns one level.
 
 ```text
 Overview
-└── Settings
-    ├── Account
-    │   └── Devices
+└── Settings (panel home; remaining destinations)
     ├── Usage
-    ├── Notifications
     ├── Menu Bar Style
     ├── Menu Bar Provider
     ├── Reset time
-    ├── Support
-    │   └── Diagnostics
     └── Agents
         └── Provider
             └── Source
+
+Settings window
+├── Account (Devices on the same page)
+├── Agents
+├── Notifications
+├── Menu Bar
+├── General
+└── Support (Diagnostics disclosure)
 ```
 
 ### Overview
@@ -442,40 +442,40 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 ### Settings
 
-Settings is also a titled window whose sidebar lists these sections; the panel pages below still
-exist until they move.
+Settings is a titled window whose sidebar lists **Account**, **Agents**, **Notifications**,
+**Menu Bar**, **General**, and **Support**. The panel still has a Settings home with **Usage**,
+**Agents**, and Menu Bar rows until those move; it no longer lists Account, Notifications, Refresh
+Interval, or Support.
 
-Settings section order is fixed:
+The Account window page is one Form in every state:
 
-1. **Account**
-2. **Quota**
-3. **Menu Bar**
-4. **General**
-
-The Account group on Settings is one row deep in every state:
-
-- Signed out or not checked: one standard-height **Sign In** row.
-- Login running: one standard-height browser completion row with **Copy Link** and **Cancel**.
+- Signed out or not checked: **Sign In**.
+- Login running: **Finish sign-in in browser** with **Copy Link** and **Cancel**.
   Cancellation sends the typed service operation and closes the browser flow. Copy Link puts the
-  authorize URL on the pasteboard. If QuotaBar could not open the browser, the row stays in this
+  authorize URL on the pasteboard. If QuotaBar could not open the browser, the page stays in this
   state and the error reads **QuotaBar could not open your browser. Copy the sign-in link and open
   it yourself.**
-- Signed in: one row titled with the account label, which opens the **Account** page.
-- Logout pending: one standard-height status row with **Retry Logout**.
+- Signed in: the account label, a Devices table on this same page, **Open quota.gotry.io**, and
+  **Sign Out**.
+- Logout pending: **Retry Logout**.
 - Removed or expired device session: use the same **Sign In** action and never show raw reason codes
   or ids. Authentication-provider choice belongs to the login flow, not this row's label.
 
-The Account group is the only place for account authentication actions. Buttons invoke typed private
+The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
-totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
-**Style**, **Provider**, and **Reset time**: rows that state the choice in force on the right and
-open a page to change it, never a menu that drops over the panel. General contains the native mini
-**Launch at Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes,
-default 5), then the **Support** destination. Choosing an interval takes effect and returns, like
-Menu Bar Style. It is how often this Mac collects provider quota; Account summary still polls every
-minute, and a window reset can collect quota once before the next interval.
+The remaining panel Settings home contains **Usage** and **Agents**. The Usage root summary uses
+account-wide totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar
+on the panel still contains **Style**, **Provider**, and **Reset time**: rows that state the choice
+in force on the right and open a page to change it, never a menu that drops over the panel.
+
+**General** is a window page: **Launch at Login**, **Refresh Interval** (Picker, 1, 2, 5, 10, or 15
+minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
+`usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
+is how often this Mac collects provider quota; Account summary still polls every minute, and a
+window reset can collect quota once before the next interval. Reset Local Data always confirms first
+and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
+stays signed in. That confirmation is a system dialog on the Settings window.
 
 **Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
 ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
@@ -486,18 +486,18 @@ showing, in Overview's order, each with its catalog brand mark. Automatic is exc
 named set; named rows toggle and the page stays. When two or more are named, **Combined** and
 **Separate** follow in a second group; Combined is unavailable past three.
 
-Support is where help lives, and it asks the service nothing on its own: opening it starts no
-check and costs no refresh. **Help** contains the **Diagnostics** destination, **Feedback**, and
-**Reset Local Data**. Reset Local Data always confirms first and says plainly that collected quota
-and Usage history are deleted and rebuilt and that the person stays signed in. That confirmation is
-`QuotaConfirmationPopup` at the panel root, like Sign Out and Disconnect. **About** stays last with
-Website, version, and **Updates**, which opens Sparkle's standard updater; Sparkle also
-checks on a daily schedule after launch.
+Support is a window page, and it asks the service nothing on its own: opening it starts no check
+and costs no refresh. **Help** contains **Feedback**. **About** stays with Website, version, and
+**Updates**, which opens Sparkle's standard updater; Sparkle also checks on a daily schedule after
+launch.
 
-Diagnostics is the diagnostic page, one level inside Support. It is backed by the private
-`diagnose` operation and opens with the report's status line: a semantic icon, **All systems
-working** / **Some checks need attention** / **Action needed**, and a fixed locale-shortened
-evaluation time (`Checked 3:40 PM`), not relative age.
+Diagnostics is a disclosure on Support, not a separate page. Expanding it runs the private
+`diagnose` operation on demand. It opens with the report's status line: a semantic icon, **All
+systems working** / **Some checks need attention** / **Action needed**, and a fixed locale-shortened
+evaluation time (`Checked 3:40 PM`), not relative age. Recheck lives in that disclosure once a
+report exists; it starts or joins the real private-service refresh and waits for a newer evaluation.
+While checking, Recheck becomes a small spinner and is disabled. If the bounded UI wait ends first,
+keep the prior completed report on screen.
 
 **Data** contains Quota Overview, This Mac Usage, Account Usage, and Account only, in that order.
 **Sources** follows it and appears only when the service sent any: one row per provider, Usage
@@ -510,13 +510,11 @@ orange warning, red blocked mark).
 recent work the page does not list, and whose row title becomes **Report Copied** for about two
 seconds. It lives here rather than on Support because here is where the report exists.
 
-Recheck lives only in the page header; opening Diagnostics resets and requests a real refresh so
-re-entry never silently shows a previous report. That initial check uses a centered page Loading
-state. Its failure uses a centered Error state with **Retry** as the only recovery action and no
-header actions. A later Recheck preserves the last completed report; failure adds a fixed inline
-warning above the report's scrolling content instead of replacing the page and enables Recheck
-again. The Usage source control is not repeated in Settings. **Show in Overview** remains
-presentation-only and has no diagnostic or local-collection meaning.
+The first expand uses a Loading state. Its failure uses an Error state with **Retry** as the only
+recovery action. A later Recheck preserves the last completed report; failure adds a fixed inline
+warning above the report instead of replacing it and enables Recheck again. The Usage source control
+is not repeated in Settings. **Show in Overview** remains presentation-only and has no diagnostic or
+local-collection meaning.
 
 Page navigation animates an immutable presentation snapshot. Async work and model updates continue
 during the transition, while the shared page host coalesces presentation changes and publishes only
@@ -527,9 +525,9 @@ published page state. Reduce Motion skips the transition and publishes updates i
 
 ### Notifications
 
-Notifications is a Settings destination under Quota. It holds the local remaining-quota rules this
-Mac evaluates itself: one master switch, remaining-percent thresholds on each subscription Overview
-is showing, and a switch for window-reset reminders.
+Notifications is a Settings window page. It holds the local remaining-quota rules this Mac evaluates
+itself: one master switch, remaining-percent thresholds on each subscription Overview is showing,
+and a switch for window-reset reminders.
 
 - The master switch is off until the person turns it on and macOS grants alerts and sound. Turning
   it on asks `UNUserNotificationCenter` for `.alert` and `.sound`. A refusal puts the switch back
@@ -538,7 +536,7 @@ is showing, and a switch for window-reset reminders.
   Opening the page re-reads the system permission; a later grant in System Settings does not turn
   the switch on by itself.
 - Each visible subscription is one group: the catalog `display_name` and the masked account label.
-  Two compact menus pick remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
+  Two pickers choose remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
   defaults to **20**; the second defaults to **10** and may be **Off**, which stores a single
   threshold. Stored values stay descending and unique.
 - Reset reminders default on. QuotaBar books a calendar notification at each available
@@ -547,34 +545,32 @@ is showing, and a switch for window-reset reminders.
   emits for a window that already has a reminder is left to that reminder.
 - The page footer is **Quota reminds you when a refresh brings new data.** Quota does not promise
   real-time.
-- The Settings home row trails **On** or **Off**. Delivery is native.
+- Delivery is native.
 
-The page uses the same Settings list rows as the rest of this panel.
+The page is a grouped Form on the Settings window.
 
 ### Account
 
-The Account page is reachable only while signed in, and it holds everything that belongs to the
-account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
-**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
-this page because what it uploads is account data, not a general preference. Multi-device sync is
-free for every account, so the page states nothing about paying for it and the switch is bound by
-nothing but being signed in.
+The Account window page is always reachable from the sidebar. Signed out, it is **Sign In**. Signed
+in, it holds everything that belongs to the account, top to bottom: the account label, **Devices**
+as a section on this same page, **Open quota.gotry.io**, and **Sign Out**. **Upload Usage to
+Account** lives on General — it is the same `usageUploadEnabled` switch, moved because it is a Mac
+preference as well as account data. Multi-device sync is free for every account, so the page states
+nothing about paying for it and the switch is bound by nothing but being signed in.
 
-**Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
-popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced
-data remain. Do not use a system alert for this flow. Signing out closes this page, along with
-anything opened from it, because there is no longer an account to manage.
+**Sign Out** is the one destructive row and it opens a window confirmation dialog with **Cancel**
+and destructive **Sign Out** actions stating that the remote Device and synced data remain. Signing
+out leaves this page on **Sign In**, because there is no longer an account to manage.
 
 ### Devices
 
-Devices is read-only in QuotaBar. Each row is the device display name, its platform, and the one
-activity line from the shared vocabulary — a trailing **Active** / **Idle** / **Not reporting**
-verdict beside `last reading 5m ago`, or `no readings yet`. Never a claim that a sleeping or closed
-app is broken. Signed-out remains explicit. Never display raw Device IDs or request a provider login for
-another Device. Empty and signed-out states point back to the Account action in Settings using the
-shared centered Empty state. An unavailable account with no device content uses the centered Error
-state and Retry; a refresh warning with cached device content uses an inline notice. Device deletion
-and account administration live on the Web account surface.
+Devices is a section on the Account window page, not a sub-page. Each row is the device display
+name, last seen as the shared freshness line (`last reading 5m ago`, or `no readings yet`), a
+**This Mac** marker when the row is this installation, and **Remove**. Never a claim that a sleeping
+or closed app is broken. Signed-out remains explicit. Never display raw Device IDs or request a
+provider login for another Device. **Remove** confirms and then opens `quota.gotry.io/my/devices`,
+where Device deletion lives. Empty and signed-out states stay on this page with Sign In. An
+unavailable account with no device content offers Retry.
 
 ### Usage
 

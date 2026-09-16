@@ -1,103 +1,70 @@
 import SwiftUI
 
-/// The confirmation Reset Local Data raises. It is an app-owned popup at the panel root, like
-/// Sign Out and Disconnect: the menu panel is not a window a system alert can sit over.
-enum ResetLocalDataCopy {
-  static let title = "Reset Local Data?"
-  static let confirmTitle = "Reset Local Data"
-  static let message =
-    "This Mac's collected quota and Usage history are deleted and rebuilt on the next refresh. "
-    + "You stay signed in."
-}
-
-/// Support is where help lives: the Diagnostics page, feedback, the local-data reset, and the
-/// build. It asks the service nothing on its own — opening it costs no refresh — so the
-/// diagnostic report is one step further in, on the page that is about it.
+/// Support is where help lives: Feedback, the build, and Diagnostics as a disclosure.
+/// It asks the service nothing on its own — opening it costs no refresh — so the
+/// diagnostic report runs only when Diagnostics is expanded.
 struct SettingsSupportView: View {
-  let onOpenDiagnostics: () -> Void
-  let onRequestResetLocalData: () -> Void
+  @Bindable var model: MenuBarViewModel
+  var diagnostics: DiagnosticsPageModel
+  var expandsDiagnostics: Bool = false
+
+  @State private var diagnosticsExpanded = false
+  @State private var didRequestDiagnostics = false
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        helpView
-        aboutView
+    Form {
+      SwiftUI.Section {
+        Link("Feedback", destination: AppMetadata.feedbackURL)
+      } header: {
+        Text("Help")
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
-    }
-  }
 
-  private var helpView: some View {
-    SettingsSection(title: "Help") {
-      VStack(alignment: .leading, spacing: 0) {
-        settingsDestinationRow(
-          title: "Diagnostics",
-          systemImage: "stethoscope",
-          accessibilityLabel: "Diagnostics",
-          action: onOpenDiagnostics
-        )
-
-        settingsExternalLinkRow(
-          title: "Feedback",
-          systemImage: "envelope",
-          url: AppMetadata.feedbackURL
-        )
-
-        Button(action: onRequestResetLocalData) {
-          SettingsListRow(title: "Reset Local Data", systemImage: "trash") {
-            EmptyView()
-          }
-        }
-        .buttonStyle(QuotaListRowButtonStyle())
-        .accessibilityLabel("Reset local data")
-        .accessibilityHint("Deletes collected quota and Usage history on this Mac and refreshes.")
-      }
-    }
-  }
-
-  private var aboutView: some View {
-    SettingsSection(title: "About") {
-      VStack(alignment: .leading, spacing: 0) {
-        settingsExternalLinkRow(
-          title: "Website",
-          systemImage: "globe",
-          url: AppMetadata.websiteURL
-        )
-        SettingsListRow(title: "Version", systemImage: "info.circle") {
+      SwiftUI.Section {
+        Link("Website", destination: AppMetadata.websiteURL)
+        LabeledContent("Version") {
           Text(AppMetadata.versionLabel)
-            .quotaMonoListValueStyle()
             .textSelection(.enabled)
         }
-        .accessibilityElement(children: .combine)
         .accessibilityLabel("Version \(AppMetadata.versionLabel)")
+        Button("Updates", action: QuotaBarUpdater.checkForUpdates)
+          .accessibilityLabel("Updates")
+          .accessibilityHint("Checks for a new QuotaBar version")
+      } header: {
+        Text("About")
+      }
 
-        // One word, like the rows beside it; the spoken label keeps the whole action.
-        Button(action: QuotaBarUpdater.checkForUpdates) {
-          SettingsListRow(title: "Updates", systemImage: "arrow.triangle.2.circlepath") {
-            EmptyView()
-          }
+      Section {
+        DisclosureGroup(isExpanded: $diagnosticsExpanded) {
+          SettingsDiagnosticsView(
+            state: diagnostics.pageState,
+            model: diagnostics,
+            widgetPublishingMessage: model.widgetPublishingMessage,
+            onRetry: { Task { await runDiagnosticsCheck() } },
+            onRecheck: { Task { await runDiagnosticsCheck() } }
+          )
+        } label: {
+          Text("Diagnostics")
         }
-        .buttonStyle(QuotaListRowButtonStyle())
-        .accessibilityLabel("Updates")
-        .accessibilityHint("Checks for a new QuotaBar version")
       }
     }
-  }
-}
-
-@MainActor
-func settingsExternalLinkRow(title: String, systemImage: String, url: URL) -> some View {
-  Link(destination: url) {
-    SettingsListRow(title: title, systemImage: systemImage) {
-      Image(systemName: "arrow.up.right")
-        .quotaAffordanceStyle()
+    .formStyle(.grouped)
+    .scrollContentBackground(.hidden)
+    .onAppear {
+      if expandsDiagnostics {
+        diagnosticsExpanded = true
+        didRequestDiagnostics = true
+      }
+    }
+    .onChange(of: diagnosticsExpanded) { _, expanded in
+      guard expanded, !didRequestDiagnostics else { return }
+      didRequestDiagnostics = true
+      Task { await runDiagnosticsCheck() }
     }
   }
-  .buttonStyle(QuotaListRowButtonStyle())
-  .accessibilityLabel(title)
-  .accessibilityHint("Opens in browser")
+
+  private func runDiagnosticsCheck() async {
+    await diagnostics.runCheck { try await model.diagnose() }
+  }
 }
 
 @MainActor

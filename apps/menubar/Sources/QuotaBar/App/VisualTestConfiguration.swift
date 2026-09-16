@@ -61,28 +61,26 @@
   enum VisualTestRoute: String {
     case overview
     case settings
-    case account
     case agents
     case providerCodex = "provider-codex"
     case providerOpenRouter = "provider-openrouter"
     case providerCursor = "provider-cursor"
     case providerCodexSource = "provider-codex-source"
     case providerLiteLLMKey = "provider-litellm-key"
-    case devices
     case usage
-    case notifications
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
     case resetCopy = "reset-time"
-    case support
-    case diagnostics
     case settingsWindow = "settings-window"
+    case settingsAccount = "settings-account"
+    case settingsNotifications = "settings-notifications"
+    case settingsGeneral = "settings-general"
+    case settingsSupport = "settings-support"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .settings: [.settings]
-      case .account: [.settings, .account]
       case .agents: [.settings, .agents]
       case .providerCodex: [.settings, .agents, .provider(.codex)]
       case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
@@ -99,15 +97,23 @@
       case .providerLiteLLMKey: [
         .settings, .agents, .provider(.litellm), .providerAPIKey(.litellm),
       ]
-      case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
-      case .notifications: [.settings, .notifications]
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
       case .resetCopy: [.settings, .resetCopy]
-      case .support: [.settings, .support]
-      case .diagnostics: [.settings, .support, .diagnostics]
-      case .settingsWindow: []
+      case .settingsWindow, .settingsAccount, .settingsNotifications, .settingsGeneral,
+        .settingsSupport:
+        []
+      }
+    }
+
+    var settingsPage: SettingsPage? {
+      switch self {
+      case .settingsAccount: .account
+      case .settingsNotifications: .notifications
+      case .settingsGeneral: .general
+      case .settingsSupport: .support
+      default: nil
       }
     }
   }
@@ -189,10 +195,18 @@
     }
 
     var initialPath: [MenuBarRoute] { route.path }
+    var settingsPage: SettingsPage? { route.settingsPage }
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
-    var hostsSettingsWindow: Bool { route == .settingsWindow }
+    var hostsSettingsWindow: Bool {
+      switch route {
+      case .settingsWindow, .settingsAccount, .settingsNotifications, .settingsGeneral,
+        .settingsSupport:
+        true
+      default: false
+      }
+    }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -271,7 +285,8 @@
           description: "Partial System Outage",
           checkedAt: date
         )
-      ]
+      ],
+      deviceID: "device_visual_studio_mac_01"
     )
   }
 

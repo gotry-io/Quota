@@ -7,11 +7,6 @@ struct MenuBarHeader: View {
     case openSettings(() -> Void)
     case overflowMenu
     case usageSource(UsageSource, (UsageSource) -> Void)
-    case diagnostics(
-      isChecking: Bool,
-      canRecheck: Bool,
-      onRecheck: () -> Void
-    )
   }
 
   let title: String
@@ -151,44 +146,7 @@ struct MenuBarHeader: View {
       .fixedSize()
       .accessibilityLabel("Usage source")
       .accessibilityValue(source.label)
-    case .diagnostics(let isChecking, let canRecheck, let onRecheck):
-      diagnosticsRecheckButton(
-        isChecking: isChecking,
-        isEnabled: canRecheck,
-        action: onRecheck
-      )
     }
-  }
-
-  private func diagnosticsRecheckButton(
-    isChecking: Bool,
-    isEnabled: Bool,
-    action: @escaping () -> Void
-  ) -> some View {
-    let accessibilityLabel = DiagnosticsHeaderAction.recheckAccessibilityLabel(
-      isChecking: isChecking
-    )
-    return Button(action: action) {
-      Group {
-        if isChecking {
-          ProgressView()
-            .controlSize(.mini)
-        } else {
-          Image(systemName: "arrow.clockwise")
-            .font(QuotaDesign.Typography.headerActionIcon)
-        }
-      }
-      .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-      .frame(
-        width: QuotaDesign.Layout.headerControlWidth,
-        height: QuotaDesign.Layout.headerHeight
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(QuotaHeaderButtonStyle())
-    .disabled(!isEnabled)
-    .accessibilityLabel(accessibilityLabel)
-    .help(accessibilityLabel)
   }
 
   private func usageSourceItem(

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0613929DFE2B54364026575D /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FDE65A19C30155A3BC0438E /* GeneralSettingsView.swift */; };
 		0A449FA4AA111F211FC0700E /* QuotaRefreshInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75CF4E4A7F2965DC0F0EC3B /* QuotaRefreshInterval.swift */; };
 		0EB950231F33C328E2F53BD6 /* QuotaChoiceMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6076DEC01D1CD81CB1681D /* QuotaChoiceMenu.swift */; };
 		0EB962731453411822D492C8 /* module.modulemap in CopyFiles */ = {isa = PBXBuildFile; fileRef = 041ECB47C16B3E1301AD44A2 /* module.modulemap */; };
@@ -62,7 +63,6 @@
 		873607E6D2A69D579626143E /* VisualTestConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4615C7464EF3F442E0F59AD8 /* VisualTestConfiguration.swift */; };
 		889FDB1F9AE22872D669BB8E /* MenuBarLabelModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C2694F58696A96DC938AD1 /* MenuBarLabelModel.swift */; };
 		8A8E7DDBC1E20B704080A31B /* ResetReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8298A966FAFFAF2C782105DD /* ResetReminderScheduler.swift */; };
-		8FDD3626FA52E3921DAFF650 /* QuotaRefreshIntervalSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F054F50820B2415A6651692 /* QuotaRefreshIntervalSettingsView.swift */; };
 		94DCB4577E97CCD7C020F24D /* BrowserSessionCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0247BB4561F585B8765AA7B5 /* BrowserSessionCopy.swift */; };
 		96C6E0889C4135B63E1C5963 /* BrowserAccessProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6019C89D1AEE6FC03538BF7 /* BrowserAccessProbe.swift */; };
 		9C729EDF1662339BD7756104 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C173EE2BE52E0CB7CC206961 /* SwiftUI.framework */; };
@@ -168,7 +168,6 @@
 		1C6076DEC01D1CD81CB1681D /* QuotaChoiceMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaChoiceMenu.swift; sourceTree = "<group>"; };
 		1CA283BAEAF880A28FD6E093 /* libQuotaBarKeychainShim.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libQuotaBarKeychainShim.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DC262AA814AFD4AE75BFF95 /* apple-client */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-client"; path = "../../packages/apple-client"; sourceTree = SOURCE_ROOT; };
-		1F054F50820B2415A6651692 /* QuotaRefreshIntervalSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshIntervalSettingsView.swift; sourceTree = "<group>"; };
 		1F6BB7E519FD895677E512C8 /* SignInRungPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInRungPresentation.swift; sourceTree = "<group>"; };
 		237F88B5BDD29BEFC3041915 /* StrictDecoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrictDecoding.swift; sourceTree = "<group>"; };
 		269BB19430C6C36B7FAD177B /* DiagnosticModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticModels.swift; sourceTree = "<group>"; };
@@ -195,6 +194,7 @@
 		6EC8FC4F1A53DB20C35B26F7 /* BrowserSessionImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserSessionImporter.swift; sourceTree = "<group>"; };
 		707E6161925CB016D8FA00B4 /* QuotaPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPalette.swift; sourceTree = "<group>"; };
 		7195FA5D82026647691446F1 /* QuotaBarAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaBarAppDelegate.swift; sourceTree = "<group>"; };
+		7FDE65A19C30155A3BC0438E /* GeneralSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralSettingsView.swift; sourceTree = "<group>"; };
 		8298A966FAFFAF2C782105DD /* ResetReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetReminderScheduler.swift; sourceTree = "<group>"; };
 		87A6E2941984FE94D4FFB960 /* LICENSE */ = {isa = PBXFileReference; name = LICENSE; path = ../../../LICENSE; sourceTree = "<group>"; };
 		88A1B4EDA44D6B5D78EEE4D1 /* AppMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMetadata.swift; sourceTree = "<group>"; };
@@ -379,12 +379,12 @@
 				06660814CACB6F78ACF8DB30 /* AccountSettingsView.swift */,
 				4F226CFFBCC41E3451498ADD /* AccountSummaryViews.swift */,
 				C370E733B22DF826112CA10F /* AgentsSettingsView.swift */,
+				7FDE65A19C30155A3BC0438E /* GeneralSettingsView.swift */,
 				BE3348233CF275CAB4617906 /* MenuBarSettingsViews.swift */,
 				694B85A2C2350E33025244D4 /* NotificationsSettingsView.swift */,
 				3E8B0380B49BB526FAD08986 /* ProviderAPIKeyView.swift */,
 				C30878F34A937276082D0E52 /* ProviderSettingsView.swift */,
 				1A9B1A49537713216EE3AFB2 /* ProviderSourceDetailView.swift */,
-				1F054F50820B2415A6651692 /* QuotaRefreshIntervalSettingsView.swift */,
 				EC0DAB46A796B4692947780F /* SettingsDiagnosticsView.swift */,
 				077B2734B160C3D5B85BE937 /* SettingsHomeView.swift */,
 				EED346DC8085436F3BC4519E /* SettingsSupportView.swift */,
@@ -741,6 +741,7 @@
 				9FFADA620D6D9C9BEFB0CC6A /* CacheRebuildNotice.swift in Sources */,
 				AFDE476796392966391CF5EB /* DesktopWidgetPublisher.swift in Sources */,
 				56DC422426EA40B7007E8016 /* DiagnosticModels.swift in Sources */,
+				0613929DFE2B54364026575D /* GeneralSettingsView.swift in Sources */,
 				4CC4E91BF567BCD27447F0E3 /* LaunchAtLoginController.swift in Sources */,
 				F7F388D87CA4B241C714DDD7 /* LocalServiceClient.swift in Sources */,
 				C65EA91311D0B85C88E8C8EB /* LocalServiceModels.swift in Sources */,
@@ -784,7 +785,6 @@
 				6F4DC7B4875BCCE7A8A87028 /* QuotaPaceLine.swift in Sources */,
 				8275B18E19D1F7A2A5147B94 /* QuotaPalette.swift in Sources */,
 				0A449FA4AA111F211FC0700E /* QuotaRefreshInterval.swift in Sources */,
-				8FDD3626FA52E3921DAFF650 /* QuotaRefreshIntervalSettingsView.swift in Sources */,
 				17254FCE637FB5B5F8329DE6 /* QuotaSelectionPopup.swift in Sources */,
 				3CDC1388E87A14D8B27631E7 /* QuotaStateViews.swift in Sources */,
 				DB443EE0DDD587EBBE582921 /* QuotaWindowDisplay.swift in Sources */,

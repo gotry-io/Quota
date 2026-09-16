@@ -6,19 +6,28 @@ import Testing
 
 struct AccountSettingsPageTests {
   @Test
-  func signedInAccountPageHoldsEverythingThatBelongsToTheAccount() {
+  func signedInAccountPageHoldsIdentityDevicesWebsiteAndSignOut() {
     #expect(
       AccountSettingsItem.items(for: .signedIn) == [
-        .identity, .syncUsage, .devices, .website, .signOut,
+        .identity, .devices, .website, .signOut,
       ]
     )
   }
 
   @Test
-  func anAccountNobodyIsSignedInToHasNothingToManage() {
+  func anAccountNobodyIsSignedInToHasNothingToManageOnTheSignedInList() {
     for state in [AccountViewState.signedOut, .notChecked, .logoutPending] {
       #expect(AccountSettingsItem.items(for: state).isEmpty)
     }
+  }
+
+  @Test
+  func settingsWindowSidebarListsTheSixPages() {
+    #expect(
+      SettingsPage.allCases.map(\.title) == [
+        "Account", "Agents", "Notifications", "Menu Bar", "General", "Support",
+      ]
+    )
   }
 
   @Test
@@ -45,32 +54,6 @@ struct AccountSettingsPageTests {
     navigation.navigateBack()
     #expect(navigation.path == [.settings, .agents])
     #expect(navigation.title == "Agents")
-  }
-
-  @Test
-  func accountIsOneLevelBelowSettingsAndDevicesOneLevelBelowThat() {
-    var navigation = MenuBarNavigationState()
-    navigation.open(.settings)
-    navigation.open(.account)
-    navigation.open(.devices)
-
-    #expect(navigation.path == [.settings, .account, .devices])
-    #expect(navigation.title == "Devices")
-    #expect(MenuBarRoute.account.title == "Account")
-  }
-
-  @Test
-  func notificationsIsOneLevelBelowSettings() {
-    var navigation = MenuBarNavigationState()
-    navigation.open(.settings)
-    navigation.open(.notifications)
-
-    #expect(navigation.path == [.settings, .notifications])
-    #expect(navigation.title == "Notifications")
-    #expect(MenuBarRoute.notifications.title == "Notifications")
-
-    navigation.navigateBack()
-    #expect(navigation.path == [.settings])
   }
 
   @Test
@@ -125,15 +108,12 @@ struct AccountSettingsPageTests {
   }
 
   @Test
-  func signingOutClosesTheAccountPageAndWhateverWasOpenedFromIt() {
-    var navigation = MenuBarNavigationState()
-    navigation.open(.settings)
-    navigation.open(.account)
-    navigation.open(.devices)
-
-    #expect(navigation.closing(.account)?.path == [.settings])
-    // A person who never opened Account is left exactly where they are.
-    #expect(MenuBarNavigationState(path: [.settings, .usage]).closing(.account) == nil)
+  func devicesLiveOnTheAccountPageAndRemoveOpensTheWebDevicesPage() {
+    #expect(AccountDevicesCopy.thisMac == "This Mac")
+    #expect(AccountDevicesCopy.remove == "Remove")
+    #expect(AccountDevicesCopy.removeTitle("Studio Mac") == "Remove Studio Mac?")
+    #expect(AccountDevicesCopy.removeMessage.contains("quota.gotry.io"))
+    #expect(AppMetadata.devicesURL.absoluteString == "https://quota.gotry.io/my/devices")
   }
 }
 
@@ -162,5 +142,14 @@ struct SyncAccountStateTests {
     #expect(model.accountState != .signedIn)
     #expect(model.syncUsageDisabledReason == "Sign in to your Quota account")
     #expect(AccountSettingsItem.items(for: model.accountState).isEmpty)
+  }
+
+  @Test
+  func thisMacDeviceIdComesFromTheAccountState() async {
+    let model = MenuBarViewModel(
+      client: StubLocalService(state: justSignedInState(label: "octocat"))
+    )
+    await model.refreshIfNeeded()
+    #expect(model.accountDeviceID == "device_1")
   }
 }

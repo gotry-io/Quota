@@ -29,7 +29,27 @@
     #expect(configuration.route == .settingsWindow)
     #expect(configuration.initialPath.isEmpty)
     #expect(configuration.hostsSettingsWindow)
+    #expect(configuration.settingsPage == nil)
     #expect(!configuration.performsInitialRefresh)
+  }
+
+  @Test
+  func settingsWindowDetailRoutesHostTheTitledSettingsPages() throws {
+    let routes: [(String, VisualTestRoute, SettingsPage)] = [
+      ("settings-account", .settingsAccount, .account),
+      ("settings-notifications", .settingsNotifications, .notifications),
+      ("settings-general", .settingsGeneral, .general),
+      ("settings-support", .settingsSupport, .support),
+    ]
+    for (raw, route, page) in routes {
+      let configuration = try #require(
+        VisualTestConfiguration(arguments: ["QuotaBar", "--route", raw])
+      )
+      #expect(configuration.route == route)
+      #expect(configuration.initialPath.isEmpty)
+      #expect(configuration.hostsSettingsWindow)
+      #expect(configuration.settingsPage == page)
+    }
   }
 
   @Test
@@ -48,21 +68,16 @@
   @Test
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
-      ("account", "Account", 2),
       ("agents", "Agents", 2),
       ("provider-codex", "Codex", 3),
       ("provider-openrouter", "OpenRouter", 3),
       ("provider-cursor", "Cursor", 3),
       ("provider-codex-source", "This Mac", 4),
       ("provider-litellm-key", "API Key", 4),
-      ("devices", "Devices", 3),
       ("usage", "Usage", 2),
-      ("notifications", "Notifications", 2),
       ("menu-bar-style", "Menu Bar Style", 2),
       ("menu-bar-provider", "Menu Bar Provider", 2),
       ("reset-time", "Reset time", 2),
-      ("support", "Support", 2),
-      ("diagnostics", "Diagnostics", 3),
     ]
 
     for expectation in routeExpectations {
@@ -102,6 +117,7 @@
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.syncUsageDisabledReason == nil)
     #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
+    #expect(model.accountDeviceID == "device_visual_studio_mac_01")
     #expect(model.accountSummary?.usage.today.cost.status == .partial)
     #expect(model.accountSummary?.usage.today.partial == true)
     #expect(model.localUsage?.sessions.active == 2)

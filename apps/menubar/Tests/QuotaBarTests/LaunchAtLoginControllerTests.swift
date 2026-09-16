@@ -21,4 +21,17 @@ struct LaunchAtLoginControllerTests {
     #expect(LaunchAtLoginController.message(for: .enabled) == nil)
     #expect(LaunchAtLoginController.message(for: .notRegistered) == nil)
   }
+
+  @Test
+  func generalPageKeepsLaunchAtLoginWithTheOtherWindowControls() {
+    #expect(GeneralSettingsCopy.launchAtLogin == "Launch at Login")
+    #expect(GeneralSettingsCopy.refreshInterval == "Refresh Interval")
+    #expect(GeneralSettingsCopy.uploadUsage == "Upload Usage to Account")
+    #expect(GeneralSettingsCopy.groupUsage == "Group Usage by project")
+    #expect(GeneralSettingsCopy.resetLocalData == "Reset Local Data")
+    #expect(ResetLocalDataCopy.title == "Reset Local Data?")
+    #expect(ResetLocalDataCopy.confirmTitle == "Reset Local Data")
+    #expect(ResetLocalDataCopy.message.contains("deleted and rebuilt"))
+    #expect(ResetLocalDataCopy.message.contains("You stay signed in."))
+  }
 }

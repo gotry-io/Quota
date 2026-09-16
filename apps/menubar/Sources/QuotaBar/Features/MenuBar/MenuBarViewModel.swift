@@ -101,6 +101,7 @@ enum AccountDisconnectReason: Equatable {
     let overview: [LocalServiceOverviewItem]
     var cache: LocalServiceCacheState = .settled
     var providerStatus: [LocalServiceProviderStatus] = []
+    var deviceID: String? = nil
   }
 #endif
 
@@ -136,6 +137,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
   private(set) var isUpdatingQuotaRefreshInterval = false
   private(set) var accountDisconnectReason: AccountDisconnectReason?
+  /// This Mac's Device id while signed in, used to mark the Devices table row.
+  private(set) var accountDeviceID: String?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
   private(set) var providerStatus: [ProviderID: LocalServiceProviderStatus] = [:]
@@ -469,6 +472,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         usagePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
       }
       authStatus = visualTestState.authStatus
+      accountDeviceID = visualTestState.deviceID
       overview = visualTestState.overview
       cache = visualTestState.cache
       providerStatus = Dictionary(
@@ -1595,6 +1599,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
     signInDisplayLabel = state.account.value?.displayLabel
+    accountDeviceID = state.account.value?.deviceID
     let incomingAuth =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)

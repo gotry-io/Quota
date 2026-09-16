@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Sidebar pages of the Settings window. Detail content is filled by later work.
+/// Sidebar pages of the Settings window.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
   case account
   case agents
@@ -37,7 +37,26 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
 }
 
 struct SettingsWindowView: View {
-  @AppStorage("settings.page") private var page = SettingsPage.account
+  @Bindable var model: MenuBarViewModel
+  var pageOverride: SettingsPage? = nil
+  var expandsDiagnostics: Bool = false
+
+  @State private var diagnostics: DiagnosticsPageModel
+  @AppStorage("settings.page") private var storedPage = SettingsPage.account
+
+  init(
+    model: MenuBarViewModel,
+    pageOverride: SettingsPage? = nil,
+    diagnostics: DiagnosticsPageModel? = nil,
+    expandsDiagnostics: Bool = false
+  ) {
+    self.model = model
+    self.pageOverride = pageOverride
+    self.expandsDiagnostics = expandsDiagnostics
+    _diagnostics = State(initialValue: diagnostics ?? DiagnosticsPageModel())
+  }
+
+  private var page: SettingsPage { pageOverride ?? storedPage }
 
   var body: some View {
     NavigationSplitView {
@@ -46,9 +65,8 @@ struct SettingsWindowView: View {
         selection: Binding<SettingsPage?>(
           get: { page },
           set: { newValue in
-            if let newValue {
-              page = newValue
-            }
+            guard pageOverride == nil, let newValue else { return }
+            storedPage = newValue
           }
         )
       ) { item in
@@ -62,14 +80,34 @@ struct SettingsWindowView: View {
         max: QuotaDesign.Layout.windowSidebarWidth
       )
     } detail: {
-      Text(page.title)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      detail
     }
     .frame(
       minWidth: QuotaDesign.Layout.settingsWindowMinSize.width,
       minHeight: QuotaDesign.Layout.settingsWindowMinSize.height
     )
     .background(Color(nsColor: .windowBackgroundColor))
+  }
+
+  @ViewBuilder
+  private var detail: some View {
+    switch page {
+    case .account:
+      AccountSettingsView(model: model)
+    case .notifications:
+      NotificationsSettingsView(model: model)
+    case .general:
+      GeneralSettingsView(model: model)
+    case .support:
+      SettingsSupportView(
+        model: model,
+        diagnostics: diagnostics,
+        expandsDiagnostics: expandsDiagnostics
+      )
+    case .agents, .menuBar:
+      Text(page.title)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
   }
 }
 
@@ -85,9 +123,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   /// collapse it as a non-key window.
   var closePanel: () -> Void = {}
 
+  private var model: MenuBarViewModel?
   private var window: NSWindow?
 
   var isPresented: Bool { window?.isVisible == true }
+
+  func attach(model: MenuBarViewModel) {
+    self.model = model
+  }
 
   func show() {
     closePanel()
@@ -98,7 +141,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   }
 
   private func makeWindow() -> NSWindow {
-    let hosting = NSHostingController(rootView: SettingsWindowView())
+    guard let model else {
+      preconditionFailure("SettingsWindowController.attach(model:) must run before show().")
+    }
+    let hosting = NSHostingController(rootView: SettingsWindowView(model: model))
     let window = SettingsWindow(contentViewController: hosting)
     window.title = "QuotaBar Settings"
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

@@ -61,15 +61,18 @@ struct QuotaBarApp: App {
     @ViewBuilder
     private var visualRoot: some View {
       if visualTestConfiguration.hostsSettingsWindow {
-        SettingsWindowView()
+        SettingsWindowView(
+          model: model,
+          pageOverride: visualTestConfiguration.settingsPage,
+          diagnostics: visualTestConfiguration.makeDiagnosticsModel(),
+          expandsDiagnostics: visualTestConfiguration.route == .settingsSupport
+        )
       } else {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
           initialUsageSource: visualTestConfiguration.route == .usage ? .local : .account,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
-          performsDiagnosticsCheckOnEntry: visualTestConfiguration.dataSource == .live,
-          diagnosticsModel: visualTestConfiguration.makeDiagnosticsModel(),
           seedsLaunchAtLogin: false
         )
         // The production panel has no title-bar safe area. Match that geometry

@@ -1,9 +1,10 @@
-import AppKit
-import Foundation
-import SwiftUI
-import Testing
+#if DEBUG
+  import AppKit
+  import Foundation
+  import SwiftUI
+  import Testing
 
-@testable import QuotaBar
+  @testable import QuotaBar
 
 /// Renders `SettingsWindowView` at 720×520 in light and dark. Writes PNGs when
 /// `WP_71_SCREENSHOTS` is a directory.
@@ -29,11 +30,17 @@ struct Wp71ScreenshotTests {
     }
 
     let size = QuotaDesign.Layout.settingsWindowMinSize
+    let configuration = try #require(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--fixture", "content", "--route", "settings-window"]
+      )
+    )
+    let model = configuration.makeModel()
     for (scheme, name) in [
       (ColorScheme.light, "settings-window-light.png"),
       (.dark, "settings-window-dark.png"),
     ] {
-      let image = try render(scheme: scheme, size: size)
+      let image = try render(model: model, scheme: scheme, size: size)
       #expect(image.size.width == size.width)
       #expect(image.size.height == size.height)
       if let dir {
@@ -42,8 +49,12 @@ struct Wp71ScreenshotTests {
     }
   }
 
-  private func render(scheme: ColorScheme, size: CGSize) throws -> NSImage {
-    let root = SettingsWindowView()
+  private func render(
+    model: MenuBarViewModel,
+    scheme: ColorScheme,
+    size: CGSize
+  ) throws -> NSImage {
+    let root = SettingsWindowView(model: model)
       .environment(\.colorScheme, scheme)
       .frame(width: size.width, height: size.height)
     let host = NSHostingView(rootView: root)
@@ -64,3 +75,4 @@ struct Wp71ScreenshotTests {
     try png.write(to: url)
   }
 }
+#endif
