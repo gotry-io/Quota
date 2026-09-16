@@ -74,22 +74,23 @@
         if configuration.mainPage?.isQuotaGroup == true {
           model.selectUsagePeriod(.last7Days)
         }
-        let size = captureSize(for: configuration)
-        for (scheme, appearance) in appearances {
-          for (textSize, textName) in textSizes {
-            let image = try render(
-              configuration: configuration,
-              model: model,
-              scheme: scheme,
-              textSize: textSize,
-              size: size
-            )
-            #expect(image.size.width == size.width)
-            #expect(image.size.height == size.height)
-            try write(
-              image,
-              to: dir.appendingPathComponent("\(route)-\(appearance)-\(textName).png")
-            )
+        for (size, suffix) in captureSizes(for: configuration, route: route) {
+          for (scheme, appearance) in appearances {
+            for (textSize, textName) in textSizes {
+              let image = try render(
+                configuration: configuration,
+                model: model,
+                scheme: scheme,
+                textSize: textSize,
+                size: size
+              )
+              #expect(image.size.width == size.width)
+              #expect(image.size.height == size.height)
+              try write(
+                image,
+                to: dir.appendingPathComponent("\(route)\(suffix)-\(appearance)-\(textName).png")
+              )
+            }
           }
         }
       }
@@ -108,6 +109,21 @@
       )
     }
 
+    /// Existing sizes stay; `main-quota` also renders at 1280×800 for the wide card layout.
+    private func captureSizes(
+      for configuration: VisualTestConfiguration,
+      route: String
+    ) -> [(CGSize, String)] {
+      let base = captureSize(for: configuration)
+      if route == "main-quota" {
+        return [
+          (base, ""),
+          (QuotaDesign.Layout.mainWindowWideSize, "-1280x800"),
+        ]
+      }
+      return [(base, "")]
+    }
+
     private func render(
       configuration: VisualTestConfiguration,
       model: MenuBarViewModel,
@@ -121,7 +137,25 @@
         .frame(width: size.width, height: size.height)
       let host = NSHostingView(rootView: root)
       host.frame = NSRect(origin: .zero, size: size)
+      // Sidebar `List` is an AppKit outline view and does not draw cells unless it
+      // lives in a window. Park it off-screen; do not order it front.
+      let window = NSWindow(
+        contentRect: NSRect(x: -10_000, y: -10_000, width: size.width, height: size.height),
+        styleMask: [.titled, .closable, .resizable],
+        backing: .buffered,
+        defer: false
+      )
+      window.isReleasedWhenClosed = false
+      window.isRestorable = false
+      window.contentView = host
+      window.setContentSize(size)
       host.layoutSubtreeIfNeeded()
+      window.layoutIfNeeded()
+      window.displayIfNeeded()
+      defer {
+        window.contentView = nil
+        window.close()
+      }
       let bounds = host.bounds
       let rep = try #require(host.bitmapImageRepForCachingDisplay(in: bounds))
       host.cacheDisplay(in: bounds, to: rep)

@@ -158,9 +158,14 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `fieldCornerRadius` | 7pt | Editable/control surface |
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
-| `windowSidebarWidth` | 200pt | Main window sidebar |
+| `windowSidebarWidth` | 220pt | Main window sidebar min/ideal |
+| `windowSidebarMaxWidth` | 280pt | Main window sidebar maximum |
 | `agentsListWidth` | 220pt | Provider list inside the Agents page |
 | `mainWindowMinSize` | 960×640 | Main window minimum content size |
+| `cardCornerRadius` | 20pt | Quota / Today / Usage cards |
+| `cardPadding` | 16pt | Inner padding of those cards |
+| `contentMaxWidth` | 1040pt | Main-window reading column |
+| `contentGutter` | 24pt | Horizontal gutter around that column |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
@@ -168,10 +173,10 @@ page body; header and footer remain fixed. Content aligns to the same 16pt guide
 ## Windows
 
 The main window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
-rather than the panel material, a 200pt sidebar, a 960×640 minimum content size, frame autosave name
-`QuotaBarMainWindow`, level `.normal`, and `collectionBehavior` including `.fullScreenPrimary`. It
-is resizable and miniaturizable and may go full screen. Esc and ⌘W close it. The title is
-**QuotaBar**.
+rather than the panel material, a user-resizable sidebar (220–280pt), a 960×640 minimum content
+size, frame autosave name `QuotaBarMainWindow`, level `.normal`, and `collectionBehavior` including
+`.fullScreenPrimary`. It is resizable and miniaturizable and may go full screen. Esc and ⌘W close
+it. The title is **QuotaBar**.
 
 QuotaBar is a regular app with a Dock icon. **Show in Dock** (General, default on) keeps the
 process `.regular`. Turning it off makes QuotaBar menu-bar-only: the main window registers with
@@ -192,16 +197,26 @@ The process has a regular-app menu bar:
 - **Window:** Minimize ⌘M, Zoom, QuotaBar (brings the main window front), Bring All to Front.
 - **Help:** QuotaBar Help (opens the website), Feedback.
 
-The sidebar has two groups: **Quota**
+The sidebar is a `List` with `.listStyle(.sidebar)` and two `Section`s: **Quota**
 (**Quota**, **Today**, **Usage**) and
 **Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
-The selected page persists in `main.page`; the first open lands on Quota. Provider selection for
-Quota is a toolbar menu (**All providers** and each shown provider with its brand icon), not
-sidebar rows. The selection is not persisted. Account, Notifications, General, and Support are
-grouped Forms in the detail column, and **Menu Bar** is one grouped form (preview, Style, Provider,
-Reset time, Show pace lines). The **Agents** row trails **3 shown** and, when any shown agent has
-no working credential and no device reporting it, **· 1 needs sign-in**; the Agents page is a
-two-column list and provider detail.
+Rows are `Label`s. On macOS 26 the system draws the floating glass sidebar; on 14/15 it is the
+standard sidebar. The selected page persists in `main.page`; the first open lands on Quota. Provider
+selection for Quota is a toolbar menu (**All providers** and each shown provider with its brand
+icon), not sidebar rows. The closed menu shows the selected provider's brand icon, or Quota's mark
+when **All providers** is selected. The selection is not persisted. Account, Notifications,
+General, and Support are grouped Forms in the detail column, and **Menu Bar** is one grouped form
+(preview, Style, Provider, Reset time, Show pace lines). The **Agents** row keeps a `.badge` of
+**3 shown** and, when any shown agent has no working credential and no device reporting it,
+**· 1 needs sign-in**; the Agents page is a two-column list and provider detail.
+
+The Quota-group toolbar groups **Provider**, **Range**, and **Usage source**, then a flexible
+spacer, then **Refresh**. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
+on 14/15 the same items appear without spacers. Refresh is on every page.
+
+Quota, Today, and Usage scroll under the toolbar and sidebar (`quotaScrollEdge()`, a soft
+scroll-edge effect on macOS 26). Their content is one column, max width 1040pt, centred, with 24pt
+gutters and 16pt between cards.
 
 ## Main window
 
@@ -210,7 +225,8 @@ lives. It does not collect, and every number the Quota, Today, and Usage pages s
 this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
 The Quota-group toolbar holds a provider menu — **All providers**, then each provider shown in
-Overview, in Overview order, each with its catalog brand mark — the history range — **Today**,
+Overview, in Overview order, each with its catalog brand mark; the closed control is that
+provider's brand icon — the history range — **Today**,
 **7D**, **30D**, persisted as `dashboard.range`, default 7D — a Usage source picker (**Account** /
 **This Mac**) that the Usage page honors, and a refresh action that uses the same tooltip as the
 panel footer: **Refresh all quota. Updated 3m ago**, or **Not checked** before any sync. The Usage
@@ -221,16 +237,20 @@ provider only.
 
 ### Quota
 
-One card per provider in the detail column. The header is one line: the catalog provider name, the
+One card per provider in the detail column. Each card uses `quotaCardSurface()` (glass on macOS 26,
+group fill otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
+the catalog brand icon and provider name as the title, with the remaining percent of the primary
+window trailing as a 28pt semibold rounded numeral and a small **remaining** caption; then the
 pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
-the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window. Parts the
-reading does not have are omitted.
+the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window, in
+secondary style, joined by ` · `. Parts the reading does not have are omitted.
 
 Each card draws one Swift Charts `LineMark` per window of used percent over time, from this Mac's
-samples in the selected range. The running window continues to its reset as a dashed `LineMark` at
-ADR 0035's projection, and a `RuleMark` marks the reset. Line colour is the remaining-quota tone
-(healthy / warning / critical) of that window; windows of the same provider are told apart by
-opacity in rank order, the first cadence window at full strength. No second palette.
+samples in the selected range, 180pt tall, with tertiary axis labels. The running window continues
+to its reset as a dashed `LineMark` at ADR 0035's projection, and a `RuleMark` marks the reset.
+Line colour is the remaining-quota tone (healthy / warning / critical) of that window; windows of
+the same provider are told apart by opacity in rank order, the first cadence window at full
+strength. No second palette.
 
 Every chart has an `accessibilityChartDescriptor` that names each window, its start, now, and the
 projected end.
@@ -242,11 +262,12 @@ reads **No history yet**.
 
 ### Today
 
-A table on the Today page. One row per provider × window that had samples today. Columns:
-window (catalog provider name · window title), used percent at the start of the local day → now
-(`12% → 47%`, the same whole percents `QuotaHistoryCopy.peak` prints), cost today when today's
-Usage can attribute it to that provider, and the reset time — the same reset copy the Quota header
-uses, or the local clock time when that reset has already passed. The panel's
+A table on the Today page, inside one card surface. One row per provider × window that had samples
+today, 36pt tall. The header row is tertiary caps. Columns: window (catalog provider name · window
+title), used percent at the start of the local day → now (`12% → 47%`, the same whole percents
+`QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
+attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
+the local clock time when that reset has already passed. The panel's
 `Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; the main window lays those facts in
 columns. A provider or window with no sample today is omitted. Toolbar provider selection narrows
 the rows the same way it narrows Quota cards.
@@ -292,39 +313,41 @@ otherwise on. The budget is set in Notifications settings; it never leaves this 
 
 The default page contains:
 
-- Summary: a titled group with a totals row of Tokens, Cost, and Cache hit, followed by the six
-  token and message metrics in a three-column grid. Cache hit is whole percent, with `saved $X.XX`
-  under it when the period's cache reads could be priced and nothing under it when they could not
-  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values use the
+- Summary: three stat tiles in a row — Tokens, Cost, and Cache hit — each a card with a 28pt
+  semibold rounded numeral, a small label, and `saved $X.XX` as the Cache hit caption when the
+  period's cache reads could be priced (nothing under it when they could not)
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The six token and message
+  metrics follow in their own Summary card as a three-column grid. Headline values use the
   primary text tone; grid labels stay muted while their values use the secondary tone. Values use
   `UsageValueFormatter`.
-- Daily, for This Mac and for any period but All: one Swift Charts `BarMark` per local day of
-  cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A day with
-  nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is the
-  shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
+- Daily, for This Mac and for any period but All, in its own card: one Swift Charts `BarMark` per
+  local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A
+  day with nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is
+  the shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
   the section when the period reported nothing. All has no Daily section: its per-day shape is the
   Account's activity chart.
-- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. A **Top models** list of
-  the three largest leads the section when there is more than one, each as `share · tokens`. Each
-  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
-  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
-  share` when unpriced.
-- Rhythm, for This Mac and for Account, and for any period but All: 24 bars at 36pt, one per
-  hour of the local clock, then Morning / Afternoon / Evening / Night, each as a whole-percent
-  share. Omit the section when every hour is empty. Account hours come from
+- Models, in its own card: grouped by the vendor whose model it is — the service resolves that from
+  the model's name — independent of the collecting client and of who billed the request. A **Top
+  models** list of the three largest leads the section when there is more than one, each as
+  `share · tokens`. Each provider heading is followed by a 4pt share bar and its whole-percent
+  share of the period. Every model remains a static single row ending in `tokens · cost · share`
+  when priced, or `tokens · share` when unpriced.
+- Rhythm, for This Mac and for Account, and for any period but All, in its own card: 24 bars at
+  36pt, one per hour of the local clock, then Morning / Afternoon / Evening / Night, each as a
+  whole-percent share. Omit the section when every hour is empty. Account hours come from
   `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
-  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
-  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
-  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
-  Account Usage has no such section.
-- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
-  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
-  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
-  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
-  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
+- Projects, in its own card: This Mac only, and only while **Group Usage by project** is on (an
+  Account period carries no `projects` key at all — attribution never leaves the Mac that made it).
+  A table of at most 50 repository basenames for the selected period, columns Project / Tokens /
+  Cost, with the top model as a meta line under the name. Unattributed work and the overflow past
+  50 share the row **Other**. Account Usage has no such section.
+- Sessions, in its own card: This Mac's session files, independent of the Account / This Mac
+  summary source. The section header trails `2 active · 14 today`. Each row is the agent mark, a
+  basename project label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same
+  compact cost copy as Models. A session written in the last five minutes wears a 6pt accent dot on
+  the mark. At most 20 rows, newest write first. An empty list says **No sessions in the last 90
+  days.**
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
@@ -935,7 +958,7 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the main window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the main window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Main window | Titled window, 960×640 minimum, 200pt sidebar of Quota and Settings groups; Quota cards, Today table, Usage, and Settings pages |
+| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Settings groups; Quota cards, Today table, Usage, and Settings pages |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -984,15 +1007,15 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 
 Every `--route` below is inspected in `--appearance light` and `dark`, and at `--text-size
-standard` and `accessibility` (60 cells). `--text-size extra-large` is available on the visual
-app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce Motion are inspected on
-the same routes.
+standard` and `accessibility` (60 cells, plus `main-quota` at 1280×800). `--text-size extra-large`
+is available on the visual app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce
+Motion are inspected on the same routes.
 
 | `--route` | Surface | Size | Appearances | Text sizes |
 | --- | --- | ---: | --- | --- |
 | `overview` | Panel | 320×480 | light, dark | standard, accessibility |
 | `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
-| `main-quota` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-quota` | Main window | 960×640 and 1280×800 | light, dark | standard, accessibility |
 | `main-quota-codex` | Main window | 960×640 | light, dark | standard, accessibility |
 | `main-today` | Main window | 960×640 | light, dark | standard, accessibility |
 | `main-usage` | Main window | 960×2200 | light, dark | standard, accessibility |

@@ -9,12 +9,30 @@ enum QuotaDesign {
     static let panelWidth: CGFloat = 320
     /// Fixed panel height for every page so first open and later pages share one ceiling.
     static let panelMaxHeight: CGFloat = 480
-    /// Sidebar of the main window.
-    static let windowSidebarWidth: CGFloat = 200
+    /// Sidebar of the main window (min and ideal). User-resizable up to `windowSidebarMaxWidth`.
+    static let windowSidebarWidth: CGFloat = 220
+    /// Maximum sidebar width of the main window.
+    static let windowSidebarMaxWidth: CGFloat = 280
     /// Provider list inside the Agents page.
     static let agentsListWidth: CGFloat = 220
     /// Minimum main window content size.
     static let mainWindowMinSize = CGSize(width: 960, height: 640)
+    /// Wide Visual QA capture for the Quota page.
+    static let mainWindowWideSize = CGSize(width: 1280, height: 800)
+    /// Quota / Today / Usage cards.
+    static let cardCornerRadius: CGFloat = 20
+    /// Inner padding of Quota / Today / Usage cards.
+    static let cardPadding: CGFloat = 16
+    /// Centred reading column on Quota, Today, and Usage.
+    static let contentMaxWidth: CGFloat = 1040
+    /// Horizontal gutter around that column.
+    static let contentGutter: CGFloat = 24
+    /// Quota history chart height.
+    static let quotaChartHeight: CGFloat = 180
+    /// Today table row height.
+    static let todayRowHeight: CGFloat = 36
+    /// Glass fallback radius for transient menus on macOS 26 (`quotaFloatingSurface`).
+    static let floatingSurfaceCornerRadius: CGFloat = 14
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16
@@ -152,6 +170,8 @@ enum QuotaDesign {
       weight: .medium
     )
     static let emptyIcon = Font.system(size: Layout.emptyIconPointSize, weight: .regular)
+    /// Big remaining / Usage stat numeral on main-window cards.
+    static let statValue = Font.system(size: 28, weight: .semibold, design: .rounded)
   }
 }
 

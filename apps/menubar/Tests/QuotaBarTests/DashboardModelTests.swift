@@ -51,6 +51,27 @@
     }
 
     @Test
+    func remainingPercentIsThePrimaryWindow() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      for provider in dashboard.providers(now: referenceDate) {
+        let snapshot = try #require(model.displaySnapshots(for: provider.provider).first?.snapshot)
+        let window = try #require(snapshot.primaryCadenceWindows.first ?? snapshot.windows.first)
+        #expect(provider.remainingPercent == window.remainingPercent)
+      }
+    }
+
+    @Test
     func selectionNarrowsToOneProvider() throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }

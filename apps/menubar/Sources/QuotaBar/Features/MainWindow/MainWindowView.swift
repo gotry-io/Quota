@@ -46,20 +46,36 @@ struct MainWindowView: View {
 
   private var page: MainPage { pageOverride ?? storedPage }
 
+  private var pageSelection: Binding<MainPage> {
+    Binding(
+      get: { pageOverride ?? storedPage },
+      set: { newValue in
+        guard pageOverride == nil else { return }
+        storedPage = newValue
+      }
+    )
+  }
+
   var body: some View {
     @Bindable var dashboard = dashboard
     NavigationSplitView(columnVisibility: .constant(.all)) {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        sidebarSection("Quota", items: MainPage.quotaGroup)
-        sidebarSection("Settings", items: MainPage.settingsGroup)
-        Spacer(minLength: 0)
+      List(selection: pageSelection) {
+        Section("Quota") {
+          ForEach(MainPage.quotaGroup) { item in
+            sidebarLabel(item).tag(item)
+          }
+        }
+        Section("Settings") {
+          ForEach(MainPage.settingsGroup) { item in
+            sidebarLabel(item).tag(item)
+          }
+        }
       }
-      .padding(.top, QuotaDesign.Spacing.sm)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .listStyle(.sidebar)
       .navigationSplitViewColumnWidth(
         min: QuotaDesign.Layout.windowSidebarWidth,
         ideal: QuotaDesign.Layout.windowSidebarWidth,
-        max: QuotaDesign.Layout.windowSidebarWidth
+        max: QuotaDesign.Layout.windowSidebarMaxWidth
       )
     } detail: {
       if let nowOverride {
@@ -73,7 +89,7 @@ struct MainWindowView: View {
     .toolbar {
       if page.isQuotaGroup {
         ToolbarItem {
-          Picker("Provider", selection: $dashboard.selection) {
+          Picker(selection: $dashboard.selection) {
             Text("All providers").tag(Optional<ProviderID>.none)
             ForEach(dashboard.sidebarProviders, id: \.self) { provider in
               Label {
@@ -84,12 +100,15 @@ struct MainWindowView: View {
               }
               .tag(Optional(provider))
             }
+          } label: {
+            providerMenuLabel
           }
           .pickerStyle(.menu)
           .accessibilityLabel("Provider")
           .accessibilityValue(dashboard.selection?.displayName ?? "All providers")
         }
-        ToolbarItem(placement: .principal) {
+        QuotaToolbarSpacer.Fixed()
+        ToolbarItem {
           Picker("Range", selection: $dashboard.range) {
             ForEach(DashboardRange.allCases) { range in
               Text(range.label).tag(range)
@@ -100,6 +119,7 @@ struct MainWindowView: View {
           .accessibilityLabel("History range")
         }
         if dashboard.showsUsageSourcePicker {
+          QuotaToolbarSpacer.Fixed()
           ToolbarItem {
             Picker("Usage source", selection: $dashboard.usageSource) {
               Text("Account").tag(UsageSource.account)
@@ -111,6 +131,7 @@ struct MainWindowView: View {
           }
         }
       }
+      QuotaToolbarSpacer.Flexible()
       ToolbarItem(placement: .primaryAction) {
         Button {
           guard !model.isRefreshing else { return }
@@ -155,54 +176,29 @@ struct MainWindowView: View {
     .onAppear { dashboard.loadHistory() }
   }
 
-  private func sidebarSection(_ title: String, items: [MainPage]) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-      Text(title)
-        .quotaSectionHeaderStyle()
-        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      ForEach(items) { item in
-        sidebarRow(item)
-      }
+  @ViewBuilder
+  private var providerMenuLabel: some View {
+    if let provider = dashboard.selection {
+      ProviderBrandIcon(
+        provider: provider,
+        size: QuotaDesign.Layout.settingsIconColumnWidth
+      )
+    } else {
+      BrandAssetIcon(
+        assetName: QuotaBrandAssets.assetName,
+        size: QuotaDesign.Layout.settingsIconColumnWidth
+      )
     }
   }
 
-  private func sidebarRow(_ item: MainPage) -> some View {
-    let selected = page == item
-    return Button {
-      guard pageOverride == nil else { return }
-      storedPage = item
-    } label: {
-      HStack(spacing: QuotaDesign.Spacing.iconLabel) {
-        Label(item.title, systemImage: item.systemImage)
-          .labelStyle(.titleAndIcon)
-          .quotaSettingsLabelStyle()
-          .lineLimit(1)
-        Spacer(minLength: 0)
-        if item == .agents {
-          Text(model.agentsSidebarBadge())
-            .quotaMetaStyle()
-            .lineLimit(1)
-        }
-      }
-      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      .frame(
-        maxWidth: .infinity,
-        minHeight: QuotaDesign.Layout.settingsRowHeight,
-        alignment: .leading
-      )
-      .background {
-        RoundedRectangle(
-          cornerRadius: QuotaDesign.Layout.rowCornerRadius,
-          style: .continuous
-        )
-        .fill(selected ? QuotaPalette.rowHoverFill : Color.clear)
-      }
-      .contentShape(Rectangle())
+  @ViewBuilder
+  private func sidebarLabel(_ item: MainPage) -> some View {
+    if item == .agents {
+      Label(item.title, systemImage: item.systemImage)
+        .badge(model.agentsSidebarBadge())
+    } else {
+      Label(item.title, systemImage: item.systemImage)
     }
-    .buttonStyle(QuotaListRowButtonStyle())
-    .padding(.horizontal, QuotaDesign.Spacing.xxs)
-    .accessibilityLabel(item.title)
-    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
   @ViewBuilder
@@ -226,23 +222,19 @@ struct MainWindowView: View {
   private func detail(now: Date, dashboard: DashboardModel) -> some View {
     switch page {
     case .quota:
-      DashboardView(dashboard: dashboard, now: now)
+      QuotaWindowScroll {
+        DashboardView(dashboard: dashboard, now: now)
+      }
     case .today:
-      ScrollView {
+      QuotaWindowScroll {
         DashboardTodayTable(
           rows: dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
         )
-        .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-        .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     case .usage:
-      ScrollView {
+      QuotaWindowScroll {
         DashboardUsageView(dashboard: dashboard, now: now)
-          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-          .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     case .account:
       AccountSettingsView(model: model)
     case .notifications:

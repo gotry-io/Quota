@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0613929DFE2B54364026575D /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FDE65A19C30155A3BC0438E /* GeneralSettingsView.swift */; };
+		08A47DBC5AE794039EF36BAA /* QuotaToolbarSpacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4278EB9FF6D47612600149 /* QuotaToolbarSpacer.swift */; };
 		0A449FA4AA111F211FC0700E /* QuotaRefreshInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75CF4E4A7F2965DC0F0EC3B /* QuotaRefreshInterval.swift */; };
 		0EB950231F33C328E2F53BD6 /* QuotaChoiceMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6076DEC01D1CD81CB1681D /* QuotaChoiceMenu.swift */; };
 		0EB962731453411822D492C8 /* module.modulemap in CopyFiles */ = {isa = PBXBuildFile; fileRef = 041ECB47C16B3E1301AD44A2 /* module.modulemap */; };
@@ -81,6 +82,7 @@
 		A7C0554887F98D00E879A38F /* SettingsListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919376F7F2A4FF2A2C11EFBC /* SettingsListRow.swift */; };
 		AADB9E2E9BF84F073C81F767 /* MenuBarPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06A3EFBC237607BAF4BE862C /* MenuBarPreferences.swift */; };
 		AC0E654C3C3D1BAD19B4C0AD /* QuotaWidgetViews in Frameworks */ = {isa = PBXBuildFile; productRef = 67C2EA329AB6E13BFA117255 /* QuotaWidgetViews */; };
+		AFCC6E2890E7182BBC7E0B10 /* QuotaSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5D193AD919E2B85AD33144 /* QuotaSurfaces.swift */; };
 		AFDE476796392966391CF5EB /* DesktopWidgetPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10EEA1E3E1604D46CBABE83 /* DesktopWidgetPublisher.swift */; };
 		AFE11C4FCE64263FF37C3D00 /* UsageValueFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C3426938505CB0CDE303873 /* UsageValueFormatter.swift */; };
 		B0D949CDEFEC6A7B10102F10 /* QuotaBarAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7195FA5D82026647691446F1 /* QuotaBarAppDelegate.swift */; };
@@ -203,6 +205,7 @@
 		63FED8D81F4DD3E7B5D0A4F6 /* ProviderVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderVisibility.swift; sourceTree = "<group>"; };
 		64ED98571488575B8A342AFE /* OverviewWidgetPreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidgetPreviews.swift; sourceTree = "<group>"; };
 		694B85A2C2350E33025244D4 /* NotificationsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsSettingsView.swift; sourceTree = "<group>"; };
+		6E5D193AD919E2B85AD33144 /* QuotaSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaSurfaces.swift; sourceTree = "<group>"; };
 		6EC8FC4F1A53DB20C35B26F7 /* BrowserSessionImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserSessionImporter.swift; sourceTree = "<group>"; };
 		707E6161925CB016D8FA00B4 /* QuotaPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPalette.swift; sourceTree = "<group>"; };
 		7195FA5D82026647691446F1 /* QuotaBarAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaBarAppDelegate.swift; sourceTree = "<group>"; };
@@ -241,6 +244,7 @@
 		C6019C89D1AEE6FC03538BF7 /* BrowserAccessProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAccessProbe.swift; sourceTree = "<group>"; };
 		CBA57641529E87430AB93006 /* QuotaControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaControls.swift; sourceTree = "<group>"; };
 		CBB44DBD911C8244B554CD5A /* apple-shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-shared"; path = "../../packages/apple-shared"; sourceTree = SOURCE_ROOT; };
+		CD4278EB9FF6D47612600149 /* QuotaToolbarSpacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaToolbarSpacer.swift; sourceTree = "<group>"; };
 		D2AF08A8655D2B347B5F754A /* QuotaWindowDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaWindowDisplay.swift; sourceTree = "<group>"; };
 		D6FA8259BDD349467B330919 /* BrowserAccessWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAccessWindowController.swift; sourceTree = "<group>"; };
 		DCE5BD1FB833617B3C97659E /* NotificationRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationRules.swift; sourceTree = "<group>"; };
@@ -384,6 +388,8 @@
 				CBA57641529E87430AB93006 /* QuotaControls.swift */,
 				5E023BD18BF3B9B1DD2EA3C3 /* QuotaDesign.swift */,
 				707E6161925CB016D8FA00B4 /* QuotaPalette.swift */,
+				6E5D193AD919E2B85AD33144 /* QuotaSurfaces.swift */,
+				CD4278EB9FF6D47612600149 /* QuotaToolbarSpacer.swift */,
 				CD0EE362D9EBE30E235BC15B /* Components */,
 			);
 			path = Appearance;
@@ -824,6 +830,8 @@
 				0A449FA4AA111F211FC0700E /* QuotaRefreshInterval.swift in Sources */,
 				17254FCE637FB5B5F8329DE6 /* QuotaSelectionPopup.swift in Sources */,
 				3CDC1388E87A14D8B27631E7 /* QuotaStateViews.swift in Sources */,
+				AFCC6E2890E7182BBC7E0B10 /* QuotaSurfaces.swift in Sources */,
+				08A47DBC5AE794039EF36BAA /* QuotaToolbarSpacer.swift in Sources */,
 				DB443EE0DDD587EBBE582921 /* QuotaWindowDisplay.swift in Sources */,
 				3735C65999B9FDF0CBA7A103 /* QuotaWireCodec.swift in Sources */,
 				8A8E7DDBC1E20B704080A31B /* ResetReminderScheduler.swift in Sources */,

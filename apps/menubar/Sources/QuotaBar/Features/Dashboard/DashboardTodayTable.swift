@@ -8,12 +8,11 @@ struct DashboardTodayTable: View {
   let rows: [DashboardTodayRow]
 
   var body: some View {
-    SettingsSection(title: "Today") {
+    Group {
       if rows.isEmpty {
         Text("No windows with samples today")
           .quotaSecondaryStyle()
-          .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
-          .padding(.vertical, QuotaDesign.Layout.groupContentInset)
+          .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
           header
@@ -24,9 +23,7 @@ struct DashboardTodayTable: View {
                 .foregroundStyle(QuotaPalette.ink)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-              Text(row.usedLine)
-                .quotaMonoListValueStyle()
-                .monospacedDigit()
+              usedColumn(row)
                 .frame(minWidth: 88, alignment: .trailing)
               Text(row.cost ?? "—")
                 .quotaMonoListValueStyle()
@@ -36,35 +33,44 @@ struct DashboardTodayTable: View {
                 .lineLimit(1)
                 .frame(minWidth: 96, alignment: .trailing)
             }
-            .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-            .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
+            .frame(minHeight: QuotaDesign.Layout.todayRowHeight)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(row.windowName)
             .accessibilityValue(accessibilityValue(row))
           }
         }
-        .padding(.vertical, QuotaDesign.Spacing.sm)
       }
     }
+    .padding(QuotaDesign.Layout.cardPadding)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .quotaCardSurface()
   }
 
   private var header: some View {
     HStack(spacing: QuotaDesign.Spacing.sm) {
       Text("Window")
-        .quotaMetaStyle()
         .frame(maxWidth: .infinity, alignment: .leading)
       Text("Used")
-        .quotaMetaStyle()
         .frame(minWidth: 88, alignment: .trailing)
       Text("Cost")
-        .quotaMetaStyle()
         .frame(minWidth: 64, alignment: .trailing)
       Text("Reset")
-        .quotaMetaStyle()
         .frame(minWidth: 96, alignment: .trailing)
     }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+    .quotaMetaStyle()
+    .textCase(.uppercase)
     .accessibilityHidden(true)
+  }
+
+  private func usedColumn(_ row: DashboardTodayRow) -> some View {
+    HStack(spacing: QuotaDesign.Spacing.xxs) {
+      Text(QuotaHistoryCopy.peak(row.usedStartPercent))
+      Text("→")
+        .foregroundStyle(QuotaPalette.mute)
+      Text(QuotaHistoryCopy.peak(row.usedNowPercent))
+    }
+    .quotaMonoListValueStyle()
+    .monospacedDigit()
   }
 
   private func accessibilityValue(_ row: DashboardTodayRow) -> String {
