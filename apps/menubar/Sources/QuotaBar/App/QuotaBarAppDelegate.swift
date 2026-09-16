@@ -11,15 +11,19 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
 
   func attach(model: MenuBarViewModel) {
     self.model = model
+    SettingsWindowController.shared.attach(model: model)
+    DashboardWindowController.shared.attach(model: model)
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    QuotaBarMainMenu.install()
     startStatusItemsIfNeeded()
   }
 
-  /// A desktop widget's `quotabar:` link. Overview opens the panel as it stands; a subscription
-  /// opens it scrolled to that subscription's provider. A link this installation never published
-  /// — an old salt, a provider since removed — resolves to nothing and lands on Overview.
+  /// A desktop widget's `quotabar:` link, or `quotabar://dashboard`. Overview opens the panel as
+  /// it stands; a subscription opens it scrolled to that subscription's provider. A link this
+  /// installation never published — an old salt, a provider since removed — resolves to nothing
+  /// and lands on Overview. Dashboard opens the Dashboard window.
   func application(_ application: NSApplication, open urls: [URL]) {
     startStatusItemsIfNeeded()
     guard let statusItems, let model else { return }
@@ -30,6 +34,8 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
         statusItems.openPanel(revealing: nil)
       case .subscription(let id):
         statusItems.openPanel(revealing: model.provider(forWidgetSelectionID: id))
+      case .dashboard:
+        DashboardWindowController.shared.show()
       }
       return
     }
@@ -38,6 +44,11 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   private func startStatusItemsIfNeeded() {
     guard statusItems == nil, let model else { return }
     statusItems = MenuBarStatusItemController(model: model)
+    let closePanel: () -> Void = { [weak self] in
+      self?.statusItems?.panel.close()
+    }
+    SettingsWindowController.shared.closePanel = closePanel
+    DashboardWindowController.shared.closePanel = closePanel
   }
 
   /// `terminateLater` is what makes an asynchronous last message possible: AppKit runs the run

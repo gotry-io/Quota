@@ -1,9 +1,9 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings → Agents → <Provider> → API Key: the one place a key is typed. New values travel only
-/// over private child stdin; the field is cleared after Save and the service keeps the masked
-/// state.
+/// Settings window → Agents → selected provider: the one place a key is typed. New values travel
+/// only over private child stdin; the field is cleared after Save and the service keeps the masked
+/// state. Rendered as a section in the provider pane, not a pushed page.
 struct ProviderAPIKeyView: View {
   @Bindable var model: MenuBarViewModel
   let provider: ProviderID
@@ -14,15 +14,8 @@ struct ProviderAPIKeyView: View {
   @State private var configurationError: String?
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        SettingsSection(title: "API Key") {
-          form
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+    SettingsSection(title: "API Key") {
+      form
     }
     .onAppear(perform: loadConfigurationPresentation)
     .onChange(of: model.providerConfigurations[provider]) {

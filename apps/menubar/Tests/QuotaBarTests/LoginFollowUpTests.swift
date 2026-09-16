@@ -42,6 +42,9 @@ final class ScriptedLocalService: LocalServiceServing, @unchecked Sendable {
   func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
     try await base.usagePeriod(from: from, to: to)
   }
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+    try await base.quotaHistory(since: since)
+  }
   func diagnose() async throws -> LocalServiceDiagnosticReport { try await base.diagnose() }
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult {
     try await base.recheckDiagnostics()

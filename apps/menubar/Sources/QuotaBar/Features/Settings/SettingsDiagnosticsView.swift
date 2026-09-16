@@ -225,6 +225,7 @@ struct SettingsDiagnosticsView: View {
   /// service knows nothing about it, so it is not in the service's report.
   let widgetPublishingMessage: String
   let onRetry: () -> Void
+  var onRecheck: (() -> Void)? = nil
 
   var body: some View {
     QuotaNavigationStableContent(state: state) { presentedState in
@@ -244,25 +245,16 @@ struct SettingsDiagnosticsView: View {
         retry: onRetry
       )
     case .report(let report, _, let refreshWarning):
-      VStack(spacing: 0) {
+      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         if let refreshWarning {
           QuotaInlineNotice(message: refreshWarning)
-            .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-            .padding(.top, QuotaDesign.Spacing.sm)
         }
-
-        ScrollView {
-          VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-            statusView(report)
-            surfacesView(report)
-            sourcesView(report)
-            reportView()
-          }
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-          .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-          .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
-        }
+        statusView(report)
+        surfacesView(report)
+        sourcesView(report)
+        reportView()
       }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
   }
 
@@ -278,8 +270,22 @@ struct SettingsDiagnosticsView: View {
         Text(checked)
           .quotaMetaStyle()
       }
+      Spacer(minLength: QuotaDesign.Spacing.sm)
+      if let onRecheck {
+        Button(action: onRecheck) {
+          if model.isLoading {
+            ProgressView().controlSize(.small)
+          } else {
+            Text(DiagnosticsHeaderAction.recheckLabel)
+          }
+        }
+        .disabled(!model.canRecheck)
+        .accessibilityLabel(
+          DiagnosticsHeaderAction.recheckAccessibilityLabel(isChecking: model.isLoading)
+        )
+      }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
     .accessibilityLabel("Status: \(label). \(checked)")
   }
 

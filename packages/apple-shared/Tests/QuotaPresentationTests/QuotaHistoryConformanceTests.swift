@@ -58,6 +58,35 @@ struct QuotaHistoryConformanceTests {
     #expect(QuotaHistoryCopy.todayLine([windows[0]]) == "Today: 1 window · 82%")
     #expect(QuotaHistoryCopy.todayLine([]) == nil)
   }
+
+  /// Two providers and two window ids fold independently: a window never takes another
+  /// window's samples, even when they share an observed_at.
+  @Test func twoProvidersAndTwoWindowsFoldSeparately() throws {
+    let now = Date(timeIntervalSince1970: 1_788_100_000)
+    let fiveHourReset = now.addingTimeInterval(2 * 3_600)
+    let weeklyReset = now.addingTimeInterval(3 * 86_400)
+    let earlier = now.addingTimeInterval(-3_600)
+    func fold(first: Double, last: Double, resetsAt: Date, cadence: Int) throws -> QuotaHistory {
+      try #require(
+        QuotaHistory.fold(
+          window: QuotaHistoryReading(resetsAt: resetsAt, cadenceSeconds: cadence),
+          samples: [
+            QuotaSample(resetsAt: resetsAt, observedAt: earlier, usedPercent: first),
+            QuotaSample(resetsAt: resetsAt, observedAt: now, usedPercent: last),
+          ],
+          now: now,
+          utcOffsetSeconds: 0
+        ))
+    }
+    let codexFiveHour = try fold(first: 10, last: 40, resetsAt: fiveHourReset, cadence: 18_000)
+    let codexWeekly = try fold(first: 12, last: 20, resetsAt: weeklyReset, cadence: 604_800)
+    let claudeFiveHour = try fold(first: 50, last: 60, resetsAt: fiveHourReset, cadence: 18_000)
+    let claudeWeekly = try fold(first: 70, last: 80, resetsAt: weeklyReset, cadence: 604_800)
+    #expect(codexFiveHour.points.map(\.usedPercent) == [10, 40])
+    #expect(codexWeekly.points.map(\.usedPercent) == [12, 20])
+    #expect(claudeFiveHour.points.map(\.usedPercent) == [50, 60])
+    #expect(claudeWeekly.points.map(\.usedPercent) == [70, 80])
+  }
 }
 
 private struct HistoryFixture: Decodable {

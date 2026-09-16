@@ -318,4 +318,111 @@ mod tests {
         );
         assert!(windows[1].get("history").is_none());
     }
+
+    /// Decimation keeps the first reading of each 300 s span after the previous kept point,
+    /// and always the last (ADR 0042).
+    #[test]
+    fn decimation_keeps_the_first_sample_of_each_five_minute_bucket() {
+        let resets = instant(Some(&json!("2026-09-05T12:00:00Z"))).expect("resets");
+        let sample = |observed: &str, used: f64| QuotaSample {
+            resets_at: resets,
+            observed_at: instant(Some(&json!(observed))).expect("observed"),
+            used_percent: used,
+        };
+        let window = json!({
+            "id": "five_hour",
+            "title": "5 Hours",
+            "used_percent": 50,
+            "resets_at": "2026-09-05T12:00:00Z",
+            "duration_seconds": 18000
+        });
+        let folded = window_history(
+            &window,
+            &[
+                sample("2026-09-05T07:30:00Z", 10.0),
+                sample("2026-09-05T07:32:00Z", 12.0),
+                sample("2026-09-05T07:34:59Z", 14.0),
+                sample("2026-09-05T07:35:00Z", 16.0),
+                sample("2026-09-05T07:36:00Z", 18.0),
+                sample("2026-09-05T09:30:00Z", 50.0),
+            ],
+            instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("now"),
+            0,
+        )
+        .expect("history");
+        let points = folded["points"].as_array().expect("points");
+        assert_eq!(
+            points
+                .iter()
+                .map(|point| point["used_percent"].as_f64().expect("used"))
+                .collect::<Vec<_>>(),
+            vec![10.0, 16.0, 50.0]
+        );
+    }
+
+    /// Samples of five_hour, weekly, and monthly fold onto their own windows and nowhere else.
+    #[test]
+    fn three_windows_fold_separately() {
+        let snapshot = json!({
+            "provider": "codex",
+            "windows": [
+                {
+                    "id": "five_hour",
+                    "title": "5 Hours",
+                    "used_percent": 40,
+                    "resets_at": "2026-09-05T12:00:00Z",
+                    "duration_seconds": 18000
+                },
+                {
+                    "id": "weekly",
+                    "title": "Weekly",
+                    "used_percent": 20,
+                    "resets_at": "2026-09-08T00:00:00Z",
+                    "duration_seconds": 604800
+                },
+                {
+                    "id": "monthly",
+                    "title": "Monthly",
+                    "used_percent": 8,
+                    "resets_at": "2026-10-01T00:00:00Z",
+                    "duration_seconds": 2592000
+                }
+            ]
+        });
+        let sample = |resets: &str, observed: &str, used: f64| QuotaSample {
+            resets_at: instant(Some(&json!(resets))).expect("resets"),
+            observed_at: instant(Some(&json!(observed))).expect("observed"),
+            used_percent: used,
+        };
+        let mut stored = BTreeMap::new();
+        stored.insert(
+            "five_hour".to_owned(),
+            vec![
+                sample("2026-09-05T12:00:00Z", "2026-09-05T08:00:00Z", 10.0),
+                sample("2026-09-05T12:00:00Z", "2026-09-05T09:30:00Z", 40.0),
+            ],
+        );
+        stored.insert(
+            "weekly".to_owned(),
+            vec![sample("2026-09-08T00:00:00Z", "2026-09-05T09:30:00Z", 20.0)],
+        );
+        stored.insert(
+            "monthly".to_owned(),
+            vec![sample("2026-10-01T00:00:00Z", "2026-09-05T09:30:00Z", 8.0)],
+        );
+        let now = instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("now");
+        let restated = snapshot_with_history(&snapshot, &stored, now, 0);
+        let windows = restated["windows"].as_array().expect("windows");
+        let used = |index: usize| {
+            windows[index]["history"]["points"]
+                .as_array()
+                .expect("points")
+                .iter()
+                .map(|point| point["used_percent"].as_f64().expect("used"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(used(0), vec![10.0, 40.0]);
+        assert_eq!(used(1), vec![20.0]);
+        assert_eq!(used(2), vec![8.0]);
+    }
 }

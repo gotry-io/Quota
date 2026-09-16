@@ -138,34 +138,6 @@ struct WpD10ScreenshotTests {
       now: now,
       to: dir.appendingPathComponent("panel-reset-absolute.png")
     )
-
-    try writeView(
-      VStack(alignment: .leading, spacing: 0) {
-        ForEach(MenuBarStylePreference.allCases) { option in
-          MenuBarChoiceRow(
-            title: option.label,
-            isSelected: option == .iconAndPercent
-          ) {}
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .quotaGroupSurface(),
-      to: dir.appendingPathComponent("settings-menu-bar-style.png")
-    )
-    try writeView(
-      VStack(alignment: .leading, spacing: 0) {
-        ForEach(ResetCopyStylePreference.allCases) { option in
-          MenuBarChoiceRow(
-            title: option.label,
-            subtitle: option.summary,
-            isSelected: option == .relative
-          ) {}
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .quotaGroupSurface(),
-      to: dir.appendingPathComponent("settings-reset-time.png")
-    )
   }
 
   private func writeRow(

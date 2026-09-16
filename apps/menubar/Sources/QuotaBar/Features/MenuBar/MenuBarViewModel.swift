@@ -75,9 +75,15 @@ struct BrowserScanCoverage: Equatable, Sendable {
   var candidates = 0
 }
 
-enum ProviderBrowserSessionPopup: Equatable, Sendable {
+enum ProviderBrowserSessionPopup: Equatable, Sendable, Identifiable {
   /// Asked before the first cookie is read after Scan browsers is turned on.
   case consent(provider: ProviderID)
+
+  var id: String {
+    switch self {
+    case .consent(let provider): "consent:\(provider.rawValue)"
+    }
+  }
 }
 
 enum AccountViewState: Equatable {
@@ -101,6 +107,8 @@ enum AccountDisconnectReason: Equatable {
     let overview: [LocalServiceOverviewItem]
     var cache: LocalServiceCacheState = .settled
     var providerStatus: [LocalServiceProviderStatus] = []
+    var deviceID: String? = nil
+    var quotaHistorySamples: LocalServiceQuotaHistory? = nil
   }
 #endif
 
@@ -113,12 +121,19 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   /// The name the sign-in gave, held until an account read carries one of its own.
   private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
-  /// Which period the Usage page is showing.
+  /// Which period Dashboard Usage is showing.
   private(set) var usagePeriod: UsagePeriodSelection = .today
   /// Custom periods this Mac has folded, keyed `from|to`. Memory only: a fold is cheap and the
   /// four `get_state` carries are the ones worth keeping.
   private(set) var customUsagePeriods: [String: LocalServiceUsageDetail] = [:]
   private(set) var customUsageLoading = false
+  /// Folded 30-day quota history, keyed provider then window id. Empty until
+  /// ``loadQuotaHistory()``; state pushes keep the current-window slice Overview already draws.
+  private(set) var quotaHistory: [ProviderID: [String: QuotaHistory]] = [:]
+  /// The samples the last `quota_history` read returned, so a later surface can re-fold a range.
+  private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
+  /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
+  private(set) var quotaHistoryErrorMessage: String?
   /// This Mac's monthly budget, and how far into it this month's local spend has gone.
   private(set) var budget: UsageBudget
   private(set) var budgetMonthDetail: LocalServiceUsageDetail?
@@ -136,6 +151,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
   private(set) var isUpdatingQuotaRefreshInterval = false
   private(set) var accountDisconnectReason: AccountDisconnectReason?
+  /// This Mac's Device id while signed in, used to mark the Devices table row.
+  private(set) var accountDeviceID: String?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
   private(set) var providerStatus: [ProviderID: LocalServiceProviderStatus] = [:]
@@ -318,6 +335,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private var customUsageTask: Task<Void, Never>?
 
   @ObservationIgnored
+  private var quotaHistoryTask: Task<Void, Never>?
+
+  @ObservationIgnored
   private let notificationCenter: any NotificationCentering
 
   @ObservationIgnored
@@ -467,13 +487,20 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
           all: Self.localPeriodDetail(usage.all)
         )
         usagePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
+        budgetMonthDetail = local.last30Days
       }
       authStatus = visualTestState.authStatus
+      accountDeviceID = visualTestState.deviceID
       overview = visualTestState.overview
       cache = visualTestState.cache
       providerStatus = Dictionary(
         uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
       )
+      if let samples = visualTestState.quotaHistorySamples {
+        quotaHistorySamples = samples
+        quotaHistory = Self.foldQuotaHistory(
+          samples, overview: visualTestState.overview, now: visualTestState.report.capturedAt)
+      }
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals
@@ -787,6 +814,56 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     loadCustomUsagePeriod()
   }
 
+  /// Asks the service for this Mac's stored samples since the retention horizon, then folds
+  /// them per provider and window. State pushes keep the current-window slice; this is the
+  /// 30-day journal Dashboard reads (ADR 0051).
+  func loadQuotaHistory() {
+    guard let client else { return }
+    quotaHistoryTask?.cancel()
+    quotaHistoryTask = Task { @MainActor [weak self] in
+      let since = Date().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
+      do {
+        let payload = try await client.quotaHistory(since: since)
+        guard !Task.isCancelled else { return }
+        self?.quotaHistorySamples = payload
+        self?.quotaHistory = Self.foldQuotaHistory(
+          payload, overview: self?.overview ?? [], now: Date())
+        self?.quotaHistoryErrorMessage = nil
+      } catch is CancellationError {
+        return
+      } catch {
+        self?.quotaHistoryErrorMessage = Self.message(for: error)
+      }
+    }
+  }
+
+  /// One fold per provider and window id, from the samples `quota_history` returned and the
+  /// cadence the current Overview reading already names.
+  static func foldQuotaHistory(
+    _ payload: LocalServiceQuotaHistory,
+    overview: [LocalServiceOverviewItem],
+    now: Date
+  ) -> [ProviderID: [String: QuotaHistory]] {
+    var result: [ProviderID: [String: QuotaHistory]] = [:]
+    for item in overview {
+      let provider = item.identity.provider
+      guard let byWindow = payload.samplesByProvider[provider.rawValue] else { continue }
+      for window in item.snapshot.windows {
+        guard let samples = byWindow[window.id],
+          let folded = QuotaHistory.fold(
+            window: QuotaHistoryReading(
+              resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
+            samples: samples,
+            now: now,
+            utcOffsetSeconds: payload.utcOffsetSeconds
+          )
+        else { continue }
+        result[provider, default: [:]][window.id] = folded
+      }
+    }
+    return result
+  }
+
   /// Asks the service to fold the selected period when it is not one of the four already folded.
   func loadCustomUsagePeriod() {
     guard usagePeriod.summaryKey == nil, let client,
@@ -864,7 +941,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   }
 
   /// Account answers for Usage only while it can. Everywhere the selection is honored uses
-  /// this, so Overview and the Usage page never disagree about which numbers are on screen.
+  /// this, so Overview and Dashboard Usage never disagree about which numbers are on screen.
   func effectiveUsageSource(_ selected: UsageSource) -> UsageSource {
     !usageUploadEnabled || accountSummary == nil ? .local : selected
   }
@@ -1508,6 +1585,15 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     }
   }
 
+  /// Sidebar badge for Agents: how many are shown, and whether any still need sign-in.
+  func agentsSidebarBadge() -> String {
+    let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
+    let needing = agentsNeedingSignIn().filter { ProviderVisibility.isVisible($0) }.count
+    let shown = "\(visible) shown"
+    guard needing > 0 else { return shown }
+    return "\(shown) · \(needing) need\(needing == 1 ? "s" : "") sign-in"
+  }
+
   func result(for provider: ProviderID) -> QuotaCollectionResult? {
     report?.results.first { $0.provider == provider }
   }
@@ -1595,6 +1681,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
     signInDisplayLabel = state.account.value?.displayLabel
+    accountDeviceID = state.account.value?.deviceID
     let incomingAuth =
       state.account.value?.authStatus
       ?? (state.account.status == .signedOut ? .signedOut : nil)

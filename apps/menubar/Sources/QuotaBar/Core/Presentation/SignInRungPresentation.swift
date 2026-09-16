@@ -217,8 +217,8 @@ enum SignInRungPresentation {
     return "\(looked) · \(skipped.joined(separator: ", ")) not checked"
   }
 
-  /// One line for the Agents list and the Settings home count: what this provider's sign-in
-  /// state is, from this Mac's rungs and the account devices reporting it.
+  /// One line for the Agents list and the Settings sidebar Agents row: what this provider's
+  /// sign-in state is, from this Mac's rungs and the account devices reporting it.
   static func statusLine(
     rungs: [SignInRung],
     accountCount: Int,

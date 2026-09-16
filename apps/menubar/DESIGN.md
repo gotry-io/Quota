@@ -1,18 +1,21 @@
-# QuotaBar Menu Panel Design
+# QuotaBar Design
 
-This file is the canonical visual and interaction specification for the native macOS QuotaBar menu
-panel. Website marketing UI belongs in `apps/web/DESIGN.md`.
+This file is the canonical visual and interaction specification for native macOS QuotaBar: the
+menu-bar panel, the Settings window, and the Dashboard window. Website marketing UI belongs in
+`apps/web/DESIGN.md`.
 
 ## Product character
 
 QuotaBar should feel like a precise macOS instrument: compact, calm, legible, and immediately useful.
 It uses system materials and controls, a restrained blue accent, and dense information hierarchy.
-The panel is an app-owned SwiftUI surface, not a website compressed into a popover.
+The panel is an app-owned SwiftUI surface, not a website compressed into a popover. Settings and
+Dashboard are titled windows; they are not the panel stretched.
 
 Core rules:
 
 1. Remaining quota is the primary value. Usage and account state support it without competing.
-2. One header, one footer, and one typed navigation stack are shared by every page.
+2. The panel shares one header, one footer, and one typed navigation stack across Overview and
+   provider detail. Settings and Dashboard are windows, not pages of that stack.
 3. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage, log
    out.
 4. QuotaBar displays typed local-service results. Provider configuration exposes only intentional
@@ -155,13 +158,193 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `fieldCornerRadius` | 7pt | Editable/control surface |
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
+| `windowSidebarWidth` | 200pt | Settings window sidebar |
+| `agentsListWidth` | 220pt | Provider list inside the Settings window Agents page |
+| `settingsWindowMinSize` | 720×520 | Settings window minimum content size |
+| `dashboardWindowMinSize` | 960×640 | Dashboard window minimum content size |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
 
+## Windows
+
+The Settings window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
+rather than the panel material, a 200pt sidebar, a 720×520 minimum content size, frame autosave name
+`QuotaBarSettingsWindow`, level `.normal`, and `collectionBehavior = [.moveToActiveSpace]`. It is
+resizable and miniaturizable; it does not go full screen. Esc and ⌘W close it.
+
+Opening Settings hides the menu-bar panel and registers the window with `WindowActivation`, which
+switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last registered
+window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
+registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
+and **Support**; the selected page persists in
+`settings.page`. Account, Notifications, General, and Support are grouped Forms in the detail
+column, and **Menu Bar** is one grouped form (preview, Style, Provider, Reset time, Show pace
+lines). The **Agents** row trails **3 shown** and, when any shown agent has no working credential
+and no device reporting it, **· 1 needs sign-in**; the Agents page is a two-column list and provider
+detail.
+
+The Dashboard window is the same kind of window: `windowBackgroundColor`, a 200pt sidebar, a
+960×640 minimum content size, frame autosave name `QuotaBarDashboardWindow`, Esc and ⌘W. Unlike
+Settings it may go full screen (`collectionBehavior` includes `.fullScreenPrimary`). Opening it
+hides the menu-bar panel and registers the window with `WindowActivation`.
+
+## Dashboard
+
+Dashboard is where this Mac's quota history is read at width. It does not collect, and every number
+it shows is already on this Mac: local samples through `quota_history`, and the current reading
+Overview already has.
+
+The sidebar lists **All providers**, then each provider shown in Overview, in Overview order, each
+with its catalog brand mark. **All providers** shows every shown provider's card; selecting a
+provider shows that provider only. The selection is not persisted.
+
+The toolbar holds the history range — **Today**, **7D**, **30D**, persisted as `dashboard.range`,
+default 7D — a Usage source picker (**Account** / **This Mac**) that the Usage section honors, and a
+refresh action that uses the same tooltip as the panel footer: **Refresh all quota. Updated 3m
+ago**, or **Not checked** before any sync. The Usage source picker is hidden when Account data is
+unavailable or Usage sync is disabled; in those states Usage is unambiguously This Mac. Changing
+source preserves the selected period.
+
+### Quota
+
+One card per provider in the detail column. The header is one line: the catalog provider name, the
+pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
+the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window. Parts the
+reading does not have are omitted.
+
+Each card draws one Swift Charts `LineMark` per window of used percent over time, from this Mac's
+samples in the selected range. The running window continues to its reset as a dashed `LineMark` at
+ADR 0035's projection, and a `RuleMark` marks the reset. Line colour is the remaining-quota tone
+(healthy / warning / critical) of that window; windows of the same provider are told apart by
+opacity in rank order, the first cadence window at full strength. No second palette.
+
+Every chart has an `accessibilityChartDescriptor` that names each window, its start, now, and the
+projected end.
+
+Empty states: while the cache is rebuilding and this Mac has no samples yet, the card reuses
+**Usage history is catching up** / **Quota and Account stay available.** A provider that is not
+signed in reuses `SignInRungPresentation.statusLine`. A signed-in provider with no samples yet
+reads **No history yet**.
+
+### Today
+
+A table under the Quota cards. One row per provider × window that had samples today. Columns:
+window (catalog provider name · window title), used percent at the start of the local day → now
+(`12% → 47%`, the same whole percents `QuotaHistoryCopy.peak` prints), cost today when today's
+Usage can attribute it to that provider, and the reset time — the same reset copy the Quota header
+uses, or the local clock time when that reset has already passed. The panel's
+`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Dashboard lays those facts in
+columns. A provider or window with no sample today is omitted. Sidebar selection narrows the rows
+the same way it narrows Quota cards.
+
+### Usage
+
+Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
+it uses This Mac. The source menu is the Dashboard toolbar; omit it when Account data is
+unavailable or Usage sync is disabled. Changing source preserves the selected period.
+
+A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
+labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
+background, with the selected item highlighted inside it; do not wrap it in another group surface.
+A custom range selects none of the six, so the tab control shows nothing selected and the row
+beneath it says what the period covers. At Dashboard width the control is leading-aligned and no
+wider than 480pt.
+
+Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
+calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
+Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
+and **Next period** is disabled on the current unit. The period names, the range title, and the
+budget copy are in Shared product vocabulary.
+
+Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Dashboard and
+changing either selector starts no collection or network work and shows no loading state when a
+snapshot already exists. Every other period is one `usage_period` request, which folds the hours
+this Mac already stored rather than collecting again; while it is in flight the page says
+**Preparing Usage…**, and a state change discards those folds and asks again because the hours
+behind them moved. The Account read hands this device four folds, not the days behind them, so on
+Account a period outside those four says **This period is folded from this Mac's own hours. Switch
+the source to this Mac to see it.** If the selected source has no snapshot yet and that
+component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
+absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
+Preparing and empty Usage remain section states below the period tabs because those controls are
+still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
+not replace available content.
+
+When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
+folded the same way any other custom period is, and it is shown whatever period the page is
+otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
+
+The default page contains:
+
+- Summary: a titled group with a totals row of Tokens, Cost, and Cache hit, followed by the six
+  token and message metrics in a three-column grid. Cache hit is whole percent, with `saved $X.XX`
+  under it when the period's cache reads could be priced and nothing under it when they could not
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values use the
+  primary text tone; grid labels stay muted while their values use the secondary tone. Values use
+  `UsageValueFormatter`.
+- Daily, for This Mac and for any period but All: one Swift Charts `BarMark` per local day of
+  cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A day with
+  nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is the
+  shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
+  the section when the period reported nothing. All has no Daily section: its per-day shape is the
+  Account's activity chart.
+- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
+  — independent of the collecting client and of who billed the request. A **Top models** list of
+  the three largest leads the section when there is more than one, each as `share · tokens`. Each
+  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
+  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
+  share` when unpriced.
+- Rhythm, for This Mac and for Account, and for any period but All: 24 bars at 36pt, one per
+  hour of the local clock, then Morning / Afternoon / Evening / Night, each as a whole-percent
+  share. Omit the section when every hour is empty. Account hours come from
+  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
+  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
+  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
+  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
+  Account Usage has no such section.
+- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
+  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
+  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
+  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
+  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
+
+Provider headings use the brand mark of the structured provider the service sent; the client never
+reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
+exists, use an honest semantic system symbol rather than another provider's logo. Approved
+monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
+Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
+provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
+each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
+Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
+at most the first five models in the existing cost/tokens order. If the same provider/model pair
+appears through more than one client, append the client name only to disambiguate those rows.
+
+Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
+data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
+summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
+another alert. Technical detail remains available through Support.
+
+Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
+suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
+name for stability.
+
+Compact cost copy is exact:
+
+- complete: `$X`;
+- partial: `≥ $X`;
+- unavailable: `— unpriced`.
+
+Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
+Summary and model values use two fractional digits to preserve the single-line layout.
+
 ## Material and color
 
-Production inherits the menu extra's system material. Add only adaptive semantic layers:
+The panel inherits the menu extra's system material. Settings and Dashboard use
+`windowBackgroundColor`, not that material. Add only adaptive semantic layers:
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
@@ -280,8 +463,7 @@ as one item each; Combined is the default arrangement for that size, and a fourt
 makes the bar Separate. More than one named provider cannot be Icon-only or Percent-only and still
 say whose number it is, so those two fall back to Icon and percent; Icon and today cost/tokens
 keep their style because each cell still wears a mark. The stored Style is left alone and
-applies again when the bar is back to one reading. Style choosing takes effect and returns;
-Provider is a set of toggles and stays until Back. Both the named set and the arrangement persist
+applies again when the bar is back to one reading. Both the named set and the arrangement persist
 in UserDefaults. A chosen provider with no current reading shows the mark alone and never borrows
 another provider's number, and **Percent**, **Icon and today cost**, and **Icon and today tokens**
 likewise fall back to the mark alone when there is no number to show, because an item with no
@@ -304,21 +486,18 @@ panel on that provider; Combined and Automatic open the same panel without chang
 
 The header shows:
 
-- Overview: Quota mark, **QuotaBar**, and Settings gear.
-- Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
-  edge because the choice changes the whole page. Diagnostics places one icon-only **Recheck**
-  (`arrow.clockwise`) action there only after a report exists; initial loading and full-page failure
-  leave the header action area empty. Recheck starts or joins the real private-service refresh and
-  waits for a newer evaluation; while checking, its icon becomes a small spinner and the action is
-  disabled. If the bounded UI wait ends first, keep the prior completed report on screen.
-- Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
+- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open Dashboard…**,
+  **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the menu focuses Quit.
+  VoiceOver names the trigger **Settings menu**. **Open Dashboard…** opens the Dashboard window;
+  **Settings…** opens the Settings window; there is no gear.
+- Child page: Back and page title. Provider detail has no trailing action.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
-tokens` from the Usage source the Usage page would show; cost drops out when the day is unpriced,
-and the whole line is absent when there are no tokens. Today's number belongs beside quota
-everywhere, so it lives in the bar every page already has rather than in an Overview line of its
-own.
+tokens` from the Usage source Dashboard would show and is a button that opens Dashboard
+(VoiceOver **Open Dashboard**); cost drops out when the day is unpriced, and the whole line is
+absent when there are no tokens. Today's number belongs beside quota everywhere, so it lives in
+the bar every page already has rather than in an Overview line of its own.
 
 When the last sync finished is a fact about the refresh action, not a number worth a permanent
 line: `arrow.clockwise` carries **Refresh all quota. Updated 3m ago** — or **Not checked** before
@@ -334,19 +513,22 @@ Back returns one level.
 
 ```text
 Overview
-└── Settings
-    ├── Account
-    │   └── Devices
-    ├── Usage
-    ├── Notifications
-    ├── Menu Bar Style
-    ├── Menu Bar Provider
-    ├── Reset time
-    ├── Support
-    │   └── Diagnostics
-    └── Agents
-        └── Provider
-            └── Source
+└── Provider (read-only quota)
+
+Settings window
+├── Account (Devices on the same page)
+├── Agents
+│   ├── Shown in Overview / Hidden from Overview (list)
+│   └── Provider (inline: Overview, Accounts, Source, Sign-in, API Key)
+├── Notifications
+├── Menu Bar (one form)
+├── General
+└── Support (Diagnostics disclosure)
+
+Dashboard window       (sidebar)  All providers · <each shown provider>
+├── Quota      (30-day window curves, pace phrase, reset, peak)
+├── Today      (per-window used % today, cost when attributable, reset)
+└── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
 ```
 
 ### Overview
@@ -356,16 +538,18 @@ account observations; Rust has already merged global identities and selected one
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
-totals stay on the Usage detail page in Settings and never create or extend an Overview provider
+totals stay on Dashboard Usage and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
-the only Overview destination into that agent's Settings page (`Settings → Agents → Provider`).
-It is a destination at `minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
+the only Overview destination, into a read-only quota page for that provider. Agent settings
+live in the Settings window (**Agents**). The heading is a destination at
+`minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
 name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
 extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
 has margin from the panel edge. Overview is not a Settings group and does not use the group's
 4pt nested inset. Quota windows, account labels, and status detail under it are static
 reading content and do not take that surface. The heading remains keyboard and VoiceOver
-reachable. Back follows the stack.
+reachable. Back follows the stack. A widget deep link `quotabar:/subscriptions/<selection_id>`
+lands on that read-only provider page.
 
 Each quota observation shows:
 
@@ -425,59 +609,62 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 ### Settings
 
-Settings section order is fixed:
+Settings is a titled window whose sidebar lists **Account**, **Agents**, **Notifications**,
+**Menu Bar**, **General**, and **Support**. The panel does not push Settings pages; **Settings…**
+is an overflow-menu item on Overview.
 
-1. **Account**
-2. **Quota**
-3. **Menu Bar**
-4. **General**
+The Account window page is one Form in every state:
 
-The Account group on Settings is one row deep in every state:
-
-- Signed out or not checked: one standard-height **Sign In** row.
-- Login running: one standard-height browser completion row with **Copy Link** and **Cancel**.
+- Signed out or not checked: **Sign In**.
+- Login running: **Finish sign-in in browser** with **Copy Link** and **Cancel**.
   Cancellation sends the typed service operation and closes the browser flow. Copy Link puts the
-  authorize URL on the pasteboard. If QuotaBar could not open the browser, the row stays in this
+  authorize URL on the pasteboard. If QuotaBar could not open the browser, the page stays in this
   state and the error reads **QuotaBar could not open your browser. Copy the sign-in link and open
   it yourself.**
-- Signed in: one row titled with the account label, which opens the **Account** page.
-- Logout pending: one standard-height status row with **Retry Logout**.
+- Signed in: the account label, a Devices table on this same page, **Open quota.gotry.io**, and
+  **Sign Out**.
+- Logout pending: **Retry Logout**.
 - Removed or expired device session: use the same **Sign In** action and never show raw reason codes
   or ids. Authentication-provider choice belongs to the login flow, not this row's label.
 
-The Account group is the only place for account authentication actions. Buttons invoke typed private
+The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
-totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
-**Style**, **Provider**, and **Reset time**: rows that state the choice in force on the right and
-open a page to change it, never a menu that drops over the panel. General contains the native mini
-**Launch at Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes,
-default 5), then the **Support** destination. Choosing an interval takes effect and returns, like
-Menu Bar Style. It is how often this Mac collects provider quota; Account summary still polls every
-minute, and a window reset can collect quota once before the next interval.
+Usage lives on Dashboard, reached from the footer **Today · $x** button. The Usage root summary
+uses account-wide totals while signed in with Usage sync enabled, and local totals otherwise.
+**Menu Bar** is one grouped form in the Settings window: a live preview of the status-item label,
+**Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
-**Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
-ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
-returns, because there is nothing else on the page to confirm. **Reset time** is the same kind of
-list: **Relative** (`Resets in 3h 12m`) or **Absolute** (`Resets Mon 17:12`). **Menu Bar Provider** lists
-**Automatic** first, without a mark because it is not a provider, then the providers Overview is
+**General** is a window page: **Launch at Login**, **Refresh Interval** (Picker, 1, 2, 5, 10, or 15
+minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
+`usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
+is how often this Mac collects provider quota; Account summary still polls every minute, and a
+window reset can collect quota once before the next interval. Reset Local Data always confirms first
+and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
+stays signed in. That confirmation is a system dialog on the Settings window.
+
+**Menu Bar** is one form. A preview row above **Style** draws the actual status-item label from
+`MenuBarLabelModel` for the current readings. **Style** is a Picker over every
+`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
+**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
 showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
-named set; named rows toggle and the page stays. When two or more are named, **Combined** and
-**Separate** follow in a second group; Combined is unavailable past three.
+named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
+Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
+**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
+writes the existing storage keys and takes effect immediately.
 
-Support is where help lives, and it asks the service nothing on its own: opening it starts no
-check and costs no refresh. **Help** contains the **Diagnostics** destination, **Feedback**, and
-**Reset Local Data**. Reset Local Data always confirms first and says plainly that collected quota
-and Usage history are deleted and rebuilt and that the person stays signed in. That confirmation is
-`QuotaConfirmationPopup` at the panel root, like Sign Out and Disconnect. **About** stays last with
-Website, version, and **Updates**, which opens Sparkle's standard updater; Sparkle also
-checks on a daily schedule after launch.
+Support is a window page, and it asks the service nothing on its own: opening it starts no check
+and costs no refresh. **Help** contains **Feedback**. **About** stays with Website, version, and
+**Updates**, which opens Sparkle's standard updater; Sparkle also checks on a daily schedule after
+launch.
 
-Diagnostics is the diagnostic page, one level inside Support. It is backed by the private
-`diagnose` operation and opens with the report's status line: a semantic icon, **All systems
-working** / **Some checks need attention** / **Action needed**, and a fixed locale-shortened
-evaluation time (`Checked 3:40 PM`), not relative age.
+Diagnostics is a disclosure on Support, not a separate page. Expanding it runs the private
+`diagnose` operation on demand. It opens with the report's status line: a semantic icon, **All
+systems working** / **Some checks need attention** / **Action needed**, and a fixed locale-shortened
+evaluation time (`Checked 3:40 PM`), not relative age. Recheck lives in that disclosure once a
+report exists; it starts or joins the real private-service refresh and waits for a newer evaluation.
+While checking, Recheck becomes a small spinner and is disabled. If the bounded UI wait ends first,
+keep the prior completed report on screen.
 
 **Data** contains Quota Overview, This Mac Usage, Account Usage, and Account only, in that order.
 **Sources** follows it and appears only when the service sent any: one row per provider, Usage
@@ -490,13 +677,11 @@ orange warning, red blocked mark).
 recent work the page does not list, and whose row title becomes **Report Copied** for about two
 seconds. It lives here rather than on Support because here is where the report exists.
 
-Recheck lives only in the page header; opening Diagnostics resets and requests a real refresh so
-re-entry never silently shows a previous report. That initial check uses a centered page Loading
-state. Its failure uses a centered Error state with **Retry** as the only recovery action and no
-header actions. A later Recheck preserves the last completed report; failure adds a fixed inline
-warning above the report's scrolling content instead of replacing the page and enables Recheck
-again. The Usage source control is not repeated in Settings. **Show in Overview** remains
-presentation-only and has no diagnostic or local-collection meaning.
+The first expand uses a Loading state. Its failure uses an Error state with **Retry** as the only
+recovery action. A later Recheck preserves the last completed report; failure adds a fixed inline
+warning above the report instead of replacing it and enables Recheck again. The Usage source control
+is not repeated in Settings. **Show in Overview** remains presentation-only and has no diagnostic or
+local-collection meaning.
 
 Page navigation animates an immutable presentation snapshot. Async work and model updates continue
 during the transition, while the shared page host coalesces presentation changes and publishes only
@@ -507,9 +692,9 @@ published page state. Reduce Motion skips the transition and publishes updates i
 
 ### Notifications
 
-Notifications is a Settings destination under Quota. It holds the local remaining-quota rules this
-Mac evaluates itself: one master switch, remaining-percent thresholds on each subscription Overview
-is showing, and a switch for window-reset reminders.
+Notifications is a Settings window page. It holds the local remaining-quota rules this Mac evaluates
+itself: one master switch, remaining-percent thresholds on each subscription Overview is showing,
+and a switch for window-reset reminders.
 
 - The master switch is off until the person turns it on and macOS grants alerts and sound. Turning
   it on asks `UNUserNotificationCenter` for `.alert` and `.sound`. A refusal puts the switch back
@@ -518,7 +703,7 @@ is showing, and a switch for window-reset reminders.
   Opening the page re-reads the system permission; a later grant in System Settings does not turn
   the switch on by itself.
 - Each visible subscription is one group: the catalog `display_name` and the masked account label.
-  Two compact menus pick remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
+  Two pickers choose remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
   defaults to **20**; the second defaults to **10** and may be **Off**, which stores a single
   threshold. Stored values stay descending and unique.
 - Reset reminders default on. QuotaBar books a calendar notification at each available
@@ -527,188 +712,85 @@ is showing, and a switch for window-reset reminders.
   emits for a window that already has a reminder is left to that reminder.
 - The page footer is **Quota reminds you when a refresh brings new data.** Quota does not promise
   real-time.
-- The Settings home row trails **On** or **Off**. Delivery is native.
+- Delivery is native.
 
-The page uses the same Settings list rows as the rest of this panel.
+The page is a grouped Form on the Settings window.
 
 ### Account
 
-The Account page is reachable only while signed in, and it holds everything that belongs to the
-account, top to bottom: the account label, the native mini **Sync Usage** switch, **Devices**,
-**Open quota.gotry.io**, and **Sign Out**. Sync Usage keeps its behaviour and its copy — it is on
-this page because what it uploads is account data, not a general preference. Multi-device sync is
-free for every account, so the page states nothing about paying for it and the switch is bound by
-nothing but being signed in.
+The Account window page is always reachable from the sidebar. Signed out, it is **Sign In**. Signed
+in, it holds everything that belongs to the account, top to bottom: the account label, **Devices**
+as a section on this same page, **Open quota.gotry.io**, and **Sign Out**. **Upload Usage to
+Account** lives on General — it is the same `usageUploadEnabled` switch, moved because it is a Mac
+preference as well as account data. Multi-device sync is free for every account, so the page states
+nothing about paying for it and the switch is bound by nothing but being signed in.
 
-**Sign Out** is the one destructive row, below the group, and it opens an app-owned confirmation
-popup with **Cancel** and destructive **Sign Out** actions stating that the remote Device and synced
-data remain. Do not use a system alert for this flow. Signing out closes this page, along with
-anything opened from it, because there is no longer an account to manage.
+**Sign Out** is the one destructive row and it opens a window confirmation dialog with **Cancel**
+and destructive **Sign Out** actions stating that the remote Device and synced data remain. Signing
+out leaves this page on **Sign In**, because there is no longer an account to manage.
 
 ### Devices
 
-Devices is read-only in QuotaBar. Each row is the device display name, its platform, and the one
-activity line from the shared vocabulary — a trailing **Active** / **Idle** / **Not reporting**
-verdict beside `last reading 5m ago`, or `no readings yet`. Never a claim that a sleeping or closed
-app is broken. Signed-out remains explicit. Never display raw Device IDs or request a provider login for
-another Device. Empty and signed-out states point back to the Account action in Settings using the
-shared centered Empty state. An unavailable account with no device content uses the centered Error
-state and Retry; a refresh warning with cached device content uses an inline notice. Device deletion
-and account administration live on the Web account surface.
-
-### Usage
-
-Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
-it uses This Mac. The compact source menu is the Usage header's trailing action; its options are
-simply **Account**, with a single-account symbol, and **This Mac**. Omit the menu when Account data is
-unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
-source preserves the selected period.
-
-A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
-labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
-background, with the selected item highlighted inside it; do not wrap it in another group surface.
-A custom range selects none of the six, so the tab control shows nothing selected and the row
-beneath it says what the period covers.
-
-Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
-calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
-Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
-and **Next period** is disabled on the current unit. The period names, the range title, and the
-budget copy are in Shared product vocabulary.
-
-Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
-changing either selector starts no collection or network work and shows no loading state when a
-snapshot already exists. Every other period is one `usage_period` request, which folds the hours
-this Mac already stored rather than collecting again; while it is in flight the page says
-**Preparing Usage…**, and a state change discards those folds and asks again because the hours
-behind them moved. The Account read hands this device four folds, not the days behind them, so on
-Account a period outside those four says **This period is folded from this Mac's own hours. Switch
-the source to this Mac to see it.** If the selected source has no snapshot yet and that
-component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
-absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
-Preparing and empty Usage remain section states below the period tabs because those controls are
-still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
-not replace available content.
-
-When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
-progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
-folded the same way any other custom period is, and it is shown whatever period the page is
-otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
-
-The default page contains:
-
-- Summary: a titled group with separate Tokens, Cost, and Cache hit headline metrics followed by
-  the six token and message metrics in a two-column grid. Cache hit is whole percent, with
-  `saved $X.XX` under it when the period's cache reads could be priced and nothing under it when
-  they could not ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values
-  use the primary text tone; grid labels stay muted while their values use the secondary tone.
-- Daily, for This Mac and for any period but 2 Years: one bar per local day at 44pt tall, then the
-  last seven of those days as `date` / `tokens · cost` rows. The bars are a plain neutral fill at
-  55% ink, and a day with nothing in it is drawn at 12% rather than left out, so the shape of a
-  week is the shape of the week. Omit the section when the period reported nothing. The 2 Years
-  period has no Daily section: its per-day shape is the Account's activity chart.
-- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. A **Top models** list of
-  the three largest leads the section when there is more than one, each as `share · tokens`. Each
-  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
-  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
-  share` when unpriced.
-- Rhythm, for This Mac and for Account, and for any period but 2 Years: 24 bars at 36pt, one per
-  hour of the local clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as
-  a whole-percent share. Omit the section when every hour is empty. Account hours come from
-  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
-  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
-  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
-  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
-  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
-  Account Usage has no such section.
-- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
-  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
-  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
-  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
-  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
-
-Provider headings use the brand mark of the structured provider the service sent; the client never
-reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
-exists, use an honest semantic system symbol rather than another provider's logo. Approved
-monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
-Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
-provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
-each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
-Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
-at most the first five models in the existing cost/tokens order. If the same provider/model pair
-appears through more than one client, append the client name only to disambiguate those rows.
-
-Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
-data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
-summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
-another alert. Technical detail remains available through Support.
-
-Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
-suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
-name for stability.
-
-Compact cost copy is exact:
-
-- complete: `$X`;
-- partial: `≥ $X`;
-- unavailable: `— unpriced`.
-
-Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
-Summary and model values use two fractional digits to preserve the single-line layout.
+Devices is a section on the Account window page, not a sub-page. Each row is the device display
+name, last seen as the shared freshness line (`last reading 5m ago`, or `no readings yet`), a
+**This Mac** marker when the row is this installation, and **Remove**. Never a claim that a sleeping
+or closed app is broken. Signed-out remains explicit. Never display raw Device IDs or request a
+provider login for another Device. **Remove** confirms and then opens `quota.gotry.io/my/devices`,
+where Device deletion lives. Empty and signed-out states stay on this page with Sign In. An
+unavailable account with no device content offers Retry.
 
 ### Agents
 
-Agents opens with a **Usage** group that holds one native mini switch, **Group Usage by project**,
-default on. It only changes This Mac: the Usage page Projects section and the local hour dimension
-behind it. Upload rows never carry a project key.
-
-Agents then has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
-reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
-name. When this Mac has a last-good official status-page reading, that line is
-**All systems operational**, or **Degraded ·** the status-page description for `minor` and above.
-Otherwise it is `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
-one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
+Agents is a two-column page in the Settings window. The left column lists every catalog provider in
+**Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag reordering
+and VoiceOver Move Up/Move Down actions. Every row carries one status line under the name. When
+this Mac has a last-good official status-page reading, that line is **All systems operational**, or
+**Degraded ·** the status-page description for `minor` and above. Otherwise it is
+`SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than one),
+**Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
 configured**, or **Not signed in** — so the list says which agent needs attention before it is
-opened. The Settings home **Agents** row trails **3 shown** and, when any shown agent has no
-working credential and no device reporting it, **· 1 needs sign-in**.
+selected. Selecting a row shows that provider in the right pane. The Settings sidebar **Agents** row
+trails **3 shown** and, when any shown agent has no working credential and no device reporting it,
+**· 1 needs sign-in**.
 
-Provider detail is read top to bottom as three questions — is it shown, what is it reporting,
-how does this Mac sign in — and contains exactly these sections, in this order:
+**Group Usage by project** lives on General, not here.
+
+The right pane is that provider's settings, read top to bottom as three questions — is it shown,
+what is it reporting, how does this Mac sign in — and contains exactly these sections, in this
+order:
 
 - **Overview**: one **Show in Overview** switch, no subtitle. Visibility is provider-wide and
   presentation-only.
 - **Accounts**: one group for every subscription. Each account is a bold row inside the group —
   the masked account label, or **Account 1**, **Account 2** when there is no label, so two
   accounts cannot share a blank name — with the compact source menu as that row's trailing
-  control; its sources follow as indented destination rows, and a hairline separates one
+  control; its sources follow as indented rows, and a hairline separates one
   account from the next. The menu uses `fieldFill` on the 24pt compact surface
   (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
   **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
-  size. It opens an app-owned floating menu (the same material as Settings overflow), not a
+  size. It opens an app-owned floating menu (`quotaFloatingMenuSurface`), not a
   system Menu. Choice rows use `fieldMinHeight` (32pt); the first item is **Automatic** with
   the quiet line **Newest live reading** under it, the rest are the available sources with no
   subtitle and no leading icons; the accent checkmark after the title is the only selected mark.
   Escape or a click outside the trigger and list dismisses it. VoiceOver names the control
   **Show from** and states the mode (Automatic or Pinned), the source Overview is actually
-  showing, and the freshness. Source rows are destinations only — device icon, name, the shared
-  freshness line trailing, `chevron.right` — and never select. The source Overview is actually
-  showing uses a filled device icon in accent; other devices stay outline in body. VoiceOver adds
-  **Showing on Overview**. A pin whose source has gone is dropped and Automatic resumes. With no
-  subscription yet the group holds one line: **No readings yet. Sign in below to start
-  reporting.**
-- **Source**: a read-only page titled with the source display name. Under **Quota** it states
-  freshness, then that source's remaining-quota windows. It does not repeat the source name,
-  source type, account label, or plan. If the snapshot is not yet available it keeps the
-  freshness line and does not invent empty quota. If the source has gone: **This source is no
-  longer reporting.** There is no **Use this source** action; selection stays on the provider
-  page menu.
+  showing, and the freshness. Source rows select which source's **Quota** section is shown —
+  device icon, name, the shared freshness line trailing — and never pin. The source Overview is
+  actually showing uses a filled device icon in accent; other devices stay outline in body.
+  VoiceOver adds **Showing on Overview**. A pin whose source has gone is dropped and Automatic
+  resumes. With no subscription yet the group holds one line: **No readings yet. Sign in below to
+  start reporting.**
+- **Source**: an inline **Quota** section, not a pushed page. It states freshness, then that
+  source's remaining-quota windows. It does not repeat the source name, source type, account
+  label, or plan. If the snapshot is not yet available it keeps the freshness line and does not
+  invent empty quota. If the source has gone: **This source is no longer reporting.** There is no
+  **Use this source** action; selection stays on the provider page menu. Source rows in
+  **Accounts** select which source's quota is shown here.
 - **Sign-in**: one group listing every credential rung this Mac has for the provider, in the
   order collection tries them, each with the verdict the last collection reached. Rung rows
   are `SignInRungPresentation`'s: **Codex CLI** / **Claude Code CLI** / **Grok CLI** /
-  **Kimi Code CLI** (`terminal`), **API Key** (`key`, a destination row to the API Key page),
-  **Cursor App** (`macwindow`), and **Browser Sign-in** (`safari`, a switch). The trailing
+  **Kimi Code CLI** (`terminal`), **API Key** (`key`, status only — the form is the **API Key**
+  section below), **Cursor App** (`macwindow`), and **Browser Sign-in** (`safari`, a switch). The trailing
   status word is **Signed in**, **Configured**, or **On** in accent; **Not signed in**, **Not
   configured**, or **Rejected** in warning; **Unavailable** in body with the collection message
   as the subtitle. A CLI rung that is not signed in shows the catalog-provided copyable command
@@ -716,9 +798,9 @@ how does this Mac sign in — and contains exactly these sections, in this order
   CLI-file rungs answer the report by different source ids (`kimi_code_usages_api`,
   `kimi_code_cli_credential`), so each row carries its own verdict. Cursor is catalog
   `exclusive`: it has no command row, and its first rung is the Cursor.app session.
-- **API Key**: a page for the providers with a key rung — native secure entry, optional base URL
-  when catalog-enabled, the masked saved state, Save, and Remove. The Agent page row shows the
-  masked key and status only.
+- **API Key**: an inline section for the providers with a key rung — native secure entry, optional
+  base URL when catalog-enabled, the masked saved state, Save, and Remove. Not a pushed page. The
+  Sign-in row shows the masked key and status only.
 - **Browser Sign-in** is a rung row, not its own section: the switch's subtitle says what it
   is a fallback for while off (**Fallback when the CLI is signed out**), then **Looking for
   sign-ins…**, the accounts found, or where it looked and did not find one — **No sign-in in
@@ -730,10 +812,12 @@ how does this Mac sign in — and contains exactly these sections, in this order
   `exclamationmark.circle`, and it replaces the ordinary error line rather than stacking with
   it.
 
-Turning Browser Sign-in on uses an app-owned confirmation popup at the panel root, never a system
-alert or sheet. There is no browser picker, account picker, Sign In, or Disconnect. The popup
-owns focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and
-accessibility-hidden.
+Turning Browser Sign-in on uses an app-owned confirmation sheet on the Settings window, never a
+system alert and never an overlay sized for the panel. There is no browser picker, account picker,
+Sign In, or Disconnect. The sheet owns focus, Escape, keyboard, and VoiceOver while the Settings
+window underneath is blocked. The sheet sits on the Settings window; the Browser Access grant
+window keeps level `.floating` so it sits above Settings, and `keychainPromptBrowser` prompts still
+fire.
 
 After consent, QuotaBar preflights the browsers installed on this Mac and only then reads jars
 it is already allowed to open. Whatever is still missing opens the **Browser Access** window —
@@ -758,10 +842,11 @@ exactly as **Open Settings…** does. After **Open Settings…** the window adds
 grant is already on, which this process cannot know. The window closes on its own when nothing is
 outstanding. Dismissing it leaves Browser Sign-in on.
 
-On the Agent page the outstanding grants are one indented destination row under the switch — **Browser
-Access** with a one-line summary such as **Safari and Chrome need permission** or **Relaunch
-QuotaBar to finish granting Full Disk Access** — that opens the window; there are no per-browser
-rows or action labels in the panel. The row disappears when every installed browser is readable.
+On the Agents page the outstanding grants are one indented destination row under the switch —
+**Browser Access** with a one-line summary such as **Safari and Chrome need permission** or
+**Relaunch QuotaBar to finish granting Full Disk Access** — that opens the window; there are no
+per-browser rows or action labels on the Agents page. The row disappears when every installed
+browser is readable.
 Scheduled refreshes never prompt: they skip Safari without Full Disk Access and any Chrome-family
 browser whose Keychain ACL is not already allowed, and record each as a refusal.
 
@@ -802,11 +887,11 @@ extra color.
 
 Links follow the iPhone's rule. QuotaBar registers the `quotabar:` scheme and answers
 `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`; either opens the panel from the
-first status item, and a subscription scrolls Overview to that provider. A link whose
+first status item, and a subscription lands on that provider's read-only quota page. A link whose
 `selection_id` this installation never published — an older salt, a provider since removed —
 lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
 subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
-several.
+several. `quotabar://dashboard` opens the Dashboard window; widgets do not publish it.
 
 The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
 extension has no app to borrow a tint from.
@@ -830,8 +915,9 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
-| `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
-| Browser Access window | Floating window independent of the menu extra; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the Settings window for Browser Sign-in consent |
+| Browser Access window | Floating window independent of the menu extra and above the Settings window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| Dashboard window | Titled window, 960×640 minimum, 200pt sidebar of shown providers, Quota cards, Today table, and Usage at width |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -878,11 +964,29 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
-Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
-Style, Menu Bar Provider, Reset time, Support, and Diagnostics. Inspect
-light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
-labels, and Reduce Motion transitions.
+
+Every `--route` below is inspected in `--appearance light` and `dark`, and at `--text-size
+standard` and `accessibility` (60 cells). `--text-size extra-large` is available on the visual
+app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce Motion are inspected on
+the same routes.
+
+| `--route` | Surface | Size | Appearances | Text sizes |
+| --- | --- | ---: | --- | --- |
+| `overview` | Panel | 320×480 | light, dark | standard, accessibility |
+| `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
+| `settings-window` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-account` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents-codex` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents-litellm-key` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-notifications` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-menu-bar` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-general` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-support` | Settings | 720×520 | light, dark | standard, accessibility |
+| `dashboard` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-codex` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-usage` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-usage-local` | Dashboard | 960×640 | light, dark | standard, accessibility |
 
 Synthetic fixtures may contain display labels and opaque ids needed for typed models, but must never
 contain access tokens, refresh tokens, provider secrets, or raw production data.

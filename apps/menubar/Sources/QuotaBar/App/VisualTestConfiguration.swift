@@ -60,52 +60,63 @@
 
   enum VisualTestRoute: String {
     case overview
-    case settings
-    case account
-    case agents
     case providerCodex = "provider-codex"
-    case providerOpenRouter = "provider-openrouter"
-    case providerCursor = "provider-cursor"
-    case providerCodexSource = "provider-codex-source"
-    case providerLiteLLMKey = "provider-litellm-key"
-    case devices
-    case usage
-    case notifications
-    case menuBarStyle = "menu-bar-style"
-    case menuBarProvider = "menu-bar-provider"
-    case resetCopy = "reset-time"
-    case support
-    case diagnostics
+    case settingsWindow = "settings-window"
+    case settingsAccount = "settings-account"
+    case settingsAgents = "settings-agents"
+    case settingsAgentsCodex = "settings-agents-codex"
+    case settingsAgentsLiteLLMKey = "settings-agents-litellm-key"
+    case settingsNotifications = "settings-notifications"
+    case settingsMenuBar = "settings-menu-bar"
+    case settingsGeneral = "settings-general"
+    case settingsSupport = "settings-support"
+    case dashboard
+    case dashboardCodex = "dashboard-codex"
+    case dashboardUsage = "dashboard-usage"
+    case dashboardUsageLocal = "dashboard-usage-local"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
-      case .settings: [.settings]
-      case .account: [.settings, .account]
-      case .agents: [.settings, .agents]
-      case .providerCodex: [.settings, .agents, .provider(.codex)]
-      case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
-      case .providerCursor: [.settings, .agents, .provider(.cursor)]
-      case .providerCodexSource: [
-        .settings, .agents, .provider(.codex),
-        .providerSource(
-          .codex,
-          identityKey: "codex|visual_personal|global|",
-          sourceID: "local",
-          displayName: "This Mac"
-        ),
-      ]
-      case .providerLiteLLMKey: [
-        .settings, .agents, .provider(.litellm), .providerAPIKey(.litellm),
-      ]
-      case .devices: [.settings, .account, .devices]
-      case .usage: [.settings, .usage]
-      case .notifications: [.settings, .notifications]
-      case .menuBarStyle: [.settings, .menuBarStyle]
-      case .menuBarProvider: [.settings, .menuBarProvider]
-      case .resetCopy: [.settings, .resetCopy]
-      case .support: [.settings, .support]
-      case .diagnostics: [.settings, .support, .diagnostics]
+      case .providerCodex: [.provider(.codex)]
+      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
+        .settingsSupport, .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal:
+        []
+      }
+    }
+
+    var settingsPage: SettingsPage? {
+      switch self {
+      case .settingsAccount: .account
+      case .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey: .agents
+      case .settingsNotifications: .notifications
+      case .settingsMenuBar: .menuBar
+      case .settingsGeneral: .general
+      case .settingsSupport: .support
+      default: nil
+      }
+    }
+
+    var settingsAgentsProvider: ProviderID? {
+      switch self {
+      case .settingsAgentsCodex: .codex
+      case .settingsAgentsLiteLLMKey: .litellm
+      default: nil
+      }
+    }
+
+    var dashboardSelection: ProviderID? {
+      switch self {
+      case .dashboardCodex: .codex
+      default: nil
+      }
+    }
+
+    var dashboardUsageSource: UsageSource {
+      switch self {
+      case .dashboardUsageLocal: .local
+      default: .account
       }
     }
   }
@@ -187,9 +198,29 @@
     }
 
     var initialPath: [MenuBarRoute] { route.path }
+    var settingsPage: SettingsPage? { route.settingsPage }
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
+    var hostsSettingsWindow: Bool {
+      switch route {
+      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
+        .settingsSupport:
+        true
+      default: false
+      }
+    }
+    var hostsDashboardWindow: Bool {
+      switch route {
+      case .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal: true
+      default: false
+      }
+    }
+    var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
+    var dashboardSelection: ProviderID? { route.dashboardSelection }
+    var dashboardUsageSource: UsageSource { route.dashboardUsageSource }
+    var hostsTitledWindow: Bool { hostsSettingsWindow || hostsDashboardWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -226,6 +257,14 @@
       for provider in ProviderID.allCases {
         ProviderVisibility.setVisible(provider, provider.defaultVisible)
       }
+      if let settingsPage {
+        UserDefaults.standard.set(settingsPage.rawValue, forKey: SettingsPage.storageKey)
+      }
+      if let provider = settingsAgentsProvider {
+        UserDefaults.standard.set(provider.rawValue, forKey: SettingsPage.agentsProviderStorageKey)
+      }
+      UserDefaults.standard.set(
+        DashboardRange.fallback.rawValue, forKey: DashboardRange.storageKey)
     }
 
     private static func argument<Value: RawRepresentable>(
@@ -268,7 +307,9 @@
           description: "Partial System Outage",
           checkedAt: date
         )
-      ]
+      ],
+      deviceID: "device_visual_studio_mac_01",
+      quotaHistorySamples: VisualQuotaHistoryFixture.samples(from: report, now: date)
     )
   }
 
@@ -586,6 +627,8 @@
                   id: "extra_usage",
                   title: "Extra Usage",
                   usedPercent: 12.5,
+                  resetsAt: date.addingTimeInterval(20 * 86_400),
+                  durationSeconds: 2_592_000,
                   remainingValue: 87.5,
                   limitValue: 100,
                   valueUnit: .usd
@@ -609,8 +652,19 @@
                   title: "Monthly",
                   usedPercent: 73,
                   resetsAt: date.addingTimeInterval(12 * 86_400),
+                  durationSeconds: 2_592_000,
                   now: date
-                )
+                ),
+                QuotaWindow(
+                  id: "extra_usage",
+                  title: "Extra Usage",
+                  usedPercent: 12.5,
+                  resetsAt: date.addingTimeInterval(20 * 86_400),
+                  durationSeconds: 2_592_000,
+                  remainingValue: 87.5,
+                  limitValue: 100,
+                  valueUnit: .usd
+                ),
               ],
               observedAt: date.addingTimeInterval(-180)
             )

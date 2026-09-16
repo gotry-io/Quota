@@ -27,8 +27,8 @@ use crate::protocol::{
     DiagnosticClient, DiagnosticDataState, DiagnosticOperation, DiagnosticRecovery,
     DiagnosticReport, DiagnosticSourceState, DiagnosticStatus, DiagnosticSummary,
     DiagnosticSurface, ErrorCode, IpcError, MANAGED_DATA_PROTOCOL, MAXIMUM_DIAGNOSTIC_SOURCES,
-    QuotaOverviewIdentity, QuotaOverviewItem, QuotaOverviewSource, RecoveryAction, UsagePeriod,
-    UsageSource,
+    QuotaHistoryResult, QuotaHistorySample, QuotaOverviewIdentity, QuotaOverviewItem,
+    QuotaOverviewSource, RecoveryAction, UsagePeriod, UsageSource,
 };
 use crate::providers::claude;
 use crate::providers::codex;
@@ -2632,6 +2632,24 @@ impl NativeBackend {
         LocalQuotaHistory::new(self.state.quota_samples().unwrap_or_default(), now)
     }
 
+    /// Samples this Mac has stored since `since`, for Dashboard to fold. Reads `cache.sqlite`
+    /// only: no collection, no network, no identity (ADR 0042, ADR 0051).
+    fn read_quota_history(&self, since: &str) -> Result<Value, BackendError> {
+        let since = DateTime::parse_from_rfc3339(since)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|_| invalid_request())?;
+        let now = Utc::now();
+        let horizon = now - Duration::days(crate::history::HISTORY_RETENTION_DAYS);
+        let since = since.max(horizon);
+        let samples = self.state.quota_samples_since(since).unwrap_or_default();
+        let history = LocalQuotaHistory::new(samples, now);
+        serde_json::to_value(quota_history_result(
+            history.samples,
+            history.utc_offset_seconds,
+        ))
+        .map_err(|_| BackendError::unavailable())
+    }
+
     /// Two readings of one subscription: this device's, and the one Relay resolved.
     ///
     /// Relay resolves the account's observations once, on the read, so there is no N-way merge
@@ -3316,6 +3334,10 @@ impl LocalBackend for NativeBackend {
 
     fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
         self.custom_usage_period(from, to)
+    }
+
+    fn quota_history(&self, since: &str) -> Result<Value, BackendError> {
+        self.read_quota_history(since)
     }
 
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
@@ -4069,10 +4091,51 @@ pub(crate) fn custom_period_window(
 }
 
 fn invalid_usage_period() -> BackendError {
+    invalid_request()
+}
+
+fn invalid_request() -> BackendError {
     BackendError::new(IpcError::new(
         ErrorCode::InvalidRequest,
         RecoveryAction::None,
     ))
+}
+
+fn quota_history_result(
+    samples: QuotaSamplesByProvider,
+    utc_offset_seconds: i32,
+) -> QuotaHistoryResult {
+    QuotaHistoryResult {
+        samples_by_provider: samples
+            .into_iter()
+            .map(|(provider, windows)| {
+                (
+                    provider,
+                    windows
+                        .into_iter()
+                        .map(|(window_id, samples)| {
+                            (
+                                window_id,
+                                samples
+                                    .into_iter()
+                                    .map(|sample| QuotaHistorySample {
+                                        resets_at: sample
+                                            .resets_at
+                                            .to_rfc3339_opts(SecondsFormat::Secs, true),
+                                        observed_at: sample
+                                            .observed_at
+                                            .to_rfc3339_opts(SecondsFormat::Secs, true),
+                                        used_percent: sample.used_percent,
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+        utc_offset_seconds,
+    }
 }
 
 /// The instant a local date begins, as the hour comparison in `usage_period_rows` reads it.
@@ -4455,8 +4518,8 @@ const LOCAL_SOURCE_DISPLAY_NAME: &str = "This Mac";
 /// (ADR 0042).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct LocalQuotaHistory {
-    samples: QuotaSamplesByProvider,
-    utc_offset_seconds: i32,
+    pub(crate) samples: QuotaSamplesByProvider,
+    pub(crate) utc_offset_seconds: i32,
 }
 
 impl LocalQuotaHistory {
@@ -8999,4 +9062,107 @@ mod tests {
         );
         assert!(effective_usage_lower_bound(&json!({})).is_err());
     }
+
+    /// `quota_history` reads cache.sqlite only: it returns samples since the requested instant,
+    /// cuts anything older than thirty days, and keeps each window's rows on that window.
+    #[test]
+    fn quota_history_reads_samples_since_and_cuts_retention() {
+        let root = std::env::temp_dir().join(format!("quota-history-ipc-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let window = |id: &str, used: f64, resets_at: &str, duration: i64| {
+            json!({
+                "id": id,
+                "title": id,
+                "used_percent": used,
+                "resets_at": resets_at,
+                "duration_seconds": duration
+            })
+        };
+        let observed = |at: DateTime<Utc>| at.to_rfc3339_opts(SecondsFormat::Secs, true);
+        let recent = now - Duration::hours(1);
+        let older = now - Duration::days(10);
+        let stale = now - Duration::days(31);
+        let five_hour_reset = (now + Duration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let weekly_reset = (now + Duration::days(3)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let monthly_reset = (now + Duration::days(20)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        state
+            .record_quota_samples(
+                "codex",
+                &observed(older),
+                &[window("five_hour", 10.0, &five_hour_reset, 18_000)],
+                now,
+            )
+            .expect("older five_hour");
+        state
+            .record_quota_samples(
+                "codex",
+                &observed(recent),
+                &[
+                    window("five_hour", 40.0, &five_hour_reset, 18_000),
+                    window("weekly", 20.0, &weekly_reset, 604_800),
+                    window("monthly", 8.0, &monthly_reset, 2_592_000),
+                ],
+                now,
+            )
+            .expect("recent windows");
+        state
+            .record_quota_samples(
+                "codex",
+                &observed(recent + Duration::minutes(5)),
+                &[window("five_hour", 40.0, &five_hour_reset, 18_000)],
+                now,
+            )
+            .expect("identical consecutive");
+        // A row older than thirty days can still sit in cache.sqlite until the next write
+        // prunes it; the read still cuts it.
+        state
+            .seed_quota_samples(std::iter::once((
+                "codex",
+                "five_hour",
+                now + Duration::hours(2),
+                stale,
+                4.0,
+            )))
+            .expect("seed stale");
+
+        let backend = NativeBackend::new(
+            state.clone(),
+            Arc::new(RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        );
+        let since = (now - Duration::days(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let value = backend.quota_history(&since).expect("history");
+        let samples = value["samples_by_provider"]["codex"]
+            .as_object()
+            .expect("codex");
+        let five_hour = samples["five_hour"].as_array().expect("five_hour");
+        assert_eq!(five_hour.len(), 1);
+        assert_eq!(five_hour[0]["used_percent"], 40.0);
+        assert_eq!(samples["weekly"].as_array().expect("weekly").len(), 1);
+        assert_eq!(samples["monthly"].as_array().expect("monthly").len(), 1);
+        assert!(value["utc_offset_seconds"].as_i64().is_some());
+
+        let far_past = (now - Duration::days(40)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let retained = backend.quota_history(&far_past).expect("retained");
+        let five_hour = retained["samples_by_provider"]["codex"]["five_hour"]
+            .as_array()
+            .expect("retained five_hour");
+        assert_eq!(five_hour.len(), 2);
+        assert_eq!(five_hour[0]["used_percent"], 10.0);
+        assert_eq!(five_hour[1]["used_percent"], 40.0);
+        assert!(
+            backend.quota_history("yesterday").is_err(),
+            "a since that is not RFC 3339 is refused"
+        );
+
+        drop(backend);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 }
+
+#[cfg(test)]
+#[path = "history_payload.rs"]
+mod history_payload;

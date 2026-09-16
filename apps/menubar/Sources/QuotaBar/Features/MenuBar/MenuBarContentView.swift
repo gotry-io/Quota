@@ -9,32 +9,24 @@ struct MenuBarContentView: View {
   @State private var navigationDirection: NavigationDirection = .forward
   @State private var navigationTransitionActive = false
   @State private var navigationTransitionGeneration = 0
-  @State private var isLogoutConfirmationPresented = false
-  @State private var usageSource: UsageSource = .account
-  @State private var diagnostics = DiagnosticsPageModel()
-  @State private var isResetConfirmationPresented = false
   private let performsInitialRefresh: Bool
-  private let performsDiagnosticsCheckOnEntry: Bool
   private let seedsLaunchAtLogin: Bool
+  private let overflowMenuStartsExpanded: Bool
 
   init(
     model: MenuBarViewModel,
     panelSession: MenuBarPanelSession? = nil,
     initialPath: [MenuBarRoute] = [],
-    initialUsageSource: UsageSource = .account,
     performsInitialRefresh: Bool = true,
-    performsDiagnosticsCheckOnEntry: Bool = true,
-    diagnosticsModel: DiagnosticsPageModel? = nil,
-    seedsLaunchAtLogin: Bool = true
+    seedsLaunchAtLogin: Bool = true,
+    overflowMenuStartsExpanded: Bool = false
   ) {
     self.model = model
     self.panelSession = panelSession
     self.performsInitialRefresh = performsInitialRefresh
-    self.performsDiagnosticsCheckOnEntry = performsDiagnosticsCheckOnEntry
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
+    self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
-    _usageSource = State(initialValue: initialUsageSource)
-    _diagnostics = State(initialValue: diagnosticsModel ?? DiagnosticsPageModel())
   }
 
   var body: some View {
@@ -44,12 +36,14 @@ struct MenuBarContentView: View {
       MenuBarShell(
         model: model,
         title: navigation.title,
-        usageSource: usageSource,
+        usageSource: .account,
         now: context.date,
         canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
         showsLeadingIcon: navigation.currentRoute == nil,
-        trailing: headerTrailingAction
+        trailing: headerTrailingAction,
+        overflowMenuStartsExpanded: overflowMenuStartsExpanded,
+        onOpenDashboard: { DashboardWindowController.shared.show() }
       ) {
         currentPage(
           now: context.date,
@@ -62,17 +56,10 @@ struct MenuBarContentView: View {
       }
     }
     .environment(\.quotaPageTransitionActive, navigationTransitionActive)
-    // The Account page belongs to a signed-in account. Signing out closes it rather than
-    // leaving a page with nothing left to manage on screen.
-    .onChange(of: model.accountState) { _, state in
-      guard state != .signedIn, let next = navigation.closing(.account) else { return }
-      navigationDirection = .back
-      applyNavigation(next)
-    }
     .onChange(of: revealGeneration) { _, _ in
-      guard revealProvider != nil, navigation.canNavigateBack else { return }
-      navigationDirection = .back
-      applyNavigation(MenuBarNavigationState())
+      guard let provider = revealProvider else { return }
+      navigationDirection = .forward
+      applyNavigation(MenuBarNavigationState(path: [.provider(provider)]))
     }
     .task {
       if seedsLaunchAtLogin {
@@ -82,58 +69,6 @@ struct MenuBarContentView: View {
       await model.refreshIfNeeded()
     }
     .focusEffectDisabled()
-    .disabled(isPopupPresented)
-    .accessibilityHidden(isPopupPresented)
-    .overlay {
-      if isLogoutConfirmationPresented {
-        QuotaConfirmationPopup(
-          title: "Sign Out?",
-          message:
-            "This signs QuotaBar out on this Mac. Your device and synced data stay in your Quota account.",
-          confirmTitle: "Sign Out",
-          onCancel: { isLogoutConfirmationPresented = false }
-        ) {
-          isLogoutConfirmationPresented = false
-          Task { await model.logout() }
-        }
-      } else if isResetConfirmationPresented {
-        QuotaConfirmationPopup(
-          title: ResetLocalDataCopy.title,
-          message: ResetLocalDataCopy.message,
-          confirmTitle: ResetLocalDataCopy.confirmTitle,
-          onCancel: { isResetConfirmationPresented = false }
-        ) {
-          isResetConfirmationPresented = false
-          Task { await model.resetLocalData() }
-        }
-      } else if let popup = model.browserSessionPopup {
-        providerBrowserSessionPopup(popup)
-      }
-    }
-  }
-
-  /// Every destructive confirmation in the panel is one of these, and while one is up the page
-  /// under it takes neither pointer nor VoiceOver.
-  private var isPopupPresented: Bool {
-    isLogoutConfirmationPresented
-      || isResetConfirmationPresented
-      || model.browserSessionPopup != nil
-  }
-
-  @ViewBuilder
-  private func providerBrowserSessionPopup(_ popup: ProviderBrowserSessionPopup) -> some View {
-    switch popup {
-    case .consent(let provider):
-      if let spec = provider.browserSession {
-        QuotaConfirmationPopup(
-          title: BrowserSessionCopy.consentTitle(provider: provider),
-          message: BrowserSessionCopy.scanConsentMessage(provider: provider, spec: spec),
-          confirmTitle: BrowserSessionCopy.consentConfirmTitle,
-          onCancel: model.cancelProviderBrowserSessionFlow,
-          onConfirm: model.confirmProviderBrowserSessionConsent
-        )
-      }
-    }
   }
 
   private var panelAnimation: Animation? {
@@ -158,22 +93,12 @@ struct MenuBarContentView: View {
 
   private var headerTrailingAction: MenuBarHeader.TrailingAction {
     guard !navigationTransitionActive else { return .none }
-    if navigation.showsSettingsMenu { return .overflowMenu }
-    if navigation.currentRoute == .usage,
-      model.usageUploadEnabled,
-      model.accountSummary != nil
-    {
-      return .usageSource(usageSource) { usageSource = $0 }
+    switch navigation.currentRoute {
+    case nil:
+      return .overflowMenu
+    case .provider:
+      return .none
     }
-    if navigation.currentRoute == .diagnostics, diagnostics.showsHeaderActions {
-      return .diagnostics(
-        isChecking: diagnostics.isLoading,
-        canRecheck: diagnostics.canRecheck,
-        onRecheck: { Task { await runDiagnosticsCheck() } }
-      )
-    }
-    if !navigation.canNavigateBack { return .openSettings(openSettings) }
-    return .none
   }
 
   @ViewBuilder
@@ -191,110 +116,58 @@ struct MenuBarContentView: View {
         revealGeneration: revealGeneration,
         revealProvider: revealProvider,
         onOpenSettings: openSettings,
-        onOpenProvider: openProviderSettings
-      )
-    case .settings:
-      SettingsHomeView(
-        model: model,
-        onOpenAccount: { navigate(to: .account) },
-        onOpenAgents: { navigate(to: .agents) },
-        onOpenUsage: { navigate(to: .usage) },
-        onOpenNotifications: { navigate(to: .notifications) },
-        onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
-        onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
-        onOpenResetCopy: { navigate(to: .resetCopy) },
-        onOpenSupport: { navigate(to: .support) },
-        onOpenRefreshInterval: { navigate(to: .quotaRefreshInterval) }
-      )
-    case .account:
-      AccountSettingsView(
-        model: model,
-        onOpenDevices: { navigate(to: .devices) },
-        onRequestSignOut: { isLogoutConfirmationPresented = true }
-      )
-    case .agents:
-      AgentsSettingsView(
-        model: model,
-        statusLine: { provider in model.agentStatusLine(for: provider) },
-        onOpenProvider: { provider in navigate(to: .provider(provider)) }
+        onOpenProvider: openProvider
       )
     case .provider(let provider):
-      ProviderSettingsView(
-        model: model,
-        provider: provider,
-        now: now,
-        onOpenSource: { item, source in
-          navigate(
-            to: .providerSource(
-              provider,
-              identityKey: item.pinIdentityKey,
-              sourceID: source.sourceID,
-              displayName: source.displayName)
-          )
-        },
-        onOpenAPIKey: { navigate(to: .providerAPIKey(provider)) }
-      )
-    case .providerAPIKey(let provider):
-      ProviderAPIKeyView(model: model, provider: provider)
-    case .providerSource(let provider, let identityKey, let sourceID, let displayName):
-      ProviderSourceDetailView(
-        model: model,
-        provider: provider,
-        identityKey: identityKey,
-        sourceID: sourceID,
-        displayName: displayName,
-        now: now
-      )
-    case .devices:
-      AccountDevicesView(model: model)
-    case .usage:
-      AccountUsageView(model: model, source: $usageSource, now: now)
-    case .notifications:
-      NotificationsSettingsView(model: model)
-    case .menuBarStyle:
-      MenuBarStyleSettingsView(onSelect: navigateBack)
-    case .menuBarProvider:
-      MenuBarProviderSettingsView(
-        providers: ProviderDisplayOrder.enabledProviders()
-      )
-    case .resetCopy:
-      ResetCopySettingsView(onSelect: navigateBack)
-    case .quotaRefreshInterval:
-      QuotaRefreshIntervalSettingsView(
-        selected: QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds)
-      ) { interval in
-        Task { await model.setQuotaRefreshInterval(interval) }
-        navigateBack()
-      }
-    case .support:
-      SettingsSupportView(
-        onOpenDiagnostics: { navigate(to: .diagnostics) },
-        onRequestResetLocalData: { isResetConfirmationPresented = true }
-      )
-    case .diagnostics:
-      SettingsDiagnosticsView(
-        state: diagnostics.pageState,
-        model: diagnostics,
-        widgetPublishingMessage: model.widgetPublishingMessage,
-        onRetry: { Task { await runDiagnosticsCheck() } }
-      )
-      .task {
-        guard performsDiagnosticsCheckOnEntry else { return }
-        await runDiagnosticsCheck()
-      }
+      providerQuotaDetail(provider, now: now)
     }
   }
 
   private func openSettings() {
-    navigate(to: .settings)
+    SettingsWindowController.shared.show()
   }
 
-  private func openProviderSettings(_ provider: ProviderID) {
-    navigate(to: [.settings, .agents, .provider(provider)])
+  private func openProvider(_ provider: ProviderID) {
+    navigate(to: .provider(provider))
   }
 
-  private func runDiagnosticsCheck() async {
-    await diagnostics.runCheck { try await model.diagnose() }
+  @ViewBuilder
+  private func providerQuotaDetail(_ provider: ProviderID, now: Date) -> some View {
+    let state = model.overviewState(enabledProviders: [provider], now: now)
+    switch state {
+    case .content(let providers, _):
+      if let presentation = providers.first {
+        ScrollView {
+          ProviderQuotaView(presentation: presentation, now: now)
+            .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+            .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+        }
+      } else {
+        QuotaPageStateView(
+          emptySystemImage: "eye.slash",
+          title: "No Quota to Show",
+          message: "Sign in to a provider CLI or enable an agent in Settings.",
+          actionTitle: "Open Settings",
+          action: { SettingsWindowController.shared.show(page: .agents) }
+        )
+      }
+    case .empty(_):
+      QuotaPageStateView(
+        emptySystemImage: "eye.slash",
+        title: "No Quota to Show",
+        message: "Sign in to a provider CLI or enable an agent in Settings.",
+        actionTitle: "Open Settings",
+        action: { SettingsWindowController.shared.show(page: .agents) }
+      )
+    case .unavailable(let message):
+      QuotaPageStateView(
+        errorTitle: "Quota Unavailable",
+        message: message,
+        retry: { Task { await model.refresh() } }
+      )
+    case .loading:
+      QuotaPageStateView(loadingTitle: "Reading quota…")
+    }
   }
 
   private func navigate(to route: MenuBarRoute) {
@@ -306,9 +179,6 @@ struct MenuBarContentView: View {
     navigationDirection = .forward
     var next = navigation
     next.open(routes)
-    if routes.contains(.diagnostics) {
-      diagnostics.prepareForEntry()
-    }
     applyNavigation(next)
   }
 
@@ -357,41 +227,11 @@ private enum NavigationDirection {
 }
 
 enum MenuBarRoute: Hashable {
-  case settings
-  case account
-  case agents
   case provider(ProviderID)
-  case devices
-  case usage
-  case notifications
-  case menuBarStyle
-  case menuBarProvider
-  case resetCopy
-  case quotaRefreshInterval
-  case support
-  case diagnostics
-  case providerSource(
-    ProviderID, identityKey: String, sourceID: String, displayName: String)
-  case providerAPIKey(ProviderID)
 
   var title: String {
     switch self {
-    case .settings: "Settings"
-    case .account: "Account"
-    case .agents: "Agents"
     case .provider(let provider): provider.displayName
-    case .providerSource(_, _, _, let displayName): displayName
-    case .providerAPIKey: "API Key"
-    case .devices: "Devices"
-    case .usage: "Usage"
-    case .notifications: "Notifications"
-    // The section header says Menu Bar; a page carries its own context.
-    case .menuBarStyle: "Menu Bar Style"
-    case .menuBarProvider: "Menu Bar Provider"
-    case .resetCopy: "Reset time"
-    case .quotaRefreshInterval: "Refresh Interval"
-    case .support: "Support"
-    case .diagnostics: "Diagnostics"
     }
   }
 }
@@ -402,21 +242,19 @@ struct MenuBarNavigationState: Equatable {
   var currentRoute: MenuBarRoute? { path.last }
   var title: String { currentRoute?.title ?? "QuotaBar" }
   var canNavigateBack: Bool { !path.isEmpty }
-  var showsSettingsMenu: Bool { path == [.settings] }
 
   var pageIdentity: String {
     currentRoute.map { "\(path.count):\(String(describing: $0))" } ?? "overview"
   }
 
   mutating func open(_ route: MenuBarRoute) {
-    guard path.last != route else { return }
-    path.append(route)
+    guard path != [route] else { return }
+    path = [route]
   }
 
   mutating func open(_ routes: [MenuBarRoute]) {
-    for route in routes {
-      open(route)
-    }
+    guard let route = routes.last else { return }
+    open(route)
   }
 
   mutating func navigateBack() {

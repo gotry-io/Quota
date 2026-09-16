@@ -23,31 +23,87 @@ struct QuotaBarApp: App {
     }
 
     var body: some Scene {
-      WindowGroup("QuotaBar Visual QA") {
+      // SceneBuilder on macOS 14 cannot `if` between window styles, so one
+      // WindowGroup hosts the panel, Settings, and Dashboard roots. Titled
+      // windows keep the default chrome; panel routes hide the title bar.
+      WindowGroup(visualWindowTitle) {
+        visualRoot
+          .preferredColorScheme(visualTestConfiguration.colorScheme)
+          .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)
+          .background(Color(nsColor: .windowBackgroundColor))
+          .background(
+            VisualTestWindowChrome(
+              hiddenTitleBar: !visualTestConfiguration.hostsTitledWindow
+            )
+          )
+          .onAppear {
+            NSApplication.shared.setActivationPolicy(.regular)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+          }
+      }
+      .defaultSize(
+        width: visualWindowSize.width,
+        height: visualWindowSize.height
+      )
+      .windowResizability(
+        visualTestConfiguration.hostsTitledWindow ? .automatic : .contentSize
+      )
+    }
+
+    private var visualWindowTitle: String {
+      if visualTestConfiguration.hostsDashboardWindow {
+        "QuotaBar Dashboard"
+      } else if visualTestConfiguration.hostsSettingsWindow {
+        "QuotaBar Settings"
+      } else {
+        "QuotaBar Visual QA"
+      }
+    }
+
+    private var visualWindowSize: CGSize {
+      if visualTestConfiguration.hostsDashboardWindow {
+        QuotaDesign.Layout.dashboardWindowMinSize
+      } else if visualTestConfiguration.hostsSettingsWindow {
+        QuotaDesign.Layout.settingsWindowMinSize
+      } else {
+        CGSize(
+          width: QuotaDesign.Layout.panelWidth,
+          height: QuotaDesign.Layout.panelMaxHeight
+        )
+      }
+    }
+
+    @ViewBuilder
+    private var visualRoot: some View {
+      if visualTestConfiguration.hostsDashboardWindow {
+        DashboardView(
+          model: model,
+          now: visualTestConfiguration.dataSource == .fixture
+            ? visualTestConfiguration.referenceDate : nil,
+          initialSelection: visualTestConfiguration.dashboardSelection,
+          initialUsageSource: visualTestConfiguration.dashboardUsageSource
+        )
+      } else if visualTestConfiguration.hostsSettingsWindow {
+        SettingsWindowView(
+          model: model,
+          pageOverride: visualTestConfiguration.settingsPage,
+          diagnostics: visualTestConfiguration.makeDiagnosticsModel(),
+          expandsDiagnostics: visualTestConfiguration.route == .settingsSupport,
+          initialAgentsProvider: visualTestConfiguration.settingsAgentsProvider,
+          now: visualTestConfiguration.dataSource == .fixture
+            ? visualTestConfiguration.referenceDate : nil
+        )
+      } else {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
-          initialUsageSource: visualTestConfiguration.route == .usage ? .local : .account,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
-          performsDiagnosticsCheckOnEntry: visualTestConfiguration.dataSource == .live,
-          diagnosticsModel: visualTestConfiguration.makeDiagnosticsModel(),
           seedsLaunchAtLogin: false
         )
-        .preferredColorScheme(visualTestConfiguration.colorScheme)
-        .dynamicTypeSize(visualTestConfiguration.dynamicTypeSize)
-        // The production panel has no title-bar safe area. Match that geometry in the ordinary
-        // Visual QA window so large text cannot be obscured by hidden title-bar chrome.
+        // The production panel has no title-bar safe area. Match that geometry
+        // so large text cannot be obscured by hidden title-bar chrome.
         .ignoresSafeArea()
-        // The production panel supplies material. The ordinary Visual QA window instead
-        // uses an opaque system background for deterministic rendering.
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear {
-          NSApplication.shared.setActivationPolicy(.regular)
-          NSApplication.shared.activate(ignoringOtherApps: true)
-        }
       }
-      .windowResizability(.contentSize)
-      .windowStyle(.hiddenTitleBar)
     }
   #else
     @NSApplicationDelegateAdaptor(QuotaBarAppDelegate.self) private var appDelegate
@@ -70,3 +126,30 @@ struct QuotaBarApp: App {
     }
   #endif
 }
+
+#if VISUAL_TEST
+  /// Applies hidden-title-bar chrome for panel Visual QA. Settings and Dashboard
+  /// use the WindowGroup's ordinary titled style.
+  private struct VisualTestWindowChrome: NSViewRepresentable {
+    var hiddenTitleBar: Bool
+
+    func makeNSView(context: Context) -> NSView {
+      NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+      DispatchQueue.main.async {
+        guard let window = nsView.window else { return }
+        if hiddenTitleBar {
+          window.titleVisibility = .hidden
+          window.titlebarAppearsTransparent = true
+          window.styleMask.insert(.fullSizeContentView)
+        } else {
+          window.titleVisibility = .visible
+          window.titlebarAppearsTransparent = false
+          window.styleMask.remove(.fullSizeContentView)
+        }
+      }
+    }
+  }
+#endif

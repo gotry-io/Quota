@@ -14,5 +14,6 @@ enum AppMetadata {
 
   static let websiteURL = URL(string: "https://quota.gotry.io")!
   static let accountURL = URL(string: "https://quota.gotry.io/my")!
+  static let devicesURL = URL(string: "https://quota.gotry.io/my/devices")!
   static let feedbackURL = URL(string: "https://github.com/gotry-io/Quota/issues")!
 }

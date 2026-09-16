@@ -787,6 +787,10 @@ private actor FlowService: LocalServiceServing {
     throw LocalServiceClientError.invalidMessage
   }
 
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+    throw LocalServiceClientError.invalidMessage
+  }
+
   func state() async throws -> LocalServiceState {
     LocalServiceState(
       ipcVersion: stateValue.ipcVersion,

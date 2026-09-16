@@ -4,14 +4,7 @@ import SwiftUI
 struct MenuBarHeader: View {
   enum TrailingAction {
     case none
-    case openSettings(() -> Void)
     case overflowMenu
-    case usageSource(UsageSource, (UsageSource) -> Void)
-    case diagnostics(
-      isChecking: Bool,
-      canRecheck: Bool,
-      onRecheck: () -> Void
-    )
   }
 
   let title: String
@@ -20,11 +13,31 @@ struct MenuBarHeader: View {
   let onNavigateBack: () -> Void
   var showsLeadingIcon = false
   let trailing: TrailingAction
+  var overflowMenuStartsExpanded = false
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var isOverflowButtonFocused: Bool
   @FocusState private var isQuitFocused: Bool
-  @State private var isOverflowMenuExpanded = false
+  @State private var isOverflowMenuExpanded: Bool
+
+  init(
+    title: String,
+    issue: String? = nil,
+    canNavigateBack: Bool,
+    onNavigateBack: @escaping () -> Void,
+    showsLeadingIcon: Bool = false,
+    trailing: TrailingAction,
+    overflowMenuStartsExpanded: Bool = false
+  ) {
+    self.title = title
+    self.issue = issue
+    self.canNavigateBack = canNavigateBack
+    self.onNavigateBack = onNavigateBack
+    self.showsLeadingIcon = showsLeadingIcon
+    self.trailing = trailing
+    self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
+    _isOverflowMenuExpanded = State(initialValue: overflowMenuStartsExpanded)
+  }
 
   var body: some View {
     headerRow
@@ -55,6 +68,11 @@ struct MenuBarHeader: View {
         if isOverflowMenuExpanded { setOverflowMenuExpanded(false) }
       }
       .onChange(of: title) { _, _ in setOverflowMenuExpanded(false) }
+      .onAppear {
+        if isOverflowMenuExpanded {
+          isQuitFocused = true
+        }
+      }
   }
 
   private var headerRow: some View {
@@ -119,12 +137,6 @@ struct MenuBarHeader: View {
     switch trailing {
     case .none:
       EmptyView()
-    case .openSettings(let action):
-      headerButton(
-        systemName: "gearshape",
-        accessibilityLabel: "Open settings",
-        action: action
-      )
     case .overflowMenu:
       headerButton(systemName: "ellipsis", accessibilityLabel: "Settings menu") {
         setOverflowMenuExpanded(!isOverflowMenuExpanded)
@@ -132,6 +144,7 @@ struct MenuBarHeader: View {
       .focusable()
       .focused($isOverflowButtonFocused)
       .accessibilityHint(isOverflowMenuExpanded ? "Collapse settings menu" : "Expand settings menu")
+      .help("Settings menu")
       .onKeyPress(.upArrow) {
         setOverflowMenuExpanded(true)
         return .handled
@@ -140,115 +153,68 @@ struct MenuBarHeader: View {
         setOverflowMenuExpanded(true)
         return .handled
       }
-    case .usageSource(let source, let select):
-      Menu {
-        usageSourceItem(.account, selected: source, select: select)
-        usageSourceItem(.local, selected: source, select: select)
-      } label: {
-        HStack(spacing: QuotaDesign.Spacing.xxs) {
-          Image(systemName: source.systemImage)
-          Text(source.label)
-          Image(systemName: "chevron.down")
-            .font(.system(size: 8, weight: .semibold))
-        }
-        .quotaFont(.meta)
-        .foregroundStyle(QuotaPalette.body)
-        .padding(.horizontal, QuotaDesign.Spacing.xs)
-        .frame(minHeight: QuotaDesign.Layout.minimumInteractiveDimension)
-        .background {
-          RoundedRectangle(cornerRadius: QuotaDesign.Layout.rowCornerRadius, style: .continuous)
-            .fill(QuotaPalette.fieldFill)
-        }
-      }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .accessibilityLabel("Usage source")
-      .accessibilityValue(source.label)
-    case .diagnostics(let isChecking, let canRecheck, let onRecheck):
-      diagnosticsRecheckButton(
-        isChecking: isChecking,
-        isEnabled: canRecheck,
-        action: onRecheck
-      )
-    }
-  }
-
-  private func diagnosticsRecheckButton(
-    isChecking: Bool,
-    isEnabled: Bool,
-    action: @escaping () -> Void
-  ) -> some View {
-    let accessibilityLabel = DiagnosticsHeaderAction.recheckAccessibilityLabel(
-      isChecking: isChecking
-    )
-    return Button(action: action) {
-      Group {
-        if isChecking {
-          ProgressView()
-            .controlSize(.mini)
-        } else {
-          Image(systemName: "arrow.clockwise")
-            .font(QuotaDesign.Typography.headerActionIcon)
-        }
-      }
-      .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-      .frame(
-        width: QuotaDesign.Layout.headerControlWidth,
-        height: QuotaDesign.Layout.headerHeight
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(QuotaHeaderButtonStyle())
-    .disabled(!isEnabled)
-    .accessibilityLabel(accessibilityLabel)
-    .help(accessibilityLabel)
-  }
-
-  private func usageSourceItem(
-    _ source: UsageSource,
-    selected: UsageSource,
-    select: @escaping (UsageSource) -> Void
-  ) -> some View {
-    Button { select(source) } label: {
-      Label {
-        Text(source.label)
-      } icon: {
-        Image(systemName: source == selected ? "checkmark" : source.systemImage)
-      }
     }
   }
 
   private var overflowMenu: some View {
     HStack(spacing: 0) {
       Spacer(minLength: 0)
-      Button {
-        isOverflowMenuExpanded = false
-        NSApplication.shared.terminate(nil)
-      } label: {
-        HStack(spacing: QuotaDesign.Spacing.inline) {
-          Image(systemName: "power")
-            .font(.system(size: 11))
-            .foregroundStyle(QuotaPalette.ink)
-            .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-          Text("Quit QuotaBar")
-            .quotaSettingsLabelStyle()
-          Spacer(minLength: 0)
+      VStack(alignment: .leading, spacing: 0) {
+        overflowMenuButton(title: "Open Dashboard…") {
+          DashboardWindowController.shared.show()
         }
-        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-        .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.fieldMinHeight)
+        overflowMenuButton(title: "Settings…") {
+          SettingsWindowController.shared.show()
+        }
+        overflowMenuButton(title: "Check for Updates…") {
+          QuotaBarUpdater.checkForUpdates()
+        }
+        Rectangle()
+          .fill(QuotaPalette.hairlineBorder.opacity(0.55))
+          .frame(height: 0.5)
+          .padding(.vertical, QuotaDesign.Spacing.xxs)
+          .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        overflowMenuButton(title: "Quit QuotaBar", isQuit: true) {
+          NSApplication.shared.terminate(nil)
+        }
       }
-      .buttonStyle(
-        QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
-      )
-      .focusable()
-      .focused($isQuitFocused)
-      .accessibilityLabel("Quit QuotaBar")
       .frame(width: QuotaDesign.Layout.headerMenuWidth)
       .quotaFloatingMenuSurface()
     }
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     .padding(.top, 2)
+  }
+
+  @ViewBuilder
+  private func overflowMenuButton(
+    title: String,
+    isEnabled: Bool = true,
+    isQuit: Bool = false,
+    action: @escaping () -> Void
+  ) -> some View {
+    let button = Button {
+      setOverflowMenuExpanded(false)
+      action()
+    } label: {
+      Text(title)
+        .quotaSettingsLabelStyle()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(
+      QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
+    )
+    .disabled(!isEnabled)
+    .accessibilityLabel(title)
+    if isQuit {
+      button
+        .focusable()
+        .focused($isQuitFocused)
+    } else {
+      button
+    }
   }
 
   private func setOverflowMenuExpanded(_ expanded: Bool) {
@@ -291,12 +257,5 @@ struct MenuBarHeader: View {
     .disabled(!isEnabled)
     .accessibilityLabel(accessibilityLabel)
     .help(accessibilityLabel)
-  }
-}
-
-extension UsageSource {
-  fileprivate var label: String { self == .account ? "Account" : "This Mac" }
-  fileprivate var systemImage: String {
-    self == .account ? "person.crop.circle" : "laptopcomputer"
   }
 }

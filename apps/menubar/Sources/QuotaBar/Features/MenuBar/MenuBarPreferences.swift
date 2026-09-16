@@ -29,6 +29,9 @@ enum MenuBarStylePreference: String, CaseIterable, Identifiable, Sendable {
   var showsPercent: Bool { self == .percent || self == .iconAndPercent }
   var showsTodayCost: Bool { self == .iconAndTodayCost }
   var showsTodayTokens: Bool { self == .iconAndTodayTokens }
+
+  /// Segmented when there are four or fewer styles; a menu otherwise.
+  static var usesSegmentedPicker: Bool { allCases.count <= 4 }
 }
 
 /// How Overview window rows name a future refill.
@@ -175,6 +178,13 @@ struct MenuBarProviderPreference: RawRepresentable, Hashable, Identifiable, Send
     }
     return MenuBarProviderPreference(selected: visibleProviders.filter { next.contains($0) })
   }
+
+  /// Turning Automatic off starts from every Overview-visible provider.
+  func turningAutomaticOff(visibleProviders: [ProviderID]) -> MenuBarProviderPreference {
+    guard isAutomatic else { return self }
+    let named = MenuBarProviderPreference.providers(visibleProviders)
+    return named.isAutomatic ? self : named
+  }
 }
 
 /// The stored menu-bar choices, read as one snapshot.
@@ -227,6 +237,33 @@ enum MenuBarLayout: Equatable, Sendable {
       return .packed(pinned)
     }
     return .items(pinned)
+  }
+
+  /// Combined / Separate is offered once two or more providers are named.
+  var showsArrangementControl: Bool {
+    switch self {
+    case .packed: true
+    case .items(let providers): providers.count >= 2
+    case .automatic: false
+    }
+  }
+
+  /// Combined is unavailable past three named providers.
+  var isCombinedEnabled: Bool {
+    switch self {
+    case .packed: true
+    case .items(let providers): providers.count <= MenuBarProviderPreference.combinedLimit
+    case .automatic: false
+    }
+  }
+
+  /// What Combined / Separate should read as, after Combined's cap.
+  var effectiveArrangement: MenuBarArrangementPreference {
+    switch self {
+    case .packed: .combined
+    case .items(let providers) where providers.count >= 2: .separate
+    default: .combined
+    }
   }
 
   /// More than one reading cannot be Icon-only or Percent-only and still say whose number it is.
