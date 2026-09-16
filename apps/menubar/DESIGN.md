@@ -166,6 +166,10 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `cardPadding` | 16pt | Inner padding of those cards |
 | `contentMaxWidth` | 1040pt | Main-window reading column |
 | `contentGutter` | 24pt | Horizontal gutter around that column |
+| `settingsContentMaxWidth` | 720pt | Settings Form pages, centred in the detail column |
+| `floatingSurfaceCornerRadius` | 14pt | Transient menus (`quotaFloatingSurface`) |
+| `menuBarStripHeight` | 24pt | Simulated menu-bar strip on Settings → Menu Bar |
+| `columnHairlineWidth` | 1pt | Agents page column divider |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
@@ -205,8 +209,9 @@ standard sidebar. The selected page persists in `main.page`; the first open land
 selection for Quota is a toolbar menu (**All providers** and each shown provider with its brand
 icon), not sidebar rows. The closed menu shows the selected provider's brand icon, or Quota's mark
 when **All providers** is selected. The selection is not persisted. Account, Notifications,
-General, and Support are grouped Forms in the detail column, and **Menu Bar** is one grouped form
-(preview, Style, Provider, Reset time, Show pace lines). The **Agents** row keeps a `.badge` of
+General, Support, and **Menu Bar** are grouped Forms in the detail column, content at most 720pt
+and centred. **Menu Bar** is one form (preview strip, Style, Provider, Reset time, Show pace
+lines). The **Agents** row keeps a `.badge` of
 **3 shown** and, when any shown agent has no working credential and no device reporting it,
 **· 1 needs sign-in**; the Agents page is a two-column list and provider detail.
 
@@ -403,6 +408,7 @@ Use semantic roles from `QuotaDesign.Typography`:
 
 | Role | Size/weight | Use |
 | --- | --- | --- |
+| `overviewProviderTitle` | 15pt semibold | Overview provider heading |
 | `panelTitle` | 13pt semibold | Header title |
 | `emptyTitle` | 13pt medium rounded | Empty-state title |
 | `rowTitle` | 13pt medium | Provider/account title and primary buttons |
@@ -530,6 +536,12 @@ The header shows:
   **Settings…** opens the main window on Account or the last Settings page; there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action.
 
+Transient menus — the Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, and
+`QuotaConfirmationPopup` — use `quotaFloatingSurface()`: glass in a 14pt continuous rounded rect
+on macOS 26, and `quotaFloatingMenuSurface()` (regular material, same 14pt radius) on 14/15. Views
+do not branch on availability. Header and footer heights stay 44pt and 36pt. The panel keeps the
+menu extra's material.
+
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
 tokens` from the Usage source the main window would show and is a button that opens the main
@@ -580,8 +592,9 @@ Overview is quota and nothing else. Provider groups carry quota only: models, me
 totals stay on main-window Usage and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
 the only Overview destination, into a read-only quota page for that provider. Agent settings
-live in the main window (**Agents**). The heading is a destination at
-`minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
+live in the main window (**Agents**). Provider groups sit 12pt apart. The heading is 15pt
+semibold (`overviewProviderTitle`) and a destination at
+`minimumInteractiveDimension` (28pt), not a Settings list row. Window rows are unchanged. Brand,
 name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
 extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
 has margin from the panel edge. Overview is not a Settings group and does not use the group's
@@ -650,7 +663,9 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 The Settings pages are the Settings group of the main window: **Account**, **Agents**,
 **Notifications**, **Menu Bar**, **General**, and **Support**. The panel does not push Settings
-pages; **Settings…** is an overflow-menu item on Overview.
+pages; **Settings…** is an overflow-menu item on Overview. Account, Notifications, General,
+Support, and Menu Bar stay grouped `Form`s; they do not paint an opaque page background over the
+window. Each of those pages' content is at most 720pt wide and centred in the detail column.
 
 The Account page is one Form in every state:
 
@@ -672,8 +687,6 @@ service operations; there are no embedded web views.
 Usage lives on the main window Usage page, reached from the footer **Today · $x** button. The Usage
 root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
 otherwise.
-**Menu Bar** is one grouped form in the Settings group: a live preview of the status-item label,
-**Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
 **General** is a Settings-group page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
 menu-bar-only except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
@@ -683,16 +696,6 @@ is how often this Mac collects provider quota; Account summary still polls every
 window reset can collect quota once before the next interval. Reset Local Data always confirms first
 and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
 stays signed in. That confirmation is a system dialog on the main window.
-
-**Menu Bar** is one form. A preview row above **Style** draws the actual status-item label from
-`MenuBarLabelModel` for the current readings. **Style** is a Picker over every
-`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
-**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
-showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
-named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
-Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
-**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
-writes the existing storage keys and takes effect immediately.
 
 Support is a Settings-group page, and it asks the service nothing on its own: opening it starts no check
 and costs no refresh. **Help** contains **Feedback**. **About** stays with Website, version, and
@@ -730,6 +733,20 @@ the latest state after the navigation animation is removed. Any page that can re
 empty, error, or content at its root uses this host; individual pages must not delay requests or
 guess the navigation duration. Header actions stay hidden during the transition and then reflect the
 published page state. Reduce Motion skips the transition and publishes updates immediately.
+
+### Menu Bar
+
+**Menu Bar** is one form. A preview row above **Style** sits in its own grouped card: the
+status-item label is centred on a simulated menu-bar strip (system material, 24pt tall) so the
+preview looks like the bar. The label is drawn from `MenuBarLabelModel` for the current readings.
+**Style** is a Picker over every
+`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
+**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
+showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
+named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
+Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
+**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
+writes the existing storage keys and takes effect immediately.
 
 ### Notifications
 
@@ -782,8 +799,10 @@ unavailable account with no device content offers Retry.
 
 ### Agents
 
-Agents is a two-column page in the Settings group of the main window. The left column lists every catalog provider in
-**Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag reordering
+Agents is a two-column page in the Settings group of the main window. A 1pt hairline with 24pt
+gutters on each side divides the columns. The left column lists every catalog provider in
+**Shown in Overview** and **Hidden from Overview** groups, each a `quotaCardSurface()` card.
+Shown providers support drag reordering
 and VoiceOver Move Up/Move Down actions. Every row carries one status line under the name. When
 this Mac has a last-good official status-page reading, that line is **All systems operational**, or
 **Degraded ·** the status-page description for `minor` and above. Otherwise it is
@@ -796,9 +815,9 @@ trails **3 shown** and, when any shown agent has no working credential and no de
 
 **Group Usage by project** lives on General, not here.
 
-The right pane is that provider's settings, read top to bottom as three questions — is it shown,
-what is it reporting, how does this Mac sign in — and contains exactly these sections, in this
-order:
+The right pane keeps grouped section chrome. It is that provider's settings, read top to bottom as
+three questions — is it shown, what is it reporting, how does this Mac sign in — and contains
+exactly these sections, in this order:
 
 - **Overview**: one **Show in Overview** switch, no subtitle. Visibility is provider-wide and
   presentation-only.
@@ -809,7 +828,7 @@ order:
   account from the next. The menu uses `fieldFill` on the 24pt compact surface
   (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
   **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
-  size. It opens an app-owned floating menu (`quotaFloatingMenuSurface`), not a
+  size. It opens an app-owned floating menu (`quotaFloatingSurface`), not a
   system Menu. Choice rows use `fieldMinHeight` (32pt); the first item is **Automatic** with
   the quiet line **Newest live reading** under it, the rest are the available sources with no
   subtitle and no leading icons; the accent checkmark after the title is the only selected mark.

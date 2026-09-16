@@ -25,7 +25,7 @@ extension View {
     }
   }
 
-  /// Transient menus: glass on 26, `quotaFloatingMenuSurface()` on 14/15.
+  /// Transient menus: glass on 26, `quotaFloatingMenuSurface()` on 14/15. 14pt continuous corners.
   @ViewBuilder
   func quotaFloatingSurface() -> some View {
     if #available(macOS 26.0, *) {
@@ -39,6 +39,49 @@ extension View {
     } else {
       quotaFloatingMenuSurface()
     }
+  }
+
+  /// Material fallback for `quotaFloatingSurface()` on macOS 14/15.
+  func quotaFloatingMenuSurface() -> some View {
+    background {
+      RoundedRectangle(
+        cornerRadius: QuotaDesign.Layout.floatingSurfaceCornerRadius,
+        style: .continuous
+      )
+      .fill(.regularMaterial)
+      .overlay {
+        RoundedRectangle(
+          cornerRadius: QuotaDesign.Layout.floatingSurfaceCornerRadius,
+          style: .continuous
+        )
+        .fill(QuotaPalette.floatingMenuFill)
+      }
+    }
+    .clipShape(
+      RoundedRectangle(
+        cornerRadius: QuotaDesign.Layout.floatingSurfaceCornerRadius,
+        style: .continuous
+      )
+    )
+    .overlay {
+      RoundedRectangle(
+        cornerRadius: QuotaDesign.Layout.floatingSurfaceCornerRadius,
+        style: .continuous
+      )
+      .strokeBorder(QuotaPalette.hairlineBorder.opacity(0.55), lineWidth: 0.5)
+    }
+    .shadow(
+      color: QuotaPalette.floatingMenuShadow.opacity(0.45),
+      radius: 2,
+      x: 0,
+      y: 1
+    )
+    .shadow(
+      color: QuotaPalette.floatingMenuShadow,
+      radius: QuotaDesign.Layout.floatingMenuShadowRadius,
+      x: 0,
+      y: QuotaDesign.Layout.floatingMenuShadowY
+    )
   }
 
   /// Soft scroll-edge effect on 26 so detail content can sit under toolbar and sidebar.
@@ -57,6 +100,12 @@ extension View {
       .frame(maxWidth: .infinity)
       .padding(.horizontal, QuotaDesign.Layout.contentGutter)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+  }
+
+  /// Settings Form pages: 720pt max, centred in the detail column.
+  func quotaSettingsColumn() -> some View {
+    frame(maxWidth: QuotaDesign.Layout.settingsContentMaxWidth)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 }
 

@@ -31,8 +31,14 @@ enum QuotaDesign {
     static let quotaChartHeight: CGFloat = 180
     /// Today table row height.
     static let todayRowHeight: CGFloat = 36
-    /// Glass fallback radius for transient menus on macOS 26 (`quotaFloatingSurface`).
+    /// Transient menus (`quotaFloatingSurface`): glass on 26, material fallback below.
     static let floatingSurfaceCornerRadius: CGFloat = 14
+    /// Settings Form pages, centred in the main-window detail column.
+    static let settingsContentMaxWidth: CGFloat = 720
+    /// Simulated menu-bar strip on Settings → Menu Bar.
+    static let menuBarStripHeight: CGFloat = 24
+    /// Agents page column divider.
+    static let columnHairlineWidth: CGFloat = 1
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16
@@ -83,11 +89,11 @@ enum QuotaDesign {
     static let groupSurfaceInset: CGFloat = 4
     /// Hover/pressed surface nested inside a settings group.
     static let rowCornerRadius: CGFloat = 6
-    /// Transient menus sit above the panel and use a slightly fuller silhouette than groups.
+    /// Panel window silhouette. Transient menus use `floatingSurfaceCornerRadius`.
     static let floatingMenuCornerRadius: CGFloat = 12
     /// Keeps menu-row hover geometry concentric with the 4pt surface inset.
     static let floatingMenuRowCornerRadius: CGFloat =
-      floatingMenuCornerRadius - groupSurfaceInset
+      floatingSurfaceCornerRadius - groupSurfaceInset
     static let floatingMenuShadowRadius: CGFloat = 12
     static let floatingMenuShadowY: CGFloat = 5
 
@@ -114,12 +120,15 @@ enum QuotaDesign {
   /// Semantic type roles. Prefer these over bare `.caption` / `.subheadline`.
   ///
   /// Hierarchy (strong → quiet):
-  /// panelTitle ≥ emptyTitle > rowTitle > settingsLabel > sectionHeader > listSecondary > meta
+  /// overviewProviderTitle > panelTitle ≥ emptyTitle > rowTitle > settingsLabel >
+  /// sectionHeader > listSecondary > meta
   enum Typography {
     enum Role {
       case panelTitle
       case emptyTitle
       case rowTitle
+      /// Overview provider name. Larger than the panel title so groups scan as headings.
+      case overviewProviderTitle
       /// Compact Settings body labels (menu-style, smaller than Overview row titles).
       case settingsLabel
       case sectionHeader
@@ -134,6 +143,7 @@ enum QuotaDesign {
 
       fileprivate var baseSize: CGFloat {
         switch self {
+        case .overviewProviderTitle: 15
         case .panelTitle, .emptyTitle, .rowTitle: 13
         case .settingsLabel, .remainingValue: 12
         case .sectionHeader, .secondary, .mono, .quotaLabel: 11
@@ -144,7 +154,7 @@ enum QuotaDesign {
 
       fileprivate var weight: Font.Weight {
         switch self {
-        case .panelTitle, .sectionHeader: .semibold
+        case .overviewProviderTitle, .panelTitle, .sectionHeader: .semibold
         case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel, .remainingValue: .medium
         case .listSecondary, .secondary, .meta, .mono, .monoMeta: .regular
         }
@@ -189,6 +199,11 @@ extension View {
 
   func quotaRowTitleStyle() -> some View {
     quotaFont(.rowTitle)
+      .foregroundStyle(QuotaPalette.ink)
+  }
+
+  func quotaOverviewProviderTitleStyle() -> some View {
+    quotaFont(.overviewProviderTitle)
       .foregroundStyle(QuotaPalette.ink)
   }
 

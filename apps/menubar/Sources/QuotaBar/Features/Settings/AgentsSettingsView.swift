@@ -20,11 +20,14 @@ struct AgentsSettingsView: View {
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 1)) { context in
-      HStack(spacing: 0) {
+      HStack(spacing: QuotaDesign.Layout.contentGutter) {
         agentList
           .frame(width: QuotaDesign.Layout.agentsListWidth)
           .frame(maxHeight: .infinity, alignment: .top)
-        Divider()
+        Rectangle()
+          .fill(QuotaPalette.hairline)
+          .frame(width: QuotaDesign.Layout.columnHairlineWidth)
+          .frame(maxHeight: .infinity)
         providerPane(now: context.date)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -36,7 +39,7 @@ struct AgentsSettingsView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
         if !enabledProviders.isEmpty {
-          SettingsSection(title: "Shown in Overview") {
+          SettingsSection(title: "Shown in Overview", chrome: .card) {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(enabledProviders) { provider in
                 providerRow(provider, isEnabled: true)
@@ -46,7 +49,7 @@ struct AgentsSettingsView: View {
         }
 
         if !disabledProviders.isEmpty {
-          SettingsSection(title: "Hidden from Overview") {
+          SettingsSection(title: "Hidden from Overview", chrome: .card) {
             VStack(alignment: .leading, spacing: 0) {
               ForEach(disabledProviders) { provider in
                 providerRow(provider, isEnabled: false)

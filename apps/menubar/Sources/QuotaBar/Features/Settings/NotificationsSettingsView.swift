@@ -65,7 +65,7 @@ struct NotificationsSettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .scrollContentBackground(.hidden)
+    .quotaSettingsColumn()
     .task { await model.refreshNotificationAuthorization() }
     .onAppear { budgetDraft = model.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
   }

@@ -118,7 +118,7 @@ struct GeneralSettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .scrollContentBackground(.hidden)
+    .quotaSettingsColumn()
     .onAppear {
       LaunchAtLoginController.seedDefaultOnIfNeeded()
       launchAtLoginEnabled = LaunchAtLoginController.isEnabled

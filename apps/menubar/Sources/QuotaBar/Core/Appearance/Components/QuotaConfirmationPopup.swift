@@ -88,6 +88,6 @@ struct QuotaConfirmationPopup: View {
     }
     .padding(QuotaDesign.Spacing.lg)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaFloatingMenuSurface()
+    .quotaFloatingSurface()
   }
 }
