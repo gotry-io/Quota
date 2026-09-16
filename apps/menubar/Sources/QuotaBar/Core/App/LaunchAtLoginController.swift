@@ -7,6 +7,32 @@ enum LaunchAtLoginController {
   /// One-shot first-run default-on seed. Survives wipe so we never re-enable after a user disable.
   private static let seedKey = "settings.launchAtLogin.seeded"
 
+  /// Open Application Apple Event keywords. `keyAEPropData` (`prdt`) holds
+  /// `keyAELaunchedAsLogInItem` (`lgit`) when this process was started as a Login Item.
+  nonisolated enum LaunchEvent {
+    static let coreEventClass = AEEventClass(0x6165_7674)  // 'aevt'
+    static let openApplication = AEEventID(0x6F61_7070)  // 'oapp'
+    static let propData = AEKeyword(0x7072_6474)  // 'prdt'
+    static let launchedAsLoginItem = AEKeyword(0x6C67_6974)  // 'lgit'
+  }
+
+  /// True when this process was started as a Login Item.
+  static var launchedAsLoginItem: Bool {
+    launchedAsLoginItem(event: NSAppleEventManager.shared().currentAppleEvent)
+  }
+
+  /// Parses the Open Application launch record. Tests construct the descriptor.
+  nonisolated static func launchedAsLoginItem(event: NSAppleEventDescriptor?) -> Bool {
+    guard let event else { return false }
+    guard event.eventClass == LaunchEvent.coreEventClass,
+      event.eventID == LaunchEvent.openApplication
+    else { return false }
+    guard let propData = event.paramDescriptor(forKeyword: LaunchEvent.propData) else {
+      return false
+    }
+    return propData.forKeyword(LaunchEvent.launchedAsLoginItem) != nil
+  }
+
   static var isEnabled: Bool {
     isEnabled(status: SMAppService.mainApp.status)
   }

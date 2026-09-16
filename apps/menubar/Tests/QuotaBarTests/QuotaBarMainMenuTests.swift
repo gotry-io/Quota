@@ -13,11 +13,11 @@ func mainMenuHasEditMenuWithPaste() throws {
 }
 
 @Test @MainActor
-func windowMenuOpensTheMainWindowWithCommandD() throws {
+func windowMenuOpensTheMainWindowWithCommand1() throws {
   let menu = QuotaBarMainMenu.make()
   let window = try #require(menu.items.first { $0.submenu?.title == "Window" }?.submenu)
   let mainWindow = try #require(window.items.first { $0.title == "QuotaBar" })
   #expect(mainWindow.action == #selector(QuotaBarMainMenu.Actions.openMainWindow(_:)))
-  #expect(mainWindow.keyEquivalent == "d")
+  #expect(mainWindow.keyEquivalent == "1")
   #expect(mainWindow.isEnabled)
 }

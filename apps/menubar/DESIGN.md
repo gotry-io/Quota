@@ -173,10 +173,15 @@ rather than the panel material, a 200pt sidebar, a 960×640 minimum content size
 is resizable and miniaturizable and may go full screen. Esc and ⌘W close it. The title is
 **QuotaBar**.
 
-Opening the main window hides the menu-bar panel and registers the window with `WindowActivation`,
-which switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last
-registered window returns to `.accessory` without activating. Browser Access and Sparkle windows
-are not registered. The sidebar has two groups: **Quota** (**Quota**, **Today**, **Usage**) and
+QuotaBar is a regular app with a Dock icon. **Show in Dock** (General, default on) keeps the
+process `.regular`. Turning it off makes QuotaBar menu-bar-only: the main window registers with
+`WindowActivation`, which switches the process to `.regular` so a Dock icon and ⌘Tab entry exist
+while that window is open, and closing it returns to `.accessory` without activating. Toggling
+the switch while the main window is open does not close it or move focus. A launch as a Login
+Item does not show the main window; a manual launch (Finder, Spotlight, `open -a`) shows it
+after the status items exist. Closing the main window never quits; a Dock click reopens it.
+Browser Access and Sparkle windows are not registered. The sidebar has two groups: **Quota**
+(**Quota**, **Today**, **Usage**) and
 **Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
 The selected page persists in `main.page`; the first open lands on Quota. Provider selection for
 Quota is a toolbar menu (**All providers** and each shown provider with its brand icon), not
@@ -484,10 +489,11 @@ panel on that provider; Combined and Automatic open the same panel without chang
 The header shows:
 
 - Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open QuotaBar**,
-  **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the menu focuses Quit.
-  VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window on the
-  last page (Quota the first time); **Settings…** opens the main window on Account or the last
-  Settings page; there is no gear.
+  **Settings…** ⌘,, **Check for Updates…**, and **Quit QuotaBar** ⌘Q. Opening the menu focuses
+  Quit. VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window
+  on the last page (Quota the first time) and does not show a shortcut; the Window menu keeps
+  **QuotaBar** ⌘1. **Settings…** opens the main window on Account or the last Settings page;
+  there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
@@ -635,8 +641,9 @@ otherwise.
 **Menu Bar** is one grouped form in the Settings window: a live preview of the status-item label,
 **Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
-**General** is a window page: **Launch at Login**, **Refresh Interval** (Picker, 1, 2, 5, 10, or 15
-minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
+**General** is a window page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
+menu-bar-only except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
+or 15 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
 `usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
 is how often this Mac collects provider quota; Account summary still polls every minute, and a
 window reset can collect quota once before the next interval. Reset Local Data always confirms first

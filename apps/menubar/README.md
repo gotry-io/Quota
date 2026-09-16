@@ -18,10 +18,10 @@ shell, reads provider/service files, receives account/provider tokens, or contac
 Requests and responses are bounded to 1 MiB and use typed `snake_case` models; revisioned events
 tell Swift when to reload state.
 
-**Windows.** QuotaBar is an `LSUIElement`: while only the menu extra is showing there is no Dock
-icon. Opening the main window switches the process to regular activation so a Dock icon and ⌘Tab
-entry exist; closing it returns to accessory. The Browser Access grant window and Sparkle's
-updater are not part of that count.
+**Windows.** QuotaBar is a regular app with a Dock icon. **Show in Dock** (General, default on)
+keeps it that way; turning the switch off makes QuotaBar menu-bar-only — a Dock icon and ⌘Tab
+entry exist only while the main window is open. A launch as a Login Item does not show the main
+window. The Browser Access grant window and Sparkle's updater are not part of that count.
 
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,

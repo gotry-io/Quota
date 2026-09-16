@@ -109,7 +109,7 @@ enum QuotaBarMainMenu {
     let mainWindow = NSMenuItem(
       title: "QuotaBar",
       action: #selector(Actions.openMainWindow(_:)),
-      keyEquivalent: "d"
+      keyEquivalent: "1"
     )
     mainWindow.target = Actions.shared
     menu.addItem(mainWindow)

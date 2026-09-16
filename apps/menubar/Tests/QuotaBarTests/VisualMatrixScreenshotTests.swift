@@ -17,6 +17,7 @@
         MainPage.agentsProviderStorageKey,
         DashboardRange.storageKey,
         ResetCopyStylePreference.storageKey,
+        DockVisibilityPreference.storageKey,
       ]
       let previous = Dictionary(
         uniqueKeysWithValues: keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
