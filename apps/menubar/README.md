@@ -171,7 +171,9 @@ is Today, `main-usage` and `main-usage-local` are Usage on Account and This Mac,
 remaining `main-*` routes are the Settings group. `scripts/test-swift.sh`
 renders that matrix to PNGs after the ordinary suite (`QUOTABAR_SCREENSHOTS` names the directory);
 under a bare `swift test` the matrix test is a no-op, because rendering every route inside the
-parallel suite starves the app's wait-loop tests.
+parallel suite starves the app's wait-loop tests. CI's `verify` job on macos-26 uploads those
+PNGs as the `quotabar-visual-matrix` artifact. Liquid Glass renders only on macOS 26; a Mac on 14
+or 15 produces the same routes with the material fallback.
 
 Fixture mode starts no service and contains synthetic account, device, quota, cost, and coverage
 data. Live mode uses the packaged service through the production IPC boundary. Generated `.build/`,

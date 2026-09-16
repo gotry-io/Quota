@@ -24,7 +24,8 @@ links to it rather than restating it.
   wire decoding only. Its UI has two surfaces
   ([ADR 0052](decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md)): the 320×480
   menu-bar panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
-  history, today's cost per window, Usage at width, and every preference). QuotaBar is a regular
+  history, today's cost per window, Usage at width, and every preference). QuotaBar adopts Liquid
+  Glass on macOS 26, with the existing material fallback below it. QuotaBar is a regular
   app with a Dock icon; **Show in Dock** off makes it menu-bar-only except while the main window is
   open. A Login Item launch does not show the main window. The desktop widgets read the same
   non-secret `WidgetSnapshot` as iOS

@@ -6,9 +6,10 @@ menu-bar panel and one main window. Website marketing UI belongs in `apps/web/DE
 ## Product character
 
 QuotaBar should feel like a precise macOS instrument: compact, calm, legible, and immediately useful.
-It uses system materials and controls, a restrained blue accent, and dense information hierarchy.
-The panel is an app-owned SwiftUI surface, not a website compressed into a popover. The main
-window is a titled window; it is not the panel stretched.
+It uses system materials and controls, a restrained accent, and dense information hierarchy. On
+macOS 26 the main-window chrome, cards, and floating menus use Liquid Glass; macOS 14 and 15 use
+the material fallback. The panel is an app-owned SwiftUI surface, not a website compressed into a
+popover. The main window is a titled window; it is not the panel stretched.
 
 Core rules:
 
@@ -243,7 +244,7 @@ provider only.
 ### Quota
 
 One card per provider in the detail column. Each card uses `quotaCardSurface()` (glass on macOS 26,
-group fill otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
+`settingsGroupFill` otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
 the catalog brand icon and provider name as the title, with the remaining percent of the primary
 window trailing as a 28pt semibold rounded numeral and a small **remaining** caption; then the
 pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
@@ -267,7 +268,7 @@ reads **No history yet**.
 
 ### Today
 
-A table on the Today page, inside one card surface. One row per provider × window that had samples
+A table on the Today page, inside one `quotaCardSurface()` card. One row per provider × window that had samples
 today, 36pt tall. The header row is tertiary caps. Columns: window (catalog provider name · window
 title), used percent at the start of the local day → now (`12% → 47%`, the same whole percents
 `QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
@@ -286,7 +287,7 @@ period.
 
 A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
-background, with the selected item highlighted inside it; do not wrap it in another group surface.
+background, with the selected item highlighted inside it; do not wrap it in a card.
 A custom range selects none of the six, so the tab control shows nothing selected and the row
 beneath it says what the period covers. At main-window width the control is leading-aligned and no
 wider than 480pt.
@@ -311,7 +312,7 @@ Preparing and empty Usage remain section states below the period tabs because th
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
 
-When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
 progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
 folded the same way any other custom period is, and it is shown whatever period the page is
 otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
@@ -390,9 +391,11 @@ The panel inherits the menu extra's system material. The main window uses
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
+- Card: `quotaCardSurface()` — glass on macOS 26, `settingsGroupFill` at 20pt continuous otherwise.
 - Control: `fieldFill` plus the accent focus ring.
-- Transient: regular material plus `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
-- Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group.
+- Transient: `quotaFloatingSurface()` — glass on macOS 26; on 14/15 regular material plus
+  `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
+- Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group or card.
 
 Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
 supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
@@ -400,7 +403,40 @@ supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus
 Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15; `critical` on text
 stays failure-only.
 
-Do not add decorative gradients, oversized cards, colored page backgrounds, or custom window chrome.
+Do not add decorative gradients, a second card language, colored page backgrounds, or custom window
+chrome. Main-window Quota / Today / Usage cards are the 20pt `quotaCardSurface()`.
+
+## Liquid Glass (macOS 26)
+
+QuotaBar uses Apple's native Liquid Glass on macOS 26. Views never branch on availability.
+Tahoe-only modifiers live in `QuotaSurfaces` (`quotaCardSurface()`, `quotaFloatingSurface()`,
+`quotaScrollEdge()`): they apply `.glassEffect` / `.scrollEdgeEffectStyle` on 26 and the existing
+group-fill / material fallbacks below it. `QuotaPalette` stays the one palette.
+
+| Surface | macOS 26 | 14/15 fallback |
+| --- | --- | --- |
+| Main-window sidebar | System floating glass (`List` `.sidebar`) | Standard sidebar |
+| Toolbar groups | Glass capsules (`ToolbarSpacer`) | Same items, no spacers |
+| Quota / Today / Usage cards, Usage stat tiles, Agents list groups | `quotaCardSurface()` glass, 20pt continuous | `settingsGroupFill`, same 20pt |
+| Transient menus (Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, `QuotaConfirmationPopup`) | `quotaFloatingSurface()` glass, 14pt continuous | `quotaFloatingMenuSurface()` |
+| Panel background | Menu extra's system material | Same |
+| Settings Form pages | Grouped Form; no opaque page wash | Same |
+| Main-window background | `windowBackgroundColor` | Same |
+
+The panel background stays the extra's material on every release. Sidebar, toolbar, cards, and
+floating menus are the glass surfaces.
+
+Concentric radii on a card: 20pt outer → 12pt inner → 7pt control (`fieldCornerRadius`). Nested
+rounded rects share a centre of curvature. Settings groups stay 10pt / 6pt (`groupCornerRadius` /
+`rowCornerRadius`) with the 4pt nested inset.
+
+State colours — remaining-quota healthy / warning / critical, `accent`, `warning`, `critical` —
+keep at least 4.5:1 on both appearances against the card and floating surfaces. If a tone fails,
+darken or lighten that tone. Do not add a second palette.
+
+Quota, Today, and Usage are one column, max width 1040pt, centred, with 24pt gutters and 16pt
+between cards. Usage totals are three stat tiles (Tokens, Cost, Cache hit): a 28pt semibold
+rounded numeral and a small label. Dense tables stay dense and sit inside the card.
 
 ## Typography
 
@@ -419,6 +455,7 @@ Use semantic roles from `QuotaDesign.Typography`:
 | `meta` | 10pt regular | Age, state, and tertiary metadata |
 | `mono` / `monoMeta` | 11pt / 10pt | Commands and technical values |
 | `remainingValue` | 12pt medium | Remaining quota |
+| `statValue` | 28pt semibold rounded | Remaining % and Usage stat numerals on main-window cards |
 
 Dynamic Type scales semantic text roles. Utility symbols keep their optical sizes, while their hit
 targets stay at least 28pt. Technical strings and chevrons never receive primary-text emphasis.
@@ -972,12 +1009,12 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | --- | --- |
 | `MenuBarShell` | Fixed header/body/footer geometry |
 | `MenuBarHeader` | Back/title/root actions and keyboard-safe transient menu |
-| `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
+| `SettingsSection` | Quiet label, optional trailing control, plus group (`quotaGroupSurface`) or card (`quotaCardSurface`) chrome |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the main window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the main window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Settings groups; Quota cards, Today table, Usage, and Settings pages |
+| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Settings groups; Quota / Today / Usage cards, and Settings pages |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -1028,7 +1065,9 @@ signed-out provider issues, service unavailable, and a rebuilding cache (`cache-
 Every `--route` below is inspected in `--appearance light` and `dark`, and at `--text-size
 standard` and `accessibility` (60 cells, plus `main-quota` at 1280×800). `--text-size extra-large`
 is available on the visual app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce
-Motion are inspected on the same routes.
+Motion are inspected on the same routes. CI's `verify` job on macos-26 uploads the rendered
+matrix as the `quotabar-visual-matrix` artifact. Liquid Glass renders only on that runner; a Mac
+on 14 or 15 produces the same routes with the material fallback.
 
 | `--route` | Surface | Size | Appearances | Text sizes |
 | --- | --- | ---: | --- | --- |
