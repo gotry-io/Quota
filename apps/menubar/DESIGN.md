@@ -180,6 +180,9 @@ lines). The **Agents** row trails **3 shown** and, when any shown agent has no w
 and no device reporting it, **· 1 needs sign-in**; the Agents page is a two-column list and provider
 detail.
 
+The Dashboard window is the same kind of window: `windowBackgroundColor`, a 200pt sidebar, a
+960×640 minimum content size, a remembered frame, Esc and ⌘W. Unlike Settings it may go full screen.
+
 ## Material and color
 
 Production inherits the menu extra's system material. Add only adaptive semantic layers:
@@ -364,6 +367,11 @@ Settings window
 ├── Menu Bar (one form)
 ├── General
 └── Support (Diagnostics disclosure)
+
+Dashboard window       (sidebar)  All providers · <each shown provider>
+├── Quota      (30-day window curves, pace phrase, reset, peak)
+├── Today      (per-window cost today)
+└── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
 ```
 
 ### Overview

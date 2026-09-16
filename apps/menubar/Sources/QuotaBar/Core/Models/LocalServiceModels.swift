@@ -821,6 +821,38 @@ extension LocalServiceUsagePeriodValues {
   }
 }
 
+/// This Mac's stored quota samples, as `quota_history` returns them.
+///
+/// Dashboard folds these with ``QuotaHistory``. The state push keeps the current-window slice
+/// Overview already draws (ADR 0051).
+struct LocalServiceQuotaHistory: Decodable, Equatable, Sendable {
+  let samplesByProvider: [String: [String: [QuotaSample]]]
+  let utcOffsetSeconds: Int
+
+  init(
+    samplesByProvider: [String: [String: [QuotaSample]]] = [:],
+    utcOffsetSeconds: Int = 0
+  ) {
+    self.samplesByProvider = samplesByProvider
+    self.utcOffsetSeconds = utcOffsetSeconds
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case samplesByProvider
+    case utcOffsetSeconds
+  }
+}
+
+extension LocalServiceQuotaHistory {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["samplesByProvider", "utcOffsetSeconds"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    samplesByProvider = try container.decode(
+      [String: [String: [QuotaSample]]].self, forKey: .samplesByProvider)
+    utcOffsetSeconds = try container.decode(Int.self, forKey: .utcOffsetSeconds)
+  }
+}
+
 extension LocalServiceUsageDetail {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([

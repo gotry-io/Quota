@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import QuotaWire
 import Testing
 import UserNotifications
@@ -131,6 +132,115 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(
     model.accountErrorMessage == "This device was removed. Sign in again to reconnect it."
   )
+}
+
+@Test @MainActor
+func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() async throws {
+  let now = Date(timeIntervalSince1970: 1_788_100_000)
+  let fiveHourReset = now.addingTimeInterval(2 * 3_600)
+  let weeklyReset = now.addingTimeInterval(3 * 86_400)
+  let observed = now.addingTimeInterval(-3_600)
+  let snapshot = QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(
+      fingerprint: "account_test",
+      label: nil,
+      plan: "Plus",
+      fingerprintScope: .global
+    ),
+    windows: [
+      QuotaWindow(
+        id: "five_hour",
+        title: "5 Hours",
+        usedPercent: 40,
+        resetsAt: fiveHourReset,
+        durationSeconds: 18_000
+      ),
+      QuotaWindow(
+        id: "weekly",
+        title: "Weekly",
+        usedPercent: 20,
+        resetsAt: weeklyReset,
+        durationSeconds: 604_800,
+        primaryCadence: .weekly
+      ),
+    ],
+    status: .available,
+    observedAt: now
+  )
+  let source = LocalServiceOverviewSource(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    observedAt: now,
+    isStale: false
+  )
+  let state = LocalServiceState(
+    ipcVersion: 3,
+    revision: 7,
+    usageUploadEnabled: true,
+    groupUsageByProject: true,
+    quotaRefreshIntervalSeconds: 300,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: emptyComponent(),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    browserScanEnabled: [],
+    overview: [
+      LocalServiceOverviewItem(
+        identity: LocalServiceOverviewIdentity(
+          provider: .codex,
+          fingerprint: "account_test",
+          scope: .global,
+          sourceID: nil
+        ),
+        snapshot: snapshot,
+        sources: [source],
+        selectedSourceID: source.sourceID,
+        selectedSourceDisplayName: source.displayName,
+        automaticSourceID: source.sourceID,
+        automaticSourceDisplayName: source.displayName,
+        isStale: false
+      )
+    ],
+    cache: .settled
+  )
+  let samples = LocalServiceQuotaHistory(
+    samplesByProvider: [
+      "codex": [
+        "five_hour": [
+          QuotaSample(resetsAt: fiveHourReset, observedAt: observed, usedPercent: 10),
+          QuotaSample(resetsAt: fiveHourReset, observedAt: now, usedPercent: 40),
+        ],
+        "weekly": [
+          QuotaSample(resetsAt: weeklyReset, observedAt: now, usedPercent: 20)
+        ],
+      ]
+    ],
+    utcOffsetSeconds: 0
+  )
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: state, quotaHistoryValue: samples)
+  )
+  await model.refreshIfNeeded()
+  #expect(model.quotaHistory.isEmpty)
+  #expect(model.quotaHistorySamples == nil)
+
+  model.loadQuotaHistory()
+  let deadline = ContinuousClock.now + .seconds(2)
+  while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
+    try await Task.sleep(for: .milliseconds(10))
+  }
+
+  #expect(model.quotaHistorySamples == samples)
+  let fiveHour = try #require(model.quotaHistory[.codex]?["five_hour"])
+  let weekly = try #require(model.quotaHistory[.codex]?["weekly"])
+  #expect(fiveHour.points.map(\.usedPercent) == [10, 40])
+  #expect(weekly.points.map(\.usedPercent) == [20])
 }
 
 @Test @MainActor
@@ -1166,6 +1276,8 @@ struct StubLocalService: LocalServiceServing {
   let pinRecord: PinCallRecord?
   /// What `usage_period` answers, for the tests that ask for a period `get_state` does not carry.
   let customPeriod: LocalServiceUsageDetail?
+  /// What `quota_history` answers, for the tests that load 30-day samples on demand.
+  let quotaHistoryValue: LocalServiceQuotaHistory?
 
   init(
     state: LocalServiceState,
@@ -1178,7 +1290,8 @@ struct StubLocalService: LocalServiceServing {
     loginError: LocalServiceClientError? = nil,
     authorizeURL: String? = nil,
     pinRecord: PinCallRecord? = nil,
-    customPeriod: LocalServiceUsageDetail? = nil
+    customPeriod: LocalServiceUsageDetail? = nil,
+    quotaHistoryValue: LocalServiceQuotaHistory? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -1192,6 +1305,7 @@ struct StubLocalService: LocalServiceServing {
     self.authorizeURL = authorizeURL
     self.pinRecord = pinRecord
     self.customPeriod = customPeriod
+    self.quotaHistoryValue = quotaHistoryValue
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -1199,6 +1313,11 @@ struct StubLocalService: LocalServiceServing {
   func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
     guard let customPeriod else { throw LocalServiceClientError.invalidMessage }
     return customPeriod
+  }
+
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+    guard let quotaHistoryValue else { throw LocalServiceClientError.invalidMessage }
+    return quotaHistoryValue
   }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {

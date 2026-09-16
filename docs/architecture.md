@@ -73,8 +73,9 @@ official provider sessions       agent JSON/JSONL logs
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
 Operations are ping, state read, diagnose/recheck, refresh, cache reset, one custom Usage period
-fold, login/cancel, logout, provider configuration, provider browser-session
-validate/commit/remove, Usage upload configuration, and shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
+fold, one 30-day quota-history read (`quota_history { since }`), login/cancel, logout, provider
+configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
+shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
 before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
 answers `ping` on the thread that reads stdin, so an operation that blocks never stops the helper
 from saying it is alive. That is the only liveness signal QuotaBar uses: requests are never on a
@@ -147,6 +148,9 @@ as a file in its own container. Both are kept thirty days, both are folded by on
 `packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
 contract names a sample, Relay gains no route, and the website shows no history. A reading that
 arrived from another device carries no history, because this device has no samples of it.
+`get_state` restates only the current-window slice Overview already draws; Dashboard reads the rest
+through `quota_history { since }`, a cache.sqlite read that collects nothing and reaches no network
+([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
 
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every

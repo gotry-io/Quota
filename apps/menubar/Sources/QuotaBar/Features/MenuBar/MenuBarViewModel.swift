@@ -126,6 +126,13 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   /// four `get_state` carries are the ones worth keeping.
   private(set) var customUsagePeriods: [String: LocalServiceUsageDetail] = [:]
   private(set) var customUsageLoading = false
+  /// Folded 30-day quota history, keyed provider then window id. Empty until
+  /// ``loadQuotaHistory()``; state pushes keep the current-window slice Overview already draws.
+  private(set) var quotaHistory: [ProviderID: [String: QuotaHistory]] = [:]
+  /// The samples the last `quota_history` read returned, so a later surface can re-fold a range.
+  private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
+  /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
+  private(set) var quotaHistoryErrorMessage: String?
   /// This Mac's monthly budget, and how far into it this month's local spend has gone.
   private(set) var budget: UsageBudget
   private(set) var budgetMonthDetail: LocalServiceUsageDetail?
@@ -325,6 +332,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
 
   @ObservationIgnored
   private var customUsageTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var quotaHistoryTask: Task<Void, Never>?
 
   @ObservationIgnored
   private let notificationCenter: any NotificationCentering
@@ -795,6 +805,56 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     guard selection != usagePeriod else { return }
     usagePeriod = selection
     loadCustomUsagePeriod()
+  }
+
+  /// Asks the service for this Mac's stored samples since the retention horizon, then folds
+  /// them per provider and window. State pushes keep the current-window slice; this is the
+  /// 30-day journal Dashboard reads (ADR 0051).
+  func loadQuotaHistory() {
+    guard let client else { return }
+    quotaHistoryTask?.cancel()
+    quotaHistoryTask = Task { @MainActor [weak self] in
+      let since = Date().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
+      do {
+        let payload = try await client.quotaHistory(since: since)
+        guard !Task.isCancelled else { return }
+        self?.quotaHistorySamples = payload
+        self?.quotaHistory = Self.foldQuotaHistory(
+          payload, overview: self?.overview ?? [], now: Date())
+        self?.quotaHistoryErrorMessage = nil
+      } catch is CancellationError {
+        return
+      } catch {
+        self?.quotaHistoryErrorMessage = Self.message(for: error)
+      }
+    }
+  }
+
+  /// One fold per provider and window id, from the samples `quota_history` returned and the
+  /// cadence the current Overview reading already names.
+  static func foldQuotaHistory(
+    _ payload: LocalServiceQuotaHistory,
+    overview: [LocalServiceOverviewItem],
+    now: Date
+  ) -> [ProviderID: [String: QuotaHistory]] {
+    var result: [ProviderID: [String: QuotaHistory]] = [:]
+    for item in overview {
+      let provider = item.identity.provider
+      guard let byWindow = payload.samplesByProvider[provider.rawValue] else { continue }
+      for window in item.snapshot.windows {
+        guard let samples = byWindow[window.id],
+          let folded = QuotaHistory.fold(
+            window: QuotaHistoryReading(
+              resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
+            samples: samples,
+            now: now,
+            utcOffsetSeconds: payload.utcOffsetSeconds
+          )
+        else { continue }
+        result[provider, default: [:]][window.id] = folded
+      }
+    }
+    return result
   }
 
   /// Asks the service to fold the selected period when it is not one of the four already folded.

@@ -222,6 +222,42 @@ func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
 }
 
 @Test
+func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
+  let data = Data(
+    #"""
+    {
+      "samples_by_provider": {
+        "codex": {
+          "five_hour": [
+            {
+              "resets_at": "2026-09-05T12:00:00Z",
+              "observed_at": "2026-09-05T09:30:00Z",
+              "used_percent": 40.0
+            }
+          ]
+        }
+      },
+      "utc_offset_seconds": -25200
+    }
+    """#.utf8
+  )
+  let history = try QuotaWireCodec.makeDecoder().decode(LocalServiceQuotaHistory.self, from: data)
+  #expect(history.utcOffsetSeconds == -25_200)
+  #expect(history.samplesByProvider["codex"]?["five_hour"]?.count == 1)
+  #expect(history.samplesByProvider["codex"]?["five_hour"]?.first?.usedPercent == 40)
+
+  let extra = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"utc_offset_seconds\": -25200",
+      with: "\"utc_offset_seconds\": -25200,\n      \"extra\": true"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceQuotaHistory.self, from: extra)
+  }
+}
+
+@Test
 func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
