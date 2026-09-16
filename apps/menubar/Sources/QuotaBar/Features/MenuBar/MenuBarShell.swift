@@ -12,7 +12,7 @@ struct MenuBarShell<Content: View>: View {
   let showsLeadingIcon: Bool
   let trailing: MenuBarHeader.TrailingAction
   var overflowMenuStartsExpanded = false
-  let onOpenDashboard: () -> Void
+  let onOpenUsage: () -> Void
   let content: Content
 
   init(
@@ -26,7 +26,7 @@ struct MenuBarShell<Content: View>: View {
     showsLeadingIcon: Bool = false,
     trailing: MenuBarHeader.TrailingAction = .none,
     overflowMenuStartsExpanded: Bool = false,
-    onOpenDashboard: @escaping () -> Void,
+    onOpenUsage: @escaping () -> Void,
     @ViewBuilder content: () -> Content
   ) {
     self.model = model
@@ -39,7 +39,7 @@ struct MenuBarShell<Content: View>: View {
     self.showsLeadingIcon = showsLeadingIcon
     self.trailing = trailing
     self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
-    self.onOpenDashboard = onOpenDashboard
+    self.onOpenUsage = onOpenUsage
     self.content = content()
   }
 
@@ -70,7 +70,7 @@ struct MenuBarShell<Content: View>: View {
         model: model,
         usageSource: usageSource,
         now: now,
-        onOpenDashboard: onOpenDashboard
+        onOpenUsage: onOpenUsage
       )
     }
     .frame(width: QuotaDesign.Layout.panelWidth)
@@ -80,24 +80,24 @@ struct MenuBarShell<Content: View>: View {
   }
 }
 
-/// The panel's bottom bar: today's spend as the Dashboard button on the left, one refresh
+/// The panel's bottom bar: today's spend as the Usage button on the left, one refresh
 /// action on the right.
 ///
 /// Today's spend is the one supporting number that belongs beside quota everywhere, so it sits
 /// in the bar every page already has rather than spending an Overview line on itself. Selecting
-/// it opens Dashboard. How long ago the last sync finished is a fact about the refresh button,
-/// not a number worth a permanent line, so it rides in that button's tooltip and its VoiceOver
-/// label.
+/// it opens the main window on Usage. How long ago the last sync finished is a fact about the
+/// refresh button, not a number worth a permanent line, so it rides in that button's tooltip
+/// and its VoiceOver label.
 struct MenuBarFooterView: View {
   @Bindable var model: MenuBarViewModel
   let usageSource: UsageSource
   let now: Date
-  let onOpenDashboard: () -> Void
+  let onOpenUsage: () -> Void
 
   var body: some View {
     HStack(spacing: QuotaDesign.Spacing.sectionBody) {
       if let today = model.todayUsageSummary(source: usageSource) {
-        Button(action: onOpenDashboard) {
+        Button(action: onOpenUsage) {
           Text(today.text)
             .quotaMetaStyle()
             .lineLimit(1)
@@ -108,9 +108,9 @@ struct MenuBarFooterView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open Dashboard")
+        .accessibilityLabel("Open Usage")
         .accessibilityValue(today.accessibilityLabel)
-        .help("Open Dashboard")
+        .help("Open Usage")
       }
 
       Spacer(minLength: 0)

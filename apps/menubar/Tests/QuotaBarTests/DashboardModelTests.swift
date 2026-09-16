@@ -15,7 +15,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
           referenceDate: referenceDate
         )
       )
@@ -35,7 +35,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
           referenceDate: referenceDate
         )
       )
@@ -57,7 +57,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
           referenceDate: referenceDate
         )
       )
@@ -77,7 +77,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
           referenceDate: referenceDate
         )
       )
@@ -105,7 +105,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard-usage"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-usage"],
           referenceDate: referenceDate
         )
       )
@@ -133,7 +133,7 @@
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
       let configuration = try #require(
         VisualTestConfiguration(
-          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
           referenceDate: referenceDate
         )
       )

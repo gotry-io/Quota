@@ -61,61 +61,64 @@
   enum VisualTestRoute: String {
     case overview
     case providerCodex = "provider-codex"
-    case settingsWindow = "settings-window"
-    case settingsAccount = "settings-account"
-    case settingsAgents = "settings-agents"
-    case settingsAgentsCodex = "settings-agents-codex"
-    case settingsAgentsLiteLLMKey = "settings-agents-litellm-key"
-    case settingsNotifications = "settings-notifications"
-    case settingsMenuBar = "settings-menu-bar"
-    case settingsGeneral = "settings-general"
-    case settingsSupport = "settings-support"
-    case dashboard
-    case dashboardCodex = "dashboard-codex"
-    case dashboardUsage = "dashboard-usage"
-    case dashboardUsageLocal = "dashboard-usage-local"
+    case mainQuota = "main-quota"
+    case mainQuotaCodex = "main-quota-codex"
+    case mainToday = "main-today"
+    case mainUsage = "main-usage"
+    case mainUsageLocal = "main-usage-local"
+    case mainAccount = "main-account"
+    case mainAgents = "main-agents"
+    case mainAgentsCodex = "main-agents-codex"
+    case mainAgentsLiteLLMKey = "main-agents-litellm-key"
+    case mainNotifications = "main-notifications"
+    case mainMenuBar = "main-menu-bar"
+    case mainGeneral = "main-general"
+    case mainSupport = "main-support"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .providerCodex: [.provider(.codex)]
-      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
-        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
-        .settingsSupport, .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal:
+      case .mainQuota, .mainQuotaCodex, .mainToday, .mainUsage, .mainUsageLocal, .mainAccount,
+        .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey, .mainNotifications, .mainMenuBar,
+        .mainGeneral, .mainSupport:
         []
       }
     }
 
-    var settingsPage: SettingsPage? {
+    var mainPage: MainPage? {
       switch self {
-      case .settingsAccount: .account
-      case .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey: .agents
-      case .settingsNotifications: .notifications
-      case .settingsMenuBar: .menuBar
-      case .settingsGeneral: .general
-      case .settingsSupport: .support
+      case .mainQuota, .mainQuotaCodex: .quota
+      case .mainToday: .today
+      case .mainUsage, .mainUsageLocal: .usage
+      case .mainAccount: .account
+      case .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey: .agents
+      case .mainNotifications: .notifications
+      case .mainMenuBar: .menuBar
+      case .mainGeneral: .general
+      case .mainSupport: .support
       default: nil
       }
     }
 
-    var settingsAgentsProvider: ProviderID? {
+    var agentsProvider: ProviderID? {
       switch self {
-      case .settingsAgentsCodex: .codex
-      case .settingsAgentsLiteLLMKey: .litellm
+      case .mainAgentsCodex: .codex
+      case .mainAgentsLiteLLMKey: .litellm
       default: nil
       }
     }
 
-    var dashboardSelection: ProviderID? {
+    var quotaSelection: ProviderID? {
       switch self {
-      case .dashboardCodex: .codex
+      case .mainQuotaCodex: .codex
       default: nil
       }
     }
 
-    var dashboardUsageSource: UsageSource {
+    var usageSource: UsageSource {
       switch self {
-      case .dashboardUsageLocal: .local
+      case .mainUsageLocal: .local
       default: .account
       }
     }
@@ -198,29 +201,15 @@
     }
 
     var initialPath: [MenuBarRoute] { route.path }
-    var settingsPage: SettingsPage? { route.settingsPage }
+    var mainPage: MainPage? { route.mainPage }
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
-    var hostsSettingsWindow: Bool {
-      switch route {
-      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
-        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
-        .settingsSupport:
-        true
-      default: false
-      }
-    }
-    var hostsDashboardWindow: Bool {
-      switch route {
-      case .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal: true
-      default: false
-      }
-    }
-    var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
-    var dashboardSelection: ProviderID? { route.dashboardSelection }
-    var dashboardUsageSource: UsageSource { route.dashboardUsageSource }
-    var hostsTitledWindow: Bool { hostsSettingsWindow || hostsDashboardWindow }
+    var hostsMainWindow: Bool { route.mainPage != nil }
+    var agentsProvider: ProviderID? { route.agentsProvider }
+    var quotaSelection: ProviderID? { route.quotaSelection }
+    var usageSource: UsageSource { route.usageSource }
+    var hostsTitledWindow: Bool { hostsMainWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -257,11 +246,11 @@
       for provider in ProviderID.allCases {
         ProviderVisibility.setVisible(provider, provider.defaultVisible)
       }
-      if let settingsPage {
-        UserDefaults.standard.set(settingsPage.rawValue, forKey: SettingsPage.storageKey)
+      if let mainPage {
+        UserDefaults.standard.set(mainPage.rawValue, forKey: MainPage.storageKey)
       }
-      if let provider = settingsAgentsProvider {
-        UserDefaults.standard.set(provider.rawValue, forKey: SettingsPage.agentsProviderStorageKey)
+      if let provider = agentsProvider {
+        UserDefaults.standard.set(provider.rawValue, forKey: MainPage.agentsProviderStorageKey)
       }
       UserDefaults.standard.set(
         DashboardRange.fallback.rawValue, forKey: DashboardRange.storageKey)

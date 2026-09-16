@@ -9,14 +9,12 @@ enum QuotaDesign {
     static let panelWidth: CGFloat = 320
     /// Fixed panel height for every page so first open and later pages share one ceiling.
     static let panelMaxHeight: CGFloat = 480
-    /// Sidebar of the Settings window.
+    /// Sidebar of the main window.
     static let windowSidebarWidth: CGFloat = 200
-    /// Provider list inside the Settings window Agents page.
+    /// Provider list inside the Agents page.
     static let agentsListWidth: CGFloat = 220
-    /// Minimum Settings window content size.
-    static let settingsWindowMinSize = CGSize(width: 720, height: 520)
-    /// Minimum Dashboard window content size.
-    static let dashboardWindowMinSize = CGSize(width: 960, height: 640)
+    /// Minimum main window content size.
+    static let mainWindowMinSize = CGSize(width: 960, height: 640)
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16

@@ -1,21 +1,21 @@
 # QuotaBar Design
 
 This file is the canonical visual and interaction specification for native macOS QuotaBar: the
-menu-bar panel, the Settings window, and the Dashboard window. Website marketing UI belongs in
-`apps/web/DESIGN.md`.
+menu-bar panel and one main window. Website marketing UI belongs in `apps/web/DESIGN.md`.
 
 ## Product character
 
 QuotaBar should feel like a precise macOS instrument: compact, calm, legible, and immediately useful.
 It uses system materials and controls, a restrained blue accent, and dense information hierarchy.
-The panel is an app-owned SwiftUI surface, not a website compressed into a popover. Settings and
-Dashboard are titled windows; they are not the panel stretched.
+The panel is an app-owned SwiftUI surface, not a website compressed into a popover. The main
+window is a titled window; it is not the panel stretched.
 
 Core rules:
 
 1. Remaining quota is the primary value. Usage and account state support it without competing.
 2. The panel shares one header, one footer, and one typed navigation stack across Overview and
-   provider detail. Settings and Dashboard are windows, not pages of that stack.
+   provider detail. Quota, Today, Usage, and Settings are pages of the main window, not of that
+   stack.
 3. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage, log
    out.
 4. QuotaBar displays typed local-service results. Provider configuration exposes only intentional
@@ -158,53 +158,49 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `fieldCornerRadius` | 7pt | Editable/control surface |
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
-| `windowSidebarWidth` | 200pt | Settings window sidebar |
-| `agentsListWidth` | 220pt | Provider list inside the Settings window Agents page |
-| `settingsWindowMinSize` | 720×520 | Settings window minimum content size |
-| `dashboardWindowMinSize` | 960×640 | Dashboard window minimum content size |
+| `windowSidebarWidth` | 200pt | Main window sidebar |
+| `agentsListWidth` | 220pt | Provider list inside the Agents page |
+| `mainWindowMinSize` | 960×640 | Main window minimum content size |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
 
 ## Windows
 
-The Settings window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
-rather than the panel material, a 200pt sidebar, a 720×520 minimum content size, frame autosave name
-`QuotaBarSettingsWindow`, level `.normal`, and `collectionBehavior = [.moveToActiveSpace]`. It is
-resizable and miniaturizable; it does not go full screen. Esc and ⌘W close it.
+The main window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
+rather than the panel material, a 200pt sidebar, a 960×640 minimum content size, frame autosave name
+`QuotaBarMainWindow`, level `.normal`, and `collectionBehavior` including `.fullScreenPrimary`. It
+is resizable and miniaturizable and may go full screen. Esc and ⌘W close it. The title is
+**QuotaBar**.
 
-Opening Settings hides the menu-bar panel and registers the window with `WindowActivation`, which
-switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last registered
-window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
-registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
-and **Support**; the selected page persists in
-`settings.page`. Account, Notifications, General, and Support are grouped Forms in the detail
-column, and **Menu Bar** is one grouped form (preview, Style, Provider, Reset time, Show pace
-lines). The **Agents** row trails **3 shown** and, when any shown agent has no working credential
-and no device reporting it, **· 1 needs sign-in**; the Agents page is a two-column list and provider
-detail.
+Opening the main window hides the menu-bar panel and registers the window with `WindowActivation`,
+which switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last
+registered window returns to `.accessory` without activating. Browser Access and Sparkle windows
+are not registered. The sidebar has two groups: **Quota** (**Quota**, **Today**, **Usage**) and
+**Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
+The selected page persists in `main.page`; the first open lands on Quota. Provider selection for
+Quota is a toolbar menu (**All providers** and each shown provider with its brand icon), not
+sidebar rows. The selection is not persisted. Account, Notifications, General, and Support are
+grouped Forms in the detail column, and **Menu Bar** is one grouped form (preview, Style, Provider,
+Reset time, Show pace lines). The **Agents** row trails **3 shown** and, when any shown agent has
+no working credential and no device reporting it, **· 1 needs sign-in**; the Agents page is a
+two-column list and provider detail.
 
-The Dashboard window is the same kind of window: `windowBackgroundColor`, a 200pt sidebar, a
-960×640 minimum content size, frame autosave name `QuotaBarDashboardWindow`, Esc and ⌘W. Unlike
-Settings it may go full screen (`collectionBehavior` includes `.fullScreenPrimary`). Opening it
-hides the menu-bar panel and registers the window with `WindowActivation`.
+## Main window
 
-## Dashboard
+The main window is where this Mac's quota history is read at width, and where every preference
+lives. It does not collect, and every number the Quota, Today, and Usage pages show is already on
+this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
-Dashboard is where this Mac's quota history is read at width. It does not collect, and every number
-it shows is already on this Mac: local samples through `quota_history`, and the current reading
-Overview already has.
-
-The sidebar lists **All providers**, then each provider shown in Overview, in Overview order, each
-with its catalog brand mark. **All providers** shows every shown provider's card; selecting a
-provider shows that provider only. The selection is not persisted.
-
-The toolbar holds the history range — **Today**, **7D**, **30D**, persisted as `dashboard.range`,
-default 7D — a Usage source picker (**Account** / **This Mac**) that the Usage section honors, and a
-refresh action that uses the same tooltip as the panel footer: **Refresh all quota. Updated 3m
-ago**, or **Not checked** before any sync. The Usage source picker is hidden when Account data is
-unavailable or Usage sync is disabled; in those states Usage is unambiguously This Mac. Changing
-source preserves the selected period.
+The Quota-group toolbar holds a provider menu — **All providers**, then each provider shown in
+Overview, in Overview order, each with its catalog brand mark — the history range — **Today**,
+**7D**, **30D**, persisted as `dashboard.range`, default 7D — a Usage source picker (**Account** /
+**This Mac**) that the Usage page honors, and a refresh action that uses the same tooltip as the
+panel footer: **Refresh all quota. Updated 3m ago**, or **Not checked** before any sync. The Usage
+source picker is hidden when Account data is unavailable or Usage sync is disabled; in those states
+Usage is unambiguously This Mac. Changing source preserves the selected period. Refresh is on
+every page. **All providers** shows every shown provider's card; selecting a provider shows that
+provider only.
 
 ### Quota
 
@@ -229,26 +225,27 @@ reads **No history yet**.
 
 ### Today
 
-A table under the Quota cards. One row per provider × window that had samples today. Columns:
+A table on the Today page. One row per provider × window that had samples today. Columns:
 window (catalog provider name · window title), used percent at the start of the local day → now
 (`12% → 47%`, the same whole percents `QuotaHistoryCopy.peak` prints), cost today when today's
 Usage can attribute it to that provider, and the reset time — the same reset copy the Quota header
 uses, or the local clock time when that reset has already passed. The panel's
-`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Dashboard lays those facts in
-columns. A provider or window with no sample today is omitted. Sidebar selection narrows the rows
-the same way it narrows Quota cards.
+`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; the main window lays those facts in
+columns. A provider or window with no sample today is omitted. Toolbar provider selection narrows
+the rows the same way it narrows Quota cards.
 
 ### Usage
 
 Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
-it uses This Mac. The source menu is the Dashboard toolbar; omit it when Account data is
-unavailable or Usage sync is disabled. Changing source preserves the selected period.
+it uses This Mac. The source menu is the main-window toolbar on Quota, Today, and Usage; omit it
+when Account data is unavailable or Usage sync is disabled. Changing source preserves the selected
+period.
 
 A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
 background, with the selected item highlighted inside it; do not wrap it in another group surface.
 A custom range selects none of the six, so the tab control shows nothing selected and the row
-beneath it says what the period covers. At Dashboard width the control is leading-aligned and no
+beneath it says what the period covers. At main-window width the control is leading-aligned and no
 wider than 480pt.
 
 Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
@@ -257,7 +254,7 @@ Week, and Month, and the current one is the last, so both arrows are disabled on
 and **Next period** is disabled on the current unit. The period names, the range title, and the
 budget copy are in Shared product vocabulary.
 
-Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Dashboard and
+Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
 changing either selector starts no collection or network work and shows no loading state when a
 snapshot already exists. Every other period is one `usage_period` request, which folds the hours
 this Mac already stored rather than collecting again; while it is in flight the page says
@@ -486,16 +483,17 @@ panel on that provider; Combined and Automatic open the same panel without chang
 
 The header shows:
 
-- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open Dashboard…**,
+- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open QuotaBar**,
   **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the menu focuses Quit.
-  VoiceOver names the trigger **Settings menu**. **Open Dashboard…** opens the Dashboard window;
-  **Settings…** opens the Settings window; there is no gear.
+  VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window on the
+  last page (Quota the first time); **Settings…** opens the main window on Account or the last
+  Settings page; there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
-tokens` from the Usage source Dashboard would show and is a button that opens Dashboard
-(VoiceOver **Open Dashboard**); cost drops out when the day is unpriced, and the whole line is
+tokens` from the Usage source the main window would show and is a button that opens the main
+window on Usage (VoiceOver **Open Usage**); cost drops out when the day is unpriced, and the whole line is
 absent when there are no tokens. Today's number belongs beside quota everywhere, so it lives in
 the bar every page already has rather than in an Overview line of its own.
 
@@ -512,23 +510,24 @@ Back returns one level.
 ## Information architecture
 
 ```text
+Panel
 Overview
 └── Provider (read-only quota)
 
-Settings window
-├── Account (Devices on the same page)
-├── Agents
-│   ├── Shown in Overview / Hidden from Overview (list)
-│   └── Provider (inline: Overview, Accounts, Source, Sign-in, API Key)
-├── Notifications
-├── Menu Bar (one form)
-├── General
-└── Support (Diagnostics disclosure)
-
-Dashboard window       (sidebar)  All providers · <each shown provider>
-├── Quota      (30-day window curves, pace phrase, reset, peak)
-├── Today      (per-window used % today, cost when attributable, reset)
-└── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
+Main window
+├── Quota
+│   ├── Quota      (30-day window curves, pace phrase, reset, peak)
+│   ├── Today      (per-window used % today, cost when attributable, reset)
+│   └── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
+└── Settings
+    ├── Account (Devices on the same page)
+    ├── Agents
+    │   ├── Shown in Overview / Hidden from Overview (list)
+    │   └── Provider (inline: Overview, Accounts, Source, Sign-in, API Key)
+    ├── Notifications
+    ├── Menu Bar (one form)
+    ├── General
+    └── Support (Diagnostics disclosure)
 ```
 
 ### Overview
@@ -538,10 +537,10 @@ account observations; Rust has already merged global identities and selected one
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
-totals stay on Dashboard Usage and never create or extend an Overview provider
+totals stay on main-window Usage and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
 the only Overview destination, into a read-only quota page for that provider. Agent settings
-live in the Settings window (**Agents**). The heading is a destination at
+live in the main window (**Agents**). The heading is a destination at
 `minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
 name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
 extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
@@ -609,9 +608,9 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 ### Settings
 
-Settings is a titled window whose sidebar lists **Account**, **Agents**, **Notifications**,
-**Menu Bar**, **General**, and **Support**. The panel does not push Settings pages; **Settings…**
-is an overflow-menu item on Overview.
+The Settings pages are the Settings group of the main window: **Account**, **Agents**,
+**Notifications**, **Menu Bar**, **General**, and **Support**. The panel does not push Settings
+pages; **Settings…** is an overflow-menu item on Overview.
 
 The Account window page is one Form in every state:
 
@@ -630,8 +629,9 @@ The Account window page is one Form in every state:
 The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Usage lives on Dashboard, reached from the footer **Today · $x** button. The Usage root summary
-uses account-wide totals while signed in with Usage sync enabled, and local totals otherwise.
+Usage lives on the main window Usage page, reached from the footer **Today · $x** button. The Usage
+root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
+otherwise.
 **Menu Bar** is one grouped form in the Settings window: a live preview of the status-item label,
 **Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
@@ -891,7 +891,7 @@ first status item, and a subscription lands on that provider's read-only quota p
 `selection_id` this installation never published — an older salt, a provider since removed —
 lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
 subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
-several. `quotabar://dashboard` opens the Dashboard window; widgets do not publish it.
+several. `quotabar://dashboard` opens the main window on Quota; widgets do not publish it.
 
 The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
 extension has no app to borrow a tint from.
@@ -915,9 +915,9 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
-| `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the Settings window for Browser Sign-in consent |
-| Browser Access window | Floating window independent of the menu extra and above the Settings window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Dashboard window | Titled window, 960×640 minimum, 200pt sidebar of shown providers, Quota cards, Today table, and Usage at width |
+| `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the main window for Browser Sign-in consent |
+| Browser Access window | Floating window independent of the menu extra and above the main window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| Main window | Titled window, 960×640 minimum, 200pt sidebar of Quota and Settings groups; Quota cards, Today table, Usage, and Settings pages |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -974,19 +974,19 @@ the same routes.
 | --- | --- | ---: | --- | --- |
 | `overview` | Panel | 320×480 | light, dark | standard, accessibility |
 | `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
-| `settings-window` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-account` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-agents` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-agents-codex` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-agents-litellm-key` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-notifications` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-menu-bar` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-general` | Settings | 720×520 | light, dark | standard, accessibility |
-| `settings-support` | Settings | 720×520 | light, dark | standard, accessibility |
-| `dashboard` | Dashboard | 960×640 | light, dark | standard, accessibility |
-| `dashboard-codex` | Dashboard | 960×640 | light, dark | standard, accessibility |
-| `dashboard-usage` | Dashboard | 960×640 | light, dark | standard, accessibility |
-| `dashboard-usage-local` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `main-quota` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-quota-codex` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-today` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-usage` | Main window | 960×2200 | light, dark | standard, accessibility |
+| `main-usage-local` | Main window | 960×2200 | light, dark | standard, accessibility |
+| `main-account` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-agents` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-agents-codex` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-agents-litellm-key` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-notifications` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-menu-bar` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-general` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-support` | Main window | 960×640 | light, dark | standard, accessibility |
 
 Synthetic fixtures may contain display labels and opaque ids needed for typed models, but must never
 contain access tokens, refresh tokens, provider secrets, or raw production data.

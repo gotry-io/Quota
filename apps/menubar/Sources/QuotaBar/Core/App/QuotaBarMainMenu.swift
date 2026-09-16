@@ -106,13 +106,13 @@ enum QuotaBarMainMenu {
       keyEquivalent: "m"
     )
     menu.addItem(.separator())
-    let dashboard = NSMenuItem(
-      title: "Dashboard",
-      action: #selector(Actions.openDashboard(_:)),
+    let mainWindow = NSMenuItem(
+      title: "QuotaBar",
+      action: #selector(Actions.openMainWindow(_:)),
       keyEquivalent: "d"
     )
-    dashboard.target = Actions.shared
-    menu.addItem(dashboard)
+    mainWindow.target = Actions.shared
+    menu.addItem(mainWindow)
     let settings = NSMenuItem(
       title: "Settings",
       action: #selector(Actions.openSettings(_:)),
@@ -132,11 +132,11 @@ enum QuotaBarMainMenu {
     }
 
     @objc func openSettings(_ sender: Any?) {
-      SettingsWindowController.shared.show()
+      MainWindowController.shared.showSettings()
     }
 
-    @objc func openDashboard(_ sender: Any?) {
-      DashboardWindowController.shared.show()
+    @objc func openMainWindow(_ sender: Any?) {
+      MainWindowController.shared.show()
     }
   }
 }

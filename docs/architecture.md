@@ -21,18 +21,18 @@ links to it rather than restating it.
   ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
   one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
-  wire decoding only. Its UI has three surfaces
+  wire decoding only. Its UI has two surfaces
   ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)): the 320×480 menu-bar
-  panel (Overview and one provider's detail), the Settings window (every preference), and the
-  Dashboard window (this Mac's 30-day quota history, today's cost per window, and Usage at width).
-  Opening Settings or Dashboard switches the process to regular activation so a Dock icon and ⌘Tab
-  entry exist; closing the last of those windows returns to accessory. QuotaBar stays
-  `LSUIElement`. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
+  panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
+  history, today's cost per window, Usage at width, and every preference). Opening the main
+  window switches the process to regular activation so a Dock icon and ⌘Tab entry exist; closing
+  it returns to accessory. QuotaBar stays `LSUIElement`. The desktop widgets read the same
+  non-secret `WidgetSnapshot` as iOS
   ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
   Overview rows it has already resolved, through the projection both Apple clients share, and
   answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
   ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
-  `quotabar://dashboard` opens the Dashboard window.
+  `quotabar://dashboard` opens the main window on Quota.
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
   Node server over local SQLite in production; the same process runs as a Cloudflare Worker

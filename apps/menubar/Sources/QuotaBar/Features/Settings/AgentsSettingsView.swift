@@ -7,7 +7,7 @@ struct AgentsSettingsView: View {
   var initialProvider: ProviderID? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @AppStorage(SettingsPage.agentsProviderStorageKey) private var storedProviderRaw = ""
+  @AppStorage(MainPage.agentsProviderStorageKey) private var storedProviderRaw = ""
   @State private var enabledProviders = ProviderDisplayOrder.enabledProviders()
   @State private var selectedProvider: ProviderID?
   @State private var draggedProvider: ProviderID?

@@ -19,9 +19,9 @@ Requests and responses are bounded to 1 MiB and use typed `snake_case` models; r
 tell Swift when to reload state.
 
 **Windows.** QuotaBar is an `LSUIElement`: while only the menu extra is showing there is no Dock
-icon. Opening the Settings or Dashboard window switches the process to regular activation so a
-Dock icon and ⌘Tab entry exist; closing the last of those windows returns to accessory. The
-Browser Access grant window and Sparkle's updater are not part of that count.
+icon. Opening the main window switches the process to regular activation so a Dock icon and ⌘Tab
+entry exist; closing it returns to accessory. The Browser Access grant window and Sparkle's
+updater are not part of that count.
 
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
@@ -157,16 +157,17 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|provider-codex|settings-window|settings-account|settings-agents|settings-agents-codex|settings-agents-litellm-key|settings-notifications|settings-menu-bar|settings-general|settings-support|dashboard|dashboard-codex|dashboard-usage|dashboard-usage-local
+--route overview|provider-codex|main-quota|main-quota-codex|main-today|main-usage|main-usage-local|main-account|main-agents|main-agents-codex|main-agents-litellm-key|main-notifications|main-menu-bar|main-general|main-support
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```
 
 The required Visual QA matrix is every `--route` above, in `--appearance light` and `dark`, at
 `--text-size standard` and `accessibility`. `--text-size extra-large` is available for spot
-checks. `settings-window` is the Settings shell; the `settings-*` routes select its sidebar
-pages. `dashboard` is All providers; `dashboard-codex` selects Codex; `dashboard-usage` and
-`dashboard-usage-local` are Dashboard Usage on Account and This Mac. `scripts/test-swift.sh`
+checks. `overview` and `provider-codex` stay on the panel. The `main-*` routes host the main
+window: `main-quota` is All providers on Quota, `main-quota-codex` selects Codex, `main-today`
+is Today, `main-usage` and `main-usage-local` are Usage on Account and This Mac, and the
+remaining `main-*` routes are the Settings group. `scripts/test-swift.sh`
 renders that matrix to PNGs after the ordinary suite (`QUOTABAR_SCREENSHOTS` names the directory);
 under a bare `swift test` the matrix test is a no-op, because rendering every route inside the
 parallel suite starves the app's wait-loop tests.

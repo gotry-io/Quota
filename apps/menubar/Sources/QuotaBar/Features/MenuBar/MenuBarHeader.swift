@@ -160,11 +160,11 @@ struct MenuBarHeader: View {
     HStack(spacing: 0) {
       Spacer(minLength: 0)
       VStack(alignment: .leading, spacing: 0) {
-        overflowMenuButton(title: "Open Dashboard…") {
-          DashboardWindowController.shared.show()
+        overflowMenuButton(title: "Open QuotaBar") {
+          MainWindowController.shared.show()
         }
         overflowMenuButton(title: "Settings…") {
-          SettingsWindowController.shared.show()
+          MainWindowController.shared.showSettings()
         }
         overflowMenuButton(title: "Check for Updates…") {
           QuotaBarUpdater.checkForUpdates()

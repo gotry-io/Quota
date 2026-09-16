@@ -1,7 +1,7 @@
 import Foundation
 
-/// What a desktop widget can ask QuotaBar to show, plus the Dashboard window. Widget paths are
-/// the ones every Quota widget draws
+/// What a desktop widget can ask QuotaBar to show, plus the main window's Quota page. Widget
+/// paths are the ones every Quota widget draws
 /// ([ADR 0014](../../../../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)); only the
 /// scheme differs, because each app registers its own. Widgets do not publish `dashboard`.
 enum QuotaBarDeepLink: Equatable, Sendable {
@@ -13,7 +13,7 @@ enum QuotaBarDeepLink: Equatable, Sendable {
 
   /// `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`. `selection_id` is twelve
   /// lowercase hex digits after percent-decoding each path segment. `quotabar://dashboard` opens
-  /// the Dashboard window.
+  /// the main window on Quota.
   static func parse(_ url: URL) -> QuotaBarDeepLink? {
     guard let scheme = url.scheme, scheme.caseInsensitiveCompare(Self.scheme) == .orderedSame
     else { return nil }

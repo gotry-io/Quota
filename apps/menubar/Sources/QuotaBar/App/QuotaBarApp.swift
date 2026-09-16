@@ -24,8 +24,8 @@ struct QuotaBarApp: App {
 
     var body: some Scene {
       // SceneBuilder on macOS 14 cannot `if` between window styles, so one
-      // WindowGroup hosts the panel, Settings, and Dashboard roots. Titled
-      // windows keep the default chrome; panel routes hide the title bar.
+      // WindowGroup hosts the panel and the main window. Titled windows keep
+      // the default chrome; panel routes hide the title bar.
       WindowGroup(visualWindowTitle) {
         visualRoot
           .preferredColorScheme(visualTestConfiguration.colorScheme)
@@ -51,20 +51,16 @@ struct QuotaBarApp: App {
     }
 
     private var visualWindowTitle: String {
-      if visualTestConfiguration.hostsDashboardWindow {
-        "QuotaBar Dashboard"
-      } else if visualTestConfiguration.hostsSettingsWindow {
-        "QuotaBar Settings"
+      if visualTestConfiguration.hostsMainWindow {
+        "QuotaBar"
       } else {
         "QuotaBar Visual QA"
       }
     }
 
     private var visualWindowSize: CGSize {
-      if visualTestConfiguration.hostsDashboardWindow {
-        QuotaDesign.Layout.dashboardWindowMinSize
-      } else if visualTestConfiguration.hostsSettingsWindow {
-        QuotaDesign.Layout.settingsWindowMinSize
+      if visualTestConfiguration.hostsMainWindow {
+        QuotaDesign.Layout.mainWindowMinSize
       } else {
         CGSize(
           width: QuotaDesign.Layout.panelWidth,
@@ -75,23 +71,17 @@ struct QuotaBarApp: App {
 
     @ViewBuilder
     private var visualRoot: some View {
-      if visualTestConfiguration.hostsDashboardWindow {
-        DashboardView(
+      if visualTestConfiguration.hostsMainWindow {
+        MainWindowView(
           model: model,
+          pageOverride: visualTestConfiguration.mainPage,
+          diagnostics: visualTestConfiguration.makeDiagnosticsModel(),
+          expandsDiagnostics: visualTestConfiguration.route == .mainSupport,
+          initialAgentsProvider: visualTestConfiguration.agentsProvider,
           now: visualTestConfiguration.dataSource == .fixture
             ? visualTestConfiguration.referenceDate : nil,
-          initialSelection: visualTestConfiguration.dashboardSelection,
-          initialUsageSource: visualTestConfiguration.dashboardUsageSource
-        )
-      } else if visualTestConfiguration.hostsSettingsWindow {
-        SettingsWindowView(
-          model: model,
-          pageOverride: visualTestConfiguration.settingsPage,
-          diagnostics: visualTestConfiguration.makeDiagnosticsModel(),
-          expandsDiagnostics: visualTestConfiguration.route == .settingsSupport,
-          initialAgentsProvider: visualTestConfiguration.settingsAgentsProvider,
-          now: visualTestConfiguration.dataSource == .fixture
-            ? visualTestConfiguration.referenceDate : nil
+          initialSelection: visualTestConfiguration.quotaSelection,
+          initialUsageSource: visualTestConfiguration.usageSource
         )
       } else {
         MenuBarContentView(
@@ -128,8 +118,8 @@ struct QuotaBarApp: App {
 }
 
 #if VISUAL_TEST
-  /// Applies hidden-title-bar chrome for panel Visual QA. Settings and Dashboard
-  /// use the WindowGroup's ordinary titled style.
+  /// Applies hidden-title-bar chrome for panel Visual QA. The main window uses
+  /// the WindowGroup's ordinary titled style.
   private struct VisualTestWindowChrome: NSViewRepresentable {
     var hiddenTitleBar: Bool
 

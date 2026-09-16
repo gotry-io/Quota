@@ -4,7 +4,7 @@ import Testing
 
 @testable import QuotaBar
 
-struct AccountSettingsPageTests {
+struct AccountSettingsTests {
   @Test
   func signedInAccountPageHoldsIdentityDevicesWebsiteAndSignOut() {
     #expect(
@@ -22,12 +22,47 @@ struct AccountSettingsPageTests {
   }
 
   @Test
-  func settingsWindowSidebarListsTheSixPages() {
+  func mainWindowSidebarListsQuotaAndSettingsGroups() {
     #expect(
-      SettingsPage.allCases.map(\.title) == [
+      MainPage.allCases.map(\.title) == [
+        "Quota", "Today", "Usage",
         "Account", "Agents", "Notifications", "Menu Bar", "General", "Support",
       ]
     )
+    #expect(MainPage.quotaGroup.map(\.title) == ["Quota", "Today", "Usage"])
+    #expect(
+      MainPage.settingsGroup.map(\.title) == [
+        "Account", "Agents", "Notifications", "Menu Bar", "General", "Support",
+      ]
+    )
+  }
+
+  @Test
+  func firstOpenMainPageIsQuotaAndTheLastPagePersists() {
+    let key = MainPage.storageKey
+    let previous = UserDefaults.standard.object(forKey: key)
+    defer {
+      if let previous {
+        UserDefaults.standard.set(previous, forKey: key)
+      } else {
+        UserDefaults.standard.removeObject(forKey: key)
+      }
+    }
+
+    UserDefaults.standard.removeObject(forKey: key)
+    #expect(MainPage.resolved == .quota)
+    #expect(MainPage.stored == nil)
+
+    UserDefaults.standard.set(MainPage.today.rawValue, forKey: key)
+    #expect(MainPage.resolved == .today)
+    #expect(MainPage.stored == .today)
+
+    UserDefaults.standard.set(MainPage.support.rawValue, forKey: key)
+    #expect(MainPage.resolved == .support)
+    #expect(MainPage.settingsLandingPage(MainPage.stored) == .support)
+
+    UserDefaults.standard.set(MainPage.quota.rawValue, forKey: key)
+    #expect(MainPage.settingsLandingPage(MainPage.stored) == .account)
   }
 
   @Test
@@ -58,9 +93,9 @@ struct AccountSettingsPageTests {
   }
 
   @Test
-  func menuBarSettingsLiveOnTheSettingsWindowPageNotThePanelStack() {
-    #expect(SettingsPage.menuBar.title == "Menu Bar")
-    #expect(SettingsPage.allCases.contains(.menuBar))
+  func menuBarSettingsLiveOnTheMainWindowSettingsGroupNotThePanelStack() {
+    #expect(MainPage.menuBar.title == "Menu Bar")
+    #expect(MainPage.settingsGroup.contains(.menuBar))
   }
 
   @Test

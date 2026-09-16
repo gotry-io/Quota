@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// App-owned confirmation surface. Overlay is for the menu panel; sheet is for the Settings window.
+/// App-owned confirmation surface. Overlay is for the menu panel; sheet is for the main window.
 struct QuotaConfirmationPopup: View {
   enum Style {
     /// Scrimmed overlay sized for the menu panel.

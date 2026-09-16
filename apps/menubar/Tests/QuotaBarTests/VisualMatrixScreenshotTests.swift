@@ -13,8 +13,8 @@
     @Test
     func closeoutVisualMatrixRendersEveryRouteInLightAndDarkAtStandardAndAccessibility() throws {
       let keys = [
-        SettingsPage.storageKey,
-        SettingsPage.agentsProviderStorageKey,
+        MainPage.storageKey,
+        MainPage.agentsProviderStorageKey,
         DashboardRange.storageKey,
         ResetCopyStylePreference.storageKey,
       ]
@@ -42,19 +42,19 @@
       let routes = [
         "overview",
         "provider-codex",
-        "settings-window",
-        "settings-account",
-        "settings-agents",
-        "settings-agents-codex",
-        "settings-agents-litellm-key",
-        "settings-notifications",
-        "settings-menu-bar",
-        "settings-general",
-        "settings-support",
-        "dashboard",
-        "dashboard-codex",
-        "dashboard-usage",
-        "dashboard-usage-local",
+        "main-quota",
+        "main-quota-codex",
+        "main-today",
+        "main-usage",
+        "main-usage-local",
+        "main-account",
+        "main-agents",
+        "main-agents-codex",
+        "main-agents-litellm-key",
+        "main-notifications",
+        "main-menu-bar",
+        "main-general",
+        "main-support",
       ]
       let appearances: [(ColorScheme, String)] = [(.light, "light"), (.dark, "dark")]
       let textSizes: [(DynamicTypeSize, String)] = [
@@ -70,7 +70,7 @@
         )
         configuration.prepareEnvironment()
         let model = configuration.makeModel()
-        if configuration.hostsDashboardWindow {
+        if configuration.mainPage?.isQuotaGroup == true {
           model.selectUsagePeriod(.last7Days)
         }
         let size = captureSize(for: configuration)
@@ -95,14 +95,11 @@
     }
 
     private func captureSize(for configuration: VisualTestConfiguration) -> CGSize {
-      if configuration.hostsDashboardWindow {
-        if configuration.route == .dashboardUsage || configuration.route == .dashboardUsageLocal {
-          return CGSize(width: QuotaDesign.Layout.dashboardWindowMinSize.width, height: 2_200)
+      if configuration.hostsMainWindow {
+        if configuration.route == .mainUsage || configuration.route == .mainUsageLocal {
+          return CGSize(width: QuotaDesign.Layout.mainWindowMinSize.width, height: 2_200)
         }
-        return QuotaDesign.Layout.dashboardWindowMinSize
-      }
-      if configuration.hostsSettingsWindow {
-        return QuotaDesign.Layout.settingsWindowMinSize
+        return QuotaDesign.Layout.mainWindowMinSize
       }
       return CGSize(
         width: QuotaDesign.Layout.panelWidth,
@@ -137,21 +134,16 @@
       configuration: VisualTestConfiguration,
       model: MenuBarViewModel
     ) -> some View {
-      if configuration.hostsDashboardWindow {
-        DashboardView(
+      if configuration.hostsMainWindow {
+        MainWindowView(
           model: model,
-          now: configuration.referenceDate,
-          initialSelection: configuration.dashboardSelection,
-          initialUsageSource: configuration.dashboardUsageSource
-        )
-      } else if configuration.hostsSettingsWindow {
-        SettingsWindowView(
-          model: model,
-          pageOverride: configuration.settingsPage ?? .account,
+          pageOverride: configuration.mainPage,
           diagnostics: configuration.makeDiagnosticsModel(),
-          expandsDiagnostics: configuration.route == .settingsSupport,
-          initialAgentsProvider: configuration.settingsAgentsProvider,
-          now: configuration.referenceDate
+          expandsDiagnostics: configuration.route == .mainSupport,
+          initialAgentsProvider: configuration.agentsProvider,
+          now: configuration.referenceDate,
+          initialSelection: configuration.quotaSelection,
+          initialUsageSource: configuration.usageSource
         )
       } else {
         MenuBarContentView(

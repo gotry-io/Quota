@@ -8,7 +8,7 @@ import AppKit
 /// and does not activate — the user may already be in another app.
 ///
 /// Browser Access and Sparkle windows are not registered: they are floating
-/// helpers, not Settings or Dashboard.
+/// helpers, not the main window.
 @MainActor
 final class WindowActivation {
   static let shared = WindowActivation()
