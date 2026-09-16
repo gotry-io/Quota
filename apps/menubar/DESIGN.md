@@ -1,18 +1,21 @@
-# QuotaBar Menu Panel Design
+# QuotaBar Design
 
-This file is the canonical visual and interaction specification for the native macOS QuotaBar menu
-panel. Website marketing UI belongs in `apps/web/DESIGN.md`.
+This file is the canonical visual and interaction specification for native macOS QuotaBar: the
+menu-bar panel, the Settings window, and the Dashboard window. Website marketing UI belongs in
+`apps/web/DESIGN.md`.
 
 ## Product character
 
 QuotaBar should feel like a precise macOS instrument: compact, calm, legible, and immediately useful.
 It uses system materials and controls, a restrained blue accent, and dense information hierarchy.
-The panel is an app-owned SwiftUI surface, not a website compressed into a popover.
+The panel is an app-owned SwiftUI surface, not a website compressed into a popover. Settings and
+Dashboard are titled windows; they are not the panel stretched.
 
 Core rules:
 
 1. Remaining quota is the primary value. Usage and account state support it without competing.
-2. One header, one footer, and one typed navigation stack are shared by every page.
+2. The panel shares one header, one footer, and one typed navigation stack across Overview and
+   provider detail. Settings and Dashboard are windows, not pages of that stack.
 3. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage, log
    out.
 4. QuotaBar displays typed local-service results. Provider configuration exposes only intentional
@@ -340,7 +343,8 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ## Material and color
 
-Production inherits the menu extra's system material. Add only adaptive semantic layers:
+The panel inherits the menu extra's system material. Settings and Dashboard use
+`windowBackgroundColor`, not that material. Add only adaptive semantic layers:
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
@@ -838,10 +842,11 @@ exactly as **Open Settings…** does. After **Open Settings…** the window adds
 grant is already on, which this process cannot know. The window closes on its own when nothing is
 outstanding. Dismissing it leaves Browser Sign-in on.
 
-On the Agent page the outstanding grants are one indented destination row under the switch — **Browser
-Access** with a one-line summary such as **Safari and Chrome need permission** or **Relaunch
-QuotaBar to finish granting Full Disk Access** — that opens the window; there are no per-browser
-rows or action labels in the panel. The row disappears when every installed browser is readable.
+On the Agents page the outstanding grants are one indented destination row under the switch —
+**Browser Access** with a one-line summary such as **Safari and Chrome need permission** or
+**Relaunch QuotaBar to finish granting Full Disk Access** — that opens the window; there are no
+per-browser rows or action labels on the Agents page. The row disappears when every installed
+browser is readable.
 Scheduled refreshes never prompt: they skip Safari without Full Disk Access and any Chrome-family
 browser whose Keychain ACL is not already allowed, and record each as a refusal.
 
@@ -959,13 +964,29 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
-Required routes are Overview, provider detail (`provider-codex`), the Settings window
-(`settings-window`), Account, Agents, provider setup variants (CLI, API key, and browser session),
-Notifications, Menu Bar (`settings-menu-bar`), General, Support, Diagnostics, Dashboard
-(`dashboard`), Dashboard with Codex selected (`dashboard-codex`), Dashboard Usage
-(`dashboard-usage`), and Dashboard Usage on This Mac (`dashboard-usage-local`). Inspect
-light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
-labels, and Reduce Motion transitions.
+
+Every `--route` below is inspected in `--appearance light` and `dark`, and at `--text-size
+standard` and `accessibility` (60 cells). `--text-size extra-large` is available on the visual
+app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce Motion are inspected on
+the same routes.
+
+| `--route` | Surface | Size | Appearances | Text sizes |
+| --- | --- | ---: | --- | --- |
+| `overview` | Panel | 320×480 | light, dark | standard, accessibility |
+| `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
+| `settings-window` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-account` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents-codex` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-agents-litellm-key` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-notifications` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-menu-bar` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-general` | Settings | 720×520 | light, dark | standard, accessibility |
+| `settings-support` | Settings | 720×520 | light, dark | standard, accessibility |
+| `dashboard` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-codex` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-usage` | Dashboard | 960×640 | light, dark | standard, accessibility |
+| `dashboard-usage-local` | Dashboard | 960×640 | light, dark | standard, accessibility |
 
 Synthetic fixtures may contain display labels and opaque ids needed for typed models, but must never
 contain access tokens, refresh tokens, provider secrets, or raw production data.

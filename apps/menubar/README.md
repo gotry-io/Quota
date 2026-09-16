@@ -18,6 +18,11 @@ shell, reads provider/service files, receives account/provider tokens, or contac
 Requests and responses are bounded to 1 MiB and use typed `snake_case` models; revisioned events
 tell Swift when to reload state.
 
+**Windows.** QuotaBar is an `LSUIElement`: while only the menu extra is showing there is no Dock
+icon. Opening the Settings or Dashboard window switches the process to regular activation so a
+Dock icon and ⌘Tab entry exist; closing the last of those windows returns to accessory. The
+Browser Access grant window and Sparkle's updater are not part of that count.
+
 The Rust service returns persisted component state immediately, then performs startup collection in
 the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
 its owner-only identity store and disposable cache, the hours it still owes an Account, and the
@@ -156,6 +161,12 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```
+
+The required Visual QA matrix is every `--route` above, in `--appearance light` and `dark`, at
+`--text-size standard` and `accessibility`. `--text-size extra-large` is available for spot
+checks. `settings-window` is the Settings shell; the `settings-*` routes select its sidebar
+pages. `dashboard` is All providers; `dashboard-codex` selects Codex; `dashboard-usage` and
+`dashboard-usage-local` are Dashboard Usage on Account and This Mac.
 
 Fixture mode starts no service and contains synthetic account, device, quota, cost, and coverage
 data. Live mode uses the packaged service through the production IPC boundary. Generated `.build/`,

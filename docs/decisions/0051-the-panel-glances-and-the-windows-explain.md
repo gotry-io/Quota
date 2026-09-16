@@ -1,6 +1,6 @@
 # ADR 0051: The panel glances, and the windows explain
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-16
 - Follows [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
   [ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),
@@ -10,9 +10,9 @@
 
 ## Context
 
-QuotaBar's menu-bar panel is 320×480 and currently stacks Overview, Settings, Usage, and every
-preference page inside that one extra. The panel is the right size to glance at remaining quota. It
-is the wrong size to manage an account, inspect 30 days of burn, or edit four Menu Bar choices as
+QuotaBar's menu-bar panel is 320×480 and stacked Overview, Settings, Usage, and every preference
+page inside that one extra. The panel is the right size to glance at remaining quota. It is the
+wrong size to manage an account, inspect 30 days of burn, or edit four Menu Bar choices as
 separate pages.
 
 [ADR 0042](0042-quota-history-is-local-samples.md) already keeps 30 days of this Mac's samples in
@@ -63,12 +63,41 @@ current-window slice Overview already draws. The samples still never leave this 
 
 ## Consequences
 
-- The panel stops being a Settings host. Usage, Agents, Notifications, Menu Bar, and Support move
-  out of the 320×480 extra and into the windows. The widget deep links (`quotabar://` Overview and
-  subscription) still land in the panel; a `quotabar://dashboard` link opens the Dashboard window.
-- Only the Settings and Dashboard windows drive the activation policy. The browser-access grant
-  window and Sparkle's update window keep the behaviour they have today.
-- WP 7.6 implements `quota_history { since }`. Adding that operation is a private IPC change and
-  ships atomically with QuotaBar; `quota` the public command and Relay are untouched.
-- A later fold that actually fits in 200 KB would be a reason to revisit Plan A. Until a
-  measurement says so, the 30-day journal is a read, not a push.
+QuotaBar has three surfaces. The panel is a glance; Settings and Dashboard are titled windows.
+
+**Panel — 320×480.** Overview and one provider's read-only quota detail. Widget deep links
+`quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` land here. The overflow menu
+opens the windows; there is no Settings stack inside the extra.
+
+**Settings window — 720×520 minimum.** Titled `NSWindow`, `windowBackgroundColor`, 200pt sidebar:
+Account, Agents, Notifications, Menu Bar (one form), General, Support. Frame autosave
+`QuotaBarSettingsWindow`. Esc and ⌘W close. Not full screen.
+
+**Dashboard window — 960×640 minimum.** Titled `NSWindow`, `windowBackgroundColor`, 200pt sidebar
+of shown providers. Quota charts, Today table, and Usage at width. Frame autosave
+`QuotaBarDashboardWindow`. Esc and ⌘W close. May go full screen. Opened by
+`quotabar://dashboard`, Overview **Open Dashboard…**, and the footer today-cost button.
+
+**Visual QA routes.**
+
+```text
+Panel       overview | provider-codex
+Settings    settings-window | settings-account | settings-agents
+            settings-agents-codex | settings-agents-litellm-key
+            settings-notifications | settings-menu-bar | settings-general
+            settings-support
+Dashboard   dashboard | dashboard-codex | dashboard-usage | dashboard-usage-local
+```
+
+**History is plan B.** Dashboard reads this Mac's 30-day samples through the private
+`quota_history { since }` IPC operation. The state push keeps the current-window slice Overview
+already draws. Samples never leave this Mac; `quota` and Relay are untouched. A later fold that
+actually fits in 200 KB would be a reason to revisit Plan A. Until a measurement says so, the
+30-day journal is a read, not a push.
+
+**Activation.** QuotaBar stays `LSUIElement`. Opening Settings or Dashboard registers the window
+with `WindowActivation`, which switches the process to `.regular` so a Dock icon and ⌘Tab entry
+exist; closing the last registered window returns to `.accessory`. Browser Access and Sparkle
+windows are not registered.
+
+**Releases.** `menubar-v0.1.0` then `menubar-v0.2.0`. The three-surface layout is 0.2.0.

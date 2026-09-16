@@ -43,7 +43,7 @@ enum QuotaDesign {
     static let providerRowVerticalPadding: CGFloat = 8
     /// Vertical padding inside multi-line settings content and command rows.
     static let settingsRowVerticalPadding: CGFloat = 8
-    /// Single-line Settings rows (home General / Sources / About).
+    /// Single-line Settings rows.
     static let settingsRowHeight: CGFloat = 38
     /// Stacked list rows (Agents, Devices) — title-only still uses this height and centers.
     static let settingsListRowHeight: CGFloat = 46

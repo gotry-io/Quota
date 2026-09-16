@@ -21,7 +21,13 @@ links to it rather than restating it.
   ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
   one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
-  wire decoding only. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
+  wire decoding only. Its UI has three surfaces
+  ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)): the 320×480 menu-bar
+  panel (Overview and one provider's detail), the Settings window (every preference), and the
+  Dashboard window (this Mac's 30-day quota history, today's cost per window, and Usage at width).
+  Opening Settings or Dashboard switches the process to regular activation so a Dock icon and ⌘Tab
+  entry exist; closing the last of those windows returns to accessory. QuotaBar stays
+  `LSUIElement`. The desktop widgets read the same non-secret `WidgetSnapshot` as iOS
   ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
   Overview rows it has already resolved, through the projection both Apple clients share, and
   answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
@@ -253,12 +259,12 @@ file-index hash, retained 90 days, and never uploaded. The Rust report groups fa
 agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
 model's name by the model catalog's family rules — the agent and the billing channel never choose
 that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).
-QuotaBar renders agent groups only on the Usage detail page; Overview stays quota-only.
+QuotaBar renders agent groups only on Dashboard Usage; Overview stays quota-only.
 
 Local periods fold from the hourly facts with SQL at refresh time, so no read loads the record
 history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are bounded by the
-instants this device's own calendar puts around them — the rule the managed read follows, so both
-sides of the panel agree. Signed-in Account
+instants this device's own calendar puts around them — the rule the managed read follows, so This
+Mac and Account agree on the same day bounds. Signed-in Account
 periods arrive in the one Account read and commit only as a complete set; QuotaBar reads them from
 `get_state`, so changing the period performs no collection or network request.
 

@@ -27,7 +27,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     }
   }
 
-  /// SF Symbols matching the current Settings home rows for these sections.
+  /// SF Symbols for the Settings window sidebar.
   var systemImage: String {
     switch self {
     case .account: "person.crop.circle"
