@@ -11,6 +11,8 @@ enum QuotaDesign {
     static let panelMaxHeight: CGFloat = 480
     /// Sidebar of the Settings window.
     static let windowSidebarWidth: CGFloat = 200
+    /// Provider list inside the Settings window Agents page.
+    static let agentsListWidth: CGFloat = 220
     /// Minimum Settings window content size.
     static let settingsWindowMinSize = CGSize(width: 720, height: 520)
 

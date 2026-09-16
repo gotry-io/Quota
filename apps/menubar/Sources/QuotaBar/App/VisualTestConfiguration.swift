@@ -62,12 +62,7 @@
     case overview
     case settings
     case account
-    case agents
     case providerCodex = "provider-codex"
-    case providerOpenRouter = "provider-openrouter"
-    case providerCursor = "provider-cursor"
-    case providerCodexSource = "provider-codex-source"
-    case providerLiteLLMKey = "provider-litellm-key"
     case devices
     case usage
     case notifications
@@ -77,28 +72,16 @@
     case support
     case diagnostics
     case settingsWindow = "settings-window"
+    case settingsAgents = "settings-agents"
+    case settingsAgentsCodex = "settings-agents-codex"
+    case settingsAgentsLiteLLMKey = "settings-agents-litellm-key"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .settings: [.settings]
       case .account: [.settings, .account]
-      case .agents: [.settings, .agents]
-      case .providerCodex: [.settings, .agents, .provider(.codex)]
-      case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
-      case .providerCursor: [.settings, .agents, .provider(.cursor)]
-      case .providerCodexSource: [
-        .settings, .agents, .provider(.codex),
-        .providerSource(
-          .codex,
-          identityKey: "codex|visual_personal|global|",
-          sourceID: "local",
-          displayName: "This Mac"
-        ),
-      ]
-      case .providerLiteLLMKey: [
-        .settings, .agents, .provider(.litellm), .providerAPIKey(.litellm),
-      ]
+      case .providerCodex: [.provider(.codex)]
       case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
       case .notifications: [.settings, .notifications]
@@ -107,7 +90,24 @@
       case .resetCopy: [.settings, .resetCopy]
       case .support: [.settings, .support]
       case .diagnostics: [.settings, .support, .diagnostics]
-      case .settingsWindow: []
+      case .settingsWindow, .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey:
+        []
+      }
+    }
+
+    var settingsPage: SettingsPage? {
+      switch self {
+      case .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey: .agents
+      case .settingsWindow: .account
+      default: nil
+      }
+    }
+
+    var settingsAgentsProvider: ProviderID? {
+      switch self {
+      case .settingsAgentsCodex: .codex
+      case .settingsAgentsLiteLLMKey: .litellm
+      default: nil
       }
     }
   }
@@ -192,7 +192,16 @@
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
-    var hostsSettingsWindow: Bool { route == .settingsWindow }
+    var hostsSettingsWindow: Bool {
+      switch route {
+      case .settingsWindow, .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey:
+        true
+      default: false
+      }
+    }
+
+    var settingsPage: SettingsPage? { route.settingsPage }
+    var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -228,6 +237,12 @@
       ProviderDisplayOrder.reset()
       for provider in ProviderID.allCases {
         ProviderVisibility.setVisible(provider, provider.defaultVisible)
+      }
+      if let settingsPage {
+        UserDefaults.standard.set(settingsPage.rawValue, forKey: SettingsPage.storageKey)
+      }
+      if let provider = settingsAgentsProvider {
+        UserDefaults.standard.set(provider.rawValue, forKey: SettingsPage.agentsProviderStorageKey)
       }
     }
 

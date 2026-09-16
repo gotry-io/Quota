@@ -6,6 +6,31 @@ import Testing
 @MainActor
 struct AgentsSettingsViewTests {
   @Test
+  func sidebarBadgeNamesHowManyAreShownAndWhoNeedsSignIn() throws {
+    let shownKey = SettingsPage.storageKey
+    let previousPage = UserDefaults.standard.object(forKey: shownKey)
+    defer {
+      if let previousPage {
+        UserDefaults.standard.set(previousPage, forKey: shownKey)
+      } else {
+        UserDefaults.standard.removeObject(forKey: shownKey)
+      }
+    }
+
+    let content = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "content"])
+    )
+    content.prepareEnvironment()
+    #expect(content.makeModel().agentsSidebarBadge() == "3 shown")
+
+    let signedOut = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "empty"])
+    )
+    signedOut.prepareEnvironment()
+    #expect(signedOut.makeModel().agentsSidebarBadge() == "3 shown · 3 need sign-in")
+  }
+
+  @Test
   func reorderTargetUsesHysteresisAroundRowBoundary() {
     let rowHeight = QuotaDesign.Layout.settingsRowHeight
 

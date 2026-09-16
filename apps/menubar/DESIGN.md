@@ -156,6 +156,7 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
 | `windowSidebarWidth` | 200pt | Settings window sidebar |
+| `agentsListWidth` | 220pt | Provider list inside the Settings window Agents page |
 | `settingsWindowMinSize` | 720×520 | Settings window minimum content size |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
@@ -173,7 +174,9 @@ switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closin
 window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
 registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
 and **Support**, matching the current Settings home rows; the selected page persists in
-`settings.page`. Detail pages are filled later.
+`settings.page`. The **Agents** row trails **3 shown** and, when any shown agent has no working
+credential and no device reporting it, **· 1 needs sign-in**. The Agents page is a two-column list
+and provider detail; other pages are filled later.
 
 ## Material and color
 
@@ -351,19 +354,17 @@ Back returns one level.
 
 ```text
 Overview
-└── Settings
-    ├── Account
-    │   └── Devices
-    ├── Usage
-    ├── Notifications
-    ├── Menu Bar Style
-    ├── Menu Bar Provider
-    ├── Reset time
-    ├── Support
-    │   └── Diagnostics
-    └── Agents
-        └── Provider
-            └── Source
+└── Provider (read-only quota)
+
+Settings window
+├── Account
+├── Agents
+│   ├── Shown in Overview / Hidden from Overview (list)
+│   └── Provider (inline: Overview, Accounts, Source, Sign-in, API Key)
+├── Notifications
+├── Menu Bar
+├── General
+└── Support
 ```
 
 ### Overview
@@ -375,14 +376,16 @@ observation. Swift never repeats that policy. Never add or average percentages a
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
 totals stay on the Usage detail page in Settings and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
-the only Overview destination into that agent's Settings page (`Settings → Agents → Provider`).
-It is a destination at `minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
+the only Overview destination, into a read-only quota page for that provider. Agent settings
+live in the Settings window (**Agents**). The heading is a destination at
+`minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
 name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
 extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
 has margin from the panel edge. Overview is not a Settings group and does not use the group's
 4pt nested inset. Quota windows, account labels, and status detail under it are static
 reading content and do not take that surface. The heading remains keyboard and VoiceOver
-reachable. Back follows the stack.
+reachable. Back follows the stack. A widget deep link `quotabar:/subscriptions/<selection_id>`
+lands on that read-only provider page.
 
 Each quota observation shows:
 
@@ -680,29 +683,30 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ### Agents
 
-Agents opens with a **Usage** group that holds one native mini switch, **Group Usage by project**,
-default on. It only changes This Mac: the Usage page Projects section and the local hour dimension
-behind it. Upload rows never carry a project key.
-
-Agents then has **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag
-reordering and VoiceOver Move Up/Move Down actions. Every row carries one status line under the
-name. When this Mac has a last-good official status-page reading, that line is
-**All systems operational**, or **Degraded ·** the status-page description for `minor` and above.
-Otherwise it is `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than
-one), **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
+Agents is a two-column page in the Settings window. The left column lists every catalog provider in
+**Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag reordering
+and VoiceOver Move Up/Move Down actions. Every row carries one status line under the name. When
+this Mac has a last-good official status-page reading, that line is **All systems operational**, or
+**Degraded ·** the status-page description for `minor` and above. Otherwise it is
+`SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than one),
+**Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
 configured**, or **Not signed in** — so the list says which agent needs attention before it is
-opened. The Settings home **Agents** row trails **3 shown** and, when any shown agent has no
-working credential and no device reporting it, **· 1 needs sign-in**.
+selected. Selecting a row shows that provider in the right pane. The Settings sidebar **Agents** row
+trails **3 shown** and, when any shown agent has no working credential and no device reporting it,
+**· 1 needs sign-in**.
 
-Provider detail is read top to bottom as three questions — is it shown, what is it reporting,
-how does this Mac sign in — and contains exactly these sections, in this order:
+**Group Usage by project** lives on General, not here.
+
+The right pane is that provider's settings, read top to bottom as three questions — is it shown,
+what is it reporting, how does this Mac sign in — and contains exactly these sections, in this
+order:
 
 - **Overview**: one **Show in Overview** switch, no subtitle. Visibility is provider-wide and
   presentation-only.
 - **Accounts**: one group for every subscription. Each account is a bold row inside the group —
   the masked account label, or **Account 1**, **Account 2** when there is no label, so two
   accounts cannot share a blank name — with the compact source menu as that row's trailing
-  control; its sources follow as indented destination rows, and a hairline separates one
+  control; its sources follow as indented rows, and a hairline separates one
   account from the next. The menu uses `fieldFill` on the 24pt compact surface
   (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
   **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
@@ -712,23 +716,23 @@ how does this Mac sign in — and contains exactly these sections, in this order
   subtitle and no leading icons; the accent checkmark after the title is the only selected mark.
   Escape or a click outside the trigger and list dismisses it. VoiceOver names the control
   **Show from** and states the mode (Automatic or Pinned), the source Overview is actually
-  showing, and the freshness. Source rows are destinations only — device icon, name, the shared
-  freshness line trailing, `chevron.right` — and never select. The source Overview is actually
-  showing uses a filled device icon in accent; other devices stay outline in body. VoiceOver adds
-  **Showing on Overview**. A pin whose source has gone is dropped and Automatic resumes. With no
-  subscription yet the group holds one line: **No readings yet. Sign in below to start
-  reporting.**
-- **Source**: a read-only page titled with the source display name. Under **Quota** it states
-  freshness, then that source's remaining-quota windows. It does not repeat the source name,
-  source type, account label, or plan. If the snapshot is not yet available it keeps the
-  freshness line and does not invent empty quota. If the source has gone: **This source is no
-  longer reporting.** There is no **Use this source** action; selection stays on the provider
-  page menu.
+  showing, and the freshness. Source rows select which source's **Quota** section is shown —
+  device icon, name, the shared freshness line trailing — and never pin. The source Overview is
+  actually showing uses a filled device icon in accent; other devices stay outline in body.
+  VoiceOver adds **Showing on Overview**. A pin whose source has gone is dropped and Automatic
+  resumes. With no subscription yet the group holds one line: **No readings yet. Sign in below to
+  start reporting.**
+- **Source**: an inline **Quota** section, not a pushed page. It states freshness, then that
+  source's remaining-quota windows. It does not repeat the source name, source type, account
+  label, or plan. If the snapshot is not yet available it keeps the freshness line and does not
+  invent empty quota. If the source has gone: **This source is no longer reporting.** There is no
+  **Use this source** action; selection stays on the provider page menu. Source rows in
+  **Accounts** select which source's quota is shown here.
 - **Sign-in**: one group listing every credential rung this Mac has for the provider, in the
   order collection tries them, each with the verdict the last collection reached. Rung rows
   are `SignInRungPresentation`'s: **Codex CLI** / **Claude Code CLI** / **Grok CLI** /
-  **Kimi Code CLI** (`terminal`), **API Key** (`key`, a destination row to the API Key page),
-  **Cursor App** (`macwindow`), and **Browser Sign-in** (`safari`, a switch). The trailing
+  **Kimi Code CLI** (`terminal`), **API Key** (`key`, status only — the form is the **API Key**
+  section below), **Cursor App** (`macwindow`), and **Browser Sign-in** (`safari`, a switch). The trailing
   status word is **Signed in**, **Configured**, or **On** in accent; **Not signed in**, **Not
   configured**, or **Rejected** in warning; **Unavailable** in body with the collection message
   as the subtitle. A CLI rung that is not signed in shows the catalog-provided copyable command
@@ -736,9 +740,9 @@ how does this Mac sign in — and contains exactly these sections, in this order
   CLI-file rungs answer the report by different source ids (`kimi_code_usages_api`,
   `kimi_code_cli_credential`), so each row carries its own verdict. Cursor is catalog
   `exclusive`: it has no command row, and its first rung is the Cursor.app session.
-- **API Key**: a page for the providers with a key rung — native secure entry, optional base URL
-  when catalog-enabled, the masked saved state, Save, and Remove. The Agent page row shows the
-  masked key and status only.
+- **API Key**: an inline section for the providers with a key rung — native secure entry, optional
+  base URL when catalog-enabled, the masked saved state, Save, and Remove. Not a pushed page. The
+  Sign-in row shows the masked key and status only.
 - **Browser Sign-in** is a rung row, not its own section: the switch's subtitle says what it
   is a fallback for while off (**Fallback when the CLI is signed out**), then **Looking for
   sign-ins…**, the accounts found, or where it looked and did not find one — **No sign-in in
@@ -750,10 +754,12 @@ how does this Mac sign in — and contains exactly these sections, in this order
   `exclamationmark.circle`, and it replaces the ordinary error line rather than stacking with
   it.
 
-Turning Browser Sign-in on uses an app-owned confirmation popup at the panel root, never a system
-alert or sheet. There is no browser picker, account picker, Sign In, or Disconnect. The popup
-owns focus, Escape, keyboard, and VoiceOver while the underlying page is disabled and
-accessibility-hidden.
+Turning Browser Sign-in on uses an app-owned confirmation sheet on the Settings window, never a
+system alert and never an overlay sized for the panel. There is no browser picker, account picker,
+Sign In, or Disconnect. The sheet owns focus, Escape, keyboard, and VoiceOver while the Settings
+window underneath is blocked. The sheet sits on the Settings window; the Browser Access grant
+window keeps level `.floating` so it sits above Settings, and `keychainPromptBrowser` prompts still
+fire.
 
 After consent, QuotaBar preflights the browsers installed on this Mac and only then reads jars
 it is already allowed to open. Whatever is still missing opens the **Browser Access** window —
@@ -822,7 +828,7 @@ extra color.
 
 Links follow the iPhone's rule. QuotaBar registers the `quotabar:` scheme and answers
 `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`; either opens the panel from the
-first status item, and a subscription scrolls Overview to that provider. A link whose
+first status item, and a subscription lands on that provider's read-only quota page. A link whose
 `selection_id` this installation never published — an older salt, a provider since removed —
 lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
 subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
@@ -850,8 +856,8 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
-| `QuotaConfirmationPopup` | Scrimmed app-owned confirmation with cancel and destructive actions |
-| Browser Access window | Floating window independent of the menu extra; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the Settings window for Browser Sign-in consent |
+| Browser Access window | Floating window independent of the menu extra and above the Settings window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |

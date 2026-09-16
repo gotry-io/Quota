@@ -43,7 +43,8 @@ struct Wp71ScreenshotTests {
   }
 
   private func render(scheme: ColorScheme, size: CGSize) throws -> NSImage {
-    let root = SettingsWindowView()
+    let configuration = try #require(VisualTestConfiguration(arguments: ["QuotaBar"]))
+    let root = SettingsWindowView(model: configuration.makeModel())
       .environment(\.colorScheme, scheme)
       .frame(width: size.width, height: size.height)
     let host = NSHostingView(rootView: root)

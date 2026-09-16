@@ -33,6 +33,33 @@
   }
 
   @Test
+  func settingsAgentsRoutesHostTheTitledSettingsShell() throws {
+    let routes: [(String, ProviderID?)] = [
+      ("settings-agents", nil),
+      ("settings-agents-codex", .codex),
+      ("settings-agents-litellm-key", .litellm),
+    ]
+    for (raw, provider) in routes {
+      let configuration = try #require(
+        VisualTestConfiguration(arguments: ["QuotaBar", "--route", raw])
+      )
+      #expect(configuration.hostsSettingsWindow)
+      #expect(configuration.settingsPage == .agents)
+      #expect(configuration.settingsAgentsProvider == provider)
+      #expect(configuration.initialPath.isEmpty)
+    }
+  }
+
+  @Test
+  func providerCodexRouteIsTheOverviewDrillDown() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "provider-codex"])
+    )
+    #expect(configuration.initialPath == [.provider(.codex)])
+    #expect(!configuration.hostsSettingsWindow)
+  }
+
+  @Test
   func liveDataSourceEnablesViewDrivenSync() throws {
     let configuration = try #require(
       VisualTestConfiguration(
@@ -49,12 +76,6 @@
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
       ("account", "Account", 2),
-      ("agents", "Agents", 2),
-      ("provider-codex", "Codex", 3),
-      ("provider-openrouter", "OpenRouter", 3),
-      ("provider-cursor", "Cursor", 3),
-      ("provider-codex-source", "This Mac", 4),
-      ("provider-litellm-key", "API Key", 4),
       ("devices", "Devices", 3),
       ("usage", "Usage", 2),
       ("notifications", "Notifications", 2),

@@ -70,9 +70,9 @@ struct MenuBarContentView: View {
       applyNavigation(next)
     }
     .onChange(of: revealGeneration) { _, _ in
-      guard revealProvider != nil, navigation.canNavigateBack else { return }
-      navigationDirection = .back
-      applyNavigation(MenuBarNavigationState())
+      guard let provider = revealProvider else { return }
+      navigationDirection = .forward
+      applyNavigation(MenuBarNavigationState(path: [.provider(provider)]))
     }
     .task {
       if seedsLaunchAtLogin {
@@ -106,8 +106,6 @@ struct MenuBarContentView: View {
           isResetConfirmationPresented = false
           Task { await model.resetLocalData() }
         }
-      } else if let popup = model.browserSessionPopup {
-        providerBrowserSessionPopup(popup)
       }
     }
   }
@@ -115,25 +113,7 @@ struct MenuBarContentView: View {
   /// Every destructive confirmation in the panel is one of these, and while one is up the page
   /// under it takes neither pointer nor VoiceOver.
   private var isPopupPresented: Bool {
-    isLogoutConfirmationPresented
-      || isResetConfirmationPresented
-      || model.browserSessionPopup != nil
-  }
-
-  @ViewBuilder
-  private func providerBrowserSessionPopup(_ popup: ProviderBrowserSessionPopup) -> some View {
-    switch popup {
-    case .consent(let provider):
-      if let spec = provider.browserSession {
-        QuotaConfirmationPopup(
-          title: BrowserSessionCopy.consentTitle(provider: provider),
-          message: BrowserSessionCopy.scanConsentMessage(provider: provider, spec: spec),
-          confirmTitle: BrowserSessionCopy.consentConfirmTitle,
-          onCancel: model.cancelProviderBrowserSessionFlow,
-          onConfirm: model.confirmProviderBrowserSessionConsent
-        )
-      }
-    }
+    isLogoutConfirmationPresented || isResetConfirmationPresented
   }
 
   private var panelAnimation: Animation? {
@@ -191,13 +171,13 @@ struct MenuBarContentView: View {
         revealGeneration: revealGeneration,
         revealProvider: revealProvider,
         onOpenSettings: openSettings,
-        onOpenProvider: openProviderSettings
+        onOpenProvider: openProvider
       )
     case .settings:
       SettingsHomeView(
         model: model,
         onOpenAccount: { navigate(to: .account) },
-        onOpenAgents: { navigate(to: .agents) },
+        onOpenAgents: { SettingsWindowController.shared.show(page: .agents) },
         onOpenUsage: { navigate(to: .usage) },
         onOpenNotifications: { navigate(to: .notifications) },
         onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
@@ -212,39 +192,8 @@ struct MenuBarContentView: View {
         onOpenDevices: { navigate(to: .devices) },
         onRequestSignOut: { isLogoutConfirmationPresented = true }
       )
-    case .agents:
-      AgentsSettingsView(
-        model: model,
-        statusLine: { provider in model.agentStatusLine(for: provider) },
-        onOpenProvider: { provider in navigate(to: .provider(provider)) }
-      )
     case .provider(let provider):
-      ProviderSettingsView(
-        model: model,
-        provider: provider,
-        now: now,
-        onOpenSource: { item, source in
-          navigate(
-            to: .providerSource(
-              provider,
-              identityKey: item.pinIdentityKey,
-              sourceID: source.sourceID,
-              displayName: source.displayName)
-          )
-        },
-        onOpenAPIKey: { navigate(to: .providerAPIKey(provider)) }
-      )
-    case .providerAPIKey(let provider):
-      ProviderAPIKeyView(model: model, provider: provider)
-    case .providerSource(let provider, let identityKey, let sourceID, let displayName):
-      ProviderSourceDetailView(
-        model: model,
-        provider: provider,
-        identityKey: identityKey,
-        sourceID: sourceID,
-        displayName: displayName,
-        now: now
-      )
+      providerQuotaDetail(provider, now: now)
     case .devices:
       AccountDevicesView(model: model)
     case .usage:
@@ -289,8 +238,47 @@ struct MenuBarContentView: View {
     SettingsWindowController.shared.show()
   }
 
-  private func openProviderSettings(_ provider: ProviderID) {
-    navigate(to: [.settings, .agents, .provider(provider)])
+  private func openProvider(_ provider: ProviderID) {
+    navigate(to: .provider(provider))
+  }
+
+  @ViewBuilder
+  private func providerQuotaDetail(_ provider: ProviderID, now: Date) -> some View {
+    let state = model.overviewState(enabledProviders: [provider], now: now)
+    switch state {
+    case .content(let providers, _):
+      if let presentation = providers.first {
+        ScrollView {
+          ProviderQuotaView(presentation: presentation, now: now)
+            .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+            .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
+        }
+      } else {
+        QuotaPageStateView(
+          emptySystemImage: "eye.slash",
+          title: "No Quota to Show",
+          message: "Sign in to a provider CLI or enable an agent in Settings.",
+          actionTitle: "Open Settings",
+          action: { SettingsWindowController.shared.show(page: .agents) }
+        )
+      }
+    case .empty(_):
+      QuotaPageStateView(
+        emptySystemImage: "eye.slash",
+        title: "No Quota to Show",
+        message: "Sign in to a provider CLI or enable an agent in Settings.",
+        actionTitle: "Open Settings",
+        action: { SettingsWindowController.shared.show(page: .agents) }
+      )
+    case .unavailable(let message):
+      QuotaPageStateView(
+        errorTitle: "Quota Unavailable",
+        message: message,
+        retry: { Task { await model.refresh() } }
+      )
+    case .loading:
+      QuotaPageStateView(loadingTitle: "Reading quota…")
+    }
   }
 
   private func runDiagnosticsCheck() async {
@@ -359,7 +347,6 @@ private enum NavigationDirection {
 enum MenuBarRoute: Hashable {
   case settings
   case account
-  case agents
   case provider(ProviderID)
   case devices
   case usage
@@ -370,18 +357,12 @@ enum MenuBarRoute: Hashable {
   case quotaRefreshInterval
   case support
   case diagnostics
-  case providerSource(
-    ProviderID, identityKey: String, sourceID: String, displayName: String)
-  case providerAPIKey(ProviderID)
 
   var title: String {
     switch self {
     case .settings: "Settings"
     case .account: "Account"
-    case .agents: "Agents"
     case .provider(let provider): provider.displayName
-    case .providerSource(_, _, _, let displayName): displayName
-    case .providerAPIKey: "API Key"
     case .devices: "Devices"
     case .usage: "Usage"
     case .notifications: "Notifications"

@@ -1,8 +1,12 @@
 import AppKit
+import QuotaWire
 import SwiftUI
 
 /// Sidebar pages of the Settings window. Detail content is filled by later work.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
+  static let storageKey = "settings.page"
+  static let agentsProviderStorageKey = "settings.agents.provider"
+
   case account
   case agents
   case notifications
@@ -37,7 +41,9 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
 }
 
 struct SettingsWindowView: View {
-  @AppStorage("settings.page") private var page = SettingsPage.account
+  @Bindable var model: MenuBarViewModel
+  var initialAgentsProvider: ProviderID? = nil
+  @AppStorage(SettingsPage.storageKey) private var page = SettingsPage.account
 
   var body: some View {
     NavigationSplitView {
@@ -52,7 +58,7 @@ struct SettingsWindowView: View {
           }
         )
       ) { item in
-        Label(item.title, systemImage: item.systemImage)
+        sidebarRow(item)
           .tag(item)
       }
       .listStyle(.sidebar)
@@ -62,14 +68,63 @@ struct SettingsWindowView: View {
         max: QuotaDesign.Layout.windowSidebarWidth
       )
     } detail: {
-      Text(page.title)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      detail
     }
     .frame(
       minWidth: QuotaDesign.Layout.settingsWindowMinSize.width,
       minHeight: QuotaDesign.Layout.settingsWindowMinSize.height
     )
     .background(Color(nsColor: .windowBackgroundColor))
+    .sheet(
+      item: Binding(
+        get: { model.browserSessionPopup },
+        set: { newValue in
+          if newValue == nil {
+            model.cancelProviderBrowserSessionFlow()
+          }
+        }
+      )
+    ) { popup in
+      browserSessionSheet(popup)
+    }
+  }
+
+  @ViewBuilder
+  private func sidebarRow(_ item: SettingsPage) -> some View {
+    let label = Label(item.title, systemImage: item.systemImage)
+    if item == .agents {
+      label.badge(model.agentsSidebarBadge())
+    } else {
+      label
+    }
+  }
+
+  @ViewBuilder
+  private var detail: some View {
+    switch page {
+    case .agents:
+      AgentsSettingsView(model: model, initialProvider: initialAgentsProvider)
+    case .account, .notifications, .menuBar, .general, .support:
+      Text(page.title)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  @ViewBuilder
+  private func browserSessionSheet(_ popup: ProviderBrowserSessionPopup) -> some View {
+    switch popup {
+    case .consent(let provider):
+      if let spec = provider.browserSession {
+        QuotaConfirmationPopup(
+          title: BrowserSessionCopy.consentTitle(provider: provider),
+          message: BrowserSessionCopy.scanConsentMessage(provider: provider, spec: spec),
+          confirmTitle: BrowserSessionCopy.consentConfirmTitle,
+          style: .sheet,
+          onCancel: model.cancelProviderBrowserSessionFlow,
+          onConfirm: model.confirmProviderBrowserSessionConsent
+        )
+      }
+    }
   }
 }
 
@@ -85,12 +140,23 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   /// collapse it as a non-key window.
   var closePanel: () -> Void = {}
 
+  private var model: MenuBarViewModel?
   private var window: NSWindow?
+  private var hosting: NSHostingController<SettingsWindowView>?
 
   var isPresented: Bool { window?.isVisible == true }
 
-  func show() {
+  func attach(model: MenuBarViewModel) {
+    self.model = model
+    hosting?.rootView = SettingsWindowView(model: model)
+  }
+
+  func show(page: SettingsPage? = nil) {
     closePanel()
+    if let page {
+      UserDefaults.standard.set(page.rawValue, forKey: SettingsPage.storageKey)
+    }
+    guard model != nil else { return }
     let window = self.window ?? makeWindow()
     self.window = window
     WindowActivation.shared.register(window)
@@ -98,7 +164,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   }
 
   private func makeWindow() -> NSWindow {
-    let hosting = NSHostingController(rootView: SettingsWindowView())
+    let hosting = NSHostingController(rootView: SettingsWindowView(model: model!))
+    self.hosting = hosting
     let window = SettingsWindow(contentViewController: hosting)
     window.title = "QuotaBar Settings"
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

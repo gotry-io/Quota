@@ -61,7 +61,10 @@ struct QuotaBarApp: App {
     @ViewBuilder
     private var visualRoot: some View {
       if visualTestConfiguration.hostsSettingsWindow {
-        SettingsWindowView()
+        SettingsWindowView(
+          model: model,
+          initialAgentsProvider: visualTestConfiguration.settingsAgentsProvider
+        )
       } else {
         MenuBarContentView(
           model: model,
