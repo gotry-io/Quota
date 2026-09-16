@@ -22,11 +22,11 @@ links to it rather than restating it.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
   one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
   wire decoding only. Its UI has two surfaces
-  ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)): the 320×480 menu-bar
-  panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
-  history, today's cost per window, Usage at width, and every preference). Opening the main
-  window switches the process to regular activation so a Dock icon and ⌘Tab entry exist; closing
-  it returns to accessory. QuotaBar stays `LSUIElement`. The desktop widgets read the same
+  ([ADR 0052](decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md)): the 320×480
+  menu-bar panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
+  history, today's cost per window, Usage at width, and every preference). QuotaBar is a regular
+  app with a Dock icon; **Show in Dock** off makes it menu-bar-only except while the main window is
+  open. A Login Item launch does not show the main window. The desktop widgets read the same
   non-secret `WidgetSnapshot` as iOS
   ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
   Overview rows it has already resolved, through the projection both Apple clients share, and
@@ -154,9 +154,9 @@ as a file in its own container. Both are kept thirty days, both are folded by on
 `packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
 contract names a sample, Relay gains no route, and the website shows no history. A reading that
 arrived from another device carries no history, because this device has no samples of it.
-`get_state` restates only the current-window slice Overview already draws; Dashboard reads the rest
-through `quota_history { since }`, a cache.sqlite read that collects nothing and reaches no network
-([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
+`get_state` restates only the current-window slice Overview already draws; the main window reads the
+rest through `quota_history { since }`, a cache.sqlite read that collects nothing and reaches no
+network ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
 
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
@@ -259,7 +259,7 @@ file-index hash, retained 90 days, and never uploaded. The Rust report groups fa
 agent that emitted the usage, then each model under the vendor whose model it is, resolved from the
 model's name by the model catalog's family rules — the agent and the billing channel never choose
 that group, and a gateway is never one ([ADR 0009](decisions/0009-versioned-model-catalog.md)).
-QuotaBar renders agent groups only on Dashboard Usage; Overview stays quota-only.
+QuotaBar renders agent groups only on main-window Usage; Overview stays quota-only.
 
 Local periods fold from the hourly facts with SQL at refresh time, so no read loads the record
 history. A local day begins at local midnight, so Today, 7 Days, and 30 Days are bounded by the

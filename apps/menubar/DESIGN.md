@@ -180,7 +180,19 @@ while that window is open, and closing it returns to `.accessory` without activa
 the switch while the main window is open does not close it or move focus. A launch as a Login
 Item does not show the main window; a manual launch (Finder, Spotlight, `open -a`) shows it
 after the status items exist. Closing the main window never quits; a Dock click reopens it.
-Browser Access and Sparkle windows are not registered. The sidebar has two groups: **Quota**
+Browser Access and Sparkle windows are not registered.
+
+The process has a regular-app menu bar:
+
+- **QuotaBar:** About QuotaBar, Check for Updates…, Settings… ⌘,, Services, Hide QuotaBar ⌘H,
+  Hide Others ⌥⌘H, Show All, Quit QuotaBar ⌘Q.
+- **File:** Close ⌘W.
+- **Edit:** Undo, Redo, Cut, Copy, Paste, Select All.
+- **View:** Quota ⌘1, Today ⌘2, Usage ⌘3, Refresh ⌘R, Enter Full Screen (⌃⌘F).
+- **Window:** Minimize ⌘M, Zoom, QuotaBar (brings the main window front), Bring All to Front.
+- **Help:** QuotaBar Help (opens the website), Feedback.
+
+The sidebar has two groups: **Quota**
 (**Quota**, **Today**, **Usage**) and
 **Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
 The selected page persists in `main.page`; the first open lands on Quota. Provider selection for
@@ -345,7 +357,7 @@ Summary and model values use two fractional digits to preserve the single-line l
 
 ## Material and color
 
-The panel inherits the menu extra's system material. Settings and Dashboard use
+The panel inherits the menu extra's system material. The main window uses
 `windowBackgroundColor`, not that material. Add only adaptive semantic layers:
 
 - Panel: transparent material plus `panelWash`.
@@ -491,9 +503,8 @@ The header shows:
 - Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open QuotaBar**,
   **Settings…** ⌘,, **Check for Updates…**, and **Quit QuotaBar** ⌘Q. Opening the menu focuses
   Quit. VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window
-  on the last page (Quota the first time) and does not show a shortcut; the Window menu keeps
-  **QuotaBar** ⌘1. **Settings…** opens the main window on Account or the last Settings page;
-  there is no gear.
+  on the last page (Quota the first time) and does not show a shortcut; View › **Quota** is ⌘1.
+  **Settings…** opens the main window on Account or the last Settings page; there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
@@ -576,7 +587,7 @@ An Overview row spends no line on which source answered or how old its reading i
 no longer describes live quota says so in tone — muted value, meter at reduced opacity — and the
 sentence that tone replaces is what VoiceOver announces for the row: the account, the source
 display name, and the shared freshness line (`Account: pe***@example.com. Studio Mac. Updated 3m
-ago`). Tone alone never carries the state. The provider detail page in Settings keeps the per-source
+ago`). Tone alone never carries the state. The Agents provider page keeps the per-source
 freshness lines, because that page is where provenance is the subject.
 
 Cursor's Other Models percentage and its included-usage dollar balance are related provider data but
@@ -618,7 +629,7 @@ The Settings pages are the Settings group of the main window: **Account**, **Age
 **Notifications**, **Menu Bar**, **General**, and **Support**. The panel does not push Settings
 pages; **Settings…** is an overflow-menu item on Overview.
 
-The Account window page is one Form in every state:
+The Account page is one Form in every state:
 
 - Signed out or not checked: **Sign In**.
 - Login running: **Finish sign-in in browser** with **Copy Link** and **Cancel**.
@@ -638,17 +649,17 @@ service operations; there are no embedded web views.
 Usage lives on the main window Usage page, reached from the footer **Today · $x** button. The Usage
 root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
 otherwise.
-**Menu Bar** is one grouped form in the Settings window: a live preview of the status-item label,
+**Menu Bar** is one grouped form in the Settings group: a live preview of the status-item label,
 **Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
-**General** is a window page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
+**General** is a Settings-group page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
 menu-bar-only except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
 or 15 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
 `usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
 is how often this Mac collects provider quota; Account summary still polls every minute, and a
 window reset can collect quota once before the next interval. Reset Local Data always confirms first
 and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
-stays signed in. That confirmation is a system dialog on the Settings window.
+stays signed in. That confirmation is a system dialog on the main window.
 
 **Menu Bar** is one form. A preview row above **Style** draws the actual status-item label from
 `MenuBarLabelModel` for the current readings. **Style** is a Picker over every
@@ -660,7 +671,7 @@ Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`R
 **Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
 writes the existing storage keys and takes effect immediately.
 
-Support is a window page, and it asks the service nothing on its own: opening it starts no check
+Support is a Settings-group page, and it asks the service nothing on its own: opening it starts no check
 and costs no refresh. **Help** contains **Feedback**. **About** stays with Website, version, and
 **Updates**, which opens Sparkle's standard updater; Sparkle also checks on a daily schedule after
 launch.
@@ -699,7 +710,7 @@ published page state. Reduce Motion skips the transition and publishes updates i
 
 ### Notifications
 
-Notifications is a Settings window page. It holds the local remaining-quota rules this Mac evaluates
+Notifications is a Settings-group page. It holds the local remaining-quota rules this Mac evaluates
 itself: one master switch, remaining-percent thresholds on each subscription Overview is showing,
 and a switch for window-reset reminders.
 
@@ -721,11 +732,11 @@ and a switch for window-reset reminders.
   real-time.
 - Delivery is native.
 
-The page is a grouped Form on the Settings window.
+The page is a grouped Form on the main window.
 
 ### Account
 
-The Account window page is always reachable from the sidebar. Signed out, it is **Sign In**. Signed
+The Account page is always reachable from the sidebar. Signed out, it is **Sign In**. Signed
 in, it holds everything that belongs to the account, top to bottom: the account label, **Devices**
 as a section on this same page, **Open quota.gotry.io**, and **Sign Out**. **Upload Usage to
 Account** lives on General — it is the same `usageUploadEnabled` switch, moved because it is a Mac
@@ -738,7 +749,7 @@ out leaves this page on **Sign In**, because there is no longer an account to ma
 
 ### Devices
 
-Devices is a section on the Account window page, not a sub-page. Each row is the device display
+Devices is a section on the Account page, not a sub-page. Each row is the device display
 name, last seen as the shared freshness line (`last reading 5m ago`, or `no readings yet`), a
 **This Mac** marker when the row is this installation, and **Remove**. Never a claim that a sleeping
 or closed app is broken. Signed-out remains explicit. Never display raw Device IDs or request a
@@ -748,7 +759,7 @@ unavailable account with no device content offers Retry.
 
 ### Agents
 
-Agents is a two-column page in the Settings window. The left column lists every catalog provider in
+Agents is a two-column page in the Settings group of the main window. The left column lists every catalog provider in
 **Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag reordering
 and VoiceOver Move Up/Move Down actions. Every row carries one status line under the name. When
 this Mac has a last-good official status-page reading, that line is **All systems operational**, or
@@ -756,7 +767,7 @@ this Mac has a last-good official status-page reading, that line is **All system
 `SignInRungPresentation.statusLine`: **Signed in** (· *n* **accounts** when more than one),
 **Configured**, **Reported by another device**, **Key rejected**, **Unavailable**, **Not
 configured**, or **Not signed in** — so the list says which agent needs attention before it is
-selected. Selecting a row shows that provider in the right pane. The Settings sidebar **Agents** row
+selected. Selecting a row shows that provider in the right pane. The sidebar **Agents** row
 trails **3 shown** and, when any shown agent has no working credential and no device reporting it,
 **· 1 needs sign-in**.
 
@@ -819,11 +830,11 @@ order:
   `exclamationmark.circle`, and it replaces the ordinary error line rather than stacking with
   it.
 
-Turning Browser Sign-in on uses an app-owned confirmation sheet on the Settings window, never a
+Turning Browser Sign-in on uses an app-owned confirmation sheet on the main window, never a
 system alert and never an overlay sized for the panel. There is no browser picker, account picker,
-Sign In, or Disconnect. The sheet owns focus, Escape, keyboard, and VoiceOver while the Settings
-window underneath is blocked. The sheet sits on the Settings window; the Browser Access grant
-window keeps level `.floating` so it sits above Settings, and `keychainPromptBrowser` prompts still
+Sign In, or Disconnect. The sheet owns focus, Escape, keyboard, and VoiceOver while the main
+window underneath is blocked. The sheet sits on the main window; the Browser Access grant
+window keeps level `.floating` so it sits above it, and `keychainPromptBrowser` prompts still
 fire.
 
 After consent, QuotaBar preflights the browsers installed on this Mac and only then reads jars

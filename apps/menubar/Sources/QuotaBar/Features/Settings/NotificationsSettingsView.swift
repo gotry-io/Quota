@@ -2,7 +2,7 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Notifications: local remaining-quota rules this Mac evaluates itself.
+/// Main window → Settings → Notifications: local remaining-quota rules this Mac evaluates itself.
 struct NotificationsSettingsView: View {
   @Bindable var model: MenuBarViewModel
   /// The amount as it is being typed, which is only a budget once it parses.

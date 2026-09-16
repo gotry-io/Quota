@@ -103,7 +103,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     if let page {
       UserDefaults.standard.set(page.rawValue, forKey: MainPage.storageKey)
     }
-    model?.loadQuotaHistory()
+    guard let model else { return }
+    model.loadQuotaHistory()
     let window = self.window ?? makeWindow()
     self.window = window
     WindowActivation.shared.register(window)
@@ -113,6 +114,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
   func showSettings() {
     show(page: MainPage.settingsLandingPage(MainPage.stored))
   }
+
+  func refresh() {
+    guard let model, !model.isRefreshing else { return }
+    Task { @MainActor in
+      await model.refresh()
+      model.loadQuotaHistory()
+    }
+  }
+
+  var canRefresh: Bool { model?.isRefreshing != true }
 
   private func makeWindow() -> NSWindow {
     guard let model else {
@@ -128,6 +139,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     window.level = .normal
     window.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
     window.isReleasedWhenClosed = false
+    window.isExcludedFromWindowsMenu = true
     window.delegate = self
     if !window.setFrameUsingName(Self.frameAutosaveName) {
       window.setContentSize(QuotaDesign.Layout.mainWindowMinSize)
@@ -138,7 +150,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
   }
 }
 
-/// Escape closes it like any other window; ⌘W is routed by the Window menu.
+/// Escape closes it like any other window; ⌘W is routed by File › Close.
 private final class MainWindow: NSWindow {
   override func cancelOperation(_ sender: Any?) {
     performClose(sender)

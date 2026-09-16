@@ -1,7 +1,7 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Agents → selected provider: the one place a key is typed. New values travel
+/// Main window → Settings → Agents → selected provider: the one place a key is typed. New values travel
 /// only over private child stdin; the field is cleared after Save and the service keeps the masked
 /// state. Rendered as a section in the provider pane, not a pushed page.
 struct ProviderAPIKeyView: View {

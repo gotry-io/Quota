@@ -1,7 +1,7 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Menu Bar: style, provider, reset time, and pace lines as one form.
+/// Main window → Settings → Menu Bar: style, provider, reset time, and pace lines as one form.
 struct MenuBarSettingsView: View {
   var model: MenuBarViewModel?
   /// Visual QA passes the fixture clock so the preview matches those readings.

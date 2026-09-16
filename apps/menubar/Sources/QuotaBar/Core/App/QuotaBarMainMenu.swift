@@ -1,35 +1,27 @@
 import AppKit
 
-/// The process's main menu.
-///
-/// Without an Edit menu, text fields in a regular window cannot paste — this is
-/// the reason the menu exists.
+/// The process's main menu: a regular-app menu bar.
 enum QuotaBarMainMenu {
   @MainActor
   static func install() {
     let menu = make()
     NSApp.mainMenu = menu
-    if let windowMenu = menu.items.first(where: { $0.submenu?.title == "Window" })?.submenu {
-      NSApp.windowsMenu = windowMenu
+    NSApp.windowsMenu = firstSubmenu(menu, titled: "Window")
+    NSApp.helpMenu = firstSubmenu(menu, titled: "Help")
+    if let app = firstSubmenu(menu, titled: "QuotaBar") {
+      NSApp.servicesMenu = app.items.first { $0.title == "Services" }?.submenu
     }
   }
 
   @MainActor
   static func make() -> NSMenu {
     let main = NSMenu()
-
-    let appItem = NSMenuItem()
-    appItem.submenu = applicationMenu()
-    main.addItem(appItem)
-
-    let editItem = NSMenuItem()
-    editItem.submenu = editMenu()
-    main.addItem(editItem)
-
-    let windowItem = NSMenuItem()
-    windowItem.submenu = windowMenu()
-    main.addItem(windowItem)
-
+    addSubmenu(applicationMenu(), to: main)
+    addSubmenu(fileMenu(), to: main)
+    addSubmenu(editMenu(), to: main)
+    addSubmenu(viewMenu(), to: main)
+    addSubmenu(windowMenu(), to: main)
+    addSubmenu(helpMenu(), to: main)
     return main
   }
 
@@ -42,32 +34,47 @@ enum QuotaBarMainMenu {
       keyEquivalent: ""
     )
     menu.addItem(.separator())
-    let updates = NSMenuItem(
-      title: "Check for Updates…",
-      action: #selector(Actions.checkForUpdates(_:)),
-      keyEquivalent: ""
-    )
-    updates.target = Actions.shared
-    menu.addItem(updates)
+    menu.addItem(targetedItem("Check for Updates…", #selector(Actions.checkForUpdates(_:))))
     menu.addItem(.separator())
-    let settings = NSMenuItem(
-      title: "Settings…",
-      action: #selector(Actions.openSettings(_:)),
-      keyEquivalent: ","
-    )
-    settings.target = Actions.shared
-    menu.addItem(settings)
+    menu.addItem(targetedItem("Settings…", #selector(Actions.openSettings(_:)), ","))
+    menu.addItem(.separator())
+    let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+    services.submenu = NSMenu(title: "Services")
+    menu.addItem(services)
     menu.addItem(.separator())
     menu.addItem(
       withTitle: "Hide QuotaBar",
       action: #selector(NSApplication.hide(_:)),
       keyEquivalent: "h"
     )
+    let hideOthers = NSMenuItem(
+      title: "Hide Others",
+      action: #selector(NSApplication.hideOtherApplications(_:)),
+      keyEquivalent: "h"
+    )
+    hideOthers.keyEquivalentModifierMask = [.command, .option]
+    menu.addItem(hideOthers)
+    menu.addItem(
+      withTitle: "Show All",
+      action: #selector(NSApplication.unhideAllApplications(_:)),
+      keyEquivalent: ""
+    )
     menu.addItem(.separator())
     menu.addItem(
       withTitle: "Quit QuotaBar",
       action: #selector(NSApplication.terminate(_:)),
       keyEquivalent: "q"
+    )
+    return menu
+  }
+
+  @MainActor
+  private static func fileMenu() -> NSMenu {
+    let menu = NSMenu(title: "File")
+    menu.addItem(
+      withTitle: "Close",
+      action: #selector(NSWindow.performClose(_:)),
+      keyEquivalent: "w"
     )
     return menu
   }
@@ -93,38 +100,81 @@ enum QuotaBarMainMenu {
   }
 
   @MainActor
+  private static func viewMenu() -> NSMenu {
+    let menu = NSMenu(title: "View")
+    menu.addItem(targetedItem("Quota", #selector(Actions.showQuota(_:)), "1"))
+    menu.addItem(targetedItem("Today", #selector(Actions.showToday(_:)), "2"))
+    menu.addItem(targetedItem("Usage", #selector(Actions.showUsage(_:)), "3"))
+    menu.addItem(.separator())
+    menu.addItem(targetedItem("Refresh", #selector(Actions.refresh(_:)), "r"))
+    menu.addItem(.separator())
+    let fullScreen = NSMenuItem(
+      title: "Enter Full Screen",
+      action: #selector(NSWindow.toggleFullScreen(_:)),
+      keyEquivalent: "f"
+    )
+    fullScreen.keyEquivalentModifierMask = [.command, .control]
+    menu.addItem(fullScreen)
+    return menu
+  }
+
+  @MainActor
   private static func windowMenu() -> NSMenu {
     let menu = NSMenu(title: "Window")
-    menu.addItem(
-      withTitle: "Close",
-      action: #selector(NSWindow.performClose(_:)),
-      keyEquivalent: "w"
-    )
     menu.addItem(
       withTitle: "Minimize",
       action: #selector(NSWindow.performMiniaturize(_:)),
       keyEquivalent: "m"
     )
+    menu.addItem(
+      withTitle: "Zoom",
+      action: #selector(NSWindow.performZoom(_:)),
+      keyEquivalent: ""
+    )
     menu.addItem(.separator())
-    let mainWindow = NSMenuItem(
-      title: "QuotaBar",
-      action: #selector(Actions.openMainWindow(_:)),
-      keyEquivalent: "1"
+    menu.addItem(targetedItem("QuotaBar", #selector(Actions.openMainWindow(_:))))
+    menu.addItem(.separator())
+    menu.addItem(
+      withTitle: "Bring All to Front",
+      action: #selector(NSApplication.arrangeInFront(_:)),
+      keyEquivalent: ""
     )
-    mainWindow.target = Actions.shared
-    menu.addItem(mainWindow)
-    let settings = NSMenuItem(
-      title: "Settings",
-      action: #selector(Actions.openSettings(_:)),
-      keyEquivalent: ","
-    )
-    settings.target = Actions.shared
-    menu.addItem(settings)
     return menu
   }
 
   @MainActor
-  final class Actions: NSObject {
+  private static func helpMenu() -> NSMenu {
+    let menu = NSMenu(title: "Help")
+    menu.addItem(targetedItem("QuotaBar Help", #selector(Actions.openHelp(_:))))
+    menu.addItem(targetedItem("Feedback", #selector(Actions.openFeedback(_:))))
+    return menu
+  }
+
+  @MainActor
+  private static func targetedItem(
+    _ title: String,
+    _ action: Selector,
+    _ keyEquivalent: String = ""
+  ) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+    item.target = Actions.shared
+    return item
+  }
+
+  @MainActor
+  private static func addSubmenu(_ submenu: NSMenu, to menu: NSMenu) {
+    let item = NSMenuItem()
+    item.submenu = submenu
+    menu.addItem(item)
+  }
+
+  @MainActor
+  private static func firstSubmenu(_ menu: NSMenu, titled title: String) -> NSMenu? {
+    menu.items.first { $0.submenu?.title == title }?.submenu
+  }
+
+  @MainActor
+  final class Actions: NSObject, NSMenuItemValidation {
     static let shared = Actions()
 
     @objc func checkForUpdates(_ sender: Any?) {
@@ -137,6 +187,37 @@ enum QuotaBarMainMenu {
 
     @objc func openMainWindow(_ sender: Any?) {
       MainWindowController.shared.show()
+    }
+
+    @objc func showQuota(_ sender: Any?) {
+      MainWindowController.shared.show(page: .quota)
+    }
+
+    @objc func showToday(_ sender: Any?) {
+      MainWindowController.shared.show(page: .today)
+    }
+
+    @objc func showUsage(_ sender: Any?) {
+      MainWindowController.shared.show(page: .usage)
+    }
+
+    @objc func refresh(_ sender: Any?) {
+      MainWindowController.shared.refresh()
+    }
+
+    @objc func openHelp(_ sender: Any?) {
+      NSWorkspace.shared.open(AppMetadata.websiteURL)
+    }
+
+    @objc func openFeedback(_ sender: Any?) {
+      NSWorkspace.shared.open(AppMetadata.feedbackURL)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+      if menuItem.action == #selector(refresh(_:)) {
+        return MainWindowController.shared.canRefresh
+      }
+      return true
     }
   }
 }

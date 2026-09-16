@@ -2,7 +2,7 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Agents → selected provider: one reporting source as an inline Quota section.
+/// Main window → Settings → Agents → selected provider: one reporting source as an inline Quota section.
 struct ProviderSourceDetailView: View {
   @Bindable var model: MenuBarViewModel
   let provider: ProviderID

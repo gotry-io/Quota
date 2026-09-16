@@ -1,7 +1,7 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings window → Agents: a provider list beside the selected provider's settings.
+/// Main window → Settings → Agents: a provider list beside the selected provider's settings.
 struct AgentsSettingsView: View {
   @Bindable var model: MenuBarViewModel
   var initialProvider: ProviderID? = nil

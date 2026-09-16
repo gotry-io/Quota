@@ -15,7 +15,7 @@ enum GeneralSettingsCopy {
     "Deletes collected quota and Usage history on this Mac and refreshes."
 }
 
-/// The confirmation Reset Local Data raises. The Settings window can use a system
+/// The confirmation Reset Local Data raises. The main window can use a system
 /// dialog; these are the words the dialog says, so the row and the confirmation
 /// cannot drift apart.
 enum ResetLocalDataCopy {
@@ -26,7 +26,7 @@ enum ResetLocalDataCopy {
     + "You stay signed in."
 }
 
-/// Settings window → General: launch, Dock, collection cadence, Usage upload, project
+/// Main window → Settings → General: launch, Dock, collection cadence, Usage upload, project
 /// grouping, and the local-data reset.
 struct GeneralSettingsView: View {
   @Bindable var model: MenuBarViewModel
