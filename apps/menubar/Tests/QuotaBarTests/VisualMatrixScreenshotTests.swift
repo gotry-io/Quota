@@ -139,14 +139,22 @@
       host.frame = NSRect(origin: .zero, size: size)
       // Sidebar `List` is an AppKit outline view and does not draw cells unless it
       // lives in a window. Park it off-screen; do not order it front.
+      // Liquid Glass is composited by the window server, so an off-screen bitmap shows no
+      // glass at all (a white sidebar, cards without a surface). With
+      // QUOTABAR_SCREENSHOTS_ONSCREEN the window is ordered front and captured through the
+      // window server instead; scripts/test-swift.sh sets it, so CI's macOS 26 runner
+      // produces real renders. Locally the off-screen bitmap stays the default.
+      let onScreen = ProcessInfo.processInfo.environment["QUOTABAR_SCREENSHOTS_ONSCREEN"] == "1"
+      let origin = onScreen ? NSPoint(x: 40, y: 40) : NSPoint(x: -10_000, y: -10_000)
       let window = NSWindow(
-        contentRect: NSRect(x: -10_000, y: -10_000, width: size.width, height: size.height),
+        contentRect: NSRect(origin: origin, size: size),
         styleMask: [.titled, .closable, .resizable],
         backing: .buffered,
         defer: false
       )
       window.isReleasedWhenClosed = false
       window.isRestorable = false
+      window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
       window.contentView = host
       window.setContentSize(size)
       host.layoutSubtreeIfNeeded()
@@ -156,12 +164,39 @@
         window.contentView = nil
         window.close()
       }
+      if onScreen {
+        window.orderFrontRegardless()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        if let captured = Self.captureFromWindowServer(window, contentSize: size) {
+          return captured
+        }
+      }
       let bounds = host.bounds
       let rep = try #require(host.bitmapImageRepForCachingDisplay(in: bounds))
       host.cacheDisplay(in: bounds, to: rep)
       let image = NSImage(size: bounds.size)
       image.addRepresentation(rep)
       return image
+    }
+
+    /// The window as the window server shows it, cropped to the content view; nil when the
+    /// process may not read the screen (then the caller keeps the off-screen bitmap).
+    private static func captureFromWindowServer(_ window: NSWindow, contentSize: CGSize) -> NSImage? {
+      let id = CGWindowID(window.windowNumber)
+      guard
+        let full = CGWindowListCreateImage(
+          .null, .optionIncludingWindow, id, [.boundsIgnoreFraming, .bestResolution])
+      else { return nil }
+      let scale = window.backingScaleFactor
+      let contentHeight = Int(contentSize.height * scale)
+      let contentWidth = Int(contentSize.width * scale)
+      // `boundsIgnoreFraming` still includes the title bar; the content view is the bottom part.
+      let cropY = max(0, full.height - contentHeight)
+      guard
+        let cropped = full.cropping(
+          to: CGRect(x: 0, y: cropY, width: min(contentWidth, full.width), height: min(contentHeight, full.height - cropY)))
+      else { return nil }
+      return NSImage(cgImage: cropped, size: contentSize)
     }
 
     @ViewBuilder
