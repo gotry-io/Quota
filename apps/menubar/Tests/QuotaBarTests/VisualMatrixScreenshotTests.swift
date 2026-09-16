@@ -7,9 +7,9 @@
   @testable import QuotaBar
 
   /// Renders the close-out Visual QA matrix: every route × light/dark × standard/accessibility.
-  /// Writes PNGs when `WP_79_SCREENSHOTS` is a directory.
+  /// Writes PNGs when `QUOTABAR_SCREENSHOTS` is a directory.
   @MainActor
-  struct Wp79ScreenshotTests {
+  struct VisualMatrixScreenshotTests {
     @Test
     func closeoutVisualMatrixRendersEveryRouteInLightAndDarkAtStandardAndAccessibility() throws {
       let keys = [
@@ -31,9 +31,10 @@
         }
       }
 
-      let dirPath = ProcessInfo.processInfo.environment["WP_79_SCREENSHOTS"] ?? ""
-      // Rendering the 60-cell matrix in the default parallel suite starves wait-loop
-      // tests. Capture is opt-in; `swift test` without the env var is a no-op.
+      let dirPath = ProcessInfo.processInfo.environment["QUOTABAR_SCREENSHOTS"] ?? ""
+      // Rendering the 60-cell matrix inside the default parallel suite starves the wait-loop
+      // tests on a slow runner, so capture is opt-in: `swift test` without the env var is a
+      // no-op, and scripts/test-swift.sh runs this test alone, afterwards, with it set.
       guard !dirPath.isEmpty else { return }
       let dir = URL(fileURLWithPath: dirPath)
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

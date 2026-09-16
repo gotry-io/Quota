@@ -166,7 +166,10 @@ The required Visual QA matrix is every `--route` above, in `--appearance light` 
 `--text-size standard` and `accessibility`. `--text-size extra-large` is available for spot
 checks. `settings-window` is the Settings shell; the `settings-*` routes select its sidebar
 pages. `dashboard` is All providers; `dashboard-codex` selects Codex; `dashboard-usage` and
-`dashboard-usage-local` are Dashboard Usage on Account and This Mac.
+`dashboard-usage-local` are Dashboard Usage on Account and This Mac. `scripts/test-swift.sh`
+renders that matrix to PNGs after the ordinary suite (`QUOTABAR_SCREENSHOTS` names the directory);
+under a bare `swift test` the matrix test is a no-op, because rendering every route inside the
+parallel suite starves the app's wait-loop tests.
 
 Fixture mode starts no service and contains synthetic account, device, quota, cost, and coverage
 data. Live mode uses the packaged service through the production IPC boundary. Generated `.build/`,

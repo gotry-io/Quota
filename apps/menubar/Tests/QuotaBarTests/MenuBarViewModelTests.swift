@@ -773,7 +773,7 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   await model.shutdown()
   let waited = ContinuousClock.now - started
 
-  #expect(waited < .seconds(6), "the quit waited on a helper that was never going to answer")
+  #expect(waited < .seconds(2), "the quit waited on a helper that was never going to answer")
   let shutdowns = await record.count
   #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
 }

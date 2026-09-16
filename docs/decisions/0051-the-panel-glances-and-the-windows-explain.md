@@ -100,4 +100,6 @@ with `WindowActivation`, which switches the process to `.regular` so a Dock icon
 exist; closing the last registered window returns to `.accessory`. Browser Access and Sparkle
 windows are not registered.
 
-**Releases.** `menubar-v0.1.0` then `menubar-v0.2.0`. The three-surface layout is 0.2.0.
+**Release.** `menubar-v0.2.0` carries the whole change. 0.1.0 was the integration point for the
+Settings window and the panel slimming; it was merged, not published, because the Dashboard
+followed the same day.
