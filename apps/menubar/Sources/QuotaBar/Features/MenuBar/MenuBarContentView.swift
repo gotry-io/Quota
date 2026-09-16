@@ -123,23 +123,12 @@ struct MenuBarContentView: View {
       SettingsHomeView(
         model: model,
         onOpenAgents: { SettingsWindowController.shared.show(page: .agents) },
-        onOpenUsage: { navigate(to: .usage) },
-        onOpenMenuBarStyle: { navigate(to: .menuBarStyle) },
-        onOpenMenuBarProvider: { navigate(to: .menuBarProvider) },
-        onOpenResetCopy: { navigate(to: .resetCopy) }
+        onOpenUsage: { navigate(to: .usage) }
       )
     case .provider(let provider):
       providerQuotaDetail(provider, now: now)
     case .usage:
       AccountUsageView(model: model, source: $usageSource, now: now)
-    case .menuBarStyle:
-      MenuBarStyleSettingsView(onSelect: navigateBack)
-    case .menuBarProvider:
-      MenuBarProviderSettingsView(
-        providers: ProviderDisplayOrder.enabledProviders()
-      )
-    case .resetCopy:
-      ResetCopySettingsView(onSelect: navigateBack)
     }
   }
 
@@ -250,19 +239,12 @@ enum MenuBarRoute: Hashable {
   case settings
   case provider(ProviderID)
   case usage
-  case menuBarStyle
-  case menuBarProvider
-  case resetCopy
 
   var title: String {
     switch self {
     case .settings: "Settings"
     case .provider(let provider): provider.displayName
     case .usage: "Usage"
-    // The section header says Menu Bar; a page carries its own context.
-    case .menuBarStyle: "Menu Bar Style"
-    case .menuBarProvider: "Menu Bar Provider"
-    case .resetCopy: "Reset time"
     }
   }
 }

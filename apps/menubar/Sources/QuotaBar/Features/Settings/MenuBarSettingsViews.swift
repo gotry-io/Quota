@@ -1,9 +1,12 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings → Menu Bar → Style: what each item shows.
-struct MenuBarStyleSettingsView: View {
-  let onSelect: () -> Void
+/// Settings window → Menu Bar: style, provider, reset time, and pace lines as one form.
+struct MenuBarSettingsView: View {
+  var model: MenuBarViewModel?
+  /// Visual QA passes the fixture clock so the preview matches those readings.
+  var now: Date?
+  var visibleProviders: [ProviderID] = ProviderDisplayOrder.enabledProviders()
 
   @AppStorage(MenuBarStylePreference.storageKey) private var style =
     MenuBarStylePreference.fallback
@@ -11,241 +14,195 @@ struct MenuBarStyleSettingsView: View {
     MenuBarProviderPreference.fallback
   @AppStorage(MenuBarArrangementPreference.storageKey) private var arrangement =
     MenuBarArrangementPreference.fallback
+  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
+    ResetCopyStylePreference.fallback
+  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
+    PaceLinePreference.fallback
 
   var body: some View {
-    let layout = currentLayout
-    let effective = layout.effectiveStyle(style)
-    MenuBarChoiceList {
-      ForEach(MenuBarStylePreference.allCases) { option in
-        let locked = layout.usesMultiReadingStyle && (option == .icon || option == .percent)
-        MenuBarChoiceRow(
-          title: option.label,
-          isSelected: option == effective,
-          isEnabled: !locked
-        ) {
-          guard !locked else { return }
-          style = option
-          onSelect()
-        }
-      }
+    Form {
+      previewSection
+      styleSection
+      providerSection
+      resetTimeSection
+      paceSection
     }
+    .formStyle(.grouped)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 
   private var currentLayout: MenuBarLayout {
     MenuBarLayout.resolve(
       selection: provider,
       arrangement: arrangement,
-      visibleProviders: ProviderDisplayOrder.enabledProviders()
+      visibleProviders: visibleProviders
     )
   }
-}
 
-/// Settings → Menu Bar → Reset time: countdown or local date on Overview window rows.
-struct ResetCopySettingsView: View {
-  let onSelect: () -> Void
-
-  @AppStorage(ResetCopyStylePreference.storageKey) private var style =
-    ResetCopyStylePreference.fallback
-
-  var body: some View {
-    MenuBarChoiceList {
-      ForEach(ResetCopyStylePreference.allCases) { option in
-        MenuBarChoiceRow(
-          title: option.label,
-          subtitle: option.summary,
-          isSelected: option == style
-        ) {
-          style = option
-          onSelect()
+  @ViewBuilder
+  private var previewSection: some View {
+    Section {
+      HStack(spacing: previewItemSpacing) {
+        ForEach(previewSpecs, id: \.id) { spec in
+          QuotaMenuBarLabel(label: spec.label)
         }
+      }
+      .frame(maxWidth: .infinity)
+      .accessibilityElement(children: .combine)
+    } header: {
+      Text("Preview")
+    }
+  }
+
+  @ViewBuilder
+  private var styleSection: some View {
+    Section {
+      if MenuBarStylePreference.usesSegmentedPicker {
+        stylePicker.pickerStyle(.segmented)
+      } else {
+        stylePicker.pickerStyle(.menu)
       }
     }
   }
-}
 
-/// Settings → Menu Bar → Provider: whose remaining quota the bar answers for.
-///
-/// Only providers Overview is showing are offered, because a number the panel does not carry has
-/// no business in the menu bar either. Automatic is exclusive with the named set. Two or three
-/// named providers can share one packed item; four or more are always separate items.
-struct MenuBarProviderSettingsView: View {
-  let providers: [ProviderID]
+  private var stylePicker: some View {
+    Picker("Style", selection: styleSelection) {
+      ForEach(MenuBarStylePreference.allCases) { option in
+        Text(option.label)
+          .tag(option)
+          .disabled(isStyleOptionDisabled(option))
+      }
+    }
+  }
 
-  @AppStorage(MenuBarProviderPreference.storageKey) private var provider =
-    MenuBarProviderPreference.fallback
-  @AppStorage(MenuBarArrangementPreference.storageKey) private var arrangement =
-    MenuBarArrangementPreference.fallback
-
-  var body: some View {
-    let layout = MenuBarLayout.resolve(
-      selection: provider,
-      arrangement: arrangement,
-      visibleProviders: providers
-    )
-    ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        MenuBarChoiceGroup {
-          MenuBarChoiceRow(
-            title: MenuBarProviderPreference.automatic.label,
-            isSelected: layout == .automatic
-          ) {
-            provider = .automatic
-          }
-
-          ForEach(providers, id: \.self) { id in
-            MenuBarChoiceRow(
-              title: id.displayName,
-              isSelected: provider.selected.contains(id),
-              leading: {
-                ProviderBrandIcon(provider: id, size: QuotaDesign.Layout.settingsIconColumnWidth)
-              }
-            ) {
-              provider = provider.toggling(id, visibleProviders: providers)
+  @ViewBuilder
+  private var providerSection: some View {
+    Section {
+      Toggle("Automatic", isOn: automaticIsOn)
+      if !provider.isAutomatic {
+        ForEach(visibleProviders, id: \.self) { id in
+          Toggle(isOn: namedIsOn(id)) {
+            HStack(spacing: QuotaDesign.Spacing.sm) {
+              ProviderBrandIcon(
+                provider: id,
+                size: QuotaDesign.Layout.settingsIconColumnWidth
+              )
+              Text(id.displayName)
             }
           }
+          .toggleStyle(.checkbox)
         }
-
-        if showsArrangement(layout) {
-          MenuBarChoiceGroup {
+        if currentLayout.showsArrangementControl {
+          Picker("Combined / Separate", selection: arrangementSelection) {
             ForEach(MenuBarArrangementPreference.allCases) { option in
-              let combinedDisabled =
-                option == .combined && !canCombine(layout)
-              MenuBarChoiceRow(
-                title: option.label,
-                subtitle: option.summary,
-                isSelected: isArrangementSelected(option, layout: layout),
-                isEnabled: !combinedDisabled
-              ) {
-                guard !combinedDisabled else { return }
-                arrangement = option
-              }
+              Text(option.label)
+                .tag(option)
+                .disabled(option == .combined && !currentLayout.isCombinedEnabled)
             }
           }
+          .pickerStyle(.segmented)
+          .accessibilityIdentifier("menu-bar.arrangement")
         }
       }
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
-    }
-  }
-
-  private func showsArrangement(_ layout: MenuBarLayout) -> Bool {
-    switch layout {
-    case .packed: true
-    case .items(let providers): providers.count >= 2
-    case .automatic: false
-    }
-  }
-
-  private func canCombine(_ layout: MenuBarLayout) -> Bool {
-    switch layout {
-    case .packed: true
-    case .items(let providers): providers.count <= MenuBarProviderPreference.combinedLimit
-    case .automatic: false
-    }
-  }
-
-  private func isArrangementSelected(
-    _ option: MenuBarArrangementPreference,
-    layout: MenuBarLayout
-  ) -> Bool {
-    switch (option, layout) {
-    case (.combined, .packed): true
-    case (.separate, .items(let providers)) where providers.count >= 2: true
-    default: false
-    }
-  }
-}
-
-/// A page that is one list of options and nothing else, so it carries no section header to
-/// repeat the title already in the header.
-private struct MenuBarChoiceList<Content: View>: View {
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    ScrollView {
-      MenuBarChoiceGroup(content: content)
-        .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-        .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
-    }
-  }
-}
-
-private struct MenuBarChoiceGroup<Content: View>: View {
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      content()
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaGroupSurface()
-  }
-}
-
-/// One option: its name, and a checkmark on the one in force.
-struct MenuBarChoiceRow<Leading: View>: View {
-  let title: String
-  var subtitle: String? = nil
-  let isSelected: Bool
-  var isEnabled: Bool = true
-  @ViewBuilder var leading: () -> Leading
-  let select: () -> Void
-
-  init(
-    title: String,
-    subtitle: String? = nil,
-    isSelected: Bool,
-    isEnabled: Bool = true,
-    @ViewBuilder leading: @escaping () -> Leading,
-    select: @escaping () -> Void
-  ) {
-    self.title = title
-    self.subtitle = subtitle
-    self.isSelected = isSelected
-    self.isEnabled = isEnabled
-    self.leading = leading
-    self.select = select
-  }
-
-  var body: some View {
-    Button(action: select) {
-      SettingsListRow(
-        title: title,
-        subtitle: subtitle,
-        height: subtitle == nil
-          ? QuotaDesign.Layout.settingsRowHeight
-          : QuotaDesign.Layout.settingsListRowHeight,
-        leading: leading
-      ) {
-        Image(systemName: "checkmark")
-          .quotaFont(.secondary)
-          .foregroundStyle(QuotaPalette.accent)
-          .opacity(isSelected ? 1 : 0)
+    } header: {
+      Text("Provider")
+    } footer: {
+      if !provider.isAutomatic, currentLayout.showsArrangementControl,
+        !currentLayout.isCombinedEnabled
+      {
+        Text("Combined is unavailable past three providers.")
       }
     }
-    .buttonStyle(QuotaListRowButtonStyle())
-    .disabled(!isEnabled)
-    .opacity(isEnabled ? 1 : 0.45)
-    .accessibilityLabel(title)
-    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
-}
 
-extension MenuBarChoiceRow where Leading == EmptyView {
-  init(
-    title: String,
-    subtitle: String? = nil,
-    isSelected: Bool,
-    isEnabled: Bool = true,
-    select: @escaping () -> Void
-  ) {
-    self.init(
-      title: title,
-      subtitle: subtitle,
-      isSelected: isSelected,
-      isEnabled: isEnabled,
-      leading: { EmptyView() },
-      select: select
+  private var resetTimeSection: some View {
+    Section {
+      Picker("Reset time", selection: $resetCopyStyle) {
+        ForEach(ResetCopyStylePreference.allCases) { option in
+          Text(option.label)
+            .tag(option)
+        }
+      }
+      .pickerStyle(.segmented)
+    } footer: {
+      Text(
+        ResetCopyStylePreference.allCases
+          .map { "\($0.label): \($0.summary)" }
+          .joined(separator: "  ·  ")
+      )
+    }
+  }
+
+  private var paceSection: some View {
+    Section {
+      Toggle("Show pace lines", isOn: $showsPaceLines)
+        .accessibilityHint("Draw each window's usage curve and where it lands at reset")
+    }
+  }
+
+  private var previewSpecs: [MenuBarStatusItemSpec] {
+    let layout = currentLayout
+    guard let model else {
+      return [MenuBarStatusItemSpec(id: .automatic, label: .empty)]
+    }
+    return model.menuBarSpecs(
+      style: layout.effectiveStyle(style),
+      layout: layout,
+      now: now ?? model.menuBarClock
     )
   }
+
+  private var previewItemSpacing: CGFloat {
+    switch currentLayout {
+    case .items: 16
+    case .packed, .automatic: MenuBarItemImage.cellSpacing
+    }
+  }
+
+  private var styleSelection: Binding<MenuBarStylePreference> {
+    Binding(
+      get: { currentLayout.effectiveStyle(style) },
+      set: { newValue in
+        guard !isStyleOptionDisabled(newValue) else { return }
+        style = newValue
+      }
+    )
+  }
+
+  private var automaticIsOn: Binding<Bool> {
+    Binding(
+      get: { provider.isAutomatic },
+      set: { automatic in
+        if automatic {
+          provider = .automatic
+        } else {
+          provider = provider.turningAutomaticOff(visibleProviders: visibleProviders)
+        }
+      }
+    )
+  }
+
+  private func namedIsOn(_ id: ProviderID) -> Binding<Bool> {
+    Binding(
+      get: { provider.selected.contains(id) },
+      set: { _ in
+        provider = provider.toggling(id, visibleProviders: visibleProviders)
+      }
+    )
+  }
+
+  private var arrangementSelection: Binding<MenuBarArrangementPreference> {
+    Binding(
+      get: { currentLayout.effectiveArrangement },
+      set: { newValue in
+        guard newValue != .combined || currentLayout.isCombinedEnabled else { return }
+        arrangement = newValue
+      }
+    )
+  }
+
+  private func isStyleOptionDisabled(_ option: MenuBarStylePreference) -> Bool {
+    currentLayout.usesMultiReadingStyle && (option == .icon || option == .percent)
+  }
+
 }

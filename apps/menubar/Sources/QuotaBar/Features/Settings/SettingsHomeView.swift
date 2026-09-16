@@ -5,20 +5,6 @@ struct SettingsHomeView: View {
   @Bindable var model: MenuBarViewModel
   let onOpenAgents: () -> Void
   let onOpenUsage: () -> Void
-  let onOpenMenuBarStyle: () -> Void
-  let onOpenMenuBarProvider: () -> Void
-  let onOpenResetCopy: () -> Void
-
-  @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
-    MenuBarStylePreference.fallback
-  @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
-    MenuBarProviderPreference.fallback
-  @AppStorage(MenuBarArrangementPreference.storageKey) private var menuBarArrangement =
-    MenuBarArrangementPreference.fallback
-  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
-    ResetCopyStylePreference.fallback
-  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
-    PaceLinePreference.fallback
 
   var body: some View {
     ScrollView {
@@ -40,52 +26,11 @@ struct SettingsHomeView: View {
             )
           }
         }
-
-        SettingsSection(title: "Menu Bar") {
-          VStack(alignment: .leading, spacing: 0) {
-            settingsDestinationRow(
-              title: "Style",
-              systemImage: "menubar.rectangle",
-              trailing: currentLayout.effectiveStyle(menuBarStyle).label,
-              accessibilityLabel: MenuBarRoute.menuBarStyle.title,
-              action: onOpenMenuBarStyle
-            )
-            settingsDestinationRow(
-              title: "Provider",
-              systemImage: "chart.bar.doc.horizontal",
-              trailing: currentLayout.settingsSummary,
-              accessibilityLabel: MenuBarRoute.menuBarProvider.title,
-              action: onOpenMenuBarProvider
-            )
-            settingsDestinationRow(
-              title: "Reset time",
-              systemImage: "clock.arrow.circlepath",
-              trailing: resetCopyStyle.label,
-              accessibilityLabel: MenuBarRoute.resetCopy.title,
-              action: onOpenResetCopy
-            )
-            settingsToggleRow(
-              title: "Show pace lines",
-              systemImage: "chart.xyaxis.line",
-              isOn: $showsPaceLines,
-              accessibilityLabel: "Show pace lines",
-              accessibilityHint: "Draw each window's usage curve and where it lands at reset"
-            )
-          }
-        }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-  }
-
-  private var currentLayout: MenuBarLayout {
-    MenuBarLayout.resolve(
-      selection: menuBarProvider,
-      arrangement: menuBarArrangement,
-      visibleProviders: ProviderDisplayOrder.enabledProviders()
-    )
   }
 
   private var usageSummary: String {

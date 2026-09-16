@@ -34,6 +34,18 @@
   }
 
   @Test
+  func settingsMenuBarRouteHostsTheMenuBarForm() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-menu-bar"])
+    )
+    #expect(configuration.route == .settingsMenuBar)
+    #expect(configuration.initialPath.isEmpty)
+    #expect(configuration.hostsSettingsWindow)
+    #expect(configuration.settingsPage == .menuBar)
+    #expect(!configuration.performsInitialRefresh)
+  }
+
+  @Test
   func settingsWindowDetailRoutesHostTheTitledSettingsPages() throws {
     let routes: [(String, VisualTestRoute, SettingsPage)] = [
       ("settings-account", .settingsAccount, .account),
@@ -96,9 +108,6 @@
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
       ("usage", "Usage", 2),
-      ("menu-bar-style", "Menu Bar Style", 2),
-      ("menu-bar-provider", "Menu Bar Provider", 2),
-      ("reset-time", "Reset time", 2),
     ]
 
     for expectation in routeExpectations {

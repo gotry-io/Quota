@@ -63,15 +63,13 @@
     case settings
     case providerCodex = "provider-codex"
     case usage
-    case menuBarStyle = "menu-bar-style"
-    case menuBarProvider = "menu-bar-provider"
-    case resetCopy = "reset-time"
     case settingsWindow = "settings-window"
     case settingsAccount = "settings-account"
     case settingsAgents = "settings-agents"
     case settingsAgentsCodex = "settings-agents-codex"
     case settingsAgentsLiteLLMKey = "settings-agents-litellm-key"
     case settingsNotifications = "settings-notifications"
+    case settingsMenuBar = "settings-menu-bar"
     case settingsGeneral = "settings-general"
     case settingsSupport = "settings-support"
 
@@ -81,11 +79,9 @@
       case .settings: [.settings]
       case .providerCodex: [.provider(.codex)]
       case .usage: [.settings, .usage]
-      case .menuBarStyle: [.settings, .menuBarStyle]
-      case .menuBarProvider: [.settings, .menuBarProvider]
-      case .resetCopy: [.settings, .resetCopy]
       case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
-        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsGeneral, .settingsSupport:
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
+        .settingsSupport:
         []
       }
     }
@@ -95,6 +91,7 @@
       case .settingsAccount: .account
       case .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey: .agents
       case .settingsNotifications: .notifications
+      case .settingsMenuBar: .menuBar
       case .settingsGeneral: .general
       case .settingsSupport: .support
       default: nil
@@ -194,7 +191,8 @@
     var hostsSettingsWindow: Bool {
       switch route {
       case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
-        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsGeneral, .settingsSupport:
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
+        .settingsSupport:
         true
       default: false
       }

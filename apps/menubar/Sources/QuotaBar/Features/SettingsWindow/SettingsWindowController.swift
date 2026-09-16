@@ -45,6 +45,8 @@ struct SettingsWindowView: View {
   var pageOverride: SettingsPage? = nil
   var expandsDiagnostics: Bool = false
   var initialAgentsProvider: ProviderID? = nil
+  /// Visual QA passes the fixture clock so the Menu Bar preview matches those readings.
+  var now: Date? = nil
 
   @State private var diagnostics: DiagnosticsPageModel
   @AppStorage(SettingsPage.storageKey) private var storedPage = SettingsPage.account
@@ -54,12 +56,14 @@ struct SettingsWindowView: View {
     pageOverride: SettingsPage? = nil,
     diagnostics: DiagnosticsPageModel? = nil,
     expandsDiagnostics: Bool = false,
-    initialAgentsProvider: ProviderID? = nil
+    initialAgentsProvider: ProviderID? = nil,
+    now: Date? = nil
   ) {
     self.model = model
     self.pageOverride = pageOverride
     self.expandsDiagnostics = expandsDiagnostics
     self.initialAgentsProvider = initialAgentsProvider
+    self.now = now
     _diagnostics = State(initialValue: diagnostics ?? DiagnosticsPageModel())
   }
 
@@ -153,8 +157,7 @@ struct SettingsWindowView: View {
     case .agents:
       AgentsSettingsView(model: model, initialProvider: initialAgentsProvider)
     case .menuBar:
-      Text(page.title)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      MenuBarSettingsView(model: model, now: now)
     }
   }
 }
