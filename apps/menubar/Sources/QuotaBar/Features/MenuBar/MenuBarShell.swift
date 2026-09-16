@@ -11,6 +11,8 @@ struct MenuBarShell<Content: View>: View {
   let onNavigateBack: () -> Void
   let showsLeadingIcon: Bool
   let trailing: MenuBarHeader.TrailingAction
+  var overflowMenuStartsExpanded = false
+  let onOpenUsage: () -> Void
   let content: Content
 
   init(
@@ -23,6 +25,8 @@ struct MenuBarShell<Content: View>: View {
     onNavigateBack: @escaping () -> Void,
     showsLeadingIcon: Bool = false,
     trailing: MenuBarHeader.TrailingAction = .none,
+    overflowMenuStartsExpanded: Bool = false,
+    onOpenUsage: @escaping () -> Void,
     @ViewBuilder content: () -> Content
   ) {
     self.model = model
@@ -34,6 +38,8 @@ struct MenuBarShell<Content: View>: View {
     self.onNavigateBack = onNavigateBack
     self.showsLeadingIcon = showsLeadingIcon
     self.trailing = trailing
+    self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
+    self.onOpenUsage = onOpenUsage
     self.content = content()
   }
 
@@ -45,7 +51,8 @@ struct MenuBarShell<Content: View>: View {
         canNavigateBack: canNavigateBack,
         onNavigateBack: onNavigateBack,
         showsLeadingIcon: showsLeadingIcon,
-        trailing: trailing
+        trailing: trailing,
+        overflowMenuStartsExpanded: overflowMenuStartsExpanded
       )
       .zIndex(1)
 
@@ -59,7 +66,12 @@ struct MenuBarShell<Content: View>: View {
       Divider()
         .opacity(0.35)
 
-      MenuBarFooterView(model: model, usageSource: usageSource, now: now)
+      MenuBarFooterView(
+        model: model,
+        usageSource: usageSource,
+        now: now,
+        onOpenUsage: onOpenUsage
+      )
     }
     .frame(width: QuotaDesign.Layout.panelWidth)
     // Pin the shared ceiling so every page occupies the same panel.
@@ -68,25 +80,36 @@ struct MenuBarShell<Content: View>: View {
   }
 }
 
-/// The panel's bottom bar: what today cost on the left, one refresh action on the right.
+/// The panel's bottom bar: today's spend as the Usage button on the left, one refresh
+/// action on the right.
 ///
 /// Today's spend is the one supporting number that belongs beside quota everywhere, so it sits
-/// in the bar every page already has rather than spending an Overview line on itself. How long
-/// ago the last sync finished is a fact about the button, not a number worth a permanent line,
-/// so it rides in the button's tooltip and its VoiceOver label.
+/// in the bar every page already has rather than spending an Overview line on itself. Selecting
+/// it opens Usage. How long ago the last sync finished is a fact about the refresh button, not a
+/// number worth a permanent line, so it rides in that button's tooltip and its VoiceOver label.
 struct MenuBarFooterView: View {
   @Bindable var model: MenuBarViewModel
   let usageSource: UsageSource
   let now: Date
+  let onOpenUsage: () -> Void
 
   var body: some View {
     HStack(spacing: QuotaDesign.Spacing.sectionBody) {
       if let today = model.todayUsageSummary(source: usageSource) {
-        Text(today.text)
-          .quotaMetaStyle()
-          .lineLimit(1)
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel(today.accessibilityLabel)
+        Button(action: onOpenUsage) {
+          Text(today.text)
+            .quotaMetaStyle()
+            .lineLimit(1)
+            .frame(
+              minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+              alignment: .leading
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open Usage")
+        .accessibilityValue(today.accessibilityLabel)
+        .help("Open Usage")
       }
 
       Spacer(minLength: 0)

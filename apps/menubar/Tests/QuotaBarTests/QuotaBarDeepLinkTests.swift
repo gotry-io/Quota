@@ -15,6 +15,13 @@ struct QuotaBarDeepLinkTests {
   }
 
   @Test
+  func parsesTheDashboardWindowLink() {
+    #expect(QuotaBarDeepLink.parse(URL(string: "quotabar://dashboard")!) == .dashboard)
+    #expect(QuotaBarDeepLink.parse(URL(string: "QuotaBar://dashboard")!) == .dashboard)
+    #expect(QuotaBarDeepLink.parse(URL(string: "quotabar://dashboard/")!) == .dashboard)
+  }
+
+  @Test
   func refusesAnythingElse() {
     // Quota on iPhone answers its own scheme; a Mac widget's link is never that one.
     #expect(QuotaBarDeepLink.parse(URL(string: "io.gotry.quota:/overview")!) == nil)
@@ -23,5 +30,7 @@ struct QuotaBarDeepLinkTests {
     #expect(QuotaBarDeepLink.parse(URL(string: "quotabar:/subscriptions/ABCDEF012345")!) == nil)
     #expect(QuotaBarDeepLink.parse(URL(string: "quotabar:/subscriptions/0123456789")!) == nil)
     #expect(QuotaBarDeepLink.parse(URL(string: "quotabar:/settings")!) == nil)
+    #expect(QuotaBarDeepLink.parse(URL(string: "quotabar:/dashboard")!) == nil)
+    #expect(QuotaBarDeepLink.parse(URL(string: "quotabar://dashboard/overview")!) == nil)
   }
 }

@@ -19,9 +19,11 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
     startStatusItemsIfNeeded()
   }
 
-  /// A desktop widget's `quotabar:` link. Overview opens the panel as it stands; a subscription
-  /// opens it scrolled to that subscription's provider. A link this installation never published
-  /// — an old salt, a provider since removed — resolves to nothing and lands on Overview.
+  /// A desktop widget's `quotabar:` link, or `quotabar://dashboard`. Overview opens the panel as
+  /// it stands; a subscription opens it scrolled to that subscription's provider. A link this
+  /// installation never published — an old salt, a provider since removed — resolves to nothing
+  /// and lands on Overview. Dashboard opens the Dashboard window; until that window exists it
+  /// opens Settings.
   func application(_ application: NSApplication, open urls: [URL]) {
     startStatusItemsIfNeeded()
     guard let statusItems, let model else { return }
@@ -32,6 +34,9 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
         statusItems.openPanel(revealing: nil)
       case .subscription(let id):
         statusItems.openPanel(revealing: model.provider(forWidgetSelectionID: id))
+      case .dashboard:
+        // WP 7.7
+        SettingsWindowController.shared.show()
       }
       return
     }

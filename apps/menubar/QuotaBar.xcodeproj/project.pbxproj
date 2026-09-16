@@ -86,7 +86,6 @@
 		BA15F58E916A8BCEBB9A89D4 /* WindowActivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3244405B1C645F14C8C37B29 /* WindowActivation.swift */; };
 		BCDFF74C481B665768BC5DB6 /* ProviderSourceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9B1A49537713216EE3AFB2 /* ProviderSourceDetailView.swift */; };
 		BDC3BB674ED2DAA27ABE7989 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = E92EC22777A2740A66CE9E6B /* THIRD_PARTY_NOTICES.md */; };
-		C27215BB3EFA341134647C5F /* SettingsHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 077B2734B160C3D5B85BE937 /* SettingsHomeView.swift */; };
 		C3AD262F3E7B662DA97D5D87 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 033F199803ED55965E5D1E80 /* Assets.xcassets */; };
 		C5A62D13401DB88768F252E9 /* QuotaBarKeychainShim.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 2760AC4EAA22061BBA7A320D /* QuotaBarKeychainShim.h */; };
 		C65EA91311D0B85C88E8C8EB /* LocalServiceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C1DC1CA1DE2D7D680FCB3B /* LocalServiceModels.swift */; };
@@ -158,7 +157,6 @@
 		041ECB47C16B3E1301AD44A2 /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
 		06660814CACB6F78ACF8DB30 /* AccountSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsView.swift; sourceTree = "<group>"; };
 		06A3EFBC237607BAF4BE862C /* MenuBarPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPreferences.swift; sourceTree = "<group>"; };
-		077B2734B160C3D5B85BE937 /* SettingsHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHomeView.swift; sourceTree = "<group>"; };
 		0E2A81C66F35D3DEA53983DC /* QuotaSelectionPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaSelectionPopup.swift; sourceTree = "<group>"; };
 		14464EE21ADFF1D37CDE533B /* QuotaCollectionReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaCollectionReport.swift; sourceTree = "<group>"; };
 		15FDF0B78284408BB5B42976 /* QuotaBarKeychainShim.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = QuotaBarKeychainShim.c; sourceTree = "<group>"; };
@@ -386,7 +384,6 @@
 				C30878F34A937276082D0E52 /* ProviderSettingsView.swift */,
 				1A9B1A49537713216EE3AFB2 /* ProviderSourceDetailView.swift */,
 				EC0DAB46A796B4692947780F /* SettingsDiagnosticsView.swift */,
-				077B2734B160C3D5B85BE937 /* SettingsHomeView.swift */,
 				EED346DC8085436F3BC4519E /* SettingsSupportView.swift */,
 			);
 			path = Settings;
@@ -791,7 +788,6 @@
 				3735C65999B9FDF0CBA7A103 /* QuotaWireCodec.swift in Sources */,
 				8A8E7DDBC1E20B704080A31B /* ResetReminderScheduler.swift in Sources */,
 				4A18C48D3A0FDD8D7265E714 /* SettingsDiagnosticsView.swift in Sources */,
-				C27215BB3EFA341134647C5F /* SettingsHomeView.swift in Sources */,
 				A7C0554887F98D00E879A38F /* SettingsListRow.swift in Sources */,
 				5AEAFB9A5F96FBDAEEA394C1 /* SettingsSection.swift in Sources */,
 				16609FFB905722017022D27C /* SettingsSupportView.swift in Sources */,

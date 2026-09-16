@@ -1,16 +1,19 @@
 import Foundation
 
-/// What a desktop widget can ask QuotaBar to show. The paths are the ones every Quota widget
-/// draws ([ADR 0014](../../../../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)); only
-/// the scheme differs, because each app registers its own.
+/// What a desktop widget can ask QuotaBar to show, plus the Dashboard window. Widget paths are
+/// the ones every Quota widget draws
+/// ([ADR 0014](../../../../../docs/decisions/0014-nonsecret-ios-widget-snapshot.md)); only the
+/// scheme differs, because each app registers its own. Widgets do not publish `dashboard`.
 enum QuotaBarDeepLink: Equatable, Sendable {
   case overview
   case subscription(id: String)
+  case dashboard
 
   static let scheme = "quotabar"
 
   /// `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>`. `selection_id` is twelve
-  /// lowercase hex digits after percent-decoding each path segment.
+  /// lowercase hex digits after percent-decoding each path segment. `quotabar://dashboard` opens
+  /// the Dashboard window.
   static func parse(_ url: URL) -> QuotaBarDeepLink? {
     guard let scheme = url.scheme, scheme.caseInsensitiveCompare(Self.scheme) == .orderedSame
     else { return nil }
@@ -18,6 +21,12 @@ enum QuotaBarDeepLink: Equatable, Sendable {
       return nil
     }
     if let host = components.host, !host.isEmpty {
+      if host.caseInsensitiveCompare("dashboard") == .orderedSame {
+        let path = components.percentEncodedPath
+        if path.isEmpty || path == "/" {
+          return .dashboard
+        }
+      }
       return nil
     }
 

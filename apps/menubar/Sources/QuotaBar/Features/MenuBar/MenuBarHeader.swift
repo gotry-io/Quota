@@ -4,7 +4,6 @@ import SwiftUI
 struct MenuBarHeader: View {
   enum TrailingAction {
     case none
-    case openSettings(() -> Void)
     case overflowMenu
     case usageSource(UsageSource, (UsageSource) -> Void)
   }
@@ -15,9 +14,66 @@ struct MenuBarHeader: View {
   let onNavigateBack: () -> Void
   var showsLeadingIcon = false
   let trailing: TrailingAction
+  var overflowMenuStartsExpanded = false
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @FocusState private var isOverflowButtonFocused: Bool
+  @FocusState private var isQuitFocused: Bool
+  @State private var isOverflowMenuExpanded: Bool
+
+  init(
+    title: String,
+    issue: String? = nil,
+    canNavigateBack: Bool,
+    onNavigateBack: @escaping () -> Void,
+    showsLeadingIcon: Bool = false,
+    trailing: TrailingAction,
+    overflowMenuStartsExpanded: Bool = false
+  ) {
+    self.title = title
+    self.issue = issue
+    self.canNavigateBack = canNavigateBack
+    self.onNavigateBack = onNavigateBack
+    self.showsLeadingIcon = showsLeadingIcon
+    self.trailing = trailing
+    self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
+    _isOverflowMenuExpanded = State(initialValue: overflowMenuStartsExpanded)
+  }
 
   var body: some View {
     headerRow
+      .overlay(alignment: .top) {
+        if isOverflowMenuExpanded {
+          ZStack(alignment: .top) {
+            Color.clear
+              .contentShape(Rectangle())
+              .frame(
+                width: QuotaDesign.Layout.panelWidth,
+                height: QuotaDesign.Layout.panelMaxHeight - QuotaDesign.Layout.headerHeight
+              )
+              .offset(y: QuotaDesign.Layout.headerHeight)
+              .onTapGesture { setOverflowMenuExpanded(false) }
+
+            overflowMenu
+              .offset(y: QuotaDesign.Layout.headerHeight)
+          }
+          .transition(
+            .asymmetric(
+              insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)),
+              removal: .opacity
+            )
+          )
+        }
+      }
+      .onExitCommand {
+        if isOverflowMenuExpanded { setOverflowMenuExpanded(false) }
+      }
+      .onChange(of: title) { _, _ in setOverflowMenuExpanded(false) }
+      .onAppear {
+        if isOverflowMenuExpanded {
+          isQuitFocused = true
+        }
+      }
   }
 
   private var headerRow: some View {
@@ -82,45 +138,22 @@ struct MenuBarHeader: View {
     switch trailing {
     case .none:
       EmptyView()
-    case .openSettings(let action):
-      headerButton(
-        systemName: "gearshape",
-        accessibilityLabel: "Open settings",
-        action: action
-      )
     case .overflowMenu:
-      Menu {
-        Button("Open Dashboard…") {
-          // WP 7.7
-        }
-        .keyboardShortcut("d", modifiers: .command)
-        .disabled(true)
-        Button("Settings…") {
-          SettingsWindowController.shared.show()
-        }
-        .keyboardShortcut(",", modifiers: .command)
-        Button("Check for Updates…", action: QuotaBarUpdater.checkForUpdates)
-        Divider()
-        Button("Quit QuotaBar") {
-          NSApplication.shared.terminate(nil)
-        }
-        .keyboardShortcut("q", modifiers: .command)
-      } label: {
-        Image(systemName: "ellipsis")
-          .font(QuotaDesign.Typography.headerActionIcon)
-          .foregroundStyle(QuotaPalette.body)
-          .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-          .frame(
-            width: QuotaDesign.Layout.headerControlWidth,
-            height: QuotaDesign.Layout.headerHeight
-          )
-          .contentShape(Rectangle())
+      headerButton(systemName: "ellipsis", accessibilityLabel: "Settings menu") {
+        setOverflowMenuExpanded(!isOverflowMenuExpanded)
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .buttonStyle(QuotaHeaderButtonStyle())
-      .accessibilityLabel("Settings menu")
+      .focusable()
+      .focused($isOverflowButtonFocused)
+      .accessibilityHint(isOverflowMenuExpanded ? "Collapse settings menu" : "Expand settings menu")
       .help("Settings menu")
+      .onKeyPress(.upArrow) {
+        setOverflowMenuExpanded(true)
+        return .handled
+      }
+      .onKeyPress(.downArrow) {
+        setOverflowMenuExpanded(true)
+        return .handled
+      }
     case .usageSource(let source, let select):
       Menu {
         usageSourceItem(.account, selected: source, select: select)
@@ -149,6 +182,67 @@ struct MenuBarHeader: View {
     }
   }
 
+  private var overflowMenu: some View {
+    HStack(spacing: 0) {
+      Spacer(minLength: 0)
+      VStack(alignment: .leading, spacing: 0) {
+        overflowMenuButton(title: "Open Dashboard…", isEnabled: false) {
+          // WP 7.7
+        }
+        overflowMenuButton(title: "Settings…") {
+          SettingsWindowController.shared.show()
+        }
+        overflowMenuButton(title: "Check for Updates…") {
+          QuotaBarUpdater.checkForUpdates()
+        }
+        Rectangle()
+          .fill(QuotaPalette.hairlineBorder.opacity(0.55))
+          .frame(height: 0.5)
+          .padding(.vertical, QuotaDesign.Spacing.xxs)
+          .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        overflowMenuButton(title: "Quit QuotaBar", isQuit: true) {
+          NSApplication.shared.terminate(nil)
+        }
+      }
+      .frame(width: QuotaDesign.Layout.headerMenuWidth)
+      .quotaFloatingMenuSurface()
+    }
+    .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
+    .padding(.top, 2)
+  }
+
+  @ViewBuilder
+  private func overflowMenuButton(
+    title: String,
+    isEnabled: Bool = true,
+    isQuit: Bool = false,
+    action: @escaping () -> Void
+  ) -> some View {
+    let button = Button {
+      setOverflowMenuExpanded(false)
+      action()
+    } label: {
+      Text(title)
+        .quotaSettingsLabelStyle()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
+        .frame(minHeight: QuotaDesign.Layout.fieldMinHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(
+      QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
+    )
+    .disabled(!isEnabled)
+    .accessibilityLabel(title)
+    if isQuit {
+      button
+        .focusable()
+        .focused($isQuitFocused)
+    } else {
+      button
+    }
+  }
+
   private func usageSourceItem(
     _ source: UsageSource,
     selected: UsageSource,
@@ -159,6 +253,24 @@ struct MenuBarHeader: View {
         Text(source.label)
       } icon: {
         Image(systemName: source == selected ? "checkmark" : source.systemImage)
+      }
+    }
+  }
+
+  private func setOverflowMenuExpanded(_ expanded: Bool) {
+    if reduceMotion {
+      isOverflowMenuExpanded = expanded
+    } else {
+      withAnimation(expanded ? .easeOut(duration: 0.12) : .easeIn(duration: 0.08)) {
+        isOverflowMenuExpanded = expanded
+      }
+    }
+    Task { @MainActor in
+      await Task.yield()
+      if expanded, isOverflowMenuExpanded {
+        isQuitFocused = true
+      } else if !isOverflowMenuExpanded {
+        isOverflowButtonFocused = true
       }
     }
   }

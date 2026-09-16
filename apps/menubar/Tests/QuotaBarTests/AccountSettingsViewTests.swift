@@ -43,6 +43,21 @@ struct AccountSettingsPageTests {
   }
 
   @Test
+  func panelNavigationStaysZeroOrOneDeep() {
+    var navigation = MenuBarNavigationState()
+    navigation.open(.provider(.codex))
+    navigation.open(.usage)
+
+    #expect(navigation.path == [.usage])
+    #expect(navigation.title == "Usage")
+    #expect(navigation.canNavigateBack)
+
+    navigation.navigateBack()
+    #expect(navigation.path == [])
+    #expect(navigation.currentRoute == nil)
+  }
+
+  @Test
   func menuBarSettingsLiveOnTheSettingsWindowPageNotThePanelStack() {
     #expect(SettingsPage.menuBar.title == "Menu Bar")
     #expect(SettingsPage.allCases.contains(.menuBar))

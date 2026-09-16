@@ -173,7 +173,7 @@ Opening Settings hides the menu-bar panel and registers the window with `WindowA
 switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last registered
 window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
 registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
-and **Support**, matching the current Settings home rows; the selected page persists in
+and **Support**; the selected page persists in
 `settings.page`. Account, Notifications, General, and Support are grouped Forms in the detail
 column, and **Menu Bar** is one grouped form (preview, Style, Provider, Reset time, Show pace
 lines). The **Agents** row trails **3 shown** and, when any shown agent has no working credential
@@ -324,18 +324,19 @@ panel on that provider; Combined and Automatic open the same panel without chang
 
 The header shows:
 
-- Overview: Quota mark, **QuotaBar**, and Settings gear. The gear opens the Settings window.
-- Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
-  edge because the choice changes the whole page.
-- Settings root: Back, **Settings**, and an overflow menu containing **Open Dashboard…** (disabled
-  until Dashboard ships), **Settings…**, **Check for Updates…**, and **Quit QuotaBar**.
+- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open Dashboard…** (disabled
+  until Dashboard ships), **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the
+  menu focuses Quit. VoiceOver names the trigger **Settings menu**. **Settings…** opens the Settings
+  window; there is no gear.
+- Child page: Back and page title. Provider detail has no trailing action. Usage may place its
+  Account/This Mac source menu at the trailing edge because the choice changes the whole page.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
-tokens` from the Usage source the Usage page would show; cost drops out when the day is unpriced,
-and the whole line is absent when there are no tokens. Today's number belongs beside quota
-everywhere, so it lives in the bar every page already has rather than in an Overview line of its
-own.
+tokens` from the Usage source the Usage page would show and is a button that opens Usage
+(VoiceOver **Open Usage**); cost drops out when the day is unpriced, and the whole line is absent
+when there are no tokens. Today's number belongs beside quota everywhere, so it lives in the bar
+every page already has rather than in an Overview line of its own.
 
 When the last sync finished is a fact about the refresh action, not a number worth a permanent
 line: `arrow.clockwise` carries **Refresh all quota. Updated 3m ago** — or **Not checked** before
@@ -351,9 +352,8 @@ Back returns one level.
 
 ```text
 Overview
-└── Provider (read-only quota)
-└── Settings (panel home; remaining destinations)
-    └── Usage
+├── Provider (read-only quota)
+└── Usage
 
 Settings window
 ├── Account (Devices on the same page)
@@ -373,7 +373,7 @@ account observations; Rust has already merged global identities and selected one
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
-totals stay on the Usage detail page in Settings and never create or extend an Overview provider
+totals stay on the Usage page and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
 the only Overview destination, into a read-only quota page for that provider. Agent settings
 live in the Settings window (**Agents**). The heading is a destination at
@@ -445,9 +445,8 @@ service its `shutdown` and waits at most two seconds for the answer before going
 ### Settings
 
 Settings is a titled window whose sidebar lists **Account**, **Agents**, **Notifications**,
-**Menu Bar**, **General**, and **Support**. The panel still has a Settings home with **Usage** and
-**Agents** rows until those move; it no longer lists Account, Notifications, Menu Bar, Refresh
-Interval, or Support.
+**Menu Bar**, **General**, and **Support**. The panel does not push Settings pages; **Settings…**
+is an overflow-menu item on Overview.
 
 The Account window page is one Form in every state:
 
@@ -466,10 +465,10 @@ The Account window page is one Form in every state:
 The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-The remaining panel Settings home contains **Usage** and **Agents**. The Usage root summary uses
-account-wide totals while signed in with Usage sync enabled, and local totals otherwise. **Menu
-Bar** is one grouped form in the Settings window: a live preview of the status-item label,
-**Style**, **Provider**, **Reset time**, and **Show pace lines**.
+Usage stays in the panel until Dashboard takes it, reached from the footer **Today · $x** button.
+The Usage root summary uses account-wide totals while signed in with Usage sync enabled, and local
+totals otherwise. **Menu Bar** is one grouped form in the Settings window: a live preview of the
+status-item label, **Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
 **General** is a window page: **Launch at Login**, **Refresh Interval** (Picker, 1, 2, 5, 10, or 15
 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
@@ -828,7 +827,8 @@ first status item, and a subscription lands on that provider's read-only quota p
 `selection_id` this installation never published — an older salt, a provider since removed —
 lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
 subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
-several.
+several. `quotabar://dashboard` opens the Dashboard window (the Settings window until that window
+exists); widgets do not publish it.
 
 The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
 extension has no app to borrow a tint from.
@@ -900,9 +900,9 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
-Required routes are Overview, Settings, Account, Agents, provider
-setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
-(`settings-menu-bar`), Support, and Diagnostics. Inspect
+Required routes are Overview, provider detail (`provider-codex`), Usage, the Settings window
+(`settings-window`), Account, Agents, provider setup variants (CLI, API key, and browser session),
+Notifications, Menu Bar (`settings-menu-bar`), General, Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

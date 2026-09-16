@@ -19,6 +19,7 @@
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "unknown"]) == nil)
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--data-source", "unknown"]) == nil)
     #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route"]) == nil)
+    #expect(VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings"]) == nil)
   }
 
   @Test
@@ -95,19 +96,19 @@
   func liveDataSourceEnablesViewDrivenSync() throws {
     let configuration = try #require(
       VisualTestConfiguration(
-        arguments: ["QuotaBar", "--data-source", "live", "--route", "settings"]
+        arguments: ["QuotaBar", "--data-source", "live", "--route", "usage"]
       )
     )
 
     #expect(configuration.dataSource == .live)
-    #expect(configuration.initialPath == [.settings])
+    #expect(configuration.initialPath == [.usage])
     #expect(configuration.performsInitialRefresh)
   }
 
   @Test
   func detailVisualRoutesUseOneTypedNavigationStack() throws {
     let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
-      ("usage", "Usage", 2),
+      ("usage", "Usage", 1),
     ]
 
     for expectation in routeExpectations {
@@ -115,7 +116,7 @@
         VisualTestConfiguration(arguments: ["QuotaBar", "--route", expectation.rawValue])
       )
       #expect(configuration.initialPath.count == expectation.depth)
-      #expect(configuration.initialPath.first == .settings)
+      #expect(configuration.initialPath == [.usage])
       #expect(configuration.initialPath.last?.title == expectation.title)
       #expect(!configuration.performsInitialRefresh)
     }
@@ -135,7 +136,7 @@
     )
     let model = configuration.makeModel()
 
-    #expect(configuration.initialPath == [.settings, .usage])
+    #expect(configuration.initialPath == [.usage])
     #expect(configuration.appearance == .dark)
     #expect(configuration.textSize == .accessibility)
     #expect(model.groupUsageByProject)

@@ -12,6 +12,7 @@ struct MenuBarContentView: View {
   @State private var usageSource: UsageSource = .account
   private let performsInitialRefresh: Bool
   private let seedsLaunchAtLogin: Bool
+  private let overflowMenuStartsExpanded: Bool
 
   init(
     model: MenuBarViewModel,
@@ -19,12 +20,14 @@ struct MenuBarContentView: View {
     initialPath: [MenuBarRoute] = [],
     initialUsageSource: UsageSource = .account,
     performsInitialRefresh: Bool = true,
-    seedsLaunchAtLogin: Bool = true
+    seedsLaunchAtLogin: Bool = true,
+    overflowMenuStartsExpanded: Bool = false
   ) {
     self.model = model
     self.panelSession = panelSession
     self.performsInitialRefresh = performsInitialRefresh
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
+    self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
     _usageSource = State(initialValue: initialUsageSource)
   }
@@ -41,7 +44,9 @@ struct MenuBarContentView: View {
         canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
         showsLeadingIcon: navigation.currentRoute == nil,
-        trailing: headerTrailingAction
+        trailing: headerTrailingAction,
+        overflowMenuStartsExpanded: overflowMenuStartsExpanded,
+        onOpenUsage: { navigate(to: .usage) }
       ) {
         currentPage(
           now: context.date,
@@ -91,15 +96,14 @@ struct MenuBarContentView: View {
 
   private var headerTrailingAction: MenuBarHeader.TrailingAction {
     guard !navigationTransitionActive else { return .none }
-    if navigation.showsSettingsMenu { return .overflowMenu }
-    if navigation.currentRoute == .usage,
-      model.usageUploadEnabled,
-      model.accountSummary != nil
-    {
+    switch navigation.currentRoute {
+    case nil:
+      return .overflowMenu
+    case .usage where model.usageUploadEnabled && model.accountSummary != nil:
       return .usageSource(usageSource) { usageSource = $0 }
+    case .usage, .provider:
+      return .none
     }
-    if !navigation.canNavigateBack { return .openSettings(openSettings) }
-    return .none
   }
 
   @ViewBuilder
@@ -118,12 +122,6 @@ struct MenuBarContentView: View {
         revealProvider: revealProvider,
         onOpenSettings: openSettings,
         onOpenProvider: openProvider
-      )
-    case .settings:
-      SettingsHomeView(
-        model: model,
-        onOpenAgents: { SettingsWindowController.shared.show(page: .agents) },
-        onOpenUsage: { navigate(to: .usage) }
       )
     case .provider(let provider):
       providerQuotaDetail(provider, now: now)
@@ -236,13 +234,11 @@ private enum NavigationDirection {
 }
 
 enum MenuBarRoute: Hashable {
-  case settings
   case provider(ProviderID)
   case usage
 
   var title: String {
     switch self {
-    case .settings: "Settings"
     case .provider(let provider): provider.displayName
     case .usage: "Usage"
     }
@@ -255,21 +251,19 @@ struct MenuBarNavigationState: Equatable {
   var currentRoute: MenuBarRoute? { path.last }
   var title: String { currentRoute?.title ?? "QuotaBar" }
   var canNavigateBack: Bool { !path.isEmpty }
-  var showsSettingsMenu: Bool { path == [.settings] }
 
   var pageIdentity: String {
     currentRoute.map { "\(path.count):\(String(describing: $0))" } ?? "overview"
   }
 
   mutating func open(_ route: MenuBarRoute) {
-    guard path.last != route else { return }
-    path.append(route)
+    guard path != [route] else { return }
+    path = [route]
   }
 
   mutating func open(_ routes: [MenuBarRoute]) {
-    for route in routes {
-      open(route)
-    }
+    guard let route = routes.last else { return }
+    open(route)
   }
 
   mutating func navigateBack() {

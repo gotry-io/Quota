@@ -26,6 +26,7 @@ links to it rather than restating it.
   Overview rows it has already resolved, through the projection both Apple clients share, and
   answer `quotabar:/overview` and `quotabar:/subscriptions/<selection_id>` back into its panel
   ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)).
+  `quotabar://dashboard` opens the Dashboard window (Settings until that window exists).
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
   Node server over local SQLite in production; the same process runs as a Cloudflare Worker

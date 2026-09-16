@@ -60,7 +60,6 @@
 
   enum VisualTestRoute: String {
     case overview
-    case settings
     case providerCodex = "provider-codex"
     case usage
     case settingsWindow = "settings-window"
@@ -76,9 +75,8 @@
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
-      case .settings: [.settings]
       case .providerCodex: [.provider(.codex)]
-      case .usage: [.settings, .usage]
+      case .usage: [.usage]
       case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
         .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
         .settingsSupport:
