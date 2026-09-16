@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Sidebar pages of the Settings window. Detail content is filled by later work.
+/// Sidebar pages of the Settings window. Menu Bar is one form; other pages are filled later.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
   case account
   case agents
@@ -37,10 +37,14 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
 }
 
 struct SettingsWindowView: View {
+  var model: MenuBarViewModel?
+  var initialPage: SettingsPage?
+  var now: Date?
   @AppStorage("settings.page") private var page = SettingsPage.account
+  @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
   var body: some View {
-    NavigationSplitView {
+    NavigationSplitView(columnVisibility: $columnVisibility) {
       List(
         SettingsPage.allCases,
         selection: Binding<SettingsPage?>(
@@ -62,14 +66,27 @@ struct SettingsWindowView: View {
         max: QuotaDesign.Layout.windowSidebarWidth
       )
     } detail: {
-      Text(page.title)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      switch page {
+      case .menuBar:
+        NavigationStack {
+          MenuBarSettingsView(model: model, now: now)
+            .navigationTitle(SettingsPage.menuBar.title)
+        }
+      default:
+        Text(page.title)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
     .frame(
       minWidth: QuotaDesign.Layout.settingsWindowMinSize.width,
       minHeight: QuotaDesign.Layout.settingsWindowMinSize.height
     )
     .background(Color(nsColor: .windowBackgroundColor))
+    .onAppear {
+      if let initialPage {
+        page = initialPage
+      }
+    }
   }
 }
 
@@ -85,6 +102,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   /// collapse it as a non-key window.
   var closePanel: () -> Void = {}
 
+  /// The same view model the panel uses; Menu Bar preview reads current quota from it.
+  var model: MenuBarViewModel?
+
   private var window: NSWindow?
 
   var isPresented: Bool { window?.isVisible == true }
@@ -98,7 +118,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   }
 
   private func makeWindow() -> NSWindow {
-    let hosting = NSHostingController(rootView: SettingsWindowView())
+    let hosting = NSHostingController(rootView: SettingsWindowView(model: model))
     let window = SettingsWindow(contentViewController: hosting)
     window.title = "QuotaBar Settings"
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

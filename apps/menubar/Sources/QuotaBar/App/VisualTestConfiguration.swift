@@ -71,12 +71,10 @@
     case devices
     case usage
     case notifications
-    case menuBarStyle = "menu-bar-style"
-    case menuBarProvider = "menu-bar-provider"
-    case resetCopy = "reset-time"
     case support
     case diagnostics
     case settingsWindow = "settings-window"
+    case settingsMenuBar = "settings-menu-bar"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -102,12 +100,9 @@
       case .devices: [.settings, .account, .devices]
       case .usage: [.settings, .usage]
       case .notifications: [.settings, .notifications]
-      case .menuBarStyle: [.settings, .menuBarStyle]
-      case .menuBarProvider: [.settings, .menuBarProvider]
-      case .resetCopy: [.settings, .resetCopy]
       case .support: [.settings, .support]
       case .diagnostics: [.settings, .support, .diagnostics]
-      case .settingsWindow: []
+      case .settingsWindow, .settingsMenuBar: []
       }
     }
   }
@@ -192,7 +187,19 @@
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
-    var hostsSettingsWindow: Bool { route == .settingsWindow }
+    var hostsSettingsWindow: Bool {
+      switch route {
+      case .settingsWindow, .settingsMenuBar: true
+      default: false
+      }
+    }
+
+    var settingsPage: SettingsPage? {
+      switch route {
+      case .settingsMenuBar: .menuBar
+      default: nil
+      }
+    }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {

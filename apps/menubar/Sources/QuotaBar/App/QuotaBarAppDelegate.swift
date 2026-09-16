@@ -11,6 +11,7 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
 
   func attach(model: MenuBarViewModel) {
     self.model = model
+    SettingsWindowController.shared.model = model
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {

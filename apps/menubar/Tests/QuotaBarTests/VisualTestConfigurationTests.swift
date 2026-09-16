@@ -29,6 +29,19 @@
     #expect(configuration.route == .settingsWindow)
     #expect(configuration.initialPath.isEmpty)
     #expect(configuration.hostsSettingsWindow)
+    #expect(configuration.settingsPage == nil)
+    #expect(!configuration.performsInitialRefresh)
+  }
+
+  @Test
+  func settingsMenuBarRouteHostsTheMenuBarForm() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-menu-bar"])
+    )
+    #expect(configuration.route == .settingsMenuBar)
+    #expect(configuration.initialPath.isEmpty)
+    #expect(configuration.hostsSettingsWindow)
+    #expect(configuration.settingsPage == .menuBar)
     #expect(!configuration.performsInitialRefresh)
   }
 
@@ -58,9 +71,6 @@
       ("devices", "Devices", 3),
       ("usage", "Usage", 2),
       ("notifications", "Notifications", 2),
-      ("menu-bar-style", "Menu Bar Style", 2),
-      ("menu-bar-provider", "Menu Bar Provider", 2),
-      ("reset-time", "Reset time", 2),
       ("support", "Support", 2),
       ("diagnostics", "Diagnostics", 3),
     ]

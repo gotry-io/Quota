@@ -173,7 +173,8 @@ switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closin
 window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
 registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
 and **Support**, matching the current Settings home rows; the selected page persists in
-`settings.page`. Detail pages are filled later.
+`settings.page`. **Menu Bar** is one grouped form (preview, Style, Provider, Reset time, Show
+pace lines); other detail pages are filled later.
 
 ## Material and color
 
@@ -296,8 +297,7 @@ as one item each; Combined is the default arrangement for that size, and a fourt
 makes the bar Separate. More than one named provider cannot be Icon-only or Percent-only and still
 say whose number it is, so those two fall back to Icon and percent; Icon and today cost/tokens
 keep their style because each cell still wears a mark. The stored Style is left alone and
-applies again when the bar is back to one reading. Style choosing takes effect and returns;
-Provider is a set of toggles and stays until Back. Both the named set and the arrangement persist
+applies again when the bar is back to one reading. Both the named set and the arrangement persist
 in UserDefaults. A chosen provider with no current reading shows the mark alone and never borrows
 another provider's number, and **Percent**, **Icon and today cost**, and **Icon and today tokens**
 likewise fall back to the mark alone when there is no number to show, because an item with no
@@ -356,9 +356,7 @@ Overview
     │   └── Devices
     ├── Usage
     ├── Notifications
-    ├── Menu Bar Style
-    ├── Menu Bar Provider
-    ├── Reset time
+    ├── Menu Bar
     ├── Support
     │   └── Diagnostics
     └── Agents
@@ -442,8 +440,8 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 ### Settings
 
-Settings is also a titled window whose sidebar lists these sections; the panel pages below still
-exist until they move.
+Settings is also a titled window whose sidebar lists these sections. **Menu Bar** lives only in
+the window; the other panel pages below still exist until they move.
 
 Settings section order is fixed:
 
@@ -469,22 +467,23 @@ The Account group is the only place for account authentication actions. Buttons 
 service operations; there are no embedded web views.
 
 Quota contains the **Usage**, **Agents**, and **Notifications** destinations. The Usage root summary uses account-wide
-totals while signed in with Usage sync enabled, and local totals otherwise. Menu Bar contains
-**Style**, **Provider**, and **Reset time**: rows that state the choice in force on the right and
-open a page to change it, never a menu that drops over the panel. General contains the native mini
+totals while signed in with Usage sync enabled, and local totals otherwise. **Menu Bar** is one
+grouped form in the Settings window: a live preview of the status-item label, **Style**, **Provider**,
+**Reset time**, and **Show pace lines**. General contains the native mini
 **Launch at Login** switch, the **Refresh Interval** destination (1, 2, 5, 10, or 15 minutes,
-default 5), then the **Support** destination. Choosing an interval takes effect and returns, like
-Menu Bar Style. It is how often this Mac collects provider quota; Account summary still polls every
+default 5), then the **Support** destination. Choosing an interval takes effect and returns.
+It is how often this Mac collects provider quota; Account summary still polls every
 minute, and a window reset can collect quota once before the next interval.
 
-**Menu Bar Style** is one list, with no section header to repeat the page title. Every option is one
-ordinary settings row; the one in force carries an accent checkmark; choosing takes effect and
-returns, because there is nothing else on the page to confirm. **Reset time** is the same kind of
-list: **Relative** (`Resets in 3h 12m`) or **Absolute** (`Resets Mon 17:12`). **Menu Bar Provider** lists
-**Automatic** first, without a mark because it is not a provider, then the providers Overview is
+**Menu Bar** is one form. A preview row above **Style** draws the actual status-item label from
+`MenuBarLabelModel` for the current readings. **Style** is a Picker over every
+`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
+**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
 showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
-named set; named rows toggle and the page stays. When two or more are named, **Combined** and
-**Separate** follow in a second group; Combined is unavailable past three.
+named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
+Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
+**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
+writes the existing storage keys and takes effect immediately.
 
 Support is where help lives, and it asks the service nothing on its own: opening it starts no
 check and costs no refresh. **Help** contains the **Diagnostics** destination, **Feedback**, and
@@ -900,7 +899,7 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, Settings, Account, Agents, provider
 setup variants (CLI, API key, and browser session), a source, Devices, Usage, Notifications, Menu Bar
-Style, Menu Bar Provider, Reset time, Support, and Diagnostics. Inspect
+(`settings-menu-bar`), Support, and Diagnostics. Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

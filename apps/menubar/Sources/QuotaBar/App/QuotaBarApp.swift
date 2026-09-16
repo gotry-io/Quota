@@ -61,7 +61,12 @@ struct QuotaBarApp: App {
     @ViewBuilder
     private var visualRoot: some View {
       if visualTestConfiguration.hostsSettingsWindow {
-        SettingsWindowView()
+        SettingsWindowView(
+          model: model,
+          initialPage: visualTestConfiguration.settingsPage,
+          now: visualTestConfiguration.dataSource == .fixture
+            ? visualTestConfiguration.referenceDate : nil
+        )
       } else {
         MenuBarContentView(
           model: model,

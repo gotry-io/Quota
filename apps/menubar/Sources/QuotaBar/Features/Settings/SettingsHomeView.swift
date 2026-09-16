@@ -7,23 +7,10 @@ struct SettingsHomeView: View {
   let onOpenAgents: () -> Void
   let onOpenUsage: () -> Void
   let onOpenNotifications: () -> Void
-  let onOpenMenuBarStyle: () -> Void
-  let onOpenMenuBarProvider: () -> Void
-  let onOpenResetCopy: () -> Void
   let onOpenSupport: () -> Void
   let onOpenRefreshInterval: () -> Void
 
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
-  @AppStorage(MenuBarStylePreference.storageKey) private var menuBarStyle =
-    MenuBarStylePreference.fallback
-  @AppStorage(MenuBarProviderPreference.storageKey) private var menuBarProvider =
-    MenuBarProviderPreference.fallback
-  @AppStorage(MenuBarArrangementPreference.storageKey) private var menuBarArrangement =
-    MenuBarArrangementPreference.fallback
-  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
-    ResetCopyStylePreference.fallback
-  @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
-    PaceLinePreference.fallback
 
   var body: some View {
     ScrollView {
@@ -63,39 +50,6 @@ struct SettingsHomeView: View {
                 enabled: model.notificationRules.enabled),
               accessibilityLabel: "Notifications",
               action: onOpenNotifications
-            )
-          }
-        }
-
-        SettingsSection(title: "Menu Bar") {
-          VStack(alignment: .leading, spacing: 0) {
-            settingsDestinationRow(
-              title: "Style",
-              systemImage: "menubar.rectangle",
-              trailing: currentLayout.effectiveStyle(menuBarStyle).label,
-              accessibilityLabel: MenuBarRoute.menuBarStyle.title,
-              action: onOpenMenuBarStyle
-            )
-            settingsDestinationRow(
-              title: "Provider",
-              systemImage: "chart.bar.doc.horizontal",
-              trailing: currentLayout.settingsSummary,
-              accessibilityLabel: MenuBarRoute.menuBarProvider.title,
-              action: onOpenMenuBarProvider
-            )
-            settingsDestinationRow(
-              title: "Reset time",
-              systemImage: "clock.arrow.circlepath",
-              trailing: resetCopyStyle.label,
-              accessibilityLabel: MenuBarRoute.resetCopy.title,
-              action: onOpenResetCopy
-            )
-            settingsToggleRow(
-              title: "Show pace lines",
-              systemImage: "chart.xyaxis.line",
-              isOn: $showsPaceLines,
-              accessibilityLabel: "Show pace lines",
-              accessibilityHint: "Draw each window's usage curve and where it lands at reset"
             )
           }
         }
@@ -213,14 +167,6 @@ struct SettingsHomeView: View {
     case nil:
       "Sync quota and Usage across your devices."
     }
-  }
-
-  private var currentLayout: MenuBarLayout {
-    MenuBarLayout.resolve(
-      selection: menuBarProvider,
-      arrangement: menuBarArrangement,
-      visibleProviders: ProviderDisplayOrder.enabledProviders()
-    )
   }
 
   private var usageSummary: String {
