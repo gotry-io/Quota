@@ -21,40 +21,8 @@ struct MenuBarHeader: View {
   var showsLeadingIcon = false
   let trailing: TrailingAction
 
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @FocusState private var isOverflowButtonFocused: Bool
-  @FocusState private var isQuitFocused: Bool
-  @State private var isOverflowMenuExpanded = false
-
   var body: some View {
     headerRow
-      .overlay(alignment: .top) {
-        if isOverflowMenuExpanded {
-          ZStack(alignment: .top) {
-            Color.clear
-              .contentShape(Rectangle())
-              .frame(
-                width: QuotaDesign.Layout.panelWidth,
-                height: QuotaDesign.Layout.panelMaxHeight - QuotaDesign.Layout.headerHeight
-              )
-              .offset(y: QuotaDesign.Layout.headerHeight)
-              .onTapGesture { setOverflowMenuExpanded(false) }
-
-            overflowMenu
-              .offset(y: QuotaDesign.Layout.headerHeight)
-          }
-          .transition(
-            .asymmetric(
-              insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)),
-              removal: .opacity
-            )
-          )
-        }
-      }
-      .onExitCommand {
-        if isOverflowMenuExpanded { setOverflowMenuExpanded(false) }
-      }
-      .onChange(of: title) { _, _ in setOverflowMenuExpanded(false) }
   }
 
   private var headerRow: some View {
@@ -126,20 +94,38 @@ struct MenuBarHeader: View {
         action: action
       )
     case .overflowMenu:
-      headerButton(systemName: "ellipsis", accessibilityLabel: "Settings menu") {
-        setOverflowMenuExpanded(!isOverflowMenuExpanded)
+      Menu {
+        Button("Open Dashboard…") {
+          // WP 7.7
+        }
+        .keyboardShortcut("d", modifiers: .command)
+        .disabled(true)
+        Button("Settings…") {
+          SettingsWindowController.shared.show()
+        }
+        .keyboardShortcut(",", modifiers: .command)
+        Button("Check for Updates…", action: QuotaBarUpdater.checkForUpdates)
+        Divider()
+        Button("Quit QuotaBar") {
+          NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q", modifiers: .command)
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(QuotaDesign.Typography.headerActionIcon)
+          .foregroundStyle(QuotaPalette.body)
+          .frame(width: QuotaDesign.Layout.headerGlyphWidth)
+          .frame(
+            width: QuotaDesign.Layout.headerControlWidth,
+            height: QuotaDesign.Layout.headerHeight
+          )
+          .contentShape(Rectangle())
       }
-      .focusable()
-      .focused($isOverflowButtonFocused)
-      .accessibilityHint(isOverflowMenuExpanded ? "Collapse settings menu" : "Expand settings menu")
-      .onKeyPress(.upArrow) {
-        setOverflowMenuExpanded(true)
-        return .handled
-      }
-      .onKeyPress(.downArrow) {
-        setOverflowMenuExpanded(true)
-        return .handled
-      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .buttonStyle(QuotaHeaderButtonStyle())
+      .accessibilityLabel("Settings menu")
+      .help("Settings menu")
     case .usageSource(let source, let select):
       Menu {
         usageSourceItem(.account, selected: source, select: select)
@@ -215,56 +201,6 @@ struct MenuBarHeader: View {
         Text(source.label)
       } icon: {
         Image(systemName: source == selected ? "checkmark" : source.systemImage)
-      }
-    }
-  }
-
-  private var overflowMenu: some View {
-    HStack(spacing: 0) {
-      Spacer(minLength: 0)
-      Button {
-        isOverflowMenuExpanded = false
-        NSApplication.shared.terminate(nil)
-      } label: {
-        HStack(spacing: QuotaDesign.Spacing.inline) {
-          Image(systemName: "power")
-            .font(.system(size: 11))
-            .foregroundStyle(QuotaPalette.ink)
-            .frame(width: QuotaDesign.Layout.headerGlyphWidth)
-          Text("Quit QuotaBar")
-            .quotaSettingsLabelStyle()
-          Spacer(minLength: 0)
-        }
-        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-        .frame(maxWidth: .infinity, minHeight: QuotaDesign.Layout.fieldMinHeight)
-      }
-      .buttonStyle(
-        QuotaListRowButtonStyle(cornerRadius: QuotaDesign.Layout.floatingMenuRowCornerRadius)
-      )
-      .focusable()
-      .focused($isQuitFocused)
-      .accessibilityLabel("Quit QuotaBar")
-      .frame(width: QuotaDesign.Layout.headerMenuWidth)
-      .quotaFloatingMenuSurface()
-    }
-    .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-    .padding(.top, 2)
-  }
-
-  private func setOverflowMenuExpanded(_ expanded: Bool) {
-    if reduceMotion {
-      isOverflowMenuExpanded = expanded
-    } else {
-      withAnimation(expanded ? .easeOut(duration: 0.12) : .easeIn(duration: 0.08)) {
-        isOverflowMenuExpanded = expanded
-      }
-    }
-    Task { @MainActor in
-      await Task.yield()
-      if expanded, isOverflowMenuExpanded {
-        isQuitFocused = true
-      } else if !isOverflowMenuExpanded {
-        isOverflowButtonFocused = true
       }
     }
   }

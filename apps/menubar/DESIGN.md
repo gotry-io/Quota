@@ -155,9 +155,25 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `fieldCornerRadius` | 7pt | Editable/control surface |
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
+| `windowSidebarWidth` | 200pt | Settings window sidebar |
+| `settingsWindowMinSize` | 720×520 | Settings window minimum content size |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
+
+## Windows
+
+The Settings window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
+rather than the panel material, a 200pt sidebar, a 720×520 minimum content size, frame autosave name
+`QuotaBarSettingsWindow`, level `.normal`, and `collectionBehavior = [.moveToActiveSpace]`. It is
+resizable and miniaturizable; it does not go full screen. Esc and ⌘W close it.
+
+Opening Settings hides the menu-bar panel and registers the window with `WindowActivation`, which
+switches the process to `.regular` so a Dock icon and ⌘Tab entry exist. Closing the last registered
+window returns to `.accessory` without activating. Browser Access and Sparkle windows are not
+registered. The sidebar lists **Account**, **Agents**, **Notifications**, **Menu Bar**, **General**,
+and **Support**, matching the current Settings home rows; the selected page persists in
+`settings.page`. Detail pages are filled later.
 
 ## Material and color
 
@@ -304,14 +320,15 @@ panel on that provider; Combined and Automatic open the same panel without chang
 
 The header shows:
 
-- Overview: Quota mark, **QuotaBar**, and Settings gear.
+- Overview: Quota mark, **QuotaBar**, and Settings gear. The gear opens the Settings window.
 - Child page: Back and page title. Usage may place its Account/This Mac source menu at the trailing
   edge because the choice changes the whole page. Diagnostics places one icon-only **Recheck**
   (`arrow.clockwise`) action there only after a report exists; initial loading and full-page failure
   leave the header action area empty. Recheck starts or joins the real private-service refresh and
   waits for a newer evaluation; while checking, its icon becomes a small spinner and the action is
   disabled. If the bounded UI wait ends first, keep the prior completed report on screen.
-- Settings root: Back, **Settings**, and an overflow menu containing **Quit QuotaBar**.
+- Settings root: Back, **Settings**, and an overflow menu containing **Open Dashboard…** (disabled
+  until Dashboard ships), **Settings…**, **Check for Updates…**, and **Quit QuotaBar**.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
@@ -424,6 +441,9 @@ no action to offer, because the next scan finishes it. Nothing blocks Quit: quit
 service its `shutdown` and waits at most two seconds for the answer before going ahead without it.
 
 ### Settings
+
+Settings is also a titled window whose sidebar lists these sections; the panel pages below still
+exist until they move.
 
 Settings section order is fixed:
 
@@ -686,7 +706,7 @@ how does this Mac sign in — and contains exactly these sections, in this order
   account from the next. The menu uses `fieldFill` on the 24pt compact surface
   (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
   **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
-  size. It opens an app-owned floating menu (the same material as Settings overflow), not a
+  size. It opens an app-owned floating menu (`quotaFloatingMenuSurface`), not a
   system Menu. Choice rows use `fieldMinHeight` (32pt); the first item is **Automatic** with
   the quiet line **Newest live reading** under it, the rest are the available sources with no
   subtitle and no leading icons; the accent checkmark after the title is the only selected mark.

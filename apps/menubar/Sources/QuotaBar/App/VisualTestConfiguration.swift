@@ -76,6 +76,7 @@
     case resetCopy = "reset-time"
     case support
     case diagnostics
+    case settingsWindow = "settings-window"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -106,6 +107,7 @@
       case .resetCopy: [.settings, .resetCopy]
       case .support: [.settings, .support]
       case .diagnostics: [.settings, .support, .diagnostics]
+      case .settingsWindow: []
       }
     }
   }
@@ -190,6 +192,7 @@
     var colorScheme: ColorScheme? { appearance.colorScheme }
     var dynamicTypeSize: DynamicTypeSize { textSize.dynamicTypeSize }
     var performsInitialRefresh: Bool { dataSource == .live }
+    var hostsSettingsWindow: Bool { route == .settingsWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {

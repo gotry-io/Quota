@@ -286,7 +286,7 @@ struct MenuBarContentView: View {
   }
 
   private func openSettings() {
-    navigate(to: .settings)
+    SettingsWindowController.shared.show()
   }
 
   private func openProviderSettings(_ provider: ProviderID) {

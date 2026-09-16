@@ -14,6 +14,7 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    QuotaBarMainMenu.install()
     startStatusItemsIfNeeded()
   }
 
@@ -38,6 +39,9 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   private func startStatusItemsIfNeeded() {
     guard statusItems == nil, let model else { return }
     statusItems = MenuBarStatusItemController(model: model)
+    SettingsWindowController.shared.closePanel = { [weak self] in
+      self?.statusItems?.panel.close()
+    }
   }
 
   /// `terminateLater` is what makes an asynchronous last message possible: AppKit runs the run

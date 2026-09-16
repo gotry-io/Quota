@@ -22,6 +22,17 @@
   }
 
   @Test
+  func settingsWindowRouteHostsTheTitledSettingsShell() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "settings-window"])
+    )
+    #expect(configuration.route == .settingsWindow)
+    #expect(configuration.initialPath.isEmpty)
+    #expect(configuration.hostsSettingsWindow)
+    #expect(!configuration.performsInitialRefresh)
+  }
+
+  @Test
   func liveDataSourceEnablesViewDrivenSync() throws {
     let configuration = try #require(
       VisualTestConfiguration(
