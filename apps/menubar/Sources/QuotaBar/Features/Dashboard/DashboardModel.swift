@@ -73,6 +73,27 @@ struct DashboardQuotaSeries: Equatable, Identifiable, Sendable {
   let startedAt: Date?
 }
 
+/// One provider × window that had samples on the reader's local day.
+struct DashboardTodayRow: Equatable, Identifiable, Sendable {
+  let id: String
+  let provider: ProviderID
+  let windowTitle: String
+  /// Used percent at the start of the local day, or at the first sample of a window that
+  /// started today.
+  let usedStartPercent: Double
+  let usedNowPercent: Double
+  /// Today's cost when Usage can attribute it to this provider; nil otherwise.
+  let cost: String?
+  let resetAt: Date
+  let resetText: String
+
+  var windowName: String { "\(provider.displayName) · \(windowTitle)" }
+
+  var usedLine: String {
+    "\(QuotaHistoryCopy.peak(usedStartPercent)) → \(QuotaHistoryCopy.peak(usedNowPercent))"
+  }
+}
+
 struct DashboardQuotaPoint: Equatable, Identifiable, Sendable {
   var id: Date { date }
   let date: Date
@@ -93,7 +114,7 @@ final class DashboardModel {
   }
   /// `nil` is **All providers**.
   var selection: ProviderID?
-  /// Placeholder until WP 7.8 wires Usage. Quota ignores it.
+  /// Account when an account summary is available and Usage sync is on; otherwise This Mac.
   var usageSource: UsageSource = .account
 
   @ObservationIgnored
@@ -102,11 +123,13 @@ final class DashboardModel {
   init(
     model: MenuBarViewModel,
     defaults: UserDefaults = .standard,
-    selection: ProviderID? = nil
+    selection: ProviderID? = nil,
+    usageSource: UsageSource = .account
   ) {
     self.model = model
     self.defaults = defaults
     self.selection = selection
+    self.usageSource = usageSource
     let raw = defaults.string(forKey: DashboardRange.storageKey) ?? ""
     range = DashboardRange(rawValue: raw) ?? .fallback
   }
@@ -116,7 +139,32 @@ final class DashboardModel {
   }
 
   var showsUsageSourcePicker: Bool {
-    model.accountSummary != nil
+    model.accountSummary != nil && model.usageUploadEnabled
+  }
+
+  /// The source Usage actually answers from. Account is only honest while a summary exists
+  /// and sync is on.
+  var presentedUsageSource: UsageSource {
+    model.effectiveUsageSource(usageSource)
+  }
+
+  /// The six-item period control's selection. A custom range selects none of them.
+  var selectedUsagePeriodSegment: UsagePeriodSegment? {
+    let segment = model.usagePeriod.segment
+    return segment == .custom ? nil : segment
+  }
+
+  /// Projects stay on This Mac (ADR 0039). Account Usage has no such table.
+  var showsUsageProjects: Bool {
+    presentedUsageSource == .local && model.groupUsageByProject
+  }
+
+  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
+    model.selectUsagePeriod(selection)
+  }
+
+  func usagePeriodTitle(now: Date) -> String {
+    model.usagePeriodTitle(now: now)
   }
 
   func providers(now: Date) -> [DashboardProvider] {
@@ -129,6 +177,41 @@ final class DashboardModel {
       return all.filter { $0.provider == selection }
     }
     return all
+  }
+
+  /// One row per provider × window that had samples on the reader's local day.
+  func todayRows(now: Date, resetStyle: ResetCopyStyle = .relative) -> [DashboardTodayRow] {
+    let utcOffset = model.quotaHistorySamples?.utcOffsetSeconds ?? 0
+    let startOfDay = Self.localDayStart(now, utcOffsetSeconds: utcOffset)
+    return displayedProviders(now: now).flatMap { provider in
+      todayRows(
+        for: provider,
+        now: now,
+        startOfDay: startOfDay,
+        utcOffsetSeconds: utcOffset,
+        resetStyle: resetStyle
+      )
+    }
+  }
+
+  func presentedUsage(now: Date) -> DashboardUsagePresentation {
+    let source = presentedUsageSource
+    let selection = model.usagePeriod
+    let detail = model.usageDetail(source: source, selection: selection)
+    let usage = detail.map { presentedUsage(from: $0, source: source) }
+    return DashboardUsagePresentation(
+      source: source,
+      refreshWarning: model.errorMessage,
+      accountWarning: source == .account ? model.accountErrorMessage : nil,
+      statusWarning: usageStatusWarning(detail: detail, source: source),
+      usage: usage,
+      sessions: model.localUsage?.sessions,
+      isPreparing: model.isPreparingUsage(source: source) || model.customUsageLoading,
+      title: model.usagePeriodTitle(now: now),
+      available: model.usagePeriodIsAvailable(source: source, selection: selection),
+      budget: model.budgetProgress,
+      showsProjects: showsUsageProjects
+    )
   }
 
   func refresh() {
@@ -260,4 +343,191 @@ final class DashboardModel {
     if model.showsCacheRebuildNotice { return .rebuilding }
     return .noHistory
   }
+
+  private func todayRows(
+    for provider: DashboardProvider,
+    now: Date,
+    startOfDay: Date,
+    utcOffsetSeconds: Int,
+    resetStyle: ResetCopyStyle
+  ) -> [DashboardTodayRow] {
+    let byWindow = model.quotaHistorySamples?.samplesByProvider[provider.provider.rawValue] ?? [:]
+    let histories = model.quotaHistory[provider.provider] ?? [:]
+    let cost = todayCost(for: provider.provider)
+    let snapshotWindows = Dictionary(
+      uniqueKeysWithValues: (provider.currentReading?.windows ?? []).map { ($0.id, $0) }
+    )
+    var rows: [DashboardTodayRow] = []
+    for (windowId, history) in histories {
+      let title = snapshotWindows[windowId]?.displayTitle ?? windowId
+      let samples = byWindow[windowId] ?? []
+      for window in history.windowsToday {
+        let instance = samples.filter { $0.resetsAt == window.resetsAt }
+          .sorted { $0.observedAt < $1.observedAt }
+        let todaySamples = instance.filter {
+          $0.observedAt >= startOfDay && $0.observedAt <= now
+        }
+        guard !todaySamples.isEmpty else { continue }
+        let usedStart =
+          instance.last { $0.observedAt <= startOfDay }?.usedPercent
+          ?? todaySamples.first?.usedPercent
+          ?? window.peakUsedPercent
+        let usedNow = todaySamples.last?.usedPercent ?? window.peakUsedPercent
+        rows.append(
+          DashboardTodayRow(
+            id: "\(provider.provider.rawValue)|\(windowId)|\(window.startedAt.timeIntervalSince1970)",
+            provider: provider.provider,
+            windowTitle: title,
+            usedStartPercent: usedStart,
+            usedNowPercent: usedNow,
+            cost: cost,
+            resetAt: window.resetsAt,
+            resetText: Self.resetColumn(resetsAt: window.resetsAt, now: now, style: resetStyle)
+          )
+        )
+      }
+    }
+    return rows.sorted {
+      $0.resetAt == $1.resetAt
+        ? $0.windowTitle.localizedStandardCompare($1.windowTitle) == .orderedAscending
+        : $0.resetAt < $1.resetAt
+    }
+  }
+
+  private func todayCost(for provider: ProviderID) -> String? {
+    guard let detail = model.usageDetail(source: presentedUsageSource, period: .today) else {
+      return nil
+    }
+    guard
+      let agent = detail.usage.agents.first(where: { $0.agent.menuBarProvider == provider })
+    else {
+      return nil
+    }
+    return MenuBarTodayUsage.make(tokens: agent.totals.totalTokens, cost: agent.cost).cost?.text
+  }
+
+  private func presentedUsage(
+    from detail: LocalServiceUsageDetail,
+    source: UsageSource
+  ) -> DashboardPresentedUsage {
+    let usage = detail.usage
+    let models = usage.agents.flatMap { agent in
+      agent.providers.flatMap { provider in
+        provider.models.map {
+          DashboardPresentedUsageModel($0, provider: provider.provider, agent: agent.agent)
+        }
+      }
+    }
+    return DashboardPresentedUsage(
+      totals: DashboardPresentedUsageTotals(usage.totals),
+      cost: usage.cost,
+      cacheSaved: usage.cacheSaved,
+      cacheHitBasisPoints: usage.cacheHitBasisPoints,
+      days: usage.days,
+      hoursOfDay: usage.hoursOfDay,
+      models: models,
+      projects: source == .local && model.groupUsageByProject ? usage.projects : nil
+    )
+  }
+
+  private func usageStatusWarning(detail: LocalServiceUsageDetail?, source: UsageSource) -> String?
+  {
+    guard let detail, detail.incomplete || detail.detailsTruncated else { return nil }
+    return source == .local
+      ? "Some local Usage may be incomplete."
+      : "Some account Usage may be incomplete."
+  }
+
+  /// The reader's local midnight for `now`, using the offset the samples were folded with.
+  static func localDayStart(_ now: Date, utcOffsetSeconds: Int) -> Date {
+    let day = Int(
+      ((now.timeIntervalSince1970 + Double(utcOffsetSeconds)) / 86_400).rounded(.down))
+    return Date(timeIntervalSince1970: Double(day) * 86_400 - Double(utcOffsetSeconds))
+  }
+
+  static func resetColumn(resetsAt: Date, now: Date, style: ResetCopyStyle) -> String {
+    if let copy = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now, style: style) {
+      return copy
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale.autoupdatingCurrent
+    formatter.setLocalizedDateFormatFromTemplate("jm")
+    return formatter.string(from: resetsAt)
+  }
+}
+
+struct DashboardUsagePresentation: Equatable {
+  let source: UsageSource
+  let refreshWarning: String?
+  let accountWarning: String?
+  let statusWarning: String?
+  let usage: DashboardPresentedUsage?
+  let sessions: LocalUsageSessions?
+  let isPreparing: Bool
+  let title: String
+  let available: Bool
+  let budget: UsageBudgetProgress?
+  let showsProjects: Bool
+}
+
+struct DashboardPresentedUsage: Equatable {
+  let totals: DashboardPresentedUsageTotals
+  let cost: UsageCostOutcome
+  let cacheSaved: UsageCacheSaved
+  let cacheHitBasisPoints: Int?
+  let days: [LocalUsageDay]?
+  let hoursOfDay: [LocalUsageHourOfDay]?
+  let models: [DashboardPresentedUsageModel]
+  let projects: [LocalUsageProjectSummary]?
+}
+
+struct DashboardPresentedUsageTotals: Equatable {
+  let totalTokens: Int
+  let inputTokens: Int
+  let outputTokens: Int
+  let cacheReadInputTokens: Int
+  let cacheWriteInputTokens: Int
+  let reasoningTokens: Int
+  let messages: Int
+
+  init(_ totals: UsageSummaryTotals) {
+    totalTokens = totals.totalTokens
+    inputTokens = totals.inputTokens
+    outputTokens = totals.outputTokens
+    cacheReadInputTokens = totals.cacheReadInputTokens
+    cacheWriteInputTokens = totals.cacheWriteInputTokens
+    reasoningTokens = totals.reasoningTokens
+    messages = totals.messages
+  }
+}
+
+struct DashboardPresentedUsageModel: Equatable {
+  let provider: InferenceProvider?
+  let agent: BillingAgent?
+  let model: String
+  let totals: DashboardPresentedUsageTotals
+  let cost: UsageCostOutcome
+
+  var id: String {
+    "\(agent?.rawValue ?? "account"):\(provider?.rawValue ?? "unknown"):\(model)"
+  }
+
+  init(
+    _ model: LocalUsageModelSummary,
+    provider: InferenceProvider,
+    agent: BillingAgent
+  ) {
+    self.provider = provider
+    self.agent = agent
+    self.model = model.model
+    totals = DashboardPresentedUsageTotals(model.totals)
+    cost = model.cost
+  }
+}
+
+struct DashboardPresentedUsageProvider: Identifiable {
+  let provider: InferenceProvider?
+  let models: [DashboardPresentedUsageModel]
+
+  var id: String { provider?.rawValue ?? "unknown" }
 }

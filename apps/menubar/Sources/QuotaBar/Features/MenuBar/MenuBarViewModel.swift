@@ -121,7 +121,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   /// The name the sign-in gave, held until an account read carries one of its own.
   private(set) var signInDisplayLabel: String?
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
-  /// Which period the Usage page is showing.
+  /// Which period Dashboard Usage is showing.
   private(set) var usagePeriod: UsagePeriodSelection = .today
   /// Custom periods this Mac has folded, keyed `from|to`. Memory only: a fold is cheap and the
   /// four `get_state` carries are the ones worth keeping.
@@ -487,6 +487,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
           all: Self.localPeriodDetail(usage.all)
         )
         usagePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
+        budgetMonthDetail = local.last30Days
       }
       authStatus = visualTestState.authStatus
       accountDeviceID = visualTestState.deviceID
@@ -940,7 +941,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   }
 
   /// Account answers for Usage only while it can. Everywhere the selection is honored uses
-  /// this, so Overview and the Usage page never disagree about which numbers are on screen.
+  /// this, so Overview and Dashboard Usage never disagree about which numbers are on screen.
   func effectiveUsageSource(_ selected: UsageSource) -> UsageSource {
     !usageUploadEnabled || accountSummary == nil ? .local : selected
   }

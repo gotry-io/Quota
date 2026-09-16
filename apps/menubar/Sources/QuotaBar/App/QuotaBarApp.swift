@@ -80,7 +80,8 @@ struct QuotaBarApp: App {
           model: model,
           now: visualTestConfiguration.dataSource == .fixture
             ? visualTestConfiguration.referenceDate : nil,
-          initialSelection: visualTestConfiguration.dashboardSelection
+          initialSelection: visualTestConfiguration.dashboardSelection,
+          initialUsageSource: visualTestConfiguration.dashboardUsageSource
         )
       } else if visualTestConfiguration.hostsSettingsWindow {
         SettingsWindowView(
@@ -96,7 +97,6 @@ struct QuotaBarApp: App {
         MenuBarContentView(
           model: model,
           initialPath: visualTestConfiguration.initialPath,
-          initialUsageSource: visualTestConfiguration.route == .usage ? .local : .account,
           performsInitialRefresh: visualTestConfiguration.performsInitialRefresh,
           seedsLaunchAtLogin: false
         )

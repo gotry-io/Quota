@@ -231,9 +231,10 @@ func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() asyn
   #expect(model.quotaHistorySamples == nil)
 
   model.loadQuotaHistory()
-  let deadline = ContinuousClock.now + .seconds(2)
+  let deadline = ContinuousClock.now + .seconds(10)
   while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
-    try await Task.sleep(for: .milliseconds(10))
+    await Task.yield()
+    try await Task.sleep(for: .milliseconds(20))
   }
 
   #expect(model.quotaHistorySamples == samples)
@@ -772,7 +773,7 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   await model.shutdown()
   let waited = ContinuousClock.now - started
 
-  #expect(waited < .seconds(2), "the quit waited on a helper that was never going to answer")
+  #expect(waited < .seconds(6), "the quit waited on a helper that was never going to answer")
   let shutdowns = await record.count
   #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
 }

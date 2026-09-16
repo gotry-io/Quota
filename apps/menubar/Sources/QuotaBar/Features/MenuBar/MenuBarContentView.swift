@@ -9,7 +9,6 @@ struct MenuBarContentView: View {
   @State private var navigationDirection: NavigationDirection = .forward
   @State private var navigationTransitionActive = false
   @State private var navigationTransitionGeneration = 0
-  @State private var usageSource: UsageSource = .account
   private let performsInitialRefresh: Bool
   private let seedsLaunchAtLogin: Bool
   private let overflowMenuStartsExpanded: Bool
@@ -18,7 +17,6 @@ struct MenuBarContentView: View {
     model: MenuBarViewModel,
     panelSession: MenuBarPanelSession? = nil,
     initialPath: [MenuBarRoute] = [],
-    initialUsageSource: UsageSource = .account,
     performsInitialRefresh: Bool = true,
     seedsLaunchAtLogin: Bool = true,
     overflowMenuStartsExpanded: Bool = false
@@ -29,7 +27,6 @@ struct MenuBarContentView: View {
     self.seedsLaunchAtLogin = seedsLaunchAtLogin
     self.overflowMenuStartsExpanded = overflowMenuStartsExpanded
     _navigation = State(initialValue: MenuBarNavigationState(path: initialPath))
-    _usageSource = State(initialValue: initialUsageSource)
   }
 
   var body: some View {
@@ -39,14 +36,14 @@ struct MenuBarContentView: View {
       MenuBarShell(
         model: model,
         title: navigation.title,
-        usageSource: usageSource,
+        usageSource: .account,
         now: context.date,
         canNavigateBack: navigation.canNavigateBack,
         onNavigateBack: navigateBack,
         showsLeadingIcon: navigation.currentRoute == nil,
         trailing: headerTrailingAction,
         overflowMenuStartsExpanded: overflowMenuStartsExpanded,
-        onOpenUsage: { navigate(to: .usage) }
+        onOpenDashboard: { DashboardWindowController.shared.show() }
       ) {
         currentPage(
           now: context.date,
@@ -99,9 +96,7 @@ struct MenuBarContentView: View {
     switch navigation.currentRoute {
     case nil:
       return .overflowMenu
-    case .usage where model.usageUploadEnabled && model.accountSummary != nil:
-      return .usageSource(usageSource) { usageSource = $0 }
-    case .usage, .provider:
+    case .provider:
       return .none
     }
   }
@@ -125,8 +120,6 @@ struct MenuBarContentView: View {
       )
     case .provider(let provider):
       providerQuotaDetail(provider, now: now)
-    case .usage:
-      AccountUsageView(model: model, source: $usageSource, now: now)
     }
   }
 
@@ -235,12 +228,10 @@ private enum NavigationDirection {
 
 enum MenuBarRoute: Hashable {
   case provider(ProviderID)
-  case usage
 
   var title: String {
     switch self {
     case .provider(let provider): provider.displayName
-    case .usage: "Usage"
     }
   }
 }

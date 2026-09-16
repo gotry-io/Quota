@@ -61,7 +61,6 @@
   enum VisualTestRoute: String {
     case overview
     case providerCodex = "provider-codex"
-    case usage
     case settingsWindow = "settings-window"
     case settingsAccount = "settings-account"
     case settingsAgents = "settings-agents"
@@ -73,15 +72,16 @@
     case settingsSupport = "settings-support"
     case dashboard
     case dashboardCodex = "dashboard-codex"
+    case dashboardUsage = "dashboard-usage"
+    case dashboardUsageLocal = "dashboard-usage-local"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
       case .overview: []
       case .providerCodex: [.provider(.codex)]
-      case .usage: [.usage]
       case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
         .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
-        .settingsSupport, .dashboard, .dashboardCodex:
+        .settingsSupport, .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal:
         []
       }
     }
@@ -110,6 +110,13 @@
       switch self {
       case .dashboardCodex: .codex
       default: nil
+      }
+    }
+
+    var dashboardUsageSource: UsageSource {
+      switch self {
+      case .dashboardUsageLocal: .local
+      default: .account
       }
     }
   }
@@ -206,12 +213,13 @@
     }
     var hostsDashboardWindow: Bool {
       switch route {
-      case .dashboard, .dashboardCodex: true
+      case .dashboard, .dashboardCodex, .dashboardUsage, .dashboardUsageLocal: true
       default: false
       }
     }
     var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
     var dashboardSelection: ProviderID? { route.dashboardSelection }
+    var dashboardUsageSource: UsageSource { route.dashboardUsageSource }
     var hostsTitledWindow: Bool { hostsSettingsWindow || hostsDashboardWindow }
 
     @MainActor

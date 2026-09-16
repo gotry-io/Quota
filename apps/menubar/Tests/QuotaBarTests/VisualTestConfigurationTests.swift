@@ -93,6 +93,7 @@
     #expect(all.hostsTitledWindow)
     #expect(!all.hostsSettingsWindow)
     #expect(all.dashboardSelection == nil)
+    #expect(all.dashboardUsageSource == .account)
     #expect(all.initialPath.isEmpty)
 
     let codex = try #require(
@@ -102,6 +103,22 @@
     #expect(codex.hostsDashboardWindow)
     #expect(codex.dashboardSelection == .codex)
     #expect(codex.initialPath.isEmpty)
+
+    let usage = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-usage"])
+    )
+    #expect(usage.route == .dashboardUsage)
+    #expect(usage.hostsDashboardWindow)
+    #expect(usage.dashboardUsageSource == .account)
+    #expect(usage.initialPath.isEmpty)
+
+    let local = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-usage-local"])
+    )
+    #expect(local.route == .dashboardUsageLocal)
+    #expect(local.hostsDashboardWindow)
+    #expect(local.dashboardUsageSource == .local)
+    #expect(local.initialPath.isEmpty)
   }
 
   @Test @MainActor
@@ -141,30 +158,25 @@
   func liveDataSourceEnablesViewDrivenSync() throws {
     let configuration = try #require(
       VisualTestConfiguration(
-        arguments: ["QuotaBar", "--data-source", "live", "--route", "usage"]
+        arguments: ["QuotaBar", "--data-source", "live", "--route", "dashboard-usage"]
       )
     )
 
     #expect(configuration.dataSource == .live)
-    #expect(configuration.initialPath == [.usage])
+    #expect(configuration.hostsDashboardWindow)
+    #expect(configuration.initialPath.isEmpty)
     #expect(configuration.performsInitialRefresh)
   }
 
   @Test
-  func detailVisualRoutesUseOneTypedNavigationStack() throws {
-    let routeExpectations: [(rawValue: String, title: String, depth: Int)] = [
-      ("usage", "Usage", 1),
-    ]
-
-    for expectation in routeExpectations {
-      let configuration = try #require(
-        VisualTestConfiguration(arguments: ["QuotaBar", "--route", expectation.rawValue])
-      )
-      #expect(configuration.initialPath.count == expectation.depth)
-      #expect(configuration.initialPath == [.usage])
-      #expect(configuration.initialPath.last?.title == expectation.title)
-      #expect(!configuration.performsInitialRefresh)
-    }
+  func panelVisualRoutesStayOnTheOverviewStack() throws {
+    let configuration = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "provider-codex"])
+    )
+    #expect(configuration.initialPath == [.provider(.codex)])
+    #expect(configuration.initialPath.last?.title == "Codex")
+    #expect(!configuration.hostsDashboardWindow)
+    #expect(!configuration.performsInitialRefresh)
   }
 
   @Test @MainActor
@@ -173,7 +185,7 @@
     let configuration = try #require(
       VisualTestConfiguration(
         arguments: [
-          "QuotaBar", "--fixture", "content", "--route", "usage", "--appearance", "dark",
+          "QuotaBar", "--fixture", "content", "--route", "dashboard-usage", "--appearance", "dark",
           "--text-size", "accessibility",
         ],
         referenceDate: referenceDate
@@ -181,7 +193,8 @@
     )
     let model = configuration.makeModel()
 
-    #expect(configuration.initialPath == [.usage])
+    #expect(configuration.hostsDashboardWindow)
+    #expect(configuration.dashboardUsageSource == .account)
     #expect(configuration.appearance == .dark)
     #expect(configuration.textSize == .accessibility)
     #expect(model.groupUsageByProject)

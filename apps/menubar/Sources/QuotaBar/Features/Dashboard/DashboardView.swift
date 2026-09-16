@@ -15,13 +15,18 @@ struct DashboardView: View {
     model: MenuBarViewModel,
     now: Date? = nil,
     initialSelection: ProviderID? = nil,
+    initialUsageSource: UsageSource = .account,
     defaults: UserDefaults = .standard
   ) {
     self.model = model
     nowOverride = now
     _dashboard = State(
       initialValue: DashboardModel(
-        model: model, defaults: defaults, selection: initialSelection)
+        model: model,
+        defaults: defaults,
+        selection: initialSelection,
+        usageSource: initialUsageSource
+      )
     )
   }
 
@@ -58,7 +63,7 @@ struct DashboardView: View {
           max: QuotaDesign.Layout.windowSidebarWidth
         )
       } detail: {
-        quotaDetail(now: now, dashboard: dashboard)
+        detail(now: now, dashboard: dashboard)
       }
       .navigationSplitViewStyle(.balanced)
       .toolbar {
@@ -155,13 +160,16 @@ struct DashboardView: View {
   }
 
   @ViewBuilder
-  private func quotaDetail(now: Date, dashboard: DashboardModel) -> some View {
+  private func detail(now: Date, dashboard: DashboardModel) -> some View {
     let providers = dashboard.displayedProviders(now: now)
+    let rows = dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
         ForEach(providers) { provider in
           quotaCard(provider, now: now)
         }
+        DashboardTodayTable(rows: rows)
+        DashboardUsageView(dashboard: dashboard, now: now)
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)

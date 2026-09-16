@@ -46,10 +46,10 @@ struct AccountSettingsPageTests {
   func panelNavigationStaysZeroOrOneDeep() {
     var navigation = MenuBarNavigationState()
     navigation.open(.provider(.codex))
-    navigation.open(.usage)
+    navigation.open(.provider(.claude))
 
-    #expect(navigation.path == [.usage])
-    #expect(navigation.title == "Usage")
+    #expect(navigation.path == [.provider(.claude)])
+    #expect(navigation.title == "Claude Code")
     #expect(navigation.canNavigateBack)
 
     navigation.navigateBack()

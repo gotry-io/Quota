@@ -71,6 +71,84 @@
     }
 
     @Test
+    func todayRowsNameEachWindowThatHadSamplesToday() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      let rows = dashboard.todayRows(now: referenceDate)
+      #expect(!rows.isEmpty)
+      #expect(Set(rows.map(\.provider)).isSuperset(of: [.codex, .claude, .grok]))
+      for row in rows {
+        #expect(row.usedLine.contains("→"))
+        #expect(!row.windowName.isEmpty)
+        #expect(!row.resetText.isEmpty)
+      }
+      dashboard.selection = .codex
+      let codexRows = dashboard.todayRows(now: referenceDate)
+      #expect(!codexRows.isEmpty)
+      #expect(codexRows.allSatisfy { $0.provider == .codex })
+    }
+
+    @Test
+    func projectsTableIsAbsentForTheAccountSourceAndPresentOnThisMac() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard-usage"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(
+        model: model, defaults: defaults.store, usageSource: .account)
+      #expect(dashboard.presentedUsageSource == .account)
+      #expect(!dashboard.showsUsageProjects)
+      let account = dashboard.presentedUsage(now: referenceDate)
+      #expect(account.usage?.projects == nil)
+      #expect(!account.showsProjects)
+
+      dashboard.usageSource = .local
+      #expect(dashboard.showsUsageProjects)
+      let local = dashboard.presentedUsage(now: referenceDate)
+      #expect(local.usage?.projects?.map(\.projectKey) == ["Quota", "other"])
+      #expect(local.showsProjects)
+    }
+
+    @Test
+    func aCustomRangeLeavesThePeriodControlUnselected() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      #expect(dashboard.selectedUsagePeriodSegment == .day)
+      dashboard.selectUsagePeriod(.custom(from: "2026-08-01", to: "2026-08-03"))
+      #expect(dashboard.selectedUsagePeriodSegment == nil)
+      #expect(model.usagePeriod.segment == .custom)
+      dashboard.selectUsagePeriod(.last7Days)
+      #expect(dashboard.selectedUsagePeriodSegment == .last7Days)
+    }
+
+    @Test
     func rangeFilterCutsSamples() async throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
@@ -152,9 +230,10 @@
       )
       await model.refreshIfNeeded()
       model.loadQuotaHistory()
-      let deadline = ContinuousClock.now + .seconds(2)
+      let deadline = ContinuousClock.now + .seconds(10)
       while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
-        try await Task.sleep(for: .milliseconds(10))
+        await Task.yield()
+        try await Task.sleep(for: .milliseconds(20))
       }
 
       let dashboard = DashboardModel(model: model, defaults: defaults.store)

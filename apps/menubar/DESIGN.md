@@ -197,10 +197,11 @@ with its catalog brand mark. **All providers** shows every shown provider's card
 provider shows that provider only. The selection is not persisted.
 
 The toolbar holds the history range — **Today**, **7D**, **30D**, persisted as `dashboard.range`,
-default 7D — a Usage source picker (**Account** / **This Mac**) that this version does not yet apply,
-and a refresh action that uses the same tooltip as the panel footer: **Refresh all quota. Updated 3m
+default 7D — a Usage source picker (**Account** / **This Mac**) that the Usage section honors, and a
+refresh action that uses the same tooltip as the panel footer: **Refresh all quota. Updated 3m
 ago**, or **Not checked** before any sync. The Usage source picker is hidden when Account data is
-unavailable.
+unavailable or Usage sync is disabled; in those states Usage is unambiguously This Mac. Changing
+source preserves the selected period.
 
 ### Quota
 
@@ -222,6 +223,120 @@ Empty states: while the cache is rebuilding and this Mac has no samples yet, the
 **Usage history is catching up** / **Quota and Account stay available.** A provider that is not
 signed in reuses `SignInRungPresentation.statusLine`. A signed-in provider with no samples yet
 reads **No history yet**.
+
+### Today
+
+A table under the Quota cards. One row per provider × window that had samples today. Columns:
+window (catalog provider name · window title), used percent at the start of the local day → now
+(`12% → 47%`, the same whole percents `QuotaHistoryCopy.peak` prints), cost today when today's
+Usage can attribute it to that provider, and the reset time — the same reset copy the Quota header
+uses, or the local clock time when that reset has already passed. The panel's
+`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Dashboard lays those facts in
+columns. A provider or window with no sample today is omitted. Sidebar selection narrows the rows
+the same way it narrows Quota cards.
+
+### Usage
+
+Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
+it uses This Mac. The source menu is the Dashboard toolbar; omit it when Account data is
+unavailable or Usage sync is disabled. Changing source preserves the selected period.
+
+A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
+labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
+background, with the selected item highlighted inside it; do not wrap it in another group surface.
+A custom range selects none of the six, so the tab control shows nothing selected and the row
+beneath it says what the period covers. At Dashboard width the control is leading-aligned and no
+wider than 480pt.
+
+Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
+calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
+Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
+and **Next period** is disabled on the current unit. The period names, the range title, and the
+budget copy are in Shared product vocabulary.
+
+Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Dashboard and
+changing either selector starts no collection or network work and shows no loading state when a
+snapshot already exists. Every other period is one `usage_period` request, which folds the hours
+this Mac already stored rather than collecting again; while it is in flight the page says
+**Preparing Usage…**, and a state change discards those folds and asks again because the hours
+behind them moved. The Account read hands this device four folds, not the days behind them, so on
+Account a period outside those four says **This period is folded from this Mac's own hours. Switch
+the source to this Mac to see it.** If the selected source has no snapshot yet and that
+component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
+absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
+Preparing and empty Usage remain section states below the period tabs because those controls are
+still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
+not replace available content.
+
+When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
+folded the same way any other custom period is, and it is shown whatever period the page is
+otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
+
+The default page contains:
+
+- Summary: a titled group with a totals row of Tokens, Cost, and Cache hit, followed by the six
+  token and message metrics in a three-column grid. Cache hit is whole percent, with `saved $X.XX`
+  under it when the period's cache reads could be priced and nothing under it when they could not
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values use the
+  primary text tone; grid labels stay muted while their values use the secondary tone. Values use
+  `UsageValueFormatter`.
+- Daily, for This Mac and for any period but All: one Swift Charts `BarMark` per local day of
+  cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A day with
+  nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is the
+  shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
+  the section when the period reported nothing. All has no Daily section: its per-day shape is the
+  Account's activity chart.
+- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
+  — independent of the collecting client and of who billed the request. A **Top models** list of
+  the three largest leads the section when there is more than one, each as `share · tokens`. Each
+  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
+  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
+  share` when unpriced.
+- Rhythm, for This Mac and for Account, and for any period but All: 24 bars at 36pt, one per
+  hour of the local clock, then Morning / Afternoon / Evening / Night, each as a whole-percent
+  share. Omit the section when every hour is empty. Account hours come from
+  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
+  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
+  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
+  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
+  Account Usage has no such section.
+- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
+  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
+  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
+  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
+  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
+
+Provider headings use the brand mark of the structured provider the service sent; the client never
+reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
+exists, use an honest semantic system symbol rather than another provider's logo. Approved
+monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
+Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
+provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
+each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
+Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
+at most the first five models in the existing cost/tokens order. If the same provider/model pair
+appears through more than one client, append the client name only to disambiguate those rows.
+
+Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
+data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
+summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
+another alert. Technical detail remains available through Support.
+
+Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
+suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
+name for stability.
+
+Compact cost copy is exact:
+
+- complete: `$X`;
+- partial: `≥ $X`;
+- unavailable: `— unpriced`.
+
+Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
+Summary and model values use two fractional digits to preserve the single-line layout.
 
 ## Material and color
 
@@ -371,15 +486,14 @@ The header shows:
   **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the menu focuses Quit.
   VoiceOver names the trigger **Settings menu**. **Open Dashboard…** opens the Dashboard window;
   **Settings…** opens the Settings window; there is no gear.
-- Child page: Back and page title. Provider detail has no trailing action. Usage may place its
-  Account/This Mac source menu at the trailing edge because the choice changes the whole page.
+- Child page: Back and page title. Provider detail has no trailing action.
 
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
-tokens` from the Usage source the Usage page would show and is a button that opens Usage
-(VoiceOver **Open Usage**); cost drops out when the day is unpriced, and the whole line is absent
-when there are no tokens. Today's number belongs beside quota everywhere, so it lives in the bar
-every page already has rather than in an Overview line of its own.
+tokens` from the Usage source Dashboard would show and is a button that opens Dashboard
+(VoiceOver **Open Dashboard**); cost drops out when the day is unpriced, and the whole line is
+absent when there are no tokens. Today's number belongs beside quota everywhere, so it lives in
+the bar every page already has rather than in an Overview line of its own.
 
 When the last sync finished is a fact about the refresh action, not a number worth a permanent
 line: `arrow.clockwise` carries **Refresh all quota. Updated 3m ago** — or **Not checked** before
@@ -395,8 +509,7 @@ Back returns one level.
 
 ```text
 Overview
-├── Provider (read-only quota)
-└── Usage
+└── Provider (read-only quota)
 
 Settings window
 ├── Account (Devices on the same page)
@@ -410,7 +523,7 @@ Settings window
 
 Dashboard window       (sidebar)  All providers · <each shown provider>
 ├── Quota      (30-day window curves, pace phrase, reset, peak)
-├── Today      (per-window cost today)
+├── Today      (per-window used % today, cost when attributable, reset)
 └── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
 ```
 
@@ -421,7 +534,7 @@ account observations; Rust has already merged global identities and selected one
 observation. Swift never repeats that policy. Never add or average percentages across devices.
 
 Overview is quota and nothing else. Provider groups carry quota only: models, messages, and period
-totals stay on the Usage page and never create or extend an Overview provider
+totals stay on Dashboard Usage and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
 the only Overview destination, into a read-only quota page for that provider. Agent settings
 live in the Settings window (**Agents**). The heading is a destination at
@@ -513,10 +626,10 @@ The Account window page is one Form in every state:
 The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Usage stays in the panel until Dashboard takes it, reached from the footer **Today · $x** button.
-The Usage root summary uses account-wide totals while signed in with Usage sync enabled, and local
-totals otherwise. **Menu Bar** is one grouped form in the Settings window: a live preview of the
-status-item label, **Style**, **Provider**, **Reset time**, and **Show pace lines**.
+Usage lives on Dashboard, reached from the footer **Today · $x** button. The Usage root summary
+uses account-wide totals while signed in with Usage sync enabled, and local totals otherwise.
+**Menu Bar** is one grouped form in the Settings window: a live preview of the status-item label,
+**Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
 **General** is a window page: **Launch at Login**, **Refresh Interval** (Picker, 1, 2, 5, 10, or 15
 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
@@ -621,108 +734,6 @@ or closed app is broken. Signed-out remains explicit. Never display raw Device I
 provider login for another Device. **Remove** confirms and then opens `quota.gotry.io/my/devices`,
 where Device deletion lives. Empty and signed-out states stay on this page with Sign In. An
 unavailable account with no device content offers Retry.
-
-### Usage
-
-Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
-it uses This Mac. The compact source menu is the Usage header's trailing action; its options are
-simply **Account**, with a single-account symbol, and **This Mac**. Omit the menu when Account data is
-unavailable or Usage sync is disabled; in those states the page is unambiguously local. Changing
-source preserves the selected period.
-
-A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
-labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
-background, with the selected item highlighted inside it; do not wrap it in another group surface.
-A custom range selects none of the six, so the tab control shows nothing selected and the row
-beneath it says what the period covers.
-
-Under the tabs is one 28pt row: **Previous period**, the range title, **Next period**, and a
-calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
-Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
-and **Next period** is disabled on the current unit. The period names, the range title, and the
-budget copy are in Shared product vocabulary.
-
-Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
-changing either selector starts no collection or network work and shows no loading state when a
-snapshot already exists. Every other period is one `usage_period` request, which folds the hours
-this Mac already stored rather than collecting again; while it is in flight the page says
-**Preparing Usage…**, and a state change discards those folds and asks again because the hours
-behind them moved. The Account read hands this device four folds, not the days behind them, so on
-Account a period outside those four says **This period is folded from this Mac's own hours. Switch
-the source to this Mac to see it.** If the selected source has no snapshot yet and that
-component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
-absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
-Preparing and empty Usage remain section states below the period tabs because those controls are
-still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
-not replace available content.
-
-When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
-progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
-folded the same way any other custom period is, and it is shown whatever period the page is
-otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
-
-The default page contains:
-
-- Summary: a titled group with separate Tokens, Cost, and Cache hit headline metrics followed by
-  the six token and message metrics in a two-column grid. Cache hit is whole percent, with
-  `saved $X.XX` under it when the period's cache reads could be priced and nothing under it when
-  they could not ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values
-  use the primary text tone; grid labels stay muted while their values use the secondary tone.
-- Daily, for This Mac and for any period but 2 Years: one bar per local day at 44pt tall, then the
-  last seven of those days as `date` / `tokens · cost` rows. The bars are a plain neutral fill at
-  55% ink, and a day with nothing in it is drawn at 12% rather than left out, so the shape of a
-  week is the shape of the week. Omit the section when the period reported nothing. The 2 Years
-  period has no Daily section: its per-day shape is the Account's activity chart.
-- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. A **Top models** list of
-  the three largest leads the section when there is more than one, each as `share · tokens`. Each
-  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
-  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
-  share` when unpriced.
-- Rhythm, for This Mac and for Account, and for any period but 2 Years: 24 bars at 36pt, one per
-  hour of the local clock, then Morning / Afternoon / Evening / Night in a two-column grid, each as
-  a whole-percent share. Omit the section when every hour is empty. Account hours come from
-  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
-  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
-  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
-  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
-  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
-  Account Usage has no such section.
-- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
-  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
-  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
-  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
-  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
-
-Provider headings use the brand mark of the structured provider the service sent; the client never
-reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
-exists, use an honest semantic system symbol rather than another provider's logo. Approved
-monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
-Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
-provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
-each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
-Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
-at most the first five models in the existing cost/tokens order. If the same provider/model pair
-appears through more than one client, append the client name only to disambiguate those rows.
-
-Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
-data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
-summary cost uses `— unpriced`, while model rows omit unavailable cost entirely; neither state adds
-another alert. Technical detail remains available through Support.
-
-Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
-suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
-name for stability.
-
-Compact cost copy is exact:
-
-- complete: `$X`;
-- partial: `≥ $X`;
-- unavailable: `— unpriced`.
-
-Do not infer missing prices, silently treat partial cost as total cost, or recompute typed output.
-Summary and model values use two fractional digits to preserve the single-line layout.
 
 ### Agents
 
@@ -901,7 +912,7 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the Settings window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the Settings window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Dashboard window | Titled window, 960×640 minimum, 200pt sidebar of shown providers, Quota cards with Swift Charts |
+| Dashboard window | Titled window, 960×640 minimum, 200pt sidebar of shown providers, Quota cards, Today table, and Usage at width |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -948,10 +959,11 @@ share tokens and accessibility semantics but do not own tasks or form a generic 
 
 Required fixture states are loading, signed-in content, cached content with a sync warning,
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
-Required routes are Overview, provider detail (`provider-codex`), Usage, the Settings window
+Required routes are Overview, provider detail (`provider-codex`), the Settings window
 (`settings-window`), Account, Agents, provider setup variants (CLI, API key, and browser session),
 Notifications, Menu Bar (`settings-menu-bar`), General, Support, Diagnostics, Dashboard
-(`dashboard`), and Dashboard with Codex selected (`dashboard-codex`). Inspect
+(`dashboard`), Dashboard with Codex selected (`dashboard-codex`), Dashboard Usage
+(`dashboard-usage`), and Dashboard Usage on This Mac (`dashboard-usage-local`). Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 
