@@ -1354,6 +1354,38 @@ impl StateStore {
         })
     }
 
+    /// Bulk-insert sample rows for the Plan A payload measurement. Every row is unique, so the
+    /// unchanged-reading check on the ordinary write path is skipped.
+    #[cfg(test)]
+    pub(crate) fn seed_quota_samples<'a>(
+        &self,
+        rows: impl Iterator<Item = (&'a str, &'a str, DateTime<Utc>, DateTime<Utc>, f64)>,
+    ) -> Result<usize, StateError> {
+        self.with_cache_mut(|conn| {
+            let tx = conn.transaction()?;
+            let mut count = 0usize;
+            {
+                let mut statement = tx.prepare(
+                    "INSERT INTO quota_samples(
+                        provider, window_id, resets_at, observed_at, used_percent
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+                for (provider, window_id, resets_at, observed_at, used_percent) in rows {
+                    statement.execute(params![
+                        provider,
+                        window_id,
+                        resets_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                        observed_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                        used_percent,
+                    ])?;
+                    count += 1;
+                }
+            }
+            tx.commit()?;
+            Ok(count)
+        })
+    }
+
     pub fn current_revision(&self) -> Result<u64, StateError> {
         self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;

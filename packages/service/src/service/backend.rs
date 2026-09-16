@@ -9000,3 +9000,7 @@ mod tests {
         assert!(effective_usage_lower_bound(&json!({})).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "history_payload.rs"]
+mod history_payload;

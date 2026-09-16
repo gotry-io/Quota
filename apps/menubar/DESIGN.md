@@ -159,6 +159,13 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
 
+## Windows
+
+The Settings and Dashboard windows are ordinary macOS windows, not the panel. They use
+`windowBackgroundColor` rather than the panel material, a 200pt sidebar, and a remembered frame.
+Esc and ⌘W close them. Dashboard may go full screen; Settings may not. Minimum size is 720×520 for
+Settings and 960×640 for Dashboard.
+
 ## Material and color
 
 Production inherits the menu extra's system material. Add only adaptive semantic layers:
@@ -333,20 +340,17 @@ Back returns one level.
 ## Information architecture
 
 ```text
-Overview
-└── Settings
-    ├── Account
-    │   └── Devices
-    ├── Usage
-    ├── Notifications
-    ├── Menu Bar Style
-    ├── Menu Bar Provider
-    ├── Reset time
-    ├── Support
-    │   └── Diagnostics
-    └── Agents
-        └── Provider
-            └── Source
+Menu bar panel
+└── Overview
+    └── Provider
+Settings window        (sidebar)  Account · Agents · Notifications · Menu Bar · General · Support
+├── Account → Devices
+├── Agents → Provider → Source / API Key
+└── Support → Diagnostics
+Dashboard window       (sidebar)  All providers · <each shown provider>
+├── Quota      (30-day window curves, pace phrase, reset, peak)
+├── Today      (per-window cost today)
+└── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
 ```
 
 ### Overview
@@ -424,6 +428,8 @@ no action to offer, because the next scan finishes it. Nothing blocks Quit: quit
 service its `shutdown` and waits at most two seconds for the answer before going ahead without it.
 
 ### Settings
+
+Settings is a window page now: every preference lives here, not in the panel.
 
 Settings section order is fixed:
 
