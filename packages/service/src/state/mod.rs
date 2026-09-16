@@ -1316,12 +1316,30 @@ impl StateStore {
 
     /// Every stored sample, oldest first, by provider and then by window id.
     pub fn quota_samples(&self) -> Result<QuotaSamplesByProvider, StateError> {
+        self.quota_samples_observed_from(None)
+    }
+
+    /// Stored samples whose `observed_at` is at or after `since`, oldest first.
+    pub fn quota_samples_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<QuotaSamplesByProvider, StateError> {
+        self.quota_samples_observed_from(Some(since))
+    }
+
+    fn quota_samples_observed_from(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<QuotaSamplesByProvider, StateError> {
         self.with_cache(|conn| {
+            let since = since.map(|value| value.to_rfc3339_opts(SecondsFormat::Secs, true));
             let mut statement = conn.prepare(
                 "SELECT provider, window_id, resets_at, observed_at, used_percent
-                 FROM quota_samples ORDER BY observed_at",
+                 FROM quota_samples
+                 WHERE ?1 IS NULL OR observed_at >= ?1
+                 ORDER BY observed_at",
             )?;
-            let rows = statement.query_map([], |row| {
+            let rows = statement.query_map(params![since], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -6235,6 +6253,17 @@ mod tests {
                 .map(|sample| sample.used_percent)
                 .collect::<Vec<_>>(),
             [40.0, 50.0]
+        );
+        let since = DateTime::parse_from_rfc3339("2026-09-05T09:15:00Z")
+            .expect("since")
+            .with_timezone(&Utc);
+        let recent = store.quota_samples_since(since).expect("since");
+        assert_eq!(
+            recent["codex"]["five_hour"]
+                .iter()
+                .map(|sample| sample.used_percent)
+                .collect::<Vec<_>>(),
+            [50.0]
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");

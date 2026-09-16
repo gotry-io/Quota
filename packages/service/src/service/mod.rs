@@ -259,6 +259,11 @@ pub trait LocalBackend: Send + Sync {
         let _ = (from, to);
         Err(BackendError::unavailable())
     }
+    /// This Mac's stored quota samples since `since`. Reads `cache.sqlite` only.
+    fn quota_history(&self, since: &str) -> Result<Value, BackendError> {
+        let _ = since;
+        Err(BackendError::unavailable())
+    }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -652,6 +657,7 @@ impl LocalService {
             Operation::Refresh => self.refresh(&request).map(as_json),
             Operation::ResetCache => self.reset_cache(&request).map(as_json),
             Operation::UsagePeriod => self.usage_period(&request),
+            Operation::QuotaHistory => self.quota_history(&request),
             Operation::Login => self.login(&request).map(as_json),
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
@@ -726,6 +732,16 @@ impl LocalService {
         self.inner
             .backend
             .usage_period(&payload.from, &payload.to)
+            .map_err(|error| error.error)
+    }
+
+    /// Reads this Mac's stored quota samples since `since`. `get_state` keeps the current-window
+    /// slice; Dashboard asks for the rest here (ADR 0051).
+    fn quota_history(&self, request: &IpcRequest) -> Result<Value, IpcError> {
+        let payload = request.decode_payload::<QuotaHistoryPayload>()?;
+        self.inner
+            .backend
+            .quota_history(&payload.since)
             .map_err(|error| error.error)
     }
 
@@ -3386,6 +3402,72 @@ mod tests {
                 .expect("component")
                 .and_then(|record| record.value),
             Some(serde_json::json!({"kept": true}))
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn quota_history_answers_samples_from_cache_and_refuses_a_bad_since() {
+        let root = std::env::temp_dir().join(format!("quota-service-history-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let now = Utc::now();
+        let observed = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let resets =
+            (now + chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        state
+            .record_quota_samples(
+                "codex",
+                &observed,
+                &[serde_json::json!({
+                    "id": "five_hour",
+                    "title": "5 Hours",
+                    "used_percent": 40.0,
+                    "resets_at": resets,
+                    "duration_seconds": 18000
+                })],
+                now,
+            )
+            .expect("sample");
+        let backend = Arc::new(crate::service::backend::NativeBackend::new(
+            state.clone(),
+            Arc::new(crate::relay::RelayClient::new().expect("relay")),
+            "QuotaTest",
+            "test",
+        ));
+        let service = LocalService::new(state.clone(), Arc::new(RecordingSink::default()), backend);
+        let since =
+            (now - chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let ok: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "qh",
+            "operation": "quota_history",
+            "payload": {"since": since}
+        }))
+        .expect("request");
+        let response = service.handle(ok);
+        let result = response.result.expect("result");
+        assert_eq!(
+            result["samples_by_provider"]["codex"]["five_hour"][0]["used_percent"],
+            40.0
+        );
+        assert!(result["utc_offset_seconds"].as_i64().is_some());
+
+        let bad: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "qh-bad",
+            "operation": "quota_history",
+            "payload": {"since": "not-a-date"}
+        }))
+        .expect("bad request");
+        let refused = service.handle(bad);
+        assert_eq!(
+            refused.error.expect("error").code,
+            ErrorCode::InvalidRequest
         );
 
         service.shutdown();

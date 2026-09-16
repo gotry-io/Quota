@@ -87,3 +87,6 @@ a **Today** section.
   answer the new case fails in its own test run.
 - The upload path, the wire schemas, and Relay are untouched, so this decision cannot regress what
   leaves the machine.
+- QuotaBar's Dashboard reads this history through the private `quota_history { since }` IPC
+  operation; the state push keeps the current-window slice Overview already draws
+  ([ADR 0051](0051-the-panel-glances-and-the-windows-explain.md)).

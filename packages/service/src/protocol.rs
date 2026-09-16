@@ -4,6 +4,8 @@
 //! as JSON values in component state; they remain owned by the provider/usage/pricing modules and
 //! are validated before they cross this boundary.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -30,6 +32,7 @@ pub enum Operation {
     Refresh,
     ResetCache,
     UsagePeriod,
+    QuotaHistory,
     Login,
     CancelLogin,
     Logout,
@@ -353,6 +356,34 @@ pub struct ReplaceProviderBrowserSessionsPayload {
 pub struct UsagePeriodPayload {
     pub from: String,
     pub to: String,
+}
+
+/// The start of the sample range Dashboard asks this device to read, as one RFC 3339 instant.
+///
+/// `get_state` restates only the current window Overview already draws. Thirty days of every
+/// window is asked for here rather than folded onto every state push (ADR 0051).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaHistoryPayload {
+    pub since: String,
+}
+
+/// One stored reading of one window, as `quota_history` returns it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaHistorySample {
+    pub resets_at: String,
+    pub observed_at: String,
+    pub used_percent: f64,
+}
+
+/// This Mac's stored quota samples since `since`, plus the offset that places them in the
+/// reader's day. The holder of the samples folds them (ADR 0042).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaHistoryResult {
+    pub samples_by_provider: BTreeMap<String, BTreeMap<String, Vec<QuotaHistorySample>>>,
+    pub utc_offset_seconds: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -835,6 +866,22 @@ mod tests {
         assert!(
             browser_session
                 .decode_payload::<ProviderBrowserSessionPayload>()
+                .is_err()
+        );
+
+        let history: IpcRequest = serde_json::from_str(
+            r#"{"type":"request","request_id":"r3","operation":"quota_history","payload":{"since":"2026-08-17T09:30:00Z"}}"#,
+        )
+        .expect("quota_history request");
+        let payload: QuotaHistoryPayload = history.decode_payload().expect("since");
+        assert_eq!(payload.since, "2026-08-17T09:30:00Z");
+        let history_extra = serde_json::from_str::<IpcRequest>(
+            r#"{"type":"request","request_id":"r3","operation":"quota_history","payload":{"since":"2026-08-17T09:30:00Z","extra":true}}"#,
+        )
+        .expect("quota_history envelope remains valid");
+        assert!(
+            history_extra
+                .decode_payload::<QuotaHistoryPayload>()
                 .is_err()
         );
     }

@@ -61,6 +61,8 @@ protocol LocalServiceServing: Sendable {
   func state() async throws -> LocalServiceState
   /// One custom local period, folded from the hours this Mac has stored.
   func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail
+  /// This Mac's stored quota samples since `since`. Reads cache.sqlite only.
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
   func diagnose() async throws -> LocalServiceDiagnosticReport
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func resetCache() async throws
@@ -186,6 +188,13 @@ actor LocalServiceClient: LocalServiceServing {
       throw LocalServiceClientError.invalidMessage
     }
     return detail
+  }
+
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+    try await request(
+      operation: "quota_history",
+      payload: QuotaHistoryPayload(since: since)
+    )
   }
 
   func diagnose() async throws -> LocalServiceDiagnosticReport {
@@ -844,6 +853,9 @@ private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
 private struct UsagePeriodPayload: Encodable {
   let from: String
   let to: String
+}
+private struct QuotaHistoryPayload: Encodable {
+  let since: Date
 }
 private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
 private struct SetOverviewSourcePinPayload: Encodable {
