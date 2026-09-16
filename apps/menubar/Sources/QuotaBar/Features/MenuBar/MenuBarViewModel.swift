@@ -75,9 +75,15 @@ struct BrowserScanCoverage: Equatable, Sendable {
   var candidates = 0
 }
 
-enum ProviderBrowserSessionPopup: Equatable, Sendable {
+enum ProviderBrowserSessionPopup: Equatable, Sendable, Identifiable {
   /// Asked before the first cookie is read after Scan browsers is turned on.
   case consent(provider: ProviderID)
+
+  var id: String {
+    switch self {
+    case .consent(let provider): "consent:\(provider.rawValue)"
+    }
+  }
 }
 
 enum AccountViewState: Equatable {
@@ -1510,6 +1516,15 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       SignInRungPresentation.needsSignIn(rungs: signInRungs(for: provider))
         && !accountReportingProviders().contains(provider)
     }
+  }
+
+  /// Sidebar badge for Agents: how many are shown, and whether any still need sign-in.
+  func agentsSidebarBadge() -> String {
+    let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
+    let needing = agentsNeedingSignIn().filter { ProviderVisibility.isVisible($0) }.count
+    let shown = "\(visible) shown"
+    guard needing > 0 else { return shown }
+    return "\(shown) · \(needing) need\(needing == 1 ? "s" : "") sign-in"
   }
 
   func result(for provider: ProviderID) -> QuotaCollectionResult? {

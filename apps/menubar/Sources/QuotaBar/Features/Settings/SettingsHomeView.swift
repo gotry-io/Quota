@@ -35,7 +35,6 @@ struct SettingsHomeView: View {
             settingsDestinationRow(
               title: "Agents",
               systemImage: "cpu",
-              trailing: agentsSummary,
               accessibilityLabel: "Agents",
               action: onOpenAgents
             )
@@ -102,11 +101,4 @@ struct SettingsHomeView: View {
     return "\(UsageValueFormatter.count(totalTokens)) tokens"
   }
 
-  private var agentsSummary: String {
-    let visible = ProviderID.allCases.filter { ProviderVisibility.isVisible($0) }.count
-    let needing = model.agentsNeedingSignIn().filter { ProviderVisibility.isVisible($0) }.count
-    let shown = "\(visible) shown"
-    guard needing > 0 else { return shown }
-    return "\(shown) · \(needing) need\(needing == 1 ? "s" : "") sign-in"
-  }
 }

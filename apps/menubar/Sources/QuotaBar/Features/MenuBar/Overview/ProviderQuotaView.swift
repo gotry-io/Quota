@@ -5,7 +5,7 @@ import SwiftUI
 struct ProviderQuotaView: View {
   let presentation: ProviderQuotaPresentation
   let now: Date
-  let onOpenProvider: () -> Void
+  var onOpenProvider: (() -> Void)? = nil
   @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
     PaceLinePreference.fallback
 
@@ -25,20 +25,26 @@ struct ProviderQuotaView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
-      Button(action: onOpenProvider) {
-        providerHeader
-          .padding(.horizontal, QuotaDesign.Spacing.sm)
-          .frame(
-            maxWidth: .infinity,
-            minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
-            alignment: .leading
-          )
-          .contentShape(Rectangle())
+      if let onOpenProvider {
+        Button(action: onOpenProvider) {
+          providerHeader(showsChevron: true)
+            .padding(.horizontal, QuotaDesign.Spacing.sm)
+            .frame(
+              maxWidth: .infinity,
+              minHeight: QuotaDesign.Layout.minimumInteractiveDimension,
+              alignment: .leading
+            )
+            .contentShape(Rectangle())
+        }
+        .padding(.horizontal, -QuotaDesign.Spacing.sm)
+        .buttonStyle(QuotaListRowButtonStyle(surfaceInset: 0))
+        .accessibilityLabel(headerAccessibilityLabel)
+        .accessibilityHint("Opens \(presentation.provider.displayName)")
+      } else {
+        providerHeader(showsChevron: false)
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel(headerAccessibilityLabel)
       }
-      .padding(.horizontal, -QuotaDesign.Spacing.sm)
-      .buttonStyle(QuotaListRowButtonStyle(surfaceInset: 0))
-      .accessibilityLabel(headerAccessibilityLabel)
-      .accessibilityHint("Opens \(presentation.provider.displayName) settings")
 
       if let detail = presentation.status?.detail {
         Text(detail)
@@ -77,7 +83,7 @@ struct ProviderQuotaView: View {
     return parts.joined(separator: ". ")
   }
 
-  private var providerHeader: some View {
+  private func providerHeader(showsChevron: Bool) -> some View {
     HStack(alignment: .center, spacing: QuotaDesign.Spacing.inline) {
       HStack(spacing: QuotaDesign.Spacing.iconLabel) {
         ProviderBrandIcon(provider: presentation.provider)
@@ -108,9 +114,11 @@ struct ProviderQuotaView: View {
 
       Spacer(minLength: 0)
 
-      Image(systemName: "chevron.right")
-        .quotaChevronStyle()
-        .accessibilityHidden(true)
+      if showsChevron {
+        Image(systemName: "chevron.right")
+          .quotaChevronStyle()
+          .accessibilityHidden(true)
+      }
     }
   }
 

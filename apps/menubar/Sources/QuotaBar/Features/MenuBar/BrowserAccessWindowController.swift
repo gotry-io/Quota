@@ -134,6 +134,7 @@ final class BrowserAccessWindowController: NSObject, BrowserAccessGrantPresentin
     let window = BrowserAccessWindow(contentViewController: hosting)
     window.title = BrowserSessionCopy.grantWindowTitle
     window.styleMask = [.titled, .closable]
+    // Floating so the grant window and Keychain prompt sit above Settings (.normal).
     window.level = .floating
     window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
     window.isMovableByWindowBackground = true

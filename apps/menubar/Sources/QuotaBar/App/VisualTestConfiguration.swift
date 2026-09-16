@@ -61,18 +61,16 @@
   enum VisualTestRoute: String {
     case overview
     case settings
-    case agents
     case providerCodex = "provider-codex"
-    case providerOpenRouter = "provider-openrouter"
-    case providerCursor = "provider-cursor"
-    case providerCodexSource = "provider-codex-source"
-    case providerLiteLLMKey = "provider-litellm-key"
     case usage
     case menuBarStyle = "menu-bar-style"
     case menuBarProvider = "menu-bar-provider"
     case resetCopy = "reset-time"
     case settingsWindow = "settings-window"
     case settingsAccount = "settings-account"
+    case settingsAgents = "settings-agents"
+    case settingsAgentsCodex = "settings-agents-codex"
+    case settingsAgentsLiteLLMKey = "settings-agents-litellm-key"
     case settingsNotifications = "settings-notifications"
     case settingsGeneral = "settings-general"
     case settingsSupport = "settings-support"
@@ -81,28 +79,13 @@
       switch self {
       case .overview: []
       case .settings: [.settings]
-      case .agents: [.settings, .agents]
-      case .providerCodex: [.settings, .agents, .provider(.codex)]
-      case .providerOpenRouter: [.settings, .agents, .provider(.openrouter)]
-      case .providerCursor: [.settings, .agents, .provider(.cursor)]
-      case .providerCodexSource: [
-        .settings, .agents, .provider(.codex),
-        .providerSource(
-          .codex,
-          identityKey: "codex|visual_personal|global|",
-          sourceID: "local",
-          displayName: "This Mac"
-        ),
-      ]
-      case .providerLiteLLMKey: [
-        .settings, .agents, .provider(.litellm), .providerAPIKey(.litellm),
-      ]
+      case .providerCodex: [.provider(.codex)]
       case .usage: [.settings, .usage]
       case .menuBarStyle: [.settings, .menuBarStyle]
       case .menuBarProvider: [.settings, .menuBarProvider]
       case .resetCopy: [.settings, .resetCopy]
-      case .settingsWindow, .settingsAccount, .settingsNotifications, .settingsGeneral,
-        .settingsSupport:
+      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsGeneral, .settingsSupport:
         []
       }
     }
@@ -110,9 +93,18 @@
     var settingsPage: SettingsPage? {
       switch self {
       case .settingsAccount: .account
+      case .settingsAgents, .settingsAgentsCodex, .settingsAgentsLiteLLMKey: .agents
       case .settingsNotifications: .notifications
       case .settingsGeneral: .general
       case .settingsSupport: .support
+      default: nil
+      }
+    }
+
+    var settingsAgentsProvider: ProviderID? {
+      switch self {
+      case .settingsAgentsCodex: .codex
+      case .settingsAgentsLiteLLMKey: .litellm
       default: nil
       }
     }
@@ -201,12 +193,13 @@
     var performsInitialRefresh: Bool { dataSource == .live }
     var hostsSettingsWindow: Bool {
       switch route {
-      case .settingsWindow, .settingsAccount, .settingsNotifications, .settingsGeneral,
-        .settingsSupport:
+      case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
+        .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsGeneral, .settingsSupport:
         true
       default: false
       }
     }
+    var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -242,6 +235,12 @@
       ProviderDisplayOrder.reset()
       for provider in ProviderID.allCases {
         ProviderVisibility.setVisible(provider, provider.defaultVisible)
+      }
+      if let settingsPage {
+        UserDefaults.standard.set(settingsPage.rawValue, forKey: SettingsPage.storageKey)
+      }
+      if let provider = settingsAgentsProvider {
+        UserDefaults.standard.set(provider.rawValue, forKey: SettingsPage.agentsProviderStorageKey)
       }
     }
 

@@ -65,7 +65,8 @@ struct QuotaBarApp: App {
           model: model,
           pageOverride: visualTestConfiguration.settingsPage,
           diagnostics: visualTestConfiguration.makeDiagnosticsModel(),
-          expandsDiagnostics: visualTestConfiguration.route == .settingsSupport
+          expandsDiagnostics: visualTestConfiguration.route == .settingsSupport,
+          initialAgentsProvider: visualTestConfiguration.settingsAgentsProvider
         )
       } else {
         MenuBarContentView(

@@ -1,15 +1,15 @@
 import QuotaWire
 import SwiftUI
 
-/// Settings → Agents: catalog providers with drill-in to visibility and configuration.
+/// Settings window → Agents: a provider list beside the selected provider's settings.
 struct AgentsSettingsView: View {
   @Bindable var model: MenuBarViewModel
-  /// One line under each provider: signed in, reported elsewhere, or what it still needs.
-  let statusLine: (ProviderID) -> String
-  let onOpenProvider: (ProviderID) -> Void
+  var initialProvider: ProviderID? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @AppStorage(SettingsPage.agentsProviderStorageKey) private var storedProviderRaw = ""
   @State private var enabledProviders = ProviderDisplayOrder.enabledProviders()
+  @State private var selectedProvider: ProviderID?
   @State private var draggedProvider: ProviderID?
   @State private var dragOriginIndex = 0
 
@@ -19,28 +19,22 @@ struct AgentsSettingsView: View {
   }
 
   var body: some View {
+    TimelineView(.periodic(from: .now, by: 1)) { context in
+      HStack(spacing: 0) {
+        agentList
+          .frame(width: QuotaDesign.Layout.agentsListWidth)
+          .frame(maxHeight: .infinity, alignment: .top)
+        Divider()
+        providerPane(now: context.date)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .onAppear(perform: appear)
+  }
+
+  private var agentList: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
-        SettingsSection(title: "Usage") {
-          SettingsListRow(title: "Group Usage by project", systemImage: "folder") {
-            Toggle(
-              "Group Usage by project",
-              isOn: Binding(
-                get: { model.groupUsageByProject },
-                set: { desired in Task { await model.setGroupUsageByProject(desired) } }
-              )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .tint(QuotaPalette.accent)
-          }
-          .accessibilityElement(children: .combine)
-          .accessibilityLabel("Group Usage by project")
-          .accessibilityHint("Show This Mac Usage broken down by repository")
-          .disabled(model.isUpdatingGroupUsageByProject)
-        }
-
         if !enabledProviders.isEmpty {
           SettingsSection(title: "Shown in Overview") {
             VStack(alignment: .leading, spacing: 0) {
@@ -65,16 +59,31 @@ struct AgentsSettingsView: View {
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
       .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .onAppear {
-      enabledProviders = ProviderDisplayOrder.enabledProviders()
+  }
+
+  @ViewBuilder
+  private func providerPane(now: Date) -> some View {
+    if let provider = selectedProvider {
+      ProviderSettingsView(
+        model: model,
+        provider: provider,
+        now: now,
+        onVisibilityChange: refreshEnabledProviders
+      )
+      .id(provider)
+    } else {
+      Text("Select an agent")
+        .quotaSecondaryStyle()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
   @ViewBuilder
   private func providerRow(_ provider: ProviderID, isEnabled: Bool) -> some View {
-    let status = statusLine(provider)
+    let status = model.agentStatusLine(for: provider)
+    let isSelected = selectedProvider == provider
     let row = Button {
-      onOpenProvider(provider)
+      select(provider)
     } label: {
       SettingsListRow(
         title: provider.displayName,
@@ -84,30 +93,34 @@ struct AgentsSettingsView: View {
           ProviderBrandIcon(provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
         },
         trailing: {
-          HStack(spacing: QuotaDesign.Spacing.inline) {
-            if isEnabled {
-              Image(systemName: "line.3.horizontal")
-                .quotaAffordanceStyle()
-                .frame(
-                  width: QuotaDesign.Layout.minimumInteractiveDimension,
-                  height: QuotaDesign.Layout.settingsListRowHeight
-                )
-                .contentShape(Rectangle())
-                .highPriorityGesture(reorderGesture(for: provider))
-                .help("Drag to reorder")
-                .accessibilityHidden(true)
-            }
-            Image(systemName: "chevron.right")
-              .quotaChevronStyle()
+          if isEnabled {
+            Image(systemName: "line.3.horizontal")
+              .quotaAffordanceStyle()
+              .frame(
+                width: QuotaDesign.Layout.minimumInteractiveDimension,
+                height: QuotaDesign.Layout.settingsListRowHeight
+              )
+              .contentShape(Rectangle())
+              .highPriorityGesture(reorderGesture(for: provider))
+              .help("Drag to reorder")
+              .accessibilityHidden(true)
           }
         }
       )
+      .background {
+        RoundedRectangle(
+          cornerRadius: QuotaDesign.Layout.rowCornerRadius,
+          style: .continuous
+        )
+        .fill(isSelected ? QuotaPalette.rowHoverFill : Color.clear)
+      }
     }
     .buttonStyle(QuotaListRowButtonStyle())
     .accessibilityLabel(provider.displayName)
     .accessibilityValue(status)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
     .accessibilityHint(
-      "\(isEnabled ? "Shown in Overview" : "Hidden from Overview"). Opens \(provider.displayName) settings"
+      "\(isEnabled ? "Shown in Overview" : "Hidden from Overview"). Shows \(provider.displayName) settings"
     )
 
     if isEnabled {
@@ -124,6 +137,28 @@ struct AgentsSettingsView: View {
     } else {
       row
     }
+  }
+
+  private func appear() {
+    refreshEnabledProviders()
+    if let initialProvider {
+      select(initialProvider)
+    } else if let stored = ProviderID(rawValue: storedProviderRaw),
+      ProviderID.allCases.contains(stored)
+    {
+      select(stored)
+    } else {
+      select(enabledProviders.first ?? disabledProviders.first)
+    }
+  }
+
+  private func select(_ provider: ProviderID?) {
+    selectedProvider = provider
+    storedProviderRaw = provider?.rawValue ?? ""
+  }
+
+  private func refreshEnabledProviders() {
+    enabledProviders = ProviderDisplayOrder.enabledProviders()
   }
 
   private func reorderGesture(for provider: ProviderID) -> some Gesture {
