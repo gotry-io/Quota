@@ -15,6 +15,8 @@ enum QuotaDesign {
     static let agentsListWidth: CGFloat = 220
     /// Minimum Settings window content size.
     static let settingsWindowMinSize = CGSize(width: 720, height: 520)
+    /// Minimum Dashboard window content size.
+    static let dashboardWindowMinSize = CGSize(width: 960, height: 640)
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16

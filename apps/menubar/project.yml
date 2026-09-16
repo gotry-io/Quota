@@ -74,7 +74,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_ENTITLEMENTS: Support/QuotaBar.entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
-        OTHER_LDFLAGS: "$(inherited) -framework UserNotifications"
+        OTHER_LDFLAGS: "$(inherited) -framework UserNotifications -framework Charts"
         # The one C module in QuotaBar. SwiftPM reads this same module map out of the target's
         # include directory; Xcode has to be pointed at it.
         SWIFT_INCLUDE_PATHS: "$(SRCROOT)/Sources/QuotaBarKeychainShim/include"
@@ -97,6 +97,7 @@ targets:
       - package: Sparkle
         product: Sparkle
       - sdk: WidgetKit.framework
+      - sdk: Charts.framework
       - target: QuotaBarWidgets
         embed: true
     # A shared scheme, so a release build never depends on Xcode autocreating one.

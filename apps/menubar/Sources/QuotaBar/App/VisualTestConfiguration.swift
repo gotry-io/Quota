@@ -71,6 +71,8 @@
     case settingsMenuBar = "settings-menu-bar"
     case settingsGeneral = "settings-general"
     case settingsSupport = "settings-support"
+    case dashboard
+    case dashboardCodex = "dashboard-codex"
 
     fileprivate var path: [MenuBarRoute] {
       switch self {
@@ -79,7 +81,7 @@
       case .usage: [.usage]
       case .settingsWindow, .settingsAccount, .settingsAgents, .settingsAgentsCodex,
         .settingsAgentsLiteLLMKey, .settingsNotifications, .settingsMenuBar, .settingsGeneral,
-        .settingsSupport:
+        .settingsSupport, .dashboard, .dashboardCodex:
         []
       }
     }
@@ -100,6 +102,13 @@
       switch self {
       case .settingsAgentsCodex: .codex
       case .settingsAgentsLiteLLMKey: .litellm
+      default: nil
+      }
+    }
+
+    var dashboardSelection: ProviderID? {
+      switch self {
+      case .dashboardCodex: .codex
       default: nil
       }
     }
@@ -195,7 +204,15 @@
       default: false
       }
     }
+    var hostsDashboardWindow: Bool {
+      switch route {
+      case .dashboard, .dashboardCodex: true
+      default: false
+      }
+    }
     var settingsAgentsProvider: ProviderID? { route.settingsAgentsProvider }
+    var dashboardSelection: ProviderID? { route.dashboardSelection }
+    var hostsTitledWindow: Bool { hostsSettingsWindow || hostsDashboardWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
@@ -238,6 +255,8 @@
       if let provider = settingsAgentsProvider {
         UserDefaults.standard.set(provider.rawValue, forKey: SettingsPage.agentsProviderStorageKey)
       }
+      UserDefaults.standard.set(
+        DashboardRange.fallback.rawValue, forKey: DashboardRange.storageKey)
     }
 
     private static func argument<Value: RawRepresentable>(
@@ -281,7 +300,8 @@
           checkedAt: date
         )
       ],
-      deviceID: "device_visual_studio_mac_01"
+      deviceID: "device_visual_studio_mac_01",
+      quotaHistorySamples: VisualQuotaHistoryFixture.samples(from: report, now: date)
     )
   }
 
@@ -599,6 +619,8 @@
                   id: "extra_usage",
                   title: "Extra Usage",
                   usedPercent: 12.5,
+                  resetsAt: date.addingTimeInterval(20 * 86_400),
+                  durationSeconds: 2_592_000,
                   remainingValue: 87.5,
                   limitValue: 100,
                   valueUnit: .usd
@@ -622,8 +644,19 @@
                   title: "Monthly",
                   usedPercent: 73,
                   resetsAt: date.addingTimeInterval(12 * 86_400),
+                  durationSeconds: 2_592_000,
                   now: date
-                )
+                ),
+                QuotaWindow(
+                  id: "extra_usage",
+                  title: "Extra Usage",
+                  usedPercent: 12.5,
+                  resetsAt: date.addingTimeInterval(20 * 86_400),
+                  durationSeconds: 2_592_000,
+                  remainingValue: 87.5,
+                  limitValue: 100,
+                  valueUnit: .usd
+                ),
               ],
               observedAt: date.addingTimeInterval(-180)
             )

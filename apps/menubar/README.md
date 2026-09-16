@@ -152,7 +152,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 ```text
 --data-source fixture|live
 --fixture loading|content|cached-refresh-error|empty|unavailable|cache-rebuilding
---route overview|provider-codex|usage|settings-window|settings-account|settings-agents|settings-agents-codex|settings-agents-litellm-key|settings-notifications|settings-menu-bar|settings-general|settings-support
+--route overview|provider-codex|usage|settings-window|settings-account|settings-agents|settings-agents-codex|settings-agents-litellm-key|settings-notifications|settings-menu-bar|settings-general|settings-support|dashboard|dashboard-codex
 --appearance system|light|dark
 --text-size standard|extra-large|accessibility
 ```

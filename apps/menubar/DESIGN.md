@@ -158,6 +158,7 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `windowSidebarWidth` | 200pt | Settings window sidebar |
 | `agentsListWidth` | 220pt | Provider list inside the Settings window Agents page |
 | `settingsWindowMinSize` | 720×520 | Settings window minimum content size |
+| `dashboardWindowMinSize` | 960×640 | Dashboard window minimum content size |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
@@ -181,7 +182,46 @@ and no device reporting it, **· 1 needs sign-in**; the Agents page is a two-col
 detail.
 
 The Dashboard window is the same kind of window: `windowBackgroundColor`, a 200pt sidebar, a
-960×640 minimum content size, a remembered frame, Esc and ⌘W. Unlike Settings it may go full screen.
+960×640 minimum content size, frame autosave name `QuotaBarDashboardWindow`, Esc and ⌘W. Unlike
+Settings it may go full screen (`collectionBehavior` includes `.fullScreenPrimary`). Opening it
+hides the menu-bar panel and registers the window with `WindowActivation`.
+
+## Dashboard
+
+Dashboard is where this Mac's quota history is read at width. It does not collect, and every number
+it shows is already on this Mac: local samples through `quota_history`, and the current reading
+Overview already has.
+
+The sidebar lists **All providers**, then each provider shown in Overview, in Overview order, each
+with its catalog brand mark. **All providers** shows every shown provider's card; selecting a
+provider shows that provider only. The selection is not persisted.
+
+The toolbar holds the history range — **Today**, **7D**, **30D**, persisted as `dashboard.range`,
+default 7D — a Usage source picker (**Account** / **This Mac**) that this version does not yet apply,
+and a refresh action that uses the same tooltip as the panel footer: **Refresh all quota. Updated 3m
+ago**, or **Not checked** before any sync. The Usage source picker is hidden when Account data is
+unavailable.
+
+### Quota
+
+One card per provider in the detail column. The header is one line: the catalog provider name, the
+pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
+the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window. Parts the
+reading does not have are omitted.
+
+Each card draws one Swift Charts `LineMark` per window of used percent over time, from this Mac's
+samples in the selected range. The running window continues to its reset as a dashed `LineMark` at
+ADR 0035's projection, and a `RuleMark` marks the reset. Line colour is the remaining-quota tone
+(healthy / warning / critical) of that window; windows of the same provider are told apart by
+opacity in rank order, the first cadence window at full strength. No second palette.
+
+Every chart has an `accessibilityChartDescriptor` that names each window, its start, now, and the
+projected end.
+
+Empty states: while the cache is rebuilding and this Mac has no samples yet, the card reuses
+**Usage history is catching up** / **Quota and Account stay available.** A provider that is not
+signed in reuses `SignInRungPresentation.statusLine`. A signed-in provider with no samples yet
+reads **No history yet**.
 
 ## Material and color
 
@@ -327,10 +367,10 @@ panel on that provider; Combined and Automatic open the same panel without chang
 
 The header shows:
 
-- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open Dashboard…** (disabled
-  until Dashboard ships), **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the
-  menu focuses Quit. VoiceOver names the trigger **Settings menu**. **Settings…** opens the Settings
-  window; there is no gear.
+- Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open Dashboard…**,
+  **Settings…**, **Check for Updates…**, and **Quit QuotaBar**. Opening the menu focuses Quit.
+  VoiceOver names the trigger **Settings menu**. **Open Dashboard…** opens the Dashboard window;
+  **Settings…** opens the Settings window; there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action. Usage may place its
   Account/This Mac source menu at the trailing edge because the choice changes the whole page.
 
@@ -835,8 +875,7 @@ first status item, and a subscription lands on that provider's read-only quota p
 `selection_id` this installation never published — an older salt, a provider since removed —
 lands on Overview rather than nothing. Medium and large rows are each a `Link` to their own
 subscription; the widget as a whole opens the subscription it shows, or Overview when it shows
-several. `quotabar://dashboard` opens the Dashboard window (the Settings window until that window
-exists); widgets do not publish it.
+several. `quotabar://dashboard` opens the Dashboard window; widgets do not publish it.
 
 The meter is the product accent, from the extension's own `AccentColor` asset catalog — the
 extension has no app to borrow a tint from.
@@ -862,6 +901,7 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the Settings window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the Settings window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
+| Dashboard window | Titled window, 960×640 minimum, 200pt sidebar of shown providers, Quota cards with Swift Charts |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -910,7 +950,8 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 Required routes are Overview, provider detail (`provider-codex`), Usage, the Settings window
 (`settings-window`), Account, Agents, provider setup variants (CLI, API key, and browser session),
-Notifications, Menu Bar (`settings-menu-bar`), General, Support, and Diagnostics. Inspect
+Notifications, Menu Bar (`settings-menu-bar`), General, Support, Diagnostics, Dashboard
+(`dashboard`), and Dashboard with Codex selected (`dashboard-codex`). Inspect
 light and dark appearances, standard and accessibility text sizes, keyboard traversal, VoiceOver
 labels, and Reduce Motion transitions.
 

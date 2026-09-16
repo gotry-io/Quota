@@ -37,7 +37,8 @@ let package = Package(
       ],
       resources: [.process("Resources")],
       linkerSettings: [
-        .linkedFramework("UserNotifications")
+        .linkedFramework("UserNotifications"),
+        .linkedFramework("Charts"),
       ]),
     .testTarget(
       name: "QuotaBarTests",

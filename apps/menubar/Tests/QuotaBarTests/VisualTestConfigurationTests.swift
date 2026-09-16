@@ -84,6 +84,51 @@
   }
 
   @Test
+  func dashboardRoutesHostTheTitledDashboardShell() throws {
+    let all = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard"])
+    )
+    #expect(all.route == .dashboard)
+    #expect(all.hostsDashboardWindow)
+    #expect(all.hostsTitledWindow)
+    #expect(!all.hostsSettingsWindow)
+    #expect(all.dashboardSelection == nil)
+    #expect(all.initialPath.isEmpty)
+
+    let codex = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "dashboard-codex"])
+    )
+    #expect(codex.route == .dashboardCodex)
+    #expect(codex.hostsDashboardWindow)
+    #expect(codex.dashboardSelection == .codex)
+    #expect(codex.initialPath.isEmpty)
+  }
+
+  @Test @MainActor
+  func contentFixtureGainsSevenDaySamplesForThreeProvidersWithTwoWindowsEach() throws {
+    let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+    let configuration = try #require(
+      VisualTestConfiguration(
+        arguments: ["QuotaBar", "--fixture", "content", "--route", "dashboard"],
+        referenceDate: referenceDate
+      )
+    )
+    let model = configuration.makeModel()
+    let samples = try #require(model.quotaHistorySamples)
+    for provider in ["codex", "claude", "grok"] {
+      let windows = try #require(samples.samplesByProvider[provider])
+      #expect(windows.keys.count >= 2)
+      for points in windows.values {
+        let dates = points.map(\.observedAt)
+        let earliest = try #require(dates.min())
+        let latest = try #require(dates.max())
+        #expect(latest.timeIntervalSince(earliest) >= 6 * 86_400)
+      }
+    }
+    #expect(!model.quotaHistory.isEmpty)
+  }
+
+  @Test
   func providerCodexRouteIsTheOverviewDrillDown() throws {
     let configuration = try #require(
       VisualTestConfiguration(arguments: ["QuotaBar", "--route", "provider-codex"])

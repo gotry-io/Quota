@@ -108,6 +108,7 @@ enum AccountDisconnectReason: Equatable {
     var cache: LocalServiceCacheState = .settled
     var providerStatus: [LocalServiceProviderStatus] = []
     var deviceID: String? = nil
+    var quotaHistorySamples: LocalServiceQuotaHistory? = nil
   }
 #endif
 
@@ -494,6 +495,11 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       providerStatus = Dictionary(
         uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
       )
+      if let samples = visualTestState.quotaHistorySamples {
+        quotaHistorySamples = samples
+        quotaHistory = Self.foldQuotaHistory(
+          samples, overview: visualTestState.overview, now: visualTestState.report.capturedAt)
+      }
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals

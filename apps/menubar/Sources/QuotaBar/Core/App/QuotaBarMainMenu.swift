@@ -124,7 +124,7 @@ enum QuotaBarMainMenu {
   }
 
   @MainActor
-  final class Actions: NSObject, NSMenuItemValidation {
+  final class Actions: NSObject {
     static let shared = Actions()
 
     @objc func checkForUpdates(_ sender: Any?) {
@@ -136,14 +136,7 @@ enum QuotaBarMainMenu {
     }
 
     @objc func openDashboard(_ sender: Any?) {
-      // WP 7.7
-    }
-
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-      if menuItem.action == #selector(openDashboard(_:)) {
-        return false  // WP 7.7
-      }
-      return true
+      DashboardWindowController.shared.show()
     }
   }
 }
