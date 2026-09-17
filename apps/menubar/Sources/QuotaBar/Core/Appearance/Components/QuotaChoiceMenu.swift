@@ -129,7 +129,7 @@ struct QuotaChoiceMenu: View {
     }
     .frame(minWidth: 160, maxWidth: QuotaDesign.Layout.headerMenuWidth)
     .padding(QuotaDesign.Layout.groupSurfaceInset)
-    .quotaFloatingMenuSurface()
+    .quotaFloatingSurface()
     .accessibilityLabel(accessibilityTitle)
   }
 

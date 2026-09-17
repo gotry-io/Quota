@@ -6,9 +6,10 @@ menu-bar panel and one main window. Website marketing UI belongs in `apps/web/DE
 ## Product character
 
 QuotaBar should feel like a precise macOS instrument: compact, calm, legible, and immediately useful.
-It uses system materials and controls, a restrained blue accent, and dense information hierarchy.
-The panel is an app-owned SwiftUI surface, not a website compressed into a popover. The main
-window is a titled window; it is not the panel stretched.
+It uses system materials and controls, a restrained accent, and dense information hierarchy. On
+macOS 26 the main-window chrome, cards, and floating menus use Liquid Glass; macOS 14 and 15 use
+the material fallback. The panel is an app-owned SwiftUI surface, not a website compressed into a
+popover. The main window is a titled window; it is not the panel stretched.
 
 Core rules:
 
@@ -158,9 +159,18 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 | `fieldCornerRadius` | 7pt | Editable/control surface |
 | `groupContentInset` | 8pt | Content inside a group |
 | `groupSurfaceInset` | 4pt | Hover surface inset |
-| `windowSidebarWidth` | 200pt | Main window sidebar |
+| `windowSidebarWidth` | 220pt | Main window sidebar min/ideal |
+| `windowSidebarMaxWidth` | 280pt | Main window sidebar maximum |
 | `agentsListWidth` | 220pt | Provider list inside the Agents page |
 | `mainWindowMinSize` | 960×640 | Main window minimum content size |
+| `cardCornerRadius` | 20pt | Quota / Today / Usage cards |
+| `cardPadding` | 16pt | Inner padding of those cards |
+| `contentMaxWidth` | 1040pt | Main-window reading column |
+| `contentGutter` | 24pt | Horizontal gutter around that column |
+| `settingsContentMaxWidth` | 720pt | Settings Form pages, centred in the detail column |
+| `floatingSurfaceCornerRadius` | 14pt | Transient menus (`quotaFloatingSurface`) |
+| `menuBarStripHeight` | 24pt | Simulated menu-bar strip on Settings → Menu Bar |
+| `columnHairlineWidth` | 1pt | Agents page column divider |
 
 Spacing uses 4, 6, 8, 12, and 16pt semantic steps. Avoid page-specific magic numbers. Scroll only the
 page body; header and footer remain fixed. Content aligns to the same 16pt guide at every depth.
@@ -168,10 +178,10 @@ page body; header and footer remain fixed. Content aligns to the same 16pt guide
 ## Windows
 
 The main window is a standard titled `NSWindow`, not the panel. It uses `windowBackgroundColor`
-rather than the panel material, a 200pt sidebar, a 960×640 minimum content size, frame autosave name
-`QuotaBarMainWindow`, level `.normal`, and `collectionBehavior` including `.fullScreenPrimary`. It
-is resizable and miniaturizable and may go full screen. Esc and ⌘W close it. The title is
-**QuotaBar**.
+rather than the panel material, a user-resizable sidebar (220–280pt), a 960×640 minimum content
+size, frame autosave name `QuotaBarMainWindow`, level `.normal`, and `collectionBehavior` including
+`.fullScreenPrimary`. It is resizable and miniaturizable and may go full screen. Esc and ⌘W close
+it. The title is **QuotaBar**.
 
 QuotaBar is a regular app with a Dock icon. **Show in Dock** (General, default on) keeps the
 process `.regular`. Turning it off makes QuotaBar menu-bar-only: the main window registers with
@@ -192,16 +202,27 @@ The process has a regular-app menu bar:
 - **Window:** Minimize ⌘M, Zoom, QuotaBar (brings the main window front), Bring All to Front.
 - **Help:** QuotaBar Help (opens the website), Feedback.
 
-The sidebar has two groups: **Quota**
+The sidebar is a `List` with `.listStyle(.sidebar)` and two `Section`s: **Quota**
 (**Quota**, **Today**, **Usage**) and
 **Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
-The selected page persists in `main.page`; the first open lands on Quota. Provider selection for
-Quota is a toolbar menu (**All providers** and each shown provider with its brand icon), not
-sidebar rows. The selection is not persisted. Account, Notifications, General, and Support are
-grouped Forms in the detail column, and **Menu Bar** is one grouped form (preview, Style, Provider,
-Reset time, Show pace lines). The **Agents** row trails **3 shown** and, when any shown agent has
-no working credential and no device reporting it, **· 1 needs sign-in**; the Agents page is a
-two-column list and provider detail.
+Rows are `Label`s. On macOS 26 the system draws the floating glass sidebar; on 14/15 it is the
+standard sidebar. The selected page persists in `main.page`; the first open lands on Quota. Provider
+selection for Quota is a toolbar menu (**All providers** and each shown provider with its brand
+icon), not sidebar rows. The closed menu shows the selected provider's brand icon, or Quota's mark
+when **All providers** is selected. The selection is not persisted. Account, Notifications,
+General, Support, and **Menu Bar** are grouped Forms in the detail column, content at most 720pt
+and centred. **Menu Bar** is one form (preview strip, Style, Provider, Reset time, Show pace
+lines). The **Agents** row keeps a `.badge` of
+**3 shown** and, when any shown agent has no working credential and no device reporting it,
+**· 1 needs sign-in**; the Agents page is a two-column list and provider detail.
+
+The Quota-group toolbar groups **Provider**, **Range**, and **Usage source**, then a flexible
+spacer, then **Refresh**. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
+on 14/15 the same items appear without spacers. Refresh is on every page.
+
+Quota, Today, and Usage scroll under the toolbar and sidebar (`quotaScrollEdge()`, a soft
+scroll-edge effect on macOS 26). Their content is one column, max width 1040pt, centred, with 24pt
+gutters and 16pt between cards.
 
 ## Main window
 
@@ -210,7 +231,8 @@ lives. It does not collect, and every number the Quota, Today, and Usage pages s
 this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
 The Quota-group toolbar holds a provider menu — **All providers**, then each provider shown in
-Overview, in Overview order, each with its catalog brand mark — the history range — **Today**,
+Overview, in Overview order, each with its catalog brand mark; the closed control is that
+provider's brand icon — the history range — **Today**,
 **7D**, **30D**, persisted as `dashboard.range`, default 7D — a Usage source picker (**Account** /
 **This Mac**) that the Usage page honors, and a refresh action that uses the same tooltip as the
 panel footer: **Refresh all quota. Updated 3m ago**, or **Not checked** before any sync. The Usage
@@ -221,16 +243,20 @@ provider only.
 
 ### Quota
 
-One card per provider in the detail column. The header is one line: the catalog provider name, the
+One card per provider in the detail column. Each card uses `quotaCardSurface()` (glass on macOS 26,
+`settingsGroupFill` otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
+the catalog brand icon and provider name as the title, with the remaining percent of the primary
+window trailing as a 28pt semibold rounded numeral and a small **remaining** caption; then the
 pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
-the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window. Parts the
-reading does not have are omitted.
+the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window, in
+secondary style, joined by ` · `. Parts the reading does not have are omitted.
 
 Each card draws one Swift Charts `LineMark` per window of used percent over time, from this Mac's
-samples in the selected range. The running window continues to its reset as a dashed `LineMark` at
-ADR 0035's projection, and a `RuleMark` marks the reset. Line colour is the remaining-quota tone
-(healthy / warning / critical) of that window; windows of the same provider are told apart by
-opacity in rank order, the first cadence window at full strength. No second palette.
+samples in the selected range, 180pt tall, with tertiary axis labels. The running window continues
+to its reset as a dashed `LineMark` at ADR 0035's projection, and a `RuleMark` marks the reset.
+Line colour is the remaining-quota tone (healthy / warning / critical) of that window; windows of
+the same provider are told apart by opacity in rank order, the first cadence window at full
+strength. No second palette.
 
 Every chart has an `accessibilityChartDescriptor` that names each window, its start, now, and the
 projected end.
@@ -242,11 +268,12 @@ reads **No history yet**.
 
 ### Today
 
-A table on the Today page. One row per provider × window that had samples today. Columns:
-window (catalog provider name · window title), used percent at the start of the local day → now
-(`12% → 47%`, the same whole percents `QuotaHistoryCopy.peak` prints), cost today when today's
-Usage can attribute it to that provider, and the reset time — the same reset copy the Quota header
-uses, or the local clock time when that reset has already passed. The panel's
+A table on the Today page, inside one `quotaCardSurface()` card. One row per provider × window that had samples
+today, 36pt tall. The header row is tertiary caps. Columns: window (catalog provider name · window
+title), used percent at the start of the local day → now (`12% → 47%`, the same whole percents
+`QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
+attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
+the local clock time when that reset has already passed. The panel's
 `Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; the main window lays those facts in
 columns. A provider or window with no sample today is omitted. Toolbar provider selection narrows
 the rows the same way it narrows Quota cards.
@@ -260,7 +287,7 @@ period.
 
 A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
-background, with the selected item highlighted inside it; do not wrap it in another group surface.
+background, with the selected item highlighted inside it; do not wrap it in a card.
 A custom range selects none of the six, so the tab control shows nothing selected and the row
 beneath it says what the period covers. At main-window width the control is leading-aligned and no
 wider than 480pt.
@@ -285,46 +312,48 @@ Preparing and empty Usage remain section states below the period tabs because th
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
 
-When this Mac has a monthly budget, a **Monthly budget** group sits above the summary with a
+When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
 progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
 folded the same way any other custom period is, and it is shown whatever period the page is
 otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
 
 The default page contains:
 
-- Summary: a titled group with a totals row of Tokens, Cost, and Cache hit, followed by the six
-  token and message metrics in a three-column grid. Cache hit is whole percent, with `saved $X.XX`
-  under it when the period's cache reads could be priced and nothing under it when they could not
-  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). Headline values use the
+- Summary: three stat tiles in a row — Tokens, Cost, and Cache hit — each a card with a 28pt
+  semibold rounded numeral, a small label, and `saved $X.XX` as the Cache hit caption when the
+  period's cache reads could be priced (nothing under it when they could not)
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The six token and message
+  metrics follow in their own Summary card as a three-column grid. Headline values use the
   primary text tone; grid labels stay muted while their values use the secondary tone. Values use
   `UsageValueFormatter`.
-- Daily, for This Mac and for any period but All: one Swift Charts `BarMark` per local day of
-  cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A day with
-  nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is the
-  shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
+- Daily, for This Mac and for any period but All, in its own card: one Swift Charts `BarMark` per
+  local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A
+  day with nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is
+  the shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
   the section when the period reported nothing. All has no Daily section: its per-day shape is the
   Account's activity chart.
-- Models: grouped by the vendor whose model it is — the service resolves that from the model's name
-  — independent of the collecting client and of who billed the request. A **Top models** list of
-  the three largest leads the section when there is more than one, each as `share · tokens`. Each
-  provider heading is followed by a 4pt share bar and its whole-percent share of the period. Every
-  model remains a static single row ending in `tokens · cost · share` when priced, or `tokens ·
-  share` when unpriced.
-- Rhythm, for This Mac and for Account, and for any period but All: 24 bars at 36pt, one per
-  hour of the local clock, then Morning / Afternoon / Evening / Night, each as a whole-percent
-  share. Omit the section when every hour is empty. Account hours come from
+- Models, in its own card: grouped by the vendor whose model it is — the service resolves that from
+  the model's name — independent of the collecting client and of who billed the request. A **Top
+  models** list of the three largest leads the section when there is more than one, each as
+  `share · tokens`. Each provider heading is followed by a 4pt share bar and its whole-percent
+  share of the period. Every model remains a static single row ending in `tokens · cost · share`
+  when priced, or `tokens · share` when unpriced.
+- Rhythm, for This Mac and for Account, and for any period but All, in its own card: 24 bars at
+  36pt, one per hour of the local clock, then Morning / Afternoon / Evening / Night, each as a
+  whole-percent share. Omit the section when every hour is empty. Account hours come from
   `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
-- Projects: This Mac only, and only while **Group Usage by project** is on (an Account period
-  carries no `projects` key at all — attribution never leaves the Mac that made it). A table of at most 50
-  repository basenames for the selected period, columns Project / Tokens / Cost, with the top model
-  as a meta line under the name. Unattributed work and the overflow past 50 share the row **Other**.
-  Account Usage has no such section.
-- Sessions: This Mac's session files, independent of the Account / This Mac summary source. The
-  section header trails `2 active · 14 today`. Each row is the agent mark, a basename project
-  label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same compact cost
-  copy as Models. A session written in the last five minutes wears a 6pt accent dot on the mark.
-  At most 20 rows, newest write first. An empty list says **No sessions in the last 90 days.**
+- Projects, in its own card: This Mac only, and only while **Group Usage by project** is on (an
+  Account period carries no `projects` key at all — attribution never leaves the Mac that made it).
+  A table of at most 50 repository basenames for the selected period, columns Project / Tokens /
+  Cost, with the top model as a meta line under the name. Unattributed work and the overflow past
+  50 share the row **Other**. Account Usage has no such section.
+- Sessions, in its own card: This Mac's session files, independent of the Account / This Mac
+  summary source. The section header trails `2 active · 14 today`. Each row is the agent mark, a
+  basename project label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same
+  compact cost copy as Models. A session written in the last five minutes wears a 6pt accent dot on
+  the mark. At most 20 rows, newest write first. An empty list says **No sessions in the last 90
+  days.**
 
 Provider headings use the brand mark of the structured provider the service sent; the client never
 reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
@@ -362,9 +391,11 @@ The panel inherits the menu extra's system material. The main window uses
 
 - Panel: transparent material plus `panelWash`.
 - Group: `settingsGroupFill` with a continuous 10pt silhouette.
+- Card: `quotaCardSurface()` — glass on macOS 26, `settingsGroupFill` at 20pt continuous otherwise.
 - Control: `fieldFill` plus the accent focus ring.
-- Transient: regular material plus `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
-- Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group.
+- Transient: `quotaFloatingSurface()` — glass on macOS 26; on 14/15 regular material plus
+  `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
+- Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group or card.
 
 Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
 supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
@@ -372,7 +403,40 @@ supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus
 Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15; `critical` on text
 stays failure-only.
 
-Do not add decorative gradients, oversized cards, colored page backgrounds, or custom window chrome.
+Do not add decorative gradients, a second card language, colored page backgrounds, or custom window
+chrome. Main-window Quota / Today / Usage cards are the 20pt `quotaCardSurface()`.
+
+## Liquid Glass (macOS 26)
+
+QuotaBar uses Apple's native Liquid Glass on macOS 26. Views never branch on availability.
+Tahoe-only modifiers live in `QuotaSurfaces` (`quotaCardSurface()`, `quotaFloatingSurface()`,
+`quotaScrollEdge()`): they apply `.glassEffect` / `.scrollEdgeEffectStyle` on 26 and the existing
+group-fill / material fallbacks below it. `QuotaPalette` stays the one palette.
+
+| Surface | macOS 26 | 14/15 fallback |
+| --- | --- | --- |
+| Main-window sidebar | System floating glass (`List` `.sidebar`) | Standard sidebar |
+| Toolbar groups | Glass capsules (`ToolbarSpacer`) | Same items, no spacers |
+| Quota / Today / Usage cards, Usage stat tiles, Agents list groups | `quotaCardSurface()` glass, 20pt continuous | `settingsGroupFill`, same 20pt |
+| Transient menus (Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, `QuotaConfirmationPopup`) | `quotaFloatingSurface()` glass, 14pt continuous | `quotaFloatingMenuSurface()` |
+| Panel background | Menu extra's system material | Same |
+| Settings Form pages | Grouped Form; no opaque page wash | Same |
+| Main-window background | `windowBackgroundColor` | Same |
+
+The panel background stays the extra's material on every release. Sidebar, toolbar, cards, and
+floating menus are the glass surfaces.
+
+Concentric radii on a card: 20pt outer → 12pt inner → 7pt control (`fieldCornerRadius`). Nested
+rounded rects share a centre of curvature. Settings groups stay 10pt / 6pt (`groupCornerRadius` /
+`rowCornerRadius`) with the 4pt nested inset.
+
+State colours — remaining-quota healthy / warning / critical, `accent`, `warning`, `critical` —
+keep at least 4.5:1 on both appearances against the card and floating surfaces. If a tone fails,
+darken or lighten that tone. Do not add a second palette.
+
+Quota, Today, and Usage are one column, max width 1040pt, centred, with 24pt gutters and 16pt
+between cards. Usage totals are three stat tiles (Tokens, Cost, Cache hit): a 28pt semibold
+rounded numeral and a small label. Dense tables stay dense and sit inside the card.
 
 ## Typography
 
@@ -380,6 +444,7 @@ Use semantic roles from `QuotaDesign.Typography`:
 
 | Role | Size/weight | Use |
 | --- | --- | --- |
+| `overviewProviderTitle` | 15pt semibold | Overview provider heading |
 | `panelTitle` | 13pt semibold | Header title |
 | `emptyTitle` | 13pt medium rounded | Empty-state title |
 | `rowTitle` | 13pt medium | Provider/account title and primary buttons |
@@ -390,6 +455,7 @@ Use semantic roles from `QuotaDesign.Typography`:
 | `meta` | 10pt regular | Age, state, and tertiary metadata |
 | `mono` / `monoMeta` | 11pt / 10pt | Commands and technical values |
 | `remainingValue` | 12pt medium | Remaining quota |
+| `statValue` | 28pt semibold rounded | Remaining % and Usage stat numerals on main-window cards |
 
 Dynamic Type scales semantic text roles. Utility symbols keep their optical sizes, while their hit
 targets stay at least 28pt. Technical strings and chevrons never receive primary-text emphasis.
@@ -507,6 +573,12 @@ The header shows:
   **Settings…** opens the main window on Account or the last Settings page; there is no gear.
 - Child page: Back and page title. Provider detail has no trailing action.
 
+Transient menus — the Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, and
+`QuotaConfirmationPopup` — use `quotaFloatingSurface()`: glass in a 14pt continuous rounded rect
+on macOS 26, and `quotaFloatingMenuSurface()` (regular material, same 14pt radius) on 14/15. Views
+do not branch on availability. Header and footer heights stay 44pt and 36pt. The panel keeps the
+menu extra's material.
+
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
 tokens` from the Usage source the main window would show and is a button that opens the main
@@ -557,8 +629,9 @@ Overview is quota and nothing else. Provider groups carry quota only: models, me
 totals stay on main-window Usage and never create or extend an Overview provider
 group. What today cost is the shell's bottom bar, not an Overview row. The provider heading is
 the only Overview destination, into a read-only quota page for that provider. Agent settings
-live in the main window (**Agents**). The heading is a destination at
-`minimumInteractiveDimension` (28pt), not a Settings list row. Brand,
+live in the main window (**Agents**). Provider groups sit 12pt apart. The heading is 15pt
+semibold (`overviewProviderTitle`) and a destination at
+`minimumInteractiveDimension` (28pt), not a Settings list row. Window rows are unchanged. Brand,
 name, status, and chevron stay on the 16pt content guide with the quota windows. Hover/press
 extends 8pt into that gutter on each side, so the bar is wider than the numbers and still
 has margin from the panel edge. Overview is not a Settings group and does not use the group's
@@ -627,7 +700,9 @@ service its `shutdown` and waits at most two seconds for the answer before going
 
 The Settings pages are the Settings group of the main window: **Account**, **Agents**,
 **Notifications**, **Menu Bar**, **General**, and **Support**. The panel does not push Settings
-pages; **Settings…** is an overflow-menu item on Overview.
+pages; **Settings…** is an overflow-menu item on Overview. Account, Notifications, General,
+Support, and Menu Bar stay grouped `Form`s; they do not paint an opaque page background over the
+window. Each of those pages' content is at most 720pt wide and centred in the detail column.
 
 The Account page is one Form in every state:
 
@@ -649,8 +724,6 @@ service operations; there are no embedded web views.
 Usage lives on the main window Usage page, reached from the footer **Today · $x** button. The Usage
 root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
 otherwise.
-**Menu Bar** is one grouped form in the Settings group: a live preview of the status-item label,
-**Style**, **Provider**, **Reset time**, and **Show pace lines**.
 
 **General** is a Settings-group page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
 menu-bar-only except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
@@ -660,16 +733,6 @@ is how often this Mac collects provider quota; Account summary still polls every
 window reset can collect quota once before the next interval. Reset Local Data always confirms first
 and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
 stays signed in. That confirmation is a system dialog on the main window.
-
-**Menu Bar** is one form. A preview row above **Style** draws the actual status-item label from
-`MenuBarLabelModel` for the current readings. **Style** is a Picker over every
-`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
-**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
-showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
-named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
-Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
-**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
-writes the existing storage keys and takes effect immediately.
 
 Support is a Settings-group page, and it asks the service nothing on its own: opening it starts no check
 and costs no refresh. **Help** contains **Feedback**. **About** stays with Website, version, and
@@ -707,6 +770,20 @@ the latest state after the navigation animation is removed. Any page that can re
 empty, error, or content at its root uses this host; individual pages must not delay requests or
 guess the navigation duration. Header actions stay hidden during the transition and then reflect the
 published page state. Reduce Motion skips the transition and publishes updates immediately.
+
+### Menu Bar
+
+**Menu Bar** is one form. A preview row above **Style** sits in its own grouped card: the
+status-item label is centred on a simulated menu-bar strip (system material, 24pt tall) so the
+preview looks like the bar. The label is drawn from `MenuBarLabelModel` for the current readings.
+**Style** is a Picker over every
+`MenuBarStylePreference` — segmented when there are four or fewer options, otherwise a menu.
+**Provider** is an **Automatic** toggle; when it is off, a checklist of the providers Overview is
+showing, in Overview's order, each with its catalog brand mark. Automatic is exclusive with the
+named set. When two or more are named, **Combined** and **Separate** appear as a segmented control;
+Combined is unavailable past three. **Reset time** is a Picker: **Relative** (`Resets in 3h 12m`) or
+**Absolute** (`Resets Mon 17:12`). **Show pace lines** is a toggle, on by default. Every control
+writes the existing storage keys and takes effect immediately.
 
 ### Notifications
 
@@ -759,8 +836,10 @@ unavailable account with no device content offers Retry.
 
 ### Agents
 
-Agents is a two-column page in the Settings group of the main window. The left column lists every catalog provider in
-**Shown in Overview** and **Hidden from Overview** groups. Shown providers support drag reordering
+Agents is a two-column page in the Settings group of the main window. A 1pt hairline with 24pt
+gutters on each side divides the columns. The left column lists every catalog provider in
+**Shown in Overview** and **Hidden from Overview** groups, each a `quotaCardSurface()` card.
+Shown providers support drag reordering
 and VoiceOver Move Up/Move Down actions. Every row carries one status line under the name. When
 this Mac has a last-good official status-page reading, that line is **All systems operational**, or
 **Degraded ·** the status-page description for `minor` and above. Otherwise it is
@@ -773,9 +852,9 @@ trails **3 shown** and, when any shown agent has no working credential and no de
 
 **Group Usage by project** lives on General, not here.
 
-The right pane is that provider's settings, read top to bottom as three questions — is it shown,
-what is it reporting, how does this Mac sign in — and contains exactly these sections, in this
-order:
+The right pane keeps grouped section chrome. It is that provider's settings, read top to bottom as
+three questions — is it shown, what is it reporting, how does this Mac sign in — and contains
+exactly these sections, in this order:
 
 - **Overview**: one **Show in Overview** switch, no subtitle. Visibility is provider-wide and
   presentation-only.
@@ -786,7 +865,7 @@ order:
   account from the next. The menu uses `fieldFill` on the 24pt compact surface
   (`headerControlSurfaceSize`) inside a 28pt pointer target, like header icon actions, and reads
   **Automatic** or **Show: <source>** when pinned, then a small `chevron.down` at affordance
-  size. It opens an app-owned floating menu (`quotaFloatingMenuSurface`), not a
+  size. It opens an app-owned floating menu (`quotaFloatingSurface`), not a
   system Menu. Choice rows use `fieldMinHeight` (32pt); the first item is **Automatic** with
   the quiet line **Newest live reading** under it, the rest are the available sources with no
   subtitle and no leading icons; the accent checkmark after the title is the only selected mark.
@@ -930,12 +1009,12 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | --- | --- |
 | `MenuBarShell` | Fixed header/body/footer geometry |
 | `MenuBarHeader` | Back/title/root actions and keyboard-safe transient menu |
-| `SettingsSection` | Quiet label, optional trailing control, plus adaptive group surface |
+| `SettingsSection` | Quiet label, optional trailing control, plus group (`quotaGroupSurface`) or card (`quotaCardSurface`) chrome |
 | `SettingsListRow` | Shared icon/title/subtitle/trailing alignment |
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the main window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the main window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Main window | Titled window, 960×640 minimum, 200pt sidebar of Quota and Settings groups; Quota cards, Today table, Usage, and Settings pages |
+| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Settings groups; Quota / Today / Usage cards, and Settings pages |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -984,15 +1063,17 @@ Required fixture states are loading, signed-in content, cached content with a sy
 signed-out provider issues, service unavailable, and a rebuilding cache (`cache-rebuilding`).
 
 Every `--route` below is inspected in `--appearance light` and `dark`, and at `--text-size
-standard` and `accessibility` (60 cells). `--text-size extra-large` is available on the visual
-app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce Motion are inspected on
-the same routes.
+standard` and `accessibility` (60 cells, plus `main-quota` at 1280×800). `--text-size extra-large`
+is available on the visual app for spot checks. Keyboard traversal, VoiceOver labels, and Reduce
+Motion are inspected on the same routes. CI's `verify` job on macos-26 uploads the rendered
+matrix as the `quotabar-visual-matrix` artifact. Liquid Glass renders only on that runner; a Mac
+on 14 or 15 produces the same routes with the material fallback.
 
 | `--route` | Surface | Size | Appearances | Text sizes |
 | --- | --- | ---: | --- | --- |
 | `overview` | Panel | 320×480 | light, dark | standard, accessibility |
 | `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
-| `main-quota` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-quota` | Main window | 960×640 and 1280×800 | light, dark | standard, accessibility |
 | `main-quota-codex` | Main window | 960×640 | light, dark | standard, accessibility |
 | `main-today` | Main window | 960×640 | light, dark | standard, accessibility |
 | `main-usage` | Main window | 960×2200 | light, dark | standard, accessibility |

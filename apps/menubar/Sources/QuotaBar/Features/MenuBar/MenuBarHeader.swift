@@ -179,7 +179,7 @@ struct MenuBarHeader: View {
         }
       }
       .frame(width: QuotaDesign.Layout.headerMenuWidth)
-      .quotaFloatingMenuSurface()
+      .quotaFloatingSurface()
     }
     .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     .padding(.top, 2)

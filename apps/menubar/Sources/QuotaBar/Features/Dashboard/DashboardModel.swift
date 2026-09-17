@@ -49,6 +49,8 @@ struct DashboardProvider: Equatable, Identifiable {
   let resetsAt: Date?
   /// `QuotaHistoryCopy.peak` of the current window, or of the highest window the fold named.
   let peak: String?
+  /// Remaining percent of the primary cadence window, when this Mac has a reading.
+  let remainingPercent: Double?
   let series: [DashboardQuotaSeries]
   let empty: DashboardEmptyState?
 }
@@ -253,6 +255,7 @@ final class DashboardModel {
       pacePhrase: pacePhrase,
       resetsAt: paceWindow?.resetsAt,
       peak: peakPercent.map(QuotaHistoryCopy.peak),
+      remainingPercent: paceWindow?.remainingPercent,
       series: series,
       empty: emptyState(provider: provider, accounts: accounts, series: series)
     )

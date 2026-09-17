@@ -30,7 +30,7 @@ struct QuotaSelectionPopup: View {
       }
       .padding(QuotaDesign.Spacing.lg)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .quotaFloatingMenuSurface()
+      .quotaFloatingSurface()
       .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
     }
     .accessibilityElement(children: .contain)

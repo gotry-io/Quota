@@ -9,12 +9,36 @@ enum QuotaDesign {
     static let panelWidth: CGFloat = 320
     /// Fixed panel height for every page so first open and later pages share one ceiling.
     static let panelMaxHeight: CGFloat = 480
-    /// Sidebar of the main window.
-    static let windowSidebarWidth: CGFloat = 200
+    /// Sidebar of the main window (min and ideal). User-resizable up to `windowSidebarMaxWidth`.
+    static let windowSidebarWidth: CGFloat = 220
+    /// Maximum sidebar width of the main window.
+    static let windowSidebarMaxWidth: CGFloat = 280
     /// Provider list inside the Agents page.
     static let agentsListWidth: CGFloat = 220
     /// Minimum main window content size.
     static let mainWindowMinSize = CGSize(width: 960, height: 640)
+    /// Wide Visual QA capture for the Quota page.
+    static let mainWindowWideSize = CGSize(width: 1280, height: 800)
+    /// Quota / Today / Usage cards.
+    static let cardCornerRadius: CGFloat = 20
+    /// Inner padding of Quota / Today / Usage cards.
+    static let cardPadding: CGFloat = 16
+    /// Centred reading column on Quota, Today, and Usage.
+    static let contentMaxWidth: CGFloat = 1040
+    /// Horizontal gutter around that column.
+    static let contentGutter: CGFloat = 24
+    /// Quota history chart height.
+    static let quotaChartHeight: CGFloat = 180
+    /// Today table row height.
+    static let todayRowHeight: CGFloat = 36
+    /// Transient menus (`quotaFloatingSurface`): glass on 26, material fallback below.
+    static let floatingSurfaceCornerRadius: CGFloat = 14
+    /// Settings Form pages, centred in the main-window detail column.
+    static let settingsContentMaxWidth: CGFloat = 720
+    /// Simulated menu-bar strip on Settings → Menu Bar.
+    static let menuBarStripHeight: CGFloat = 24
+    /// Agents page column divider.
+    static let columnHairlineWidth: CGFloat = 1
 
     /// Single horizontal gutter for header, page body, and footer.
     static let panelHorizontalPadding: CGFloat = 16
@@ -65,11 +89,11 @@ enum QuotaDesign {
     static let groupSurfaceInset: CGFloat = 4
     /// Hover/pressed surface nested inside a settings group.
     static let rowCornerRadius: CGFloat = 6
-    /// Transient menus sit above the panel and use a slightly fuller silhouette than groups.
+    /// Panel window silhouette. Transient menus use `floatingSurfaceCornerRadius`.
     static let floatingMenuCornerRadius: CGFloat = 12
     /// Keeps menu-row hover geometry concentric with the 4pt surface inset.
     static let floatingMenuRowCornerRadius: CGFloat =
-      floatingMenuCornerRadius - groupSurfaceInset
+      floatingSurfaceCornerRadius - groupSurfaceInset
     static let floatingMenuShadowRadius: CGFloat = 12
     static let floatingMenuShadowY: CGFloat = 5
 
@@ -96,12 +120,15 @@ enum QuotaDesign {
   /// Semantic type roles. Prefer these over bare `.caption` / `.subheadline`.
   ///
   /// Hierarchy (strong → quiet):
-  /// panelTitle ≥ emptyTitle > rowTitle > settingsLabel > sectionHeader > listSecondary > meta
+  /// overviewProviderTitle > panelTitle ≥ emptyTitle > rowTitle > settingsLabel >
+  /// sectionHeader > listSecondary > meta
   enum Typography {
     enum Role {
       case panelTitle
       case emptyTitle
       case rowTitle
+      /// Overview provider name. Larger than the panel title so groups scan as headings.
+      case overviewProviderTitle
       /// Compact Settings body labels (menu-style, smaller than Overview row titles).
       case settingsLabel
       case sectionHeader
@@ -116,6 +143,7 @@ enum QuotaDesign {
 
       fileprivate var baseSize: CGFloat {
         switch self {
+        case .overviewProviderTitle: 15
         case .panelTitle, .emptyTitle, .rowTitle: 13
         case .settingsLabel, .remainingValue: 12
         case .sectionHeader, .secondary, .mono, .quotaLabel: 11
@@ -126,7 +154,7 @@ enum QuotaDesign {
 
       fileprivate var weight: Font.Weight {
         switch self {
-        case .panelTitle, .sectionHeader: .semibold
+        case .overviewProviderTitle, .panelTitle, .sectionHeader: .semibold
         case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel, .remainingValue: .medium
         case .listSecondary, .secondary, .meta, .mono, .monoMeta: .regular
         }
@@ -152,6 +180,8 @@ enum QuotaDesign {
       weight: .medium
     )
     static let emptyIcon = Font.system(size: Layout.emptyIconPointSize, weight: .regular)
+    /// Big remaining / Usage stat numeral on main-window cards.
+    static let statValue = Font.system(size: 28, weight: .semibold, design: .rounded)
   }
 }
 
@@ -169,6 +199,11 @@ extension View {
 
   func quotaRowTitleStyle() -> some View {
     quotaFont(.rowTitle)
+      .foregroundStyle(QuotaPalette.ink)
+  }
+
+  func quotaOverviewProviderTitleStyle() -> some View {
+    quotaFont(.overviewProviderTitle)
       .foregroundStyle(QuotaPalette.ink)
   }
 

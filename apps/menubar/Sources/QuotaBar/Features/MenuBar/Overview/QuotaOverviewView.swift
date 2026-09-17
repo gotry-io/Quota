@@ -80,16 +80,14 @@ struct QuotaOverviewView: View {
           .padding(.vertical, QuotaDesign.Spacing.sm)
       }
 
-      ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-        ProviderQuotaView(
-          presentation: provider,
-          now: now,
-          onOpenProvider: { onOpenProvider(provider.provider) }
-        )
-        .id(provider.id)
-
-        if index < providers.count - 1 {
-          Divider()
+      VStack(spacing: QuotaDesign.Spacing.md) {
+        ForEach(providers) { provider in
+          ProviderQuotaView(
+            presentation: provider,
+            now: now,
+            onOpenProvider: { onOpenProvider(provider.provider) }
+          )
+          .id(provider.id)
         }
       }
     }

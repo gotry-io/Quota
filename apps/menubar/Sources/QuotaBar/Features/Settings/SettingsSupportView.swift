@@ -48,7 +48,7 @@ struct SettingsSupportView: View {
       }
     }
     .formStyle(.grouped)
-    .scrollContentBackground(.hidden)
+    .quotaSettingsColumn()
     .onAppear {
       if expandsDiagnostics {
         diagnosticsExpanded = true

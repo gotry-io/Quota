@@ -28,7 +28,7 @@ struct MenuBarSettingsView: View {
       paceSection
     }
     .formStyle(.grouped)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .quotaSettingsColumn()
   }
 
   private var currentLayout: MenuBarLayout {
@@ -48,6 +48,14 @@ struct MenuBarSettingsView: View {
         }
       }
       .frame(maxWidth: .infinity)
+      .frame(height: QuotaDesign.Layout.menuBarStripHeight)
+      .background(
+        .bar,
+        in: RoundedRectangle(
+          cornerRadius: QuotaDesign.Layout.rowCornerRadius,
+          style: .continuous
+        )
+      )
       .accessibilityElement(children: .combine)
     } header: {
       Text("Preview")

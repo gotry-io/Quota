@@ -88,7 +88,7 @@ struct ProviderQuotaView: View {
       HStack(spacing: QuotaDesign.Spacing.iconLabel) {
         ProviderBrandIcon(provider: presentation.provider)
         Text(presentation.provider.displayName)
-          .quotaRowTitleStyle()
+          .quotaOverviewProviderTitleStyle()
         if let serviceStatus = presentation.serviceStatus,
           ProviderServiceStatusCopy.showsDot(serviceStatus.indicator)
         {

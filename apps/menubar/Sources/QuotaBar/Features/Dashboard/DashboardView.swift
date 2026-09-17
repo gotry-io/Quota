@@ -12,27 +12,18 @@ struct DashboardView: View {
 
   var body: some View {
     let providers = dashboard.displayedProviders(now: now)
-    ScrollView {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
-        ForEach(providers) { provider in
-          quotaCard(provider, now: now)
-        }
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
+      ForEach(providers) { provider in
+        quotaCard(provider, now: now)
       }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .padding(.horizontal, QuotaDesign.Layout.panelHorizontalPadding)
-      .padding(.vertical, QuotaDesign.Layout.pageVerticalPadding)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 
   @ViewBuilder
   private func quotaCard(_ provider: DashboardProvider, now: Date) -> some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-      Text(headerLine(provider, now: now))
-        .quotaFont(.settingsLabel)
-        .foregroundStyle(QuotaPalette.ink)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
+      header(provider, now: now)
 
       if let empty = provider.empty {
         emptyState(empty)
@@ -40,11 +31,51 @@ struct DashboardView: View {
         DashboardQuotaChart(series: provider.series, now: now)
       }
     }
-    .padding(QuotaDesign.Layout.groupContentInset)
+    .padding(QuotaDesign.Layout.cardPadding)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .quotaGroupSurface()
+    .quotaCardSurface()
     .accessibilityElement(children: .contain)
     .accessibilityLabel(headerLine(provider, now: now))
+  }
+
+  private func header(_ provider: DashboardProvider, now: Date) -> some View {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
+      HStack(alignment: .center, spacing: QuotaDesign.Spacing.sm) {
+        HStack(spacing: QuotaDesign.Spacing.iconLabel) {
+          ProviderBrandIcon(
+            provider: provider.provider,
+            size: QuotaDesign.Layout.settingsIconColumnWidth
+          )
+          Text(provider.provider.displayName)
+            .quotaRowTitleStyle()
+            .lineLimit(1)
+        }
+        .accessibilityAddTraits(.isHeader)
+
+        Spacer(minLength: 0)
+
+        if let remaining = provider.remainingPercent {
+          VStack(alignment: .trailing, spacing: 0) {
+            Text(RemainingQuotaFormat.percent(remaining))
+              .font(QuotaDesign.Typography.statValue)
+              .foregroundStyle(QuotaPalette.ink)
+              .monospacedDigit()
+              .lineLimit(1)
+              .minimumScaleFactor(0.6)
+            Text("remaining")
+              .quotaMetaStyle()
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("\(RemainingQuotaFormat.percent(remaining)) remaining")
+        }
+      }
+
+      if let subtitle = subtitleLine(provider, now: now) {
+        Text(subtitle)
+          .quotaSecondaryStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
   }
 
   @ViewBuilder
@@ -62,8 +93,8 @@ struct DashboardView: View {
     }
   }
 
-  private func headerLine(_ provider: DashboardProvider, now: Date) -> String {
-    var parts = [provider.provider.displayName]
+  private func subtitleLine(_ provider: DashboardProvider, now: Date) -> String? {
+    var parts: [String] = []
     if let pace = provider.pacePhrase {
       parts.append(pace)
     }
@@ -75,6 +106,17 @@ struct DashboardView: View {
     }
     if let peak = provider.peak {
       parts.append(peak)
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
+  private func headerLine(_ provider: DashboardProvider, now: Date) -> String {
+    var parts = [provider.provider.displayName]
+    if let remaining = provider.remainingPercent {
+      parts.append("\(RemainingQuotaFormat.percent(remaining)) remaining")
+    }
+    if let subtitle = subtitleLine(provider, now: now) {
+      parts.append(subtitle)
     }
     return parts.joined(separator: " · ")
   }

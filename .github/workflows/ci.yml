@@ -130,6 +130,15 @@ jobs:
           cargo test --locked --package quota-service --package quota-menubar-helper
           ./scripts/test-swift.sh
 
+      - name: Upload Visual QA matrix
+        if: ${{ steps.mac.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quotabar-visual-matrix
+          path: ${{ runner.temp }}/quotabar-screenshots
+          if-no-files-found: error
+          retention-days: 14
+
       # QuotaBar.xcodeproj is generated from apps/menubar/project.yml and committed; a source
       # file added without regenerating it would still build under SwiftPM above and only fail
       # here, so the committed project is checked against a fresh generation first.

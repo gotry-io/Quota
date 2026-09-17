@@ -53,6 +53,7 @@ struct DashboardQuotaChart: View {
         AxisGridLine()
         AxisTick()
         AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+          .foregroundStyle(QuotaPalette.mute)
       }
     }
     .chartYAxis {
@@ -61,12 +62,13 @@ struct DashboardQuotaChart: View {
         AxisValueLabel {
           if let amount = value.as(Double.self) {
             Text("\(Int(amount))%")
+              .foregroundStyle(QuotaPalette.mute)
           }
         }
       }
     }
     .chartLegend(position: .bottom, alignment: .leading)
-    .frame(minHeight: 160)
+    .frame(height: QuotaDesign.Layout.quotaChartHeight)
     .accessibilityChartDescriptor(DashboardQuotaChartDescriptor(series: series, now: now))
   }
 

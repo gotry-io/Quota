@@ -63,7 +63,7 @@ struct AccountSettingsView: View {
         }
       }
       .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
+      .quotaSettingsColumn()
     }
     .confirmationDialog("Sign Out?", isPresented: $confirmSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
