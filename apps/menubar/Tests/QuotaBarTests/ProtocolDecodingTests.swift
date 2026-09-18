@@ -1,31 +1,26 @@
 import AppKit
 import Foundation
-import QuotaWire
+import QuotaBrandIcons
 import QuotaPresentation
+import QuotaWire
 import Testing
 
 @testable import QuotaBar
 
 @Test @MainActor
-func loadsBundledProviderBrandSVGs() throws {
+func loadsBundledProviderBrandMarks() throws {
   for provider in ProviderID.allCases {
-    let url = try #require(ProviderBrandAssets.resourceURL(for: provider))
-    #expect(url.pathExtension == "svg")
-    #expect(NSImage(contentsOf: url) != nil)
+    let mark = try #require(ProviderBrandAssets.mark(named: provider.brandIconAssetName))
+    #expect(mark.image.isTemplate)
   }
   for assetName in ["azureai", "bedrock", "vertexai", "opencode", "pi"] {
-    let url = try #require(ProviderBrandAssets.resourceURL(named: assetName))
-    #expect(NSImage(contentsOf: url) != nil)
+    let mark = try #require(ProviderBrandAssets.mark(named: assetName))
+    #expect(mark.image.isTemplate)
   }
 }
 
 @Test @MainActor
-func loadsBundledQuotaBrandSVG() throws {
-  let url = try #require(QuotaBrandAssets.menuBarResourceURL())
-  #expect(url.pathExtension == "svg")
-  let svg = try String(contentsOf: url, encoding: .utf8)
-  #expect(svg.components(separatedBy: "<path").count == 3)
-  #expect(!svg.contains("stroke-opacity"))
+func loadsBundledQuotaBrandMark() throws {
   let image = try #require(QuotaBrandAssets.menuBarTemplateImage())
   #expect(image.isTemplate)
   #expect(image.size == NSSize(width: 18, height: 18))

@@ -46,24 +46,6 @@ extension ProviderID {
     }
   }
 
-  var brandIconAssetName: String {
-    switch self {
-    case .`codex`: "openai"
-    case .`claude`: "claude"
-    case .`grok`: "grok"
-    case .`openrouter`: "openrouter"
-    case .`deepseek`: "deepseek"
-    case .`kimi`: "kimi"
-    case .`litellm`: "litellm"
-    case .`cursor`: "cursor"
-    case .`gemini`: "gemini"
-    case .`copilot`: "copilot"
-    case .`antigravity`: "antigravity"
-    case .`opencode_go`: "opencode-go"
-    case .unknown(let rawValue): rawValue
-    }
-  }
-
   /// Providers that store secrets via service configuration.
   static var configurableCases: [ProviderID] {
     [.`openrouter`, .`deepseek`, .`kimi`, .`litellm`, .`opencode_go`]

@@ -421,8 +421,9 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 ## Source and dependency rules
 
 - `packages/provider/catalog.json` generates the Rust crate metadata, the Swift `ProviderID` enum in
-  `packages/apple-client`, QuotaBar's app-behavior extension on that enum, and the protocol
-  TypeScript IDs. One catalog produces one Swift type, and one decoder validates for both products.
+  `packages/apple-client`, QuotaBar's app-behavior extension on that enum,
+  `ProviderID.brandIconAssetName` in `QuotaBrandIcons`, and the protocol TypeScript IDs. One catalog
+  produces one Swift type, and one decoder validates for both products.
 - `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
   OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` is its only
   entry point and adds only process startup and IPC lifetime around it.
@@ -480,10 +481,13 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   through; `QuotaWidgetProjection` turns resolved
   `QuotaSnapshot` readings into that snapshot and is the publishing side, so it speaks `QuotaWire`
   and neither extension links it
-  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)). `QuotaWidgets` and
+  ([ADR 0043](decisions/0043-one-widget-view-package-for-both-platforms.md)). `QuotaBrandIcons` is
+  the template asset catalog of provider marks both apps draw (`ProviderMark`,
+  `ProviderID.brandIconAssetName`); apps link it, widget extensions do not. `QuotaWidgets` and
   `QuotaBarWidgets` depend only on `QuotaWidgetViews`, `QuotaWidgetData`, and `QuotaPresentation`,
-  and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`, or Security,
-  or use `URLSession` or Keychain. Relay does not forward provider status pages.
+  and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`,
+  `QuotaBrandIcons`, or Security, or use `URLSession` or Keychain. Relay does not forward provider
+  status pages.
 - `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie
   a sign-in left behind — the last rung of the collection ladder, on the device the reader signed in
   on. It depends on QuotaWire for `ProviderID`, the catalog's browser-session spec, and the snapshot

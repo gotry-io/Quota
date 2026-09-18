@@ -194,7 +194,6 @@ struct SubscriptionDetailView: View {
           QuotaWindowBlock(
             window: window,
             usesLiveCountdown: true,
-            emphasizedRemaining: true,
             history: content.histories[window.id]
           )
         }

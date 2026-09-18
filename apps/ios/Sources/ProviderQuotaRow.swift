@@ -1,3 +1,4 @@
+import QuotaBrandIcons
 import QuotaPresentation
 import QuotaProviderStatus
 import QuotaWire
@@ -14,8 +15,10 @@ struct ProviderQuotaRow: View {
     let stateLabel = snapshot.stateLabel()
     return VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .center, spacing: 8) {
+        ProviderMark(provider: provider, size: QuotaDesign.Layout.markSize)
+          .foregroundStyle(.primary)
         Text(provider.displayName)
-          .font(.headline)
+          .font(QuotaDesign.Typography.cardTitle)
           .foregroundStyle(.primary)
         if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
           Circle()
@@ -103,7 +106,6 @@ struct QuotaWindowBlock: View {
   var stateLabel: String? = nil
   /// Detail uses a live timer under a day; Overview keeps the shared static reset copy.
   var usesLiveCountdown: Bool = false
-  var emphasizedRemaining: Bool = false
   /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
   var now: Date = Date()
   /// The curve this device's own samples draw for the window, when it has any (ADR 0042).
@@ -112,23 +114,19 @@ struct QuotaWindowBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text(QuotaFormat.windowTitle(window))
-        .font(.subheadline)
-        .foregroundStyle(.primary)
+        .font(QuotaDesign.Typography.support)
+        .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
       Text(QuotaFormat.remaining(window))
-        .font(
-          (emphasizedRemaining ? Font.title : Font.title2).monospacedDigit().weight(.semibold)
-        )
+        .font(QuotaDesign.Typography.remainingValue)
         .foregroundStyle(.primary)
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
 
       if window.showsPercentMeter {
-        ProgressView(value: window.remainingPercent, total: 100)
-          .tint(QuotaTheme.emerald)
-          .accessibilityHidden(true)
+        QuotaMeter(remainingPercent: window.remainingPercent)
           .allowsHitTesting(false)
       }
 
@@ -143,14 +141,14 @@ struct QuotaWindowBlock: View {
       } else if let support = supportLine {
         // No line limit: at accessibility text sizes a capped line clips the reset time.
         Text(support)
-          .font(.footnote)
+          .font(QuotaDesign.Typography.meta)
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
       }
 
       if let paceLine {
         Text(paceLine.text)
-          .font(.footnote)
+          .font(QuotaDesign.Typography.meta)
           .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -165,14 +163,14 @@ struct QuotaWindowBlock: View {
     case .live(let end):
       // The shared reset copy says "Resets in …"; the live timer keeps the same words.
       (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
-        .font(.footnote.monospacedDigit())
+        .font(QuotaDesign.Typography.meta.monospacedDigit())
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(
           Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
     case .copy(let text):
       Text(text)
-        .font(.footnote)
+        .font(QuotaDesign.Typography.meta)
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
     case nil:

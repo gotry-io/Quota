@@ -74,7 +74,9 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
 - The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
-  managed wire types — quota, account, and Usage — plus `ProviderID` and Relay access;
+  managed wire types — quota, account, and Usage — plus `ProviderID`, Relay access, and
+  `QuotaBrandIcons` (the template catalog of provider marks both apps draw; widget extensions do
+  not link it);
   `packages/apple-shared` owns Foundation-only presentation semantics, `QuotaAlerts`, the
   Foundation-only remaining-quota rule evaluator both Apple apps share, and `QuotaAlertDelivery`,
   the UserNotifications delivery layer both Apple apps share (each app passes its own key prefix

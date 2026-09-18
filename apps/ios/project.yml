@@ -64,6 +64,8 @@ targets:
         product: QuotaProviderSessions
       - package: QuotaAppleClient
         product: QuotaProviderStatus
+      - package: QuotaAppleClient
+        product: QuotaBrandIcons
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared

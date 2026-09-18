@@ -29,6 +29,7 @@ let package = Package(
         .product(name: "QuotaWire", package: "apple-client"),
         .product(name: "QuotaWidgetData", package: "apple-client"),
         .product(name: "QuotaWidgetProjection", package: "apple-client"),
+        .product(name: "QuotaBrandIcons", package: "apple-client"),
         .product(name: "QuotaPresentation", package: "apple-shared"),
         .product(name: "QuotaAlerts", package: "apple-shared"),
         .product(name: "QuotaAlertDelivery", package: "apple-shared"),
@@ -48,5 +49,6 @@ let package = Package(
         .product(name: "QuotaAlerts", package: "apple-shared"),
         .product(name: "QuotaAlertDelivery", package: "apple-shared"),
         .product(name: "QuotaWidgetData", package: "apple-client"),
+        .product(name: "QuotaBrandIcons", package: "apple-client"),
       ]),
   ])

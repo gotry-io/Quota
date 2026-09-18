@@ -1,4 +1,5 @@
 import AppKit
+import QuotaBrandIcons
 import QuotaWire
 import SwiftUI
 
@@ -46,38 +47,17 @@ struct BrandTemplateMark: Sendable {
 enum ProviderBrandAssets {
   private static var cache: [String: BrandTemplateMark] = [:]
 
-  static func resourceURL(for provider: ProviderID) -> URL? {
-    resourceURL(named: provider.brandIconAssetName)
-  }
-
-  static func resourceURL(named assetName: String) -> URL? {
-    if let appResource = Bundle.main.url(
-      forResource: assetName,
-      withExtension: "svg",
-      subdirectory: "BrandIcons"
-    ) {
-      return appResource
-    }
-    #if SWIFT_PACKAGE
-      // `swift test` runs these sources as a package, where the icons ride in Bundle.module
-      // rather than in an app bundle's Resources/BrandIcons.
-      return Bundle.module.url(forResource: assetName, withExtension: "svg")
-    #else
-      return nil
-    #endif
-  }
-
   static func templateImage(named assetName: String) -> NSImage? {
     mark(named: assetName)?.image
   }
 
-  /// Loads the SVG and bakes a square template bitmap so CoreSVG path quirks
+  /// Loads the catalog mark and bakes a square template bitmap so CoreSVG path quirks
   /// and 1em intrinsic sizes cannot clip at menu-bar icon sizes, then measures the ink.
   static func mark(named assetName: String) -> BrandTemplateMark? {
     if let cached = cache[assetName] {
       return cached
     }
-    guard let url = resourceURL(named: assetName), let source = NSImage(contentsOf: url) else {
+    guard let source = Bundle.quotaBrandIcons.brandMarkNSImage(named: assetName) else {
       return nil
     }
 

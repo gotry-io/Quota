@@ -44,7 +44,7 @@ rm -rf "$APP_PATH"
 mkdir -p \
   "$APP_PATH/Contents/MacOS" \
   "$APP_PATH/Contents/Helpers" \
-  "$APP_PATH/Contents/Resources/BrandIcons"
+  "$APP_PATH/Contents/Resources"
 
 cp "$APP_BINARY" "$APP_PATH/Contents/MacOS/QuotaBar"
 cp "$HELPER_BINARY" "$APP_PATH/Contents/Helpers/quota-service"
@@ -52,8 +52,11 @@ chmod +x "${ROOT_DIR}/scripts/embed-sparkle-framework.sh"
 "${ROOT_DIR}/scripts/embed-sparkle-framework.sh" "$APP_PATH"
 cp apps/menubar/Support/Info.plist "$APP_PATH/Contents/Info.plist"
 cp apps/menubar/Support/QuotaBar.icns "$APP_PATH/Contents/Resources/QuotaBar.icns"
-cp apps/menubar/Sources/QuotaBar/Resources/BrandIcons/*.svg \
-  "$APP_PATH/Contents/Resources/BrandIcons/"
+# SwiftPM resource bundles (QuotaBrandIcons catalog, QuotaBar notices) sit next to the binary.
+shopt -s nullglob
+for bundle in "${SWIFT_BIN_DIR}"/*.bundle; do
+  cp -R "$bundle" "$APP_PATH/Contents/Resources/"
+done
 cp apps/menubar/Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md \
   "$APP_PATH/Contents/Resources/THIRD_PARTY_NOTICES.md"
 cp LICENSE "$APP_PATH/Contents/Resources/LICENSE"

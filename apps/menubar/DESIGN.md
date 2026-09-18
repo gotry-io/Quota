@@ -1033,7 +1033,7 @@ with a system or bordered control. **Save** and empty-state **Retry** use compac
 switch, not a pair of in-section actions. Diagnostics' Recheck is a header icon action only; Copy Report and
 Reset Local Data are Settings list rows. Full-width Settings rows such as **Sign Out** stay list rows. Do not use
 `ButtonStyle.bordered` or an unstyled system button inside the panel. Provider assets remain in
-`Resources/BrandIcons`; do not copy their geometry into SwiftUI paths.
+`QuotaBrandIcons`; do not copy their geometry into SwiftUI paths.
 
 Page states live outside `ScrollView`, fill the entire body between the normal header and footer,
 and center their content horizontally and vertically. Loading is a small spinner plus a short title.
