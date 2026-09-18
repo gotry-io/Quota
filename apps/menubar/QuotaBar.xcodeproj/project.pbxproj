@@ -25,6 +25,7 @@
 		2E2CC5D17C11AF48E8356352 /* QuotaWidgetProjection in Frameworks */ = {isa = PBXBuildFile; productRef = 367E9DED1196EB366E2B53B4 /* QuotaWidgetProjection */; };
 		2FC3F378B60118AB5A5B33CB /* SignInRungPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6BB7E519FD895677E512C8 /* SignInRungPresentation.swift */; };
 		31B374C05F17787AC883E62C /* QuotaConfirmationPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2F2372B5C75122FA0587A7 /* QuotaConfirmationPopup.swift */; };
+		322195B4365E460794102246 /* LaunchPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C200BA002619B882BA356DE2 /* LaunchPresentation.swift */; };
 		3240E60406FC49B008E9A9C6 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 171BDCF3D6E24ED637DFD299 /* DashboardView.swift */; };
 		35D71A8B60A438844D0DFF5A /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F453874DB9C6C73240C58F3F /* AppIntents.framework */; };
 		3735C65999B9FDF0CBA7A103 /* QuotaWireCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A39C9326413C8F679369DD0D /* QuotaWireCodec.swift */; };
@@ -99,6 +100,7 @@
 		CEC9A4707CD65FD8308B9016 /* MenuBarHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10A8891702B59A380D6087D /* MenuBarHeader.swift */; };
 		D0229BE2F091FD6350778369 /* ProviderVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63FED8D81F4DD3E7B5D0A4F6 /* ProviderVisibility.swift */; };
 		D9BFE1FDEDDEB8AF1A8FC215 /* QuotaAlertDelivery in Frameworks */ = {isa = PBXBuildFile; productRef = 5D902DF1A74A7141AD14263B /* QuotaAlertDelivery */; };
+		DAB13D87360C1C162D94F9AA /* QuitIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CD20E354B94DC549DE04B10 /* QuitIntent.swift */; };
 		DB443EE0DDD587EBBE582921 /* QuotaWindowDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AF08A8655D2B347B5F754A /* QuotaWindowDisplay.swift */; };
 		DECF01C6E1A13DCEB0A0E7C5 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9B410A967029C8BE9D6E8DE2 /* WidgetKit.framework */; };
 		E05A43DEFA144C46C5D40FA2 /* QuotaBarUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50710BC153A03418AC444B78 /* QuotaBarUpdater.swift */; };
@@ -173,6 +175,7 @@
 		1B82C8123BA988F0A62402DD /* QuotaBarMainMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaBarMainMenu.swift; sourceTree = "<group>"; };
 		1C6076DEC01D1CD81CB1681D /* QuotaChoiceMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaChoiceMenu.swift; sourceTree = "<group>"; };
 		1CA283BAEAF880A28FD6E093 /* libQuotaBarKeychainShim.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libQuotaBarKeychainShim.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		1CD20E354B94DC549DE04B10 /* QuitIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuitIntent.swift; sourceTree = "<group>"; };
 		1DC262AA814AFD4AE75BFF95 /* apple-client */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "apple-client"; path = "../../packages/apple-client"; sourceTree = SOURCE_ROOT; };
 		1F6BB7E519FD895677E512C8 /* SignInRungPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInRungPresentation.swift; sourceTree = "<group>"; };
 		237F88B5BDD29BEFC3041915 /* StrictDecoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrictDecoding.swift; sourceTree = "<group>"; };
@@ -230,6 +233,7 @@
 		BD621E406EBA0D3F3385FB08 /* QuotaComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaComponents.swift; sourceTree = "<group>"; };
 		BE3348233CF275CAB4617906 /* MenuBarSettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarSettingsViews.swift; sourceTree = "<group>"; };
 		C173EE2BE52E0CB7CC206961 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		C200BA002619B882BA356DE2 /* LaunchPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchPresentation.swift; sourceTree = "<group>"; };
 		C30878F34A937276082D0E52 /* ProviderSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSettingsView.swift; sourceTree = "<group>"; };
 		C370E733B22DF826112CA10F /* AgentsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsSettingsView.swift; sourceTree = "<group>"; };
 		C3C2694F58696A96DC938AD1 /* MenuBarLabelModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarLabelModel.swift; sourceTree = "<group>"; };
@@ -524,7 +528,9 @@
 			children = (
 				88A1B4EDA44D6B5D78EEE4D1 /* AppMetadata.swift */,
 				AED77047F6F801BC875511FF /* LaunchAtLoginController.swift */,
+				C200BA002619B882BA356DE2 /* LaunchPresentation.swift */,
 				63FED8D81F4DD3E7B5D0A4F6 /* ProviderVisibility.swift */,
+				1CD20E354B94DC549DE04B10 /* QuitIntent.swift */,
 				03C3F6092D644EEEE220875D /* QuotaBarDeepLink.swift */,
 				1B82C8123BA988F0A62402DD /* QuotaBarMainMenu.swift */,
 				50710BC153A03418AC444B78 /* QuotaBarUpdater.swift */,
@@ -774,6 +780,7 @@
 				56DC422426EA40B7007E8016 /* DiagnosticModels.swift in Sources */,
 				0613929DFE2B54364026575D /* GeneralSettingsView.swift in Sources */,
 				4CC4E91BF567BCD27447F0E3 /* LaunchAtLoginController.swift in Sources */,
+				322195B4365E460794102246 /* LaunchPresentation.swift in Sources */,
 				F7F388D87CA4B241C714DDD7 /* LocalServiceClient.swift in Sources */,
 				C65EA91311D0B85C88E8C8EB /* LocalServiceModels.swift in Sources */,
 				5C310D1A506DF833326D29DD /* MainWindowController.swift in Sources */,
@@ -798,6 +805,7 @@
 				BCDFF74C481B665768BC5DB6 /* ProviderSourceDetailView.swift in Sources */,
 				185FE5D684B0A2586596CCD7 /* ProviderStatusCopy.swift in Sources */,
 				D0229BE2F091FD6350778369 /* ProviderVisibility.swift in Sources */,
+				DAB13D87360C1C162D94F9AA /* QuitIntent.swift in Sources */,
 				72C5EC089E7923E35A892999 /* QuotaBarApp.swift in Sources */,
 				B0D949CDEFEC6A7B10102F10 /* QuotaBarAppDelegate.swift in Sources */,
 				EA04FD9E1DE3D499F4075450 /* QuotaBarDeepLink.swift in Sources */,

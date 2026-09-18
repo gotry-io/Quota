@@ -8,6 +8,34 @@ import Testing
 @MainActor
 struct WindowActivationTests {
   @Test
+  func untouchedDefaultsStayAccessoryUntilAWindowRegisters() throws {
+    try withDockKeyRemoved {
+      _ = NSApplication.shared
+      let previous = NSApp.activationPolicy()
+      WindowActivation.shared.resetForTests()
+      let window = makeOffscreenWindow()
+      defer {
+        window.close()
+        WindowActivation.shared.resetForTests()
+        NSApp.setActivationPolicy(previous)
+      }
+
+      NSApp.setActivationPolicy(.regular)
+      WindowActivation.shared.applyDockVisibility()
+      #expect(!DockVisibilityPreference.isShown)
+      #expect(NSApp.activationPolicy() == .accessory)
+
+      WindowActivation.shared.register(window)
+      #expect(WindowActivation.shared.registeredCount == 1)
+      #expect(NSApp.activationPolicy() == .regular)
+
+      window.close()
+      #expect(WindowActivation.shared.registeredCount == 0)
+      #expect(NSApp.activationPolicy() == .accessory)
+    }
+  }
+
+  @Test
   func shownPreferenceNeverLeavesRegular() throws {
     try withDockShown(true) {
       _ = NSApplication.shared
@@ -117,6 +145,21 @@ struct WindowActivationTests {
       #expect(NSApp.activationPolicy() == .accessory)
     }
   }
+}
+
+@MainActor
+private func withDockKeyRemoved(_ body: () throws -> Void) throws {
+  let key = DockVisibilityPreference.storageKey
+  let previous = UserDefaults.standard.object(forKey: key)
+  defer {
+    if let previous {
+      UserDefaults.standard.set(previous, forKey: key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: key)
+    }
+  }
+  UserDefaults.standard.removeObject(forKey: key)
+  try body()
 }
 
 @MainActor

@@ -26,9 +26,18 @@ struct LaunchAtLoginControllerTests {
   @Test
   func generalPageKeepsLaunchAtLoginWithTheOtherWindowControls() {
     #expect(GeneralSettingsCopy.launchAtLogin == "Launch at Login")
+    #expect(GeneralSettingsCopy.openWindowAtLaunch == "Open window at launch")
+    #expect(
+      GeneralSettingsCopy.openWindowAtLaunchHint
+        == "Show the QuotaBar window when you open the app")
     #expect(GeneralSettingsCopy.showInDock == "Show in Dock")
+    #expect(
+      GeneralSettingsCopy.showInDockHint
+        == "Keep QuotaBar in the Dock when its window is closed")
     #expect(DockVisibilityPreference.storageKey == "dock.shown")
-    #expect(DockVisibilityPreference.fallback)
+    #expect(!DockVisibilityPreference.fallback)
+    #expect(LaunchWindowPreference.storageKey == "launch.opensMainWindow")
+    #expect(!LaunchWindowPreference.fallback)
     #expect(GeneralSettingsCopy.refreshInterval == "Refresh Interval")
     #expect(GeneralSettingsCopy.uploadUsage == "Upload Usage to Account")
     #expect(GeneralSettingsCopy.groupUsage == "Group Usage by project")

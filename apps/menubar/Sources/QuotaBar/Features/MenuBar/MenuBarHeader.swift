@@ -175,7 +175,7 @@ struct MenuBarHeader: View {
           .padding(.vertical, QuotaDesign.Spacing.xxs)
           .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
         overflowMenuButton(title: "Quit QuotaBar", shortcut: "⌘Q", isQuit: true) {
-          NSApplication.shared.terminate(nil)
+          QuitIntent.requestFullQuit()
         }
       }
       .frame(width: QuotaDesign.Layout.headerMenuWidth)

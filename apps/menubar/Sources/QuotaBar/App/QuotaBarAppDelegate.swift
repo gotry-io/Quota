@@ -1,10 +1,12 @@
 import AppKit
 
 /// Quitting is the last moment QuotaBar can speak to its local service, and every route out of
-/// the app — the panel's Quit item, ⌘Q, and logging out — arrives at
-/// `applicationShouldTerminate`. The helper's own exit is asked for there rather than left to
-/// the process dying, so a service that is mid-write finishes before its pipe disappears.
-/// Closing the main window never quits; a Dock click or `open -a` reopens it.
+/// the app — the panel's Quit item, ⌥⌘Q, Sparkle relaunch, Browser Access relaunch, ⌘Q, and
+/// logging out — arrives at `applicationShouldTerminate`. A plain Quit while the main window is
+/// open closes that window and keeps the menu bar; a full quit still asks the helper to exit
+/// there rather than leaving it to the process dying, so a service that is mid-write finishes
+/// before its pipe disappears. Closing the main window never quits; a Dock click or `open -a`
+/// reopens it.
 @MainActor
 final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   private var model: MenuBarViewModel?
@@ -27,8 +29,21 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
     openedAsLoginItem = LaunchAtLoginController.launchedAsLoginItem
     QuotaBarMainMenu.install()
     startStatusItemsIfNeeded()
-    if !openedAsLoginItem {
+    switch LaunchPresentation.resolve(
+      loginItem: openedAsLoginItem,
+      opensWindow: LaunchWindowPreference.isOn,
+      hasShownQuota: LaunchHasShownQuota.hasShown
+    ) {
+    case .silent:
+      break
+    case .mainWindow:
       MainWindowController.shared.show()
+    case .panel:
+      // The status item is created here but placed a beat later (it resizes in place, then
+      // moves), and a panel opened against the first frame hangs off the wrong spot.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        self?.statusItems?.openPanel(revealing: nil)
+      }
     }
   }
 
@@ -79,13 +94,25 @@ final class QuotaBarAppDelegate: NSObject, NSApplicationDelegate {
   /// waiting for the helper, and a logout still reads this app as agreeing to quit — which
   /// `terminateCancel` would not. It does mean the quit has to reach here from the run loop
   /// rather than from inside a main-actor task, which would leave the main queue holding the
-  /// task below; every route QuotaBar quits by — the panel's Quit item, ⌘Q, a Quit event, and
+  /// task below; every route QuotaBar quits by — the panel's Quit item, ⌥⌘Q, a Quit event, and
   /// logging out — is a run-loop one. The wait is capped by `MenuBarViewModel.shutdownDeadline`,
   /// so a wedged helper delays a quit by two seconds and then stops mattering: the reply always
   /// comes, and it is always yes.
   func applicationShouldTerminate(
     _ sender: NSApplication
   ) -> NSApplication.TerminateReply {
+    switch QuitDecision.resolve(
+      windowPresented: MainWindowController.shared.isOpen,
+      fullQuitRequested: QuitIntent.fullQuitRequested,
+      systemQuit: QuitIntent.isSystemQuit
+    ) {
+    case .closeWindow:
+      MainWindowController.shared.close()
+      QuitKeepRunningExplanation.presentIfNeeded()
+      return .terminateCancel
+    case .terminate:
+      break
+    }
     statusItems?.invalidate()
     statusItems = nil
     guard let model else { return .terminateNow }
