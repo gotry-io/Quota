@@ -215,8 +215,12 @@ git tag ios-vX.Y.Z
 
 `.github/workflows/release-ios.yml` runs on `ios-v*` tags. `scripts/check-ios-version.sh` fails the
 job unless the tag's `X.Y.Z` equals `MARKETING_VERSION`. The archive's `CURRENT_PROJECT_VERSION` is
-`github.run_number`. The owner (not CI on an unsigned pull request) creates the tag after the
-version is committed.
+`github.run_number`. The owner (not CI on an unsigned pull request) creates the tag. main already
+carries the version to tag: once an `ios-vX.Y.Z` upload succeeds, the workflow's `bump-next` job
+opens `chore/bump-ios-X.Y.(Z+1)` as the repository's automation GitHub App and lets it auto-merge,
+the way `release-menubar` does (see `AGENTS.md`, Development commands). A suffixed prerelease tag
+spends no version, and a minor or major is the exception — close the bot's pull request and run
+`pnpm version:bump:ios minor` by hand.
 
 Repository secrets, all required before export:
 
