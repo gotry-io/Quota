@@ -56,6 +56,7 @@ Read the relevant source before changing that area:
 | Relay's public provider status-page read | `docs/decisions/0044-relay-publishes-provider-status.md` |
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |
+| One alert delivery package for both Apple apps | `docs/decisions/0053-one-alert-delivery-package-for-both-apps.md` |
 | Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
 | Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
 | QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
@@ -74,10 +75,12 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
 - The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
   managed wire types — quota, account, and Usage — plus `ProviderID` and Relay access;
-  `packages/apple-shared` owns Foundation-only presentation semantics and `QuotaAlerts`, the
-  Foundation-only remaining-quota rule evaluator both Apple apps share. QuotaBar owns its private IPC
-  models, its Usage upload and local-report types, and app-only provider behavior, and extends the
-  shared types rather than declaring a second copy. Wire validation lives with the type it protects,
+  `packages/apple-shared` owns Foundation-only presentation semantics, `QuotaAlerts`, the
+  Foundation-only remaining-quota rule evaluator both Apple apps share, and `QuotaAlertDelivery`,
+  the UserNotifications delivery layer both Apple apps share (each app passes its own key prefix
+  and state file). QuotaBar owns its private IPC models, its Usage upload and local-report types,
+  and app-only provider behavior, and extends the shared types rather than declaring a second copy.
+  Wire validation lives with the type it protects,
   so both products answer the same input the same way. Do not restate a type one of those packages
   already owns; do not move a QuotaBar-only type into them to make it look shared.
 - Do not recreate legacy top-level `internal/`, `protocol/`, or `cmd/` trees.

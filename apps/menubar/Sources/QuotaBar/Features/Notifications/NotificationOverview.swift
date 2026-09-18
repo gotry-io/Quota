@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
@@ -38,16 +39,16 @@ enum NotificationOverview {
 
   static func catalog(
     from overview: [LocalServiceOverviewItem]
-  ) -> NotificationDeliveryCatalog {
-    var entries: [String: NotificationDeliveryCatalog.Entry] = [:]
+  ) -> AlertDeliveryCatalog {
+    var entries: [String: AlertDeliveryCatalog.Entry] = [:]
     for item in overview {
       let windows = Dictionary(uniqueKeysWithValues: item.snapshot.windows.map { ($0.id, $0.title) })
-      entries[selector(for: item)] = NotificationDeliveryCatalog.Entry(
+      entries[selector(for: item)] = AlertDeliveryCatalog.Entry(
         providerDisplayName: item.identity.provider.displayName,
         windows: windows
       )
     }
-    return NotificationDeliveryCatalog(entries: entries)
+    return AlertDeliveryCatalog(entries: entries)
   }
 }
 

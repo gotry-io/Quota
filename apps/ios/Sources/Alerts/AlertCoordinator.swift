@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
@@ -9,15 +10,18 @@ import QuotaWire
 /// Delivery is `AlertSink`. Sign-out clears the state store and leaves rules in place.
 @MainActor
 final class AlertCoordinator {
-  private let rulesStore: IOSAlertRulesStore
-  private let stateStore: any IOSAlertStateStore
+  nonisolated static let rulesKeyPrefix = "alerts"
+  nonisolated static let stateFileName = "alert-state.json"
+
+  private let rulesStore: AlertRulesStore
+  private let stateStore: any AlertStateStore
   private let budgetStore: UsageBudgetStore
   private let sink: any AlertSink
   private let now: () -> Date
 
   init(
-    rulesStore: IOSAlertRulesStore,
-    stateStore: any IOSAlertStateStore,
+    rulesStore: AlertRulesStore,
+    stateStore: any AlertStateStore,
     budgetStore: UsageBudgetStore = UsageBudgetStore(),
     sink: any AlertSink,
     now: @escaping () -> Date = Date.init
@@ -74,6 +78,14 @@ final class AlertCoordinator {
 
   func clearState() {
     try? stateStore.clear()
+  }
+
+  nonisolated static func rulesStore(defaults: UserDefaults = .standard) -> AlertRulesStore {
+    AlertRulesStore(defaults: defaults, keyPrefix: rulesKeyPrefix)
+  }
+
+  nonisolated static func stateFileURL(applicationSupport: URL) -> URL {
+    applicationSupport.appendingPathComponent(stateFileName, isDirectory: false)
   }
 
   static func selector(for subscription: QuotaSubscription) -> String {

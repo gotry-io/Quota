@@ -31,6 +31,7 @@ let package = Package(
         .product(name: "QuotaWidgetProjection", package: "apple-client"),
         .product(name: "QuotaPresentation", package: "apple-shared"),
         .product(name: "QuotaAlerts", package: "apple-shared"),
+        .product(name: "QuotaAlertDelivery", package: "apple-shared"),
         .product(name: "SweetCookieKit", package: "SweetCookieKit"),
         .product(name: "Sparkle", package: "Sparkle"),
         "QuotaBarKeychainShim",
@@ -45,6 +46,7 @@ let package = Package(
       dependencies: [
         "QuotaBar",
         .product(name: "QuotaAlerts", package: "apple-shared"),
+        .product(name: "QuotaAlertDelivery", package: "apple-shared"),
         .product(name: "QuotaWidgetData", package: "apple-client"),
       ]),
   ])

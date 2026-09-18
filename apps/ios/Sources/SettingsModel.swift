@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
@@ -190,7 +191,7 @@ final class SettingsModel {
   /// Remaining-percent choices the Notifications page offers. The second slot may be Off.
   static let thresholdChoices = [5, 10, 15, 20, 25, 30, 40, 50]
 
-  private let rulesStore: IOSAlertRulesStore
+  private let rulesStore: AlertRulesStore
   private let notificationCenter: any NotificationAuthorizing
   private let appearanceDefaults: UserDefaults
 
@@ -199,7 +200,7 @@ final class SettingsModel {
   var authorizationDenied = false
 
   init(
-    rulesStore: IOSAlertRulesStore = IOSAlertRulesStore(),
+    rulesStore: AlertRulesStore = AlertRulesStore(keyPrefix: AlertCoordinator.rulesKeyPrefix),
     notificationCenter: any NotificationAuthorizing = SystemNotificationAuthorizer(),
     appearanceDefaults: UserDefaults = .standard
   ) {

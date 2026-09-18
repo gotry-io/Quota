@@ -1,52 +1,34 @@
 import Foundation
 import QuotaAlerts
-import QuotaPresentation
 import UserNotifications
 
-protocol AlertSink: Sendable {
+/// Where evaluated alert events go.
+public protocol AlertSink: Sendable {
   func deliver(_ events: [AlertEvent])
 }
 
-struct NoOpAlertSink: AlertSink {
-  func deliver(_ events: [AlertEvent]) {}
-}
+public struct NoOpAlertSink: AlertSink {
+  public init() {}
 
-/// Provider display names and window titles the sink needs to write `AlertCopy`.
-struct AlertDeliveryCatalog: Equatable, Sendable {
-  struct Entry: Equatable, Sendable {
-    var providerDisplayName: String
-    var windows: [String: String]
-  }
-
-  var entries: [String: Entry]
-
-  static let empty = AlertDeliveryCatalog(entries: [:])
-
-  func providerDisplayName(selector: String) -> String? {
-    entries[selector]?.providerDisplayName
-  }
-
-  func windowTitle(selector: String, windowID: String) -> String? {
-    entries[selector]?.windows[windowID]
-  }
+  public func deliver(_ events: [AlertEvent]) {}
 }
 
 /// Immediate `UNUserNotificationCenter` delivery. A `windowReset` whose selector and window
 /// already have a scheduled reminder is left to that reminder rather than posted twice.
-final class IOSAlertSink: AlertSink, @unchecked Sendable {
+public final class UserNotificationAlertSink: AlertSink, @unchecked Sendable {
   private let center: any NotificationCentering
-  var catalog = AlertDeliveryCatalog.empty
+  public var catalog = AlertDeliveryCatalog.empty
   /// `"selector\u{1e}windowID"` keys the scheduler currently has a reminder for.
-  var scheduledResetKeys: Set<String> = []
-  var now: Date = Date()
-  var timeZone: TimeZone = .current
-  var calendar: Calendar = .current
+  public var scheduledResetKeys: Set<String> = []
+  public var now: Date = Date()
+  public var timeZone: TimeZone = .current
+  public var calendar: Calendar = .current
 
-  init(center: any NotificationCentering) {
+  public init(center: any NotificationCentering) {
     self.center = center
   }
 
-  func deliver(_ events: [AlertEvent]) {
+  public func deliver(_ events: [AlertEvent]) {
     for event in events {
       if case .windowReset(let selector, let windowID, _) = event,
         scheduledResetKeys.contains(Self.resetKey(selector: selector, windowID: windowID))
@@ -58,7 +40,7 @@ final class IOSAlertSink: AlertSink, @unchecked Sendable {
     }
   }
 
-  static func resetKey(selector: String, windowID: String) -> String {
+  public static func resetKey(selector: String, windowID: String) -> String {
     "\(selector)\u{1e}\(windowID)"
   }
 
@@ -111,4 +93,3 @@ final class IOSAlertSink: AlertSink, @unchecked Sendable {
     )
   }
 }
-
