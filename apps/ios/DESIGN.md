@@ -916,7 +916,7 @@ no-data states. Check iPhone, light and dark, standard and accessibility text si
 labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display labels
 only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `connect-signed-out`, `connect-connecting`,
+`scripts/ios-ui-screenshots.sh` exports the `sign-in`, `connect-connecting`,
 `connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
 `overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
 `overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
