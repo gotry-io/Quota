@@ -3,6 +3,7 @@ import SwiftUI
 
 struct QuotaMeter: View {
   var remainingPercent: Double
+  var height: CGFloat = QuotaDesign.Layout.meterHeight
 
   var body: some View {
     GeometryReader { proxy in
@@ -15,7 +16,7 @@ struct QuotaMeter: View {
           .frame(width: proxy.size.width * CGFloat(fraction))
       }
     }
-    .frame(height: QuotaDesign.Layout.meterHeight)
+    .frame(height: height)
     .accessibilityHidden(true)
   }
 }
