@@ -1,10 +1,11 @@
 import AppKit
 
-/// Show in Dock. Default on: QuotaBar stays a regular app. Off: Plan 7
-/// accessory-until-a-window.
+/// Show in Dock. Default off: accessory until the main window is open.
+/// On: QuotaBar stays a regular app. An installation that never wrote
+/// `dock.shown` takes this default; a stored value is read as written.
 enum DockVisibilityPreference {
   static let storageKey = "dock.shown"
-  static let fallback = true
+  static let fallback = false
 
   static var isShown: Bool {
     guard UserDefaults.standard.object(forKey: storageKey) != nil else {
@@ -17,13 +18,13 @@ enum DockVisibilityPreference {
 /// Counts the regular windows that should bring QuotaBar to the Dock when
 /// Show in Dock is off.
 ///
-/// Show in Dock (`dock.shown`, default on) is the process-wide rule. On, this
+/// Show in Dock (`dock.shown`, default off) is the process-wide rule. On, this
 /// type does not change the activation policy — the process stays `.regular`.
-/// Off, the Plan 7 behaviour applies: the first registered window becoming
-/// visible switches the process to `.regular` and activates it; closing the
-/// last registered window returns to `.accessory` without activating. Callers
-/// do not branch on the preference; they always register the main window and
-/// call `applyDockVisibility()` when the switch changes.
+/// Off, the first registered window becoming visible switches the process to
+/// `.regular` and activates it; closing the last registered window returns to
+/// `.accessory` without activating. Callers do not branch on the preference;
+/// they always register the main window and call `applyDockVisibility()` when
+/// the switch changes.
 ///
 /// Browser Access and Sparkle windows are not registered: they are floating
 /// helpers, not the main window. When Show in Dock is on they need no

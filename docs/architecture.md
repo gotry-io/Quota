@@ -22,12 +22,13 @@ links to it rather than restating it.
 - **QuotaBar** is the macOS presentation product. Its bundle contains one private Rust service and
   one WidgetKit extension; Swift owns views, UI preferences, accessibility, Launch at Login, and
   wire decoding only. Its UI has two surfaces
-  ([ADR 0052](decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md)): the 320×480
+  ([ADR 0052](decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md),
+  [ADR 0054](decisions/0054-quotabar-is-resident-in-the-menu-bar.md)): the 320×480
   menu-bar panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
   history, today's cost per window, Usage at width, and every preference). QuotaBar adopts Liquid
-  Glass on macOS 26, with the existing material fallback below it. QuotaBar is a regular
-  app with a Dock icon; **Show in Dock** off makes it menu-bar-only except while the main window is
-  open. A Login Item launch does not show the main window. The desktop widgets read the same
+  Glass on macOS 26, with the existing material fallback below it. QuotaBar lives in the menu bar;
+  **Show in Dock** is off by default, so a Dock icon exists only while the main window is open. A
+  Login Item launch does not show the main window. The desktop widgets read the same
   non-secret `WidgetSnapshot` as iOS
   ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
   Overview rows it has already resolved, through the projection both Apple clients share, and
