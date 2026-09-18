@@ -3,9 +3,9 @@ import QuotaAlerts
 import Testing
 import UserNotifications
 
-@testable import QuotaBar
+@testable import QuotaAlertDelivery
 
-struct UserNotificationSinkTests {
+struct UserNotificationAlertSinkTests {
   @Test func dedupKeyIdentifierEncodesSelectorWindowResetAndThreshold() {
     let resetsAt = Date(timeIntervalSince1970: 1_786_300_000)
     #expect(
@@ -24,12 +24,12 @@ struct UserNotificationSinkTests {
 
   @Test func thresholdCrossedPostsImmediatelyWithCopyAndDedupIdentifier() throws {
     let center = FakeNotificationCenter()
-    let sink = UserNotificationSink(center: center)
+    let sink = UserNotificationAlertSink(center: center)
     let now = Date(timeIntervalSince1970: 1_786_300_000)
     sink.now = now
     sink.timeZone = TimeZone(secondsFromGMT: 0)!
     sink.calendar = utcCalendar()
-    sink.catalog = NotificationDeliveryCatalog(entries: [
+    sink.catalog = AlertDeliveryCatalog(entries: [
       "ccfc96629357": .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
 
@@ -63,8 +63,8 @@ struct UserNotificationSinkTests {
 
   @Test func windowResetPostsImmediatelyWhenNothingIsScheduled() {
     let center = FakeNotificationCenter()
-    let sink = UserNotificationSink(center: center)
-    sink.catalog = NotificationDeliveryCatalog(entries: [
+    let sink = UserNotificationAlertSink(center: center)
+    sink.catalog = AlertDeliveryCatalog(entries: [
       "ccfc96629357": .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
 
@@ -78,11 +78,13 @@ struct UserNotificationSinkTests {
 
   @Test func windowResetIsSkippedWhenAReminderIsAlreadyScheduledForThatWindow() {
     let center = FakeNotificationCenter()
-    let sink = UserNotificationSink(center: center)
-    sink.catalog = NotificationDeliveryCatalog(entries: [
+    let sink = UserNotificationAlertSink(center: center)
+    sink.catalog = AlertDeliveryCatalog(entries: [
       "ccfc96629357": .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
-    sink.scheduledResetKeys = [UserNotificationSink.resetKey(selector: "ccfc96629357", windowID: "weekly")]
+    sink.scheduledResetKeys = [
+      UserNotificationAlertSink.resetKey(selector: "ccfc96629357", windowID: "weekly")
+    ]
 
     sink.deliver([
       .windowReset(
@@ -104,7 +106,7 @@ struct ResetReminderSchedulerTests {
     let now = Date(timeIntervalSince1970: 1_786_300_000)
     let resetsAt = now.addingTimeInterval(3_600)
     let selector = "ccfc96629357"
-    let catalog = NotificationDeliveryCatalog(entries: [
+    let catalog = AlertDeliveryCatalog(entries: [
       selector: .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
 
@@ -160,7 +162,7 @@ struct ResetReminderSchedulerTests {
     let first = now.addingTimeInterval(3_600)
     let second = now.addingTimeInterval(7_200)
     let selector = "ccfc96629357"
-    let catalog = NotificationDeliveryCatalog(entries: [
+    let catalog = AlertDeliveryCatalog(entries: [
       selector: .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
     let subscription = { (resetsAt: Date) in
@@ -204,7 +206,7 @@ struct ResetReminderSchedulerTests {
     let scheduler = ResetReminderScheduler(center: center, calendar: utcCalendar())
     let now = Date(timeIntervalSince1970: 1_786_300_000)
     let selector = "ccfc96629357"
-    let catalog = NotificationDeliveryCatalog(entries: [
+    let catalog = AlertDeliveryCatalog(entries: [
       selector: .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
     ])
     scheduler.reschedule(
@@ -267,7 +269,7 @@ struct ResetReminderSchedulerTests {
     let center = FakeNotificationCenter()
     let scheduler = ResetReminderScheduler(center: center, calendar: utcCalendar())
     let now = Date(timeIntervalSince1970: 1_786_300_000)
-    let catalog = NotificationDeliveryCatalog(entries: [
+    let catalog = AlertDeliveryCatalog(entries: [
       "a": .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"]),
       "b": .init(providerDisplayName: "Claude Code", windows: ["five_hour": "5 Hours"]),
     ])

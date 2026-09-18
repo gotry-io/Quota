@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
@@ -782,8 +783,10 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
 func quotaApplyDeliversFirstSeenThresholdEventsWhenNotificationsAreEnabled() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
-  let store = InMemoryNotificationStateStore()
+  NotificationRules.store(defaults: defaults.store).save(
+    AlertRules(enabled: true, resetReminders: true)
+  )
+  let store = InMemoryAlertStateStore()
   let sink = RecordingNotificationSink()
   let now = Date(timeIntervalSince1970: 1_786_300_000)
   let model = MenuBarViewModel(
@@ -814,7 +817,7 @@ func quotaApplyDeliversFirstSeenThresholdEventsWhenNotificationsAreEnabled() thr
 func signingOutClearsNotificationDedupState() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  let store = InMemoryNotificationStateStore(
+  let store = InMemoryAlertStateStore(
     state: AlertDedupState(
       fired: [
         AlertDedupKey(
@@ -843,7 +846,9 @@ func signingOutClearsNotificationDedupState() throws {
 func newReadingsRescheduleResetReminders() throws {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  NotificationRules.store(defaults: defaults.store).save(
+    AlertRules(enabled: true, resetReminders: true)
+  )
   let center = FakeNotificationCenter()
   let now = Date()
   let firstReset = now.addingTimeInterval(3_600)
@@ -887,7 +892,9 @@ func newReadingsRescheduleResetReminders() throws {
 func signingOutRemovesScheduledResetReminders() {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  NotificationRules.store(defaults: defaults.store).save(
+    AlertRules(enabled: true, resetReminders: true)
+  )
   let center = FakeNotificationCenter()
   let now = Date()
   let resetsAt = now.addingTimeInterval(3_600)
@@ -909,7 +916,9 @@ func signingOutRemovesScheduledResetReminders() {
 func turningOffResetRemindersClearsScheduledReminders() {
   let defaults = notificationDefaultsSuite()
   defer { defaults.tearDown() }
-  NotificationRules.save(AlertRules(enabled: true, resetReminders: true), to: defaults.store)
+  NotificationRules.store(defaults: defaults.store).save(
+    AlertRules(enabled: true, resetReminders: true)
+  )
   let center = FakeNotificationCenter()
   let now = Date()
   let model = MenuBarViewModel(
@@ -931,7 +940,47 @@ func turningOffResetRemindersClearsScheduledReminders() {
   #expect(!model.notificationRules.resetReminders)
 }
 
-final class RecordingNotificationSink: NotificationSink, @unchecked Sendable {
+final class FakeNotificationCenter: NotificationCentering, @unchecked Sendable {
+  var authorizationStatusValue: UNAuthorizationStatus = .notDetermined
+  var requestAuthorizationGranted = true
+  var requestedOptions: UNAuthorizationOptions?
+  var added: [UNNotificationRequest] = []
+  var pending: [UNNotificationRequest] = []
+  var removedAllPendingCount = 0
+
+  func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+    requestedOptions = options
+    if requestAuthorizationGranted {
+      authorizationStatusValue = .authorized
+    } else {
+      authorizationStatusValue = .denied
+    }
+    return requestAuthorizationGranted
+  }
+
+  func authorizationStatus() async -> UNAuthorizationStatus {
+    authorizationStatusValue
+  }
+
+  func add(_ request: UNNotificationRequest) {
+    added.append(request)
+    if request.trigger != nil {
+      pending.removeAll { $0.identifier == request.identifier }
+      pending.append(request)
+    }
+  }
+
+  func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {
+    pending.removeAll { identifiers.contains($0.identifier) }
+  }
+
+  func removeAllPendingNotificationRequests() {
+    removedAllPendingCount += 1
+    pending.removeAll()
+  }
+}
+
+final class RecordingNotificationSink: AlertSink, @unchecked Sendable {
   var events: [AlertEvent] = []
 
   func deliver(_ events: [AlertEvent]) {

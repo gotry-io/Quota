@@ -1,53 +1,20 @@
 import Foundation
-import QuotaAlerts
+import QuotaAlertDelivery
 
-/// UserDefaults adapter for `AlertRules` under `notifications.*`.
+/// Remaining-percent choices the Notifications page offers, and this Mac's `AlertRulesStore`.
 ///
-/// Thresholds are remaining-percent integers 1–99, kept descending and unique by `AlertRules`.
-/// Remaining-percent choices the Notifications page offers live here; the second slot may be Off.
+/// The second slot may be Off. Persistence is the shared store under the shipped
+/// `notifications.*` prefix; the state file is `QuotaBar/notification-state.json`.
 enum NotificationRules {
-  static let enabledKey = "notifications.enabled"
-  static let resetRemindersKey = "notifications.resetReminders"
-  static let paceAlertsKey = "notifications.paceAlerts"
-  static let thresholdsKey = "notifications.thresholds"
-
-  /// Remaining-percent choices the Notifications page offers. The second slot may be Off.
   static let thresholdChoices = [5, 10, 15, 20, 25, 30, 40, 50]
 
-  static func load(from defaults: UserDefaults = .standard) -> AlertRules {
-    let enabled = defaults.object(forKey: enabledKey) as? Bool ?? AlertRules.defaultEnabled
-    let resetReminders =
-      defaults.object(forKey: resetRemindersKey) as? Bool ?? AlertRules.defaultResetReminders
-    let paceAlerts = defaults.object(forKey: paceAlertsKey) as? Bool ?? AlertRules.defaultPaceAlerts
-    var parsed: [String: [Int]] = [:]
-    if let raw = defaults.dictionary(forKey: thresholdsKey) {
-      for (selector, value) in raw {
-        if let numbers = intArray(value) {
-          parsed[selector] = AlertRules.normalized(numbers)
-        }
-      }
-    }
-    return AlertRules(
-      enabled: enabled,
-      resetReminders: resetReminders,
-      paceAlerts: paceAlerts,
-      thresholds: parsed
-    )
+  static func store(defaults: UserDefaults = .standard) -> AlertRulesStore {
+    AlertRulesStore(defaults: defaults, keyPrefix: "notifications")
   }
 
-  static func save(_ rules: AlertRules, to defaults: UserDefaults = .standard) {
-    defaults.set(rules.enabled, forKey: enabledKey)
-    defaults.set(rules.resetReminders, forKey: resetRemindersKey)
-    defaults.set(rules.paceAlerts, forKey: paceAlertsKey)
-    defaults.set(
-      rules.thresholds.mapValues { AlertRules.normalized($0) } as [String: Any],
-      forKey: thresholdsKey
-    )
-  }
-
-  private static func intArray(_ value: Any) -> [Int]? {
-    if let ints = value as? [Int] { return ints }
-    if let numbers = value as? [NSNumber] { return numbers.map(\.intValue) }
-    return nil
+  static func stateFileURL(applicationSupport: URL) -> URL {
+    applicationSupport
+      .appendingPathComponent("QuotaBar", isDirectory: true)
+      .appendingPathComponent("notification-state.json", isDirectory: false)
   }
 }
