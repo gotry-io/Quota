@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue builds each queued pull request on top of main and the ones ahead of it, and
+  # merges only what passed there, so a pull request no longer has to be re-synced and re-run every
+  # time something else lands first.
+  merge_group:
 
 permissions:
   contents: read
@@ -46,6 +50,8 @@ jobs:
           pnpm check:schema
           pnpm -r --if-present check
           pnpm -r --if-present test
+          # The scripts that decide what CI runs and what a release tag may name.
+          pnpm test:scripts
 
       - name: Build the Relay Worker and website
         run: pnpm --filter @gotry-io/quota-relay build
@@ -99,6 +105,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: >-
           ./scripts/ci-changed-paths.sh all
           '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(pr-agent|release-ios|release-menubar|release-relay-image)\.yml$)'
@@ -175,6 +182,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: >-
           ./scripts/ci-changed-paths.sh any
           '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
@@ -209,6 +217,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: >-
           ./scripts/ci-changed-paths.sh any
           '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'

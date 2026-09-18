@@ -39,6 +39,7 @@
     "check:ios": "./scripts/check-ios.sh",
     "test:ios": "./scripts/test-ios.sh",
     "test:ios:version": "node --test scripts/check-ios-version.test.mjs",
+    "test:scripts": "node --test scripts/check-ios-version.test.mjs scripts/ci-changed-paths.test.mjs",
     "build:ios": "./scripts/build-ios.sh",
     "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
