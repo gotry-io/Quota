@@ -54,9 +54,6 @@ targets:
       - path: Sources/QuotaBar
         excludes:
           - Resources
-      - path: Sources/QuotaBar/Resources/BrandIcons
-        type: folder
-        buildPhase: resources
       - path: Sources/QuotaBar/Resources/THIRD_PARTY_NOTICES.md
         buildPhase: resources
       - path: Support/QuotaBar.icns
@@ -88,6 +85,8 @@ targets:
         product: QuotaWidgetData
       - package: QuotaAppleClient
         product: QuotaWidgetProjection
+      - package: QuotaAppleClient
+        product: QuotaBrandIcons
       - package: QuotaAppleShared
         product: QuotaPresentation
       - package: QuotaAppleShared

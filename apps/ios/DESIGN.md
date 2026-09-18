@@ -30,6 +30,46 @@ Core rules:
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
+## Design system
+
+Layout tokens, type roles, and content components live in `apps/ios/Sources/Design/`. Colors stay
+on `QuotaTheme`. Brand RGB stays on `QuotaBrand`. Remaining-quota tone stays on `QuotaTone`. Do not
+merge those.
+
+Layout (`QuotaDesign.Layout`): card corner radius 20 continuous, card padding 16, section spacing
+24, row spacing 12, meter height 8, provider mark 22, stat tile minimum width 140.
+
+Type (`QuotaDesign.Typography`) scales with Dynamic Type:
+
+| Role | Font |
+| --- | --- |
+| `statValue` | rounded `largeTitle` semibold, monospaced digits |
+| `remainingValue` | rounded `title` semibold, monospaced digits |
+| `cardTitle` | `headline` |
+| `support` | `subheadline` |
+| `meta` | `footnote` |
+| `sectionTitle` | `title3` semibold |
+
+Supporting copy may be `.secondary` at `subheadline` and larger. `footnote` / `caption` metadata
+stays `.primary`.
+
+`QuotaCard` is the content card: `secondarySystemGroupedBackground`, 20-point continuous corners,
+16-point padding, optional `cardTitle` above the content. It is not glass. Inside a List row,
+`quotaCardRow()` clears insets, the row background, and the separator so pull-to-refresh and
+`NavigationLink` rows keep working.
+
+`QuotaStatTile` is a `support` / `.secondary` label over a `statValue`, with an optional `meta`
+caption, combined into one VoiceOver element. `QuotaStatGrid` lays tiles in two columns and falls
+back to one column at accessibility sizes (`ViewThatFits`).
+
+`QuotaMeter` is a capsule track (`QuotaTheme.meterTrack`) whose fill is
+`QuotaTheme.color(for: QuotaTone.remaining(percent:))` — healthy at or above 40 remaining, warning
+at or above 15, otherwise critical. Height 8. Hidden from VoiceOver; the window's remaining figure
+is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
+
+`ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows, tinted
+by the caller, hidden from VoiceOver. Widget extensions do not link the catalog.
+
 ## Shared product vocabulary
 
 Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
@@ -180,15 +220,16 @@ Body, in order:
    standard list-row background. Cached: **Showing saved data. Couldn't refresh.** No cache:
    **Couldn't refresh. Pull to try again.** Keep provider-state and freshness vocabulary from the
    shared formatters unchanged.
-2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): provider
-   name with an 8pt incident dot after the name when this device's last-good status-page reading
-   is `minor` or worse (VoiceOver speaks the status-page description; there is no tooltip),
-   masked account label, optional neutral plan capsule, and `QuotaWindowBlock` children. The
-   List row background is the only content container. Status pages are fetched on this device
-   (`QuotaProviderStatus`) on the helper's ten-minute cadence while the app is in the foreground
-   (`AppModel` holds the timer) and again on a background refresh; a failed poll keeps the last
-   reading. Relay does not forward them. Widgets do not show the mark. Remaining
-   is the strongest number, with one meter per percent window and reset copy. A reading that is
+2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): a 22pt
+   catalog `ProviderMark`, then the provider name with an 8pt incident dot after the name when this
+   device's last-good status-page reading is `minor` or worse (VoiceOver speaks the status-page
+   description; there is no tooltip), masked account label, optional neutral plan capsule, and
+   `QuotaWindowBlock` children. The List row background is the only content container. Status
+   pages are fetched on this device (`QuotaProviderStatus`) on the helper's ten-minute cadence
+   while the app is in the foreground (`AppModel` holds the timer) and again on a background
+   refresh; a failed poll keeps the last reading. Relay does not forward them. Widgets do not show
+   the incident mark. Remaining is the strongest number, with one meter per percent window — filled
+   by the shared remaining-quota tone bands, not a flat emerald — and reset copy. A reading that is
    not current names why in place of, or ahead of, that reset time, because the reset it names
    may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
    refresh** for a state its device reported, and **Not current** for one that aged past its
@@ -606,7 +647,8 @@ Rules:
 
 1. Do not put an explicit glass effect inside another system glass control.
 2. Do not reproduce system materials with gradients, strokes, shadows, custom blur, or rounded
-   glass panels. There is no `quotaSurface`, ambient backdrop, or card token.
+   glass panels. There is no `quotaSurface` or ambient backdrop. `QuotaCard` is the content card
+   (grouped fill, 20-point continuous corners); it is not glass.
 3. Reduce Transparency is owned by system glass. The app does not simulate transparency.
 4. Widgets never call `glassEffect`; system widget chrome owns that rendering.
 
@@ -647,10 +689,11 @@ carries status alone. There is no status card or glass.
 Signed-in tabs use the system grouped background supplied by List/Form. Overview, subscription
 detail, and Devices are inset-grouped Lists. There is no root background modifier and no ambient
 wash. Settings is a compact hub Form; Notifications, Appearance, and About are pushed destination
-Forms with the same system background. Semantic text styles (`largeTitle` / `title2` for remaining
-values, `headline` for provider names, `subheadline` and `footnote` for support). Connect content is
-a 320-point column. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no padding, corner,
-stroke, shadow, material, or glass of their own.
+Forms with the same system background. Type roles are `QuotaDesign.Typography`: `remainingValue` for
+a window's remaining figure, `cardTitle` for provider names, `support` for window titles, `meta`
+for reset and pace. Connect content is a 320-point column. `ProviderQuotaRow` and
+`QuotaWindowBlock` are content only: no padding, corner, stroke, shadow, material, or glass of
+their own. The provider mark is 22 points; the remaining meter is `QuotaMeter`.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
 **View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
@@ -675,7 +718,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 - The Connect mark is one static element named **Quota**. The button's accessibility label is
   exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.** While
   connecting, the value is **Connecting** and the control does not respond to interaction.
-- Remaining meters expose the remaining percent and window title, not only a graphic.
+- Remaining meters are hidden from VoiceOver; the window block speaks remaining percent and window
+  title.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
 - The Overview quota Section footer is the shared freshness phrase, read in full.
 - Each Devices row is one VoiceOver element that speaks name, verdict, platform, and age.

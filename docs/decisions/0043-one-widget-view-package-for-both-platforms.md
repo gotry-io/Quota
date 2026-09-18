@@ -80,9 +80,10 @@ to.
 - QuotaBar has two build descriptions of the same sources. `project.yml` is what ships;
   `Package.swift` is what `swift test` runs. A source file added to one is added to the other, and
   `pnpm generate:menubar` must stay idempotent so the committed project is reviewable.
-- The one place they differ is resources: the packaged app finds brand icons in
-  `Contents/Resources/BrandIcons`, and the package build finds them in `Bundle.module`. The lookup
-  says so with `#if SWIFT_PACKAGE` rather than carrying a second copy of the assets.
+- Brand marks live in `QuotaBrandIcons` (`packages/apple-client`). Both apps link that product;
+  the widget extensions do not. QuotaBar bakes an `NSImage` from `Bundle.quotaBrandIcons` for
+  optical ink-bounds; Quota iOS draws `ProviderMark`. There is no app-bundle
+  `Resources/BrandIcons` copy.
 - A widget change is now one change. An iOS-only or macOS-only rendering rule has to say which
   platform it is for, in the shared view, where the other platform's behaviour is visible next to
   it.

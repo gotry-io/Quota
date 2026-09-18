@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import QuotaBrandIcons
 import SwiftUI
 
 /// The status item's whole label, drawn once into a single template image.
@@ -387,18 +388,11 @@ enum QuotaBrandAssets {
 
   private static var cachedHeaderImage: NSImage?
 
-  static func menuBarResourceURL() -> URL? {
-    ProviderBrandAssets.resourceURL(named: assetName)
-  }
-
   static func menuBarTemplateImage() -> NSImage? {
     if let cachedHeaderImage {
       return cachedHeaderImage
     }
-    guard
-      let url = menuBarResourceURL(),
-      let image = NSImage(contentsOf: url)
-    else {
+    guard let image = Bundle.quotaBrandIcons.brandMarkNSImage(named: assetName) else {
       return nil
     }
     image.size = NSSize(width: 18, height: 18)
