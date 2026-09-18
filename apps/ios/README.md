@@ -169,7 +169,10 @@ hub plus Notifications, Appearance, and About destinations, and runs an accessib
 Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
 Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
 unnamed clipping skip and no whole-type contrast skip. Log Out and Delete Account sit on the
-Settings hub. Delete Account starts on the website.
+Settings hub. Delete Account starts on the website. `testLargeTypeScreenshots` always runs at
+`accessibilityExtraLarge` (CI's `verify-ios-ui` included) and opens **View day**, Settings › About,
+hub Log Out after a pop, and a connected Providers session so a below-the-fold regression fails
+that job rather than only a local screenshot run.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh

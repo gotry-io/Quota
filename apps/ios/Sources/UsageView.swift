@@ -336,6 +336,7 @@ struct UsageTotalsSection: View {
     .accessibilityLabel(
       "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
     )
+    .accessibilityIdentifier("\(identifier).tokens")
   }
 
   private var cacheHitTile: some View {

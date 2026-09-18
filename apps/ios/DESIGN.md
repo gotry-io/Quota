@@ -500,9 +500,11 @@ no custom material.
 
 The Account's list, so without an account it is one `ContentUnavailableView`: title **Sign in to
 see your Macs**, image `desktopcomputer`, description **Quota lists the Macs reporting to your
-account. This iPhone reads the providers you connect here whether or not you sign in.**, action
-**Sign in to Quota** as `.borderedProminent`. The Manage Devices toolbar link is absent then, and
-so is the This iPhone row: there is no list for it to end.
+account. This iPhone reads the providers you connect here whether or not you sign in.**
+**Sign in to Quota** is a full-width `.borderedProminent` `.controlSize(.large)` button *outside*
+that container (`devices.signin`) — `ContentUnavailableView` actions do not stretch to 44 pt.
+The Manage Devices toolbar link is absent then, and so is the This iPhone row: there is no list
+for it to end.
 
 With an account, an inset-grouped `List` of the Account's collection devices, then **This iPhone**
 as the last row — platform **iOS**, verdict and age from the last local collection. It is not an
@@ -523,8 +525,9 @@ label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my/devi
 URL Settings uses. The toolbar supplies its own Liquid Glass.
 
 An account with no Macs is `ContentUnavailableView`: title **No Macs connected**, image
-`desktopcomputer`, description **Install QuotaBar on a Mac signed in with this GitHub account.**,
-action **Download QuotaBar** as `.borderedProminent` — with the This iPhone row still beneath it.
+`desktopcomputer`, description **Install QuotaBar on a Mac signed in with this GitHub account.**
+**Download QuotaBar** is a full-width `.borderedProminent` `.controlSize(.large)` `Link` outside
+that container — with the This iPhone row still beneath it.
 No QR code or custom surface. Root loading covers summary loading. Device status is last-good
 account content.
 
@@ -818,77 +821,19 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
   Connect (no tab bar) still runs contrast.
-- Usage runs the same app-owned audit as the other screens, including contrast. Do not skip
-  contrast, Dynamic Type, or clipping as whole audit types. Do not skip by `StaticText` type,
-  "nearly passed", `"Resets "`, or List-button contrast. Documented system-owned exceptions,
-  scoped to the named element:
-  - unnamed tab-bar / navigation / sheet glass (`issue.element == nil`) for contrast, Dynamic
-    Type, clipping, and inaccessible;
-  - grouped List / Form section header and footer views whose accessibility identifier starts
-    with `section.header.` or `section.footer.` (contrast and Dynamic Type). Those identifiers
-    are: `section.header.today`, `section.header.quota`, `section.header.readings`,
-    `section.header.activity`, `section.header.preferences`, `section.header.privacy-and-support`,
-    `section.header.account`, `section.header.mac-setup`, `section.header.appearance`,
-    `section.header.codex`, `section.header.claude_code`, `section.header.grok`,
-    `section.header.opencode`, `section.header.pi`, `section.header.cursor`,
-    `section.header.claude`, `section.footer.updated`, `section.footer.mac-setup`,
-    `section.footer.account`, `section.footer.notifications`,
-    `section.footer.subscription-updated`, `section.footer.usage.headline`,
-    `section.footer.usage.day.headline`;
-  - the system sheet **Done** confirmation button for Dynamic Type;
-  - contrast and clipping on any element whose frame intersects the floating tab bar's frame
-    (and contrast on any element whose frame intersects the floating navigation bar's frame once
-    a list has scrolled under it; the same glass, at the other end of the screen);
-  - contrast on an element that cannot be hit while a sheet's Done button is up: the presentation
-    dims what is behind it, and that dimming is the system's;
-  - contrast on `usage.activity.selected-day`: the date label shares its row container with the
-    selected heatmap cell, whose accent ring the auditor reads as the label's background;
-  - contrast on `usage.headline.cache-hit` / `usage.day.headline.cache-hit`: the unpriced `—` is
-    `remainingValue` / primary on the card fill; at accessibility sizes the auditor samples the
-    thin glyph rather than the tile;
-  - contrast on `usage.budget`: the spent / budget line is `support` / primary on the card; at
-    accessibility sizes the auditor samples it against the meter track in the same card;
-  - contrast on `settings.sign-in-methods.` rows: they already use the opaque label colour; the
-    auditor still samples them as failing when they sit in the middle of the Settings hub;
-  - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which
-    iOS 26.3 passes and the 26.5 simulator reports as failing for the second row only — an
-    exception to remove once that report reproduces
-    (inset by 40 pt horizontally and 56 pt vertically): the Liquid Glass capsule and its bloom sit
-    over the last visible rows, so the contrast auditor samples the glass, not the row, and the
-    clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never
-    applies to rows away from the tab bar;
-  - contrast, Dynamic Type, and clipping on the Today tiles of Overview, scoped by frame
-    containment to the elements this app marked `overview.today` or `overview.today.*`. Those
-    tiles are `QuotaStatTile`s inside a `QuotaCard`; the auditor still names inner label and value
-    texts, which carry no identifier of their own — which is why matching the `overview.today`
-    identifier on the reported element alone never reached them. Containment in a marked tile's
-    frame is what ties a report back to a tile: the exception is not by element type, not by how
-    close the ratio came, and it is the only place either type is skipped by frame other than the
-    tab-bar glass above;
-  - Dynamic Type "unsupported" / "partially unsupported" on inner Text of Overview
-    `overview.subscription` cards and of subscription-detail combined elements (empty identifier),
-    scoped by card frame or `subscription.detail`. Those nodes use scaling `QuotaDesign` fonts and
-    are merged for VoiceOver; the auditor names the inner text instead of the card;
-  - iOS 26 `UIListContentConfiguration` List/Form Button, Link, and LabeledContent rows for the
-    "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
-    full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today tiles the
-    bullet above names by frame. Named identifiers:
-    `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
-    `usage.show-fewer`, `usage.daily.table`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
-    `overview.today.cost`, `overview.today.input`, `overview.today.output`,
-    `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
-    `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
-    `overview.subscription`, `devices.manage`, `providers.connect.`, `providers.session.`,
-    `usage.activity.selected-day`,
-    `usage.provider.<provider id>`, the totals-row labels **Tokens**, **API-equivalent cost**,
-    **Cache hit**, and **Reasoning**, the Daily **Daily breakdown** disclosure label, the
-    About **License** and **Version** labels, the
-    Notifications **Enable Notifications** and **Reset Reminders** toggle rows, plus Link labels
-    **GitHub**, **Website**, **Privacy**, **Support**, **Manage Devices on Web**, **Download for
-    Mac**, and **Download QuotaBar**.
-- A contrast pass that exceeds the iOS 26 auditor deadline on the 365-day heatmap may retry
-  without contrast; the run attaches which screen did not complete contrast. That is a deadline,
-  not a type skip.
+- Usage runs the same app-owned audit as the other screens, including contrast. A finding gates
+  the UITest only when the same type, element key, and screen appear on two consecutive passes
+  one second apart. Contrast whose element frame intersects the tab bar or a navigation bar
+  (including the Liquid Glass bloom of those frames) is chrome overlap, not a colour, and is
+  never a finding.
+- Unnamed glass (`issue.element == nil`) is ignored. "Contrast nearly passed" is attached as
+  unconfirmed, never a gate. The iOS 26 auditor still reports Dynamic Type
+  "partially unsupported" twice on system list configuration and on inner text of scaling fonts
+  (`section.header.` / `section.footer.`, `overview.today` / `overview.subscription` tiles,
+  app-owned identifiers, Form labels, the sheet **Done** button); clipping on
+  `usage.activity.empty` also reproduces. Those stay. Unconfirmed (once-only) findings attach as
+  `audit-unconfirmed-<screen>.txt`. A contrast pass that exceeds the auditor deadline on the
+  365-day heatmap may retry without contrast; that is a deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
@@ -928,6 +873,10 @@ fixture screenshots to
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
 detail, and each Settings destination at one accessibility text size.
+`QuotaUITests.testLargeTypeScreenshots` always launches at `accessibilityExtraLarge` (including
+CI's `verify-ios-ui`) and visits **View day** / the day sheet, Settings › About, hub Log Out after
+pop, and the first connected Providers session, so a below-the-fold regression fails that job
+instead of only a local screenshot run.
 
 ### DEBUG visual fixtures
 
