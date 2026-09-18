@@ -1452,6 +1452,8 @@ final class QuotaUITests: XCTestCase {
             "settings.notifications",
             "settings.appearance",
             "settings.about",
+            "providers.connect.",
+            "providers.session.",
             "overview.subscription",
             "devices.manage",
             "settings.delete-account",
@@ -1492,6 +1494,7 @@ final class QuotaUITests: XCTestCase {
 
 /// The rows this app collapses into one accessibility element with `children: .ignore`.
 private let mergedRows = [
+  "providers.session.",
   "settings.sign-in-methods.",
   "usage.day",
   "usage.provider.",

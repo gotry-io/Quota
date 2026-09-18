@@ -9,7 +9,11 @@ struct ConnectAccountView: View {
     GeometryReader { proxy in
       ScrollView {
         VStack(spacing: 24) {
-          QuotaAppMark()
+          Spacer(minLength: 0)
+          welcomeHeader
+          Spacer(minLength: 8)
+          featureLines
+          Spacer(minLength: 8)
           actions
           VStack(spacing: 12) {
             footnote
@@ -18,6 +22,7 @@ struct ConnectAccountView: View {
           // Clear of the prominent button's glass bloom so the footnote reads on plain background.
           .padding(.top, 24)
           .frame(maxWidth: .infinity)
+          Spacer(minLength: 0)
         }
         .frame(maxWidth: 320)
         .padding()
@@ -28,6 +33,53 @@ struct ConnectAccountView: View {
     .safeAreaPadding()
     .background(Color(uiColor: .systemBackground))
     .accessibilityIdentifier("connect.root")
+  }
+
+  private var welcomeHeader: some View {
+    VStack(spacing: 12) {
+      QuotaAppMark(size: QuotaDesign.Layout.quotaMarkWelcome)
+      Text("Quota")
+        .font(.largeTitle.bold())
+        .foregroundStyle(.primary)
+      Text("Your AI quota, on every device.")
+        .font(.title3)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private var featureLines: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      feature(
+        symbol: "gauge.with.dots.needle.33percent",
+        text: "Remaining quota for every provider"
+      )
+      feature(
+        symbol: "macbook.and.iphone",
+        text: "What your Macs report, on this iPhone"
+      )
+      feature(
+        symbol: "bell.badge",
+        text: "Alerts before a window runs out"
+      )
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func feature(symbol: String, text: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Image(systemName: symbol)
+        .font(.body)
+        .foregroundStyle(QuotaTheme.emerald)
+        .frame(width: 28, alignment: .center)
+        .accessibilityHidden(true)
+      Text(text)
+        .font(QuotaDesign.Typography.support)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityElement(children: .combine)
   }
 
   @ViewBuilder
@@ -77,8 +129,7 @@ struct ConnectAccountView: View {
 
   private var emailButton: some View {
     webSignInButton(title: "Continue with Email", identifier: "connect.email")
-      .buttonStyle(.glass)
-      .foregroundStyle(.primary)
+      .buttonStyle(.bordered)
   }
 
   /// Both browser channels open the same Relay sign-in page, which asks which Account this is

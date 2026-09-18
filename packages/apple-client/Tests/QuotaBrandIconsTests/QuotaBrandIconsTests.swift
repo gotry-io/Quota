@@ -18,6 +18,11 @@ struct QuotaBrandIconsTests {
       )
     }
   }
+
+  @Test
+  func quotaBrandMarkResolvesACatalogImage() {
+    #expect(catalogImage(named: "quota") != nil, "missing Quota mark")
+  }
 }
 
 #if os(iOS)

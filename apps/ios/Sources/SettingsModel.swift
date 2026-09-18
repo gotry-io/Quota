@@ -69,6 +69,13 @@ enum SettingsCopy {
     label ?? "Linked"
   }
   static let signIn = "Sign in to Quota"
+  /// Bound channels on the identity card, in the order every Quota surface lists them.
+  static func identityMethodLine(_ identities: [AccountIdentity]) -> String {
+    let names = IdentityProvider.offered.compactMap { provider in
+      identities.contains { $0.provider == provider } ? provider.displayName : nil
+    }
+    return names.isEmpty ? "Signed in" : names.joined(separator: " · ")
+  }
   /// What an account adds to a phone that already reads its own providers.
   static let signInExplanation =
     "Sign in to see what QuotaBar reports from your Macs, and your usage across them."

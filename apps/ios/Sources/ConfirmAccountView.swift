@@ -8,19 +8,28 @@ struct ConfirmAccountView: View {
     GeometryReader { proxy in
       ScrollView {
         VStack(spacing: 24) {
-          QuotaAppMark()
+          QuotaCard {
+            HStack(alignment: .center, spacing: 12) {
+              QuotaIdentityAvatar(label: label)
+              VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                  .font(.headline)
+                  .foregroundStyle(.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                Text(connectedAs)
+                  .font(QuotaDesign.Typography.support)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              Spacer(minLength: 0)
+            }
+          }
 
           Text("Use this GitHub account?")
-            .font(.title2.weight(.semibold))
+            .font(.title3)
             .foregroundStyle(Color(uiColor: .label))
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
-
-          Text(connectedAs)
-            .font(.body)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
 
           Button {
             Task { await model.confirmAccount() }

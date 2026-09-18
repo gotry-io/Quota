@@ -4,9 +4,12 @@ struct SettingsAboutView: View {
   var body: some View {
     Form {
       Section {
-        VStack(alignment: .leading, spacing: 16) {
-          QuotaAppMark()
-            .frame(maxWidth: .infinity)
+        VStack(spacing: 12) {
+          QuotaAppMark(size: QuotaDesign.Layout.quotaMarkAbout)
+          Text(SettingsCopy.bundleVersionLabel())
+            .font(QuotaDesign.Typography.support)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
 
           Text(SettingsCopy.productSentence)
             .fixedSize(horizontal: false, vertical: true)
@@ -14,6 +17,8 @@ struct SettingsAboutView: View {
           Text(SettingsCopy.privacySentence)
             .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
       }
 
       Section {

@@ -9,6 +9,11 @@ enum QuotaDesign {
     static let meterHeight: CGFloat = 8
     static let markSize: CGFloat = 22
     static let statTileMinWidth: CGFloat = 140
+    static let identityAvatarSize: CGFloat = 44
+    static let settingsRowIconSize: CGFloat = 28
+    static let deviceSymbolSize: CGFloat = 28
+    static let quotaMarkAbout: CGFloat = 64
+    static let quotaMarkWelcome: CGFloat = 72
   }
 
   enum Typography {
