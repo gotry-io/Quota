@@ -70,16 +70,18 @@ struct DevicesView: View {
       // Devices are the Account's. Without one there is no list to show, and the phone's own
       // readings are not a substitute for it — they are on Overview, where the quota is.
       if !model.hasAccountSession {
-        ContentUnavailableView {
-          Label(DevicesCopy.signedOutTitle, systemImage: "desktopcomputer")
-        } description: {
-          Text(DevicesCopy.signedOutDetail)
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-        } actions: {
+        VStack(spacing: QuotaDesign.Layout.rowSpacing) {
+          ContentUnavailableView {
+            Label(DevicesCopy.signedOutTitle, systemImage: "desktopcomputer")
+          } description: {
+            Text(DevicesCopy.signedOutDetail)
+              .foregroundStyle(.primary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
           Button(DevicesCopy.signIn) { model.showSignIn() }
             .buttonStyle(.borderedProminent)
-            .frame(minHeight: QuotaTheme.minimumTouchTarget)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
             .accessibilityIdentifier("devices.signin")
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -92,16 +94,18 @@ struct DevicesView: View {
             DeviceRow(device: device)
           }
         } else {
-          ContentUnavailableView {
-            Label(MacSetupGuide.emptyDevicesTitle, systemImage: "desktopcomputer")
-          } description: {
-            Text(MacSetupGuide.detail)
-              .foregroundStyle(.primary)
-              .fixedSize(horizontal: false, vertical: true)
-          } actions: {
+          VStack(spacing: QuotaDesign.Layout.rowSpacing) {
+            ContentUnavailableView {
+              Label(MacSetupGuide.emptyDevicesTitle, systemImage: "desktopcomputer")
+            } description: {
+              Text(MacSetupGuide.detail)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             Link(MacSetupGuide.devicesAction, destination: MacSetupGuide.downloadURL)
               .buttonStyle(.borderedProminent)
-              .frame(minHeight: QuotaTheme.minimumTouchTarget)
+              .controlSize(.large)
+              .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, minHeight: 220)
