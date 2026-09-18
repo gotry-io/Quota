@@ -497,7 +497,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       }
       authStatus = visualTestState.authStatus
       accountDeviceID = visualTestState.deviceID
-      overview = visualTestState.overview
+      applyOverview(visualTestState.overview)
       cache = visualTestState.cache
       providerStatus = Dictionary(
         uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
@@ -1672,6 +1672,13 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     }
   }
 
+  private func applyOverview(_ items: [LocalServiceOverviewItem]) {
+    overview = items
+    if !items.isEmpty {
+      LaunchHasShownQuota.markShown()
+    }
+  }
+
   func apply(_ state: LocalServiceState) {
     revision = state.revision
     cache = state.cache
@@ -1719,7 +1726,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       } else {
         nil
       }
-    overview = state.overview
+    applyOverview(state.overview)
     advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
       uniqueKeysWithValues: state.providers.map { ($0.provider, $0) }

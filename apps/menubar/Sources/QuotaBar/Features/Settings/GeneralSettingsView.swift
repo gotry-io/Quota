@@ -3,8 +3,10 @@ import SwiftUI
 enum GeneralSettingsCopy {
   static let launchAtLogin = "Launch at Login"
   static let launchAtLoginHint = "Start QuotaBar when you log in"
+  static let openWindowAtLaunch = "Open window at launch"
+  static let openWindowAtLaunchHint = "Show the QuotaBar window when you open the app"
   static let showInDock = "Show in Dock"
-  static let showInDockHint = "Show QuotaBar in the Dock"
+  static let showInDockHint = "Keep QuotaBar in the Dock when its window is closed"
   static let refreshInterval = "Refresh Interval"
   static let uploadUsage = "Upload Usage to Account"
   static let uploadUsageHint = "Upload this Mac's Usage to your Quota account"
@@ -26,12 +28,14 @@ enum ResetLocalDataCopy {
     + "You stay signed in."
 }
 
-/// Main window → Settings → General: launch, Dock, collection cadence, Usage upload, project
-/// grouping, and the local-data reset.
+/// Main window → Settings → General: launch, open-window-at-launch, Dock, collection cadence,
+/// Usage upload, project grouping, and the local-data reset.
 struct GeneralSettingsView: View {
   @Bindable var model: MenuBarViewModel
   @State private var launchAtLoginEnabled = LaunchAtLoginController.isEnabled
   @State private var confirmReset = false
+  @AppStorage(LaunchWindowPreference.storageKey) private var opensMainWindow =
+    LaunchWindowPreference.fallback
   @AppStorage(DockVisibilityPreference.storageKey) private var dockShown =
     DockVisibilityPreference.fallback
 
@@ -50,6 +54,10 @@ struct GeneralSettingsView: View {
         )
         .accessibilityLabel(GeneralSettingsCopy.launchAtLogin)
         .accessibilityHint(GeneralSettingsCopy.launchAtLoginHint)
+
+        Toggle(GeneralSettingsCopy.openWindowAtLaunch, isOn: $opensMainWindow)
+          .accessibilityLabel(GeneralSettingsCopy.openWindowAtLaunch)
+          .accessibilityHint(GeneralSettingsCopy.openWindowAtLaunchHint)
 
         Toggle(
           GeneralSettingsCopy.showInDock,

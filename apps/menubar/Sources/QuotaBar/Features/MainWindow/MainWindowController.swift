@@ -93,6 +93,14 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
   var isPresented: Bool { window?.isVisible == true }
 
+  /// Open in the sense a Quit cares about: on screen, or miniaturized into the Dock. A
+  /// miniaturized window is not `isVisible`, but it is still the app's window, so a plain Quit
+  /// closes it rather than ending the process behind it.
+  var isOpen: Bool {
+    guard let window else { return false }
+    return window.isVisible || window.isMiniaturized
+  }
+
   func attach(model: MenuBarViewModel) {
     self.model = model
     hosting?.rootView = MainWindowView(model: model)
@@ -113,6 +121,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
   func showSettings() {
     show(page: MainPage.settingsLandingPage(MainPage.stored))
+  }
+
+  /// Same path as File › Close / ⌘W, so `WindowActivation` drops to accessory.
+  func close() {
+    window?.performClose(nil)
   }
 
   func refresh() {

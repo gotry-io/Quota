@@ -65,6 +65,14 @@ enum QuotaBarMainMenu {
       action: #selector(NSApplication.terminate(_:)),
       keyEquivalent: "q"
     )
+    let quitCompletely = NSMenuItem(
+      title: "Quit QuotaBar Completely",
+      action: #selector(Actions.quitCompletely(_:)),
+      keyEquivalent: "q"
+    )
+    quitCompletely.keyEquivalentModifierMask = [.command, .option]
+    quitCompletely.target = Actions.shared
+    menu.addItem(quitCompletely)
     return menu
   }
 
@@ -211,6 +219,10 @@ enum QuotaBarMainMenu {
 
     @objc func openFeedback(_ sender: Any?) {
       NSWorkspace.shared.open(AppMetadata.feedbackURL)
+    }
+
+    @objc func quitCompletely(_ sender: Any?) {
+      QuitIntent.requestFullQuit()
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

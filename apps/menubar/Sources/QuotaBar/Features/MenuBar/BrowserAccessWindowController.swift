@@ -55,7 +55,7 @@ final class WorkspaceQuotaBarRelauncher: QuotaBarRelaunching {
       "while /bin/ps -p \(pid) >/dev/null 2>&1; do /bin/sleep 0.2; done; /usr/bin/open '\(escaped)'",
     ]
     try? process.run()
-    NSApp.terminate(nil)
+    QuitIntent.requestFullQuit()
   }
 }
 

@@ -30,6 +30,7 @@ func applicationMenuHasAboutUpdatesSettingsServicesHideAndQuit() throws {
     "Show All",
     "",
     "Quit QuotaBar",
+    "Quit QuotaBar Completely",
   ])
 
   let settings = try item(app, titled: "Settings…")
@@ -49,6 +50,12 @@ func applicationMenuHasAboutUpdatesSettingsServicesHideAndQuit() throws {
   let quit = try item(app, titled: "Quit QuotaBar")
   #expect(quit.action == #selector(NSApplication.terminate(_:)))
   #expect(quit.keyEquivalent == "q")
+
+  let quitCompletely = try item(app, titled: "Quit QuotaBar Completely")
+  #expect(quitCompletely.action == #selector(QuotaBarMainMenu.Actions.quitCompletely(_:)))
+  #expect(quitCompletely.keyEquivalent == "q")
+  #expect(quitCompletely.keyEquivalentModifierMask == [.command, .option])
+  #expect(quitCompletely.target === QuotaBarMainMenu.Actions.shared)
 
   let services = try item(app, titled: "Services")
   #expect(services.submenu?.title == "Services")

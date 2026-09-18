@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-16
+- Amended by [ADR 0054](0054-quotabar-is-resident-in-the-menu-bar.md)
 - Supersedes the window and activation parts of
   [ADR 0051](0051-the-panel-glances-and-the-windows-explain.md)
 - Keeps the data rules of [ADR 0042](0042-quota-history-is-local-samples.md) and

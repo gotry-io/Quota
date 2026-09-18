@@ -136,6 +136,39 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
 }
 
 @Test @MainActor
+func applyingANonEmptyOverviewSetsLaunchHasShownQuotaOnce() {
+  let key = LaunchHasShownQuota.storageKey
+  let previous = UserDefaults.standard.object(forKey: key)
+  defer {
+    if let previous {
+      UserDefaults.standard.set(previous, forKey: key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: key)
+    }
+  }
+  UserDefaults.standard.removeObject(forKey: key)
+
+  let now = Date(timeIntervalSince1970: 1_786_300_000)
+  let item = sourceScopedOverviewItem(
+    sourceID: "local",
+    kind: .local,
+    deviceID: nil,
+    displayName: "This Mac",
+    usedPercent: 20,
+    now: now
+  )
+  let model = MenuBarViewModel(client: StubLocalService(state: overviewOnlyState(overview: [])))
+  model.apply(overviewOnlyState(overview: []))
+  #expect(!LaunchHasShownQuota.hasShown)
+
+  model.apply(overviewOnlyState(overview: [item]))
+  #expect(LaunchHasShownQuota.hasShown)
+
+  model.apply(overviewOnlyState(overview: []))
+  #expect(LaunchHasShownQuota.hasShown)
+}
+
+@Test @MainActor
 func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() async throws {
   let now = Date(timeIntervalSince1970: 1_788_100_000)
   let fiveHourReset = now.addingTimeInterval(2 * 3_600)

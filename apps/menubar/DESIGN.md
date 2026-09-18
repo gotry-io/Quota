@@ -185,19 +185,23 @@ size, frame autosave name `QuotaBarMainWindow`, level `.normal`, and `collection
 `.fullScreenPrimary`. It is resizable and miniaturizable and may go full screen. Esc and ⌘W close
 it. The title is **QuotaBar**.
 
-QuotaBar is a regular app with a Dock icon. **Show in Dock** (General, default on) keeps the
-process `.regular`. Turning it off makes QuotaBar menu-bar-only: the main window registers with
-`WindowActivation`, which switches the process to `.regular` so a Dock icon and ⌘Tab entry exist
-while that window is open, and closing it returns to `.accessory` without activating. Toggling
-the switch while the main window is open does not close it or move focus. A launch as a Login
-Item does not show the main window; a manual launch (Finder, Spotlight, `open -a`) shows it
-after the status items exist. Closing the main window never quits; a Dock click reopens it.
-Browser Access and Sparkle windows are not registered.
+QuotaBar lives in the menu bar. **Show in Dock** (General, default off) on keeps the process
+`.regular` even when the window is closed. Off (the default) makes QuotaBar menu-bar-only: the
+main window registers with `WindowActivation`, which switches the process to `.regular` so a
+Dock icon and ⌘Tab entry exist while that window is open, and closing it returns to `.accessory`
+without activating. Toggling the switch while the main window is open does not close it or move
+focus. A launch as a Login Item does not show the main window. A manual launch (Finder,
+Spotlight, `open -a`) shows the main window until this Mac has shown quota, then opens the
+menu-bar panel after the status items exist; **Open window at launch** (General, default off)
+always shows the window on a manual launch. Closing the main window never quits; a Dock click
+reopens it. A plain Quit (⌘Q) while the main window is open closes that window and keeps the
+menu bar; **Quit QuotaBar Completely** ⌥⌘Q, the panel overflow **Quit QuotaBar**, a system log
+out, and an update relaunch terminate. Browser Access and Sparkle windows are not registered.
 
 The process has a regular-app menu bar:
 
 - **QuotaBar:** About QuotaBar, Check for Updates…, Settings… ⌘,, Services, Hide QuotaBar ⌘H,
-  Hide Others ⌥⌘H, Show All, Quit QuotaBar ⌘Q.
+  Hide Others ⌥⌘H, Show All, Quit QuotaBar ⌘Q, Quit QuotaBar Completely ⌥⌘Q.
 - **File:** Close ⌘W.
 - **Edit:** Undo, Redo, Cut, Copy, Paste, Select All.
 - **View:** Quota ⌘1, Today ⌘2, Usage ⌘3, Refresh ⌘R, Enter Full Screen (⌃⌘F).
@@ -573,6 +577,7 @@ The header shows:
   Quit. VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window
   on the last page (Quota the first time) and does not show a shortcut; View › **Quota** is ⌘1.
   **Settings…** opens the main window on Account or the last Settings page; there is no gear.
+  **Quit QuotaBar** quits the process, not only the window.
 - Child page: Back and page title. Provider detail has no trailing action.
 
 Transient menus — the Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, and
@@ -727,8 +732,10 @@ Usage lives on the main window Usage page, reached from the footer **Today · $x
 root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
 otherwise.
 
-**General** is a Settings-group page: **Launch at Login**, **Show in Dock** (toggle, default on; off is
-menu-bar-only except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
+**General** is a Settings-group page: **Launch at Login**, **Open window at launch** (toggle,
+default off; hint **Show the QuotaBar window when you open the app**), **Show in Dock** (toggle,
+default off; hint **Keep QuotaBar in the Dock when its window is closed**; off is menu-bar-only
+except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
 or 15 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
 `usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
 is how often this Mac collects provider quota; Account summary still polls every minute, and a

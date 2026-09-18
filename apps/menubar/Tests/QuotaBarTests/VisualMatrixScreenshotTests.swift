@@ -18,6 +18,8 @@
         DashboardRange.storageKey,
         ResetCopyStylePreference.storageKey,
         DockVisibilityPreference.storageKey,
+        LaunchWindowPreference.storageKey,
+        LaunchHasShownQuota.storageKey,
       ]
       let previous = Dictionary(
         uniqueKeysWithValues: keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }

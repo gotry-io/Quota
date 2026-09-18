@@ -28,13 +28,14 @@ enum QuotaBarUpdater {
     @MainActor
     private final class Owner {
       let driver = QuotaBarSparkleDriver()
+      let updaterDelegate = QuotaBarSparkleUpdaterDelegate()
       let controller: SPUStandardUpdaterController
       private var started = false
 
       init() {
         controller = SPUStandardUpdaterController(
           startingUpdater: false,
-          updaterDelegate: nil,
+          updaterDelegate: updaterDelegate,
           userDriverDelegate: driver
         )
       }
@@ -49,6 +50,15 @@ enum QuotaBarUpdater {
           started = true
         } catch {
           return
+        }
+      }
+    }
+
+    private final class QuotaBarSparkleUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+      func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        // Sparkle invokes this on the main thread, immediately before terminate.
+        MainActor.assumeIsolated {
+          QuitIntent.markFullQuitRequested()
         }
       }
     }
