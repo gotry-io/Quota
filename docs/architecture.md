@@ -438,8 +438,15 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
   status-page copy, the observation-freshness rule each snapshot type conforms to, and the subscription selector every
   Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
-  evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
-  wire types, network, persist, or reach Relay; `QuotaAlerts` may depend on `QuotaPresentation`.
+  evaluator both Apple apps share, and `QuotaAlertDelivery`, the UserNotifications delivery layer
+  both Apple apps share: the sink, reset-reminder scheduler, notification-center slice, rules
+  UserDefaults adapter, and alert-state file store
+  ([ADR 0053](decisions/0053-one-alert-delivery-package-for-both-apps.md)). It depends on neither
+  app and does not own `ProviderID`, decode wire types, network, or reach Relay; `QuotaAlerts` may
+  depend on `QuotaPresentation` and stays Foundation-only. `QuotaAlertDelivery` may depend on
+  `QuotaAlerts`, `QuotaPresentation`, and UserNotifications; each app passes its own key prefix
+  and state file so shipped Quota iOS `alerts.*` / `alert-state.json` and QuotaBar
+  `notifications.*` / `QuotaBar/notification-state.json` stay those names.
   `QuotaObservations`, beside them, owns the subscription key and the observation merge — the one
   Swift statement of [ADR 0003](decisions/0003-observation-preserving-subscription-merge.md),
   generic over the snapshot type so it converts nothing and reads no quota value; it may depend on

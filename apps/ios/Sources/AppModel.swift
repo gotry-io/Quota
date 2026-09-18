@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import UIKit
 import QuotaAccount
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaProviderSessions
@@ -62,8 +63,8 @@ final class AppModel {
   private let selectionSaltStore: any SelectionSaltStore
   private let backgroundRefresh: any BackgroundRefreshScheduling
   private let alertCoordinator: AlertCoordinator
-  private let iosAlertSink: IOSAlertSink?
-  private let resetScheduler: IOSResetReminderScheduler
+  private let userNotificationSink: UserNotificationAlertSink?
+  private let resetScheduler: ResetReminderScheduler
   private let activity: any ActivityLoading
   private let localStore: any LocalCollectionStoring
   private let sampleStore: any LocalQuotaSampleStoring
@@ -148,8 +149,8 @@ final class AppModel {
     selectionSaltStore: any SelectionSaltStore = InMemorySelectionSaltStore(),
     backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
     alertCoordinator: AlertCoordinator? = nil,
-    alertRulesStore: IOSAlertRulesStore? = nil,
-    alertStateStore: (any IOSAlertStateStore)? = nil,
+    alertRulesStore: AlertRulesStore? = nil,
+    alertStateStore: (any AlertStateStore)? = nil,
     notificationCenter: (any NotificationCentering)? = nil,
     makeAuthorizationAttempt: @escaping @Sendable () throws -> AuthorizationAttempt = {
       try AuthorizationRequest.make()
@@ -180,16 +181,16 @@ final class AppModel {
     self.now = now
     self.makeAuthorizationAttempt = makeAuthorizationAttempt
     let center = notificationCenter ?? NoOpNotificationCenter()
-    let sink = IOSAlertSink(center: center)
-    self.resetScheduler = IOSResetReminderScheduler(center: center)
+    let sink = UserNotificationAlertSink(center: center)
+    self.resetScheduler = ResetReminderScheduler(center: center)
     if let alertCoordinator {
       self.alertCoordinator = alertCoordinator
-      self.iosAlertSink = nil
+      self.userNotificationSink = nil
     } else {
-      self.iosAlertSink = sink
+      self.userNotificationSink = sink
       self.alertCoordinator = AlertCoordinator(
-        rulesStore: alertRulesStore ?? IOSAlertRulesStore(),
-        stateStore: alertStateStore ?? InMemoryIOSAlertStateStore(),
+        rulesStore: alertRulesStore ?? AlertCoordinator.rulesStore(),
+        stateStore: alertStateStore ?? InMemoryAlertStateStore(),
         budgetStore: budgetStore,
         sink: sink,
         now: now
@@ -210,8 +211,13 @@ final class AppModel {
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
       selectionSaltStore: KeychainSelectionSaltStore(),
       backgroundRefresh: backgroundRefresh,
-      alertStateStore: FileIOSAlertStateStore.applicationSupport(),
-      notificationCenter: IOSNotificationCenter(),
+      alertStateStore: FileAlertStateStore(
+        fileURL: AlertCoordinator.stateFileURL(
+          applicationSupport: FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        )
+      ),
+      notificationCenter: SystemNotificationCenter(),
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       sampleStore: FileLocalQuotaSampleStore.applicationSupport()
         ?? MemoryLocalQuotaSampleStore(),
@@ -1280,10 +1286,10 @@ final class AppModel {
     let instant = now()
     let readings = subscriptions
     let catalog = AlertCoordinator.catalog(from: readings)
-    if let iosAlertSink {
-      iosAlertSink.catalog = catalog
-      iosAlertSink.scheduledResetKeys = resetScheduler.scheduledResetKeys
-      iosAlertSink.now = instant
+    if let userNotificationSink {
+      userNotificationSink.catalog = catalog
+      userNotificationSink.scheduledResetKeys = resetScheduler.scheduledResetKeys
+      userNotificationSink.now = instant
     }
     alertCoordinator.evaluate(subscriptions: readings)
     resetScheduler.reschedule(

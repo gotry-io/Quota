@@ -6,31 +6,31 @@ import UserNotifications
 ///
 /// When `resets_at` is in the future, one `UNCalendarNotificationTrigger` is booked. A later
 /// reading replaces the previous request for that selector and window. Turning the master
-/// switch or reset-reminders off, or signing out, removes every pending reminder. Background
-/// app refresh is asked for no sooner than every thirty minutes; the calendar booking is
-/// what fires at `resets_at` if that window has not landed yet.
-final class IOSResetReminderScheduler: @unchecked Sendable {
+/// switch or reset-reminders off, or signing out, removes every pending reminder.
+public final class ResetReminderScheduler: @unchecked Sendable {
   private let center: any NotificationCentering
   private let calendar: Calendar
   private var scheduledKeys: Set<String> = []
 
-  init(center: any NotificationCentering, calendar: Calendar = .current) {
+  public init(center: any NotificationCentering, calendar: Calendar = .current) {
     self.center = center
     self.calendar = calendar
   }
 
-  var scheduledResetKeys: Set<String> { scheduledKeys }
+  public var scheduledResetKeys: Set<String> { scheduledKeys }
 
-  func hasScheduledReset(selector: String, windowID: String) -> Bool {
-    scheduledKeys.contains(IOSAlertSink.resetKey(selector: selector, windowID: windowID))
+  public func hasScheduledReset(selector: String, windowID: String) -> Bool {
+    scheduledKeys.contains(
+      UserNotificationAlertSink.resetKey(selector: selector, windowID: windowID)
+    )
   }
 
-  func removeAll() {
+  public func removeAll() {
     center.removeAllPendingNotificationRequests()
     scheduledKeys.removeAll()
   }
 
-  func reschedule(
+  public func reschedule(
     rules: AlertRules,
     subscriptions: [AlertSubscriptionReading],
     catalog: AlertDeliveryCatalog,
@@ -77,7 +77,8 @@ final class IOSResetReminderScheduler: @unchecked Sendable {
           )
         )
         scheduledKeys.insert(
-          IOSAlertSink.resetKey(selector: subscription.selector, windowID: window.id)
+          UserNotificationAlertSink.resetKey(
+            selector: subscription.selector, windowID: window.id)
         )
       }
     }

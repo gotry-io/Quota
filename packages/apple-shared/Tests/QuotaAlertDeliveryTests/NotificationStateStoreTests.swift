@@ -2,16 +2,18 @@ import Foundation
 import QuotaAlerts
 import Testing
 
-@testable import QuotaBar
+@testable import QuotaAlertDelivery
 
 struct NotificationStateStoreTests {
   @Test func writtenFileIsOwnerReadWriteOnlyAndClearRemovesIt() throws {
     let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("QuotaBarTests.notification-state.\(UUID().uuidString)")
+      .appendingPathComponent("QuotaAlertDeliveryTests.state.\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    let store = FileNotificationStateStore(directory: directory)
+    let store = FileAlertStateStore(
+      fileURL: directory.appendingPathComponent("state.json", isDirectory: false)
+    )
     let resetsAt = Date(timeIntervalSince1970: 1_773_576_000)
     let state = AlertDedupState(
       fired: [
@@ -47,7 +49,7 @@ struct NotificationStateStoreTests {
   }
 
   @Test func memoryStoreRoundTripsAndClearEmpties() throws {
-    let store = InMemoryNotificationStateStore()
+    let store = InMemoryAlertStateStore()
     let state = AlertDedupState(
       fired: [
         AlertDedupKey(

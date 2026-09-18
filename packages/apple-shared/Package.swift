@@ -11,6 +11,7 @@ let package = Package(
   products: [
     .library(name: "QuotaPresentation", targets: ["QuotaPresentation"]),
     .library(name: "QuotaAlerts", targets: ["QuotaAlerts"]),
+    .library(name: "QuotaAlertDelivery", targets: ["QuotaAlertDelivery"]),
     .library(name: "QuotaObservations", targets: ["QuotaObservations"]),
   ],
   targets: [
@@ -18,6 +19,13 @@ let package = Package(
     .target(
       name: "QuotaAlerts",
       dependencies: ["QuotaPresentation"]
+    ),
+    .target(
+      name: "QuotaAlertDelivery",
+      dependencies: ["QuotaAlerts", "QuotaPresentation"],
+      linkerSettings: [
+        .linkedFramework("UserNotifications")
+      ]
     ),
     .target(
       name: "QuotaObservations",
@@ -30,6 +38,10 @@ let package = Package(
     .testTarget(
       name: "QuotaAlertsTests",
       dependencies: ["QuotaAlerts", "QuotaPresentation"]
+    ),
+    .testTarget(
+      name: "QuotaAlertDeliveryTests",
+      dependencies: ["QuotaAlertDelivery", "QuotaAlerts"]
     ),
     .testTarget(
       name: "QuotaObservationsTests",

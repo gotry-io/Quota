@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
@@ -33,7 +34,7 @@ struct SettingsModelTests {
     let defaults = isolatedSettingsDefaults()
     defer { defaults.tearDown() }
     let model = SettingsModel(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       notificationCenter: FakeNotificationAuthorizer(),
       appearanceDefaults: defaults.store
     )
@@ -62,7 +63,7 @@ struct SettingsModelTests {
     model.setFirstThreshold(5, for: selector)
     #expect(model.rules.thresholds(for: selector) == [5])
 
-    let reloaded = IOSAlertRulesStore(defaults: defaults.store).load()
+    let reloaded = AlertCoordinator.rulesStore(defaults: defaults.store).load()
     #expect(reloaded.thresholds(for: selector) == [5])
   }
 
@@ -77,7 +78,7 @@ struct SettingsModelTests {
     #expect(defaults.store.string(forKey: AppearancePreference.storageKey) == "dark")
 
     let model = SettingsModel(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       notificationCenter: FakeNotificationAuthorizer(),
       appearanceDefaults: defaults.store
     )
@@ -121,7 +122,7 @@ struct SettingsModelTests {
     let defaults = isolatedSettingsDefaults()
     defer { defaults.tearDown() }
     let model = SettingsModel(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       notificationCenter: FakeNotificationAuthorizer(),
       appearanceDefaults: defaults.store
     )
@@ -163,7 +164,7 @@ struct SettingsModelTests {
     let center = FakeNotificationAuthorizer()
     center.requestAuthorizationGranted = false
     let model = SettingsModel(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       notificationCenter: center,
       appearanceDefaults: defaults.store
     )
@@ -181,7 +182,7 @@ struct SettingsModelTests {
     let center = FakeNotificationAuthorizer()
     center.requestAuthorizationGranted = true
     let model = SettingsModel(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       notificationCenter: center,
       appearanceDefaults: defaults.store
     )
@@ -190,7 +191,7 @@ struct SettingsModelTests {
 
     #expect(model.rules.enabled)
     #expect(!model.authorizationDenied)
-    let reloaded = IOSAlertRulesStore(defaults: defaults.store).load()
+    let reloaded = AlertCoordinator.rulesStore(defaults: defaults.store).load()
     #expect(reloaded.enabled)
   }
 }
