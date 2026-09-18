@@ -55,19 +55,20 @@ Supporting copy may be `.secondary` at `subheadline` and larger. `footnote` / `c
 stays `.primary`.
 
 `QuotaCard` is the content card: `secondarySystemGroupedBackground`, 20-point continuous corners,
-16-point padding, optional `cardTitle` above the content. It is not glass. Inside a List row,
-`quotaCardRow()` clears insets, the row background, and the separator so pull-to-refresh and
-`NavigationLink` rows keep working.
+16-point padding, optional `cardTitle` above the content, optional leading SF Symbol, optional
+trailing accessory. It is not glass. Inside a List row, `quotaCardRow()` clears insets, the row
+background, and the separator so pull-to-refresh and `NavigationLink` rows keep working.
 
-`QuotaStatTile` is a `support` / `.secondary` label over a `statValue`, with an optional `meta`
-caption, combined into one VoiceOver element. `QuotaStatGrid` lays tiles in two columns and falls
-back to one column at accessibility sizes (`ViewThatFits`).
+`QuotaStatTile` is a `support` / `.secondary` label over a `statValue` (or `remainingValue` when
+the pair is a supporting tile), with an optional `meta` caption, combined into one VoiceOver
+element. `QuotaStatGrid` lays tiles in two columns and falls back to one column at accessibility
+sizes.
 
 `QuotaMeter` is a capsule track (`QuotaTheme.meterTrack`) whose fill is
 `QuotaTheme.color(for: QuotaTone.remaining(percent:))` — healthy at or above 40 remaining, warning
-at or above 15, otherwise critical. Height 8 by default, 4 on compact Overview windows. Hidden from
-VoiceOver; the window's remaining figure is the spoken value. `QuotaTheme.emerald` remains the
-accent and the healthy fill.
+at or above 15, otherwise critical — or a caller-supplied `QuotaTone` when the bar is spend, not
+remaining. Height 8 by default, 4 on compact Overview windows. Hidden from VoiceOver; the window's
+remaining figure is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
 
 `ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows and 40
 points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. Widget
@@ -387,49 +388,53 @@ Header:
 
 Body, in order:
 
-1. A segmented period control in the first List row: **Day**, **Week**, **Month**, **7D**, **30D**,
-   and **All**, whose VoiceOver names are the full ones in Shared product vocabulary. Default is
-   **Last 30 days**. A custom range selects none of the six, so the control shows nothing selected.
-   The selection lives in memory for the signed-in session. It is a system content filter, not a
-   floating navigation action, and it scrolls with the List.
-2. A stepper row under it: a **Previous period** chevron, the range the period covers, a **Next
-   period** chevron, and a calendar button. Stepping applies to Day, Week, and Month only, and the
-   current unit is the last, so both chevrons are disabled on a fixed window and **Next period** is
-   disabled on the current one. The calendar button opens a **Custom range** sheet of two
-   `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
-3. A **Monthly budget** section: a `ProgressView` and one monospaced-digit line of
-   `spent / budget · percent` for this month, or **No budget is set for this month.**, then a
-   **Set budget** / **Edit budget** row opening a sheet with the amount in USD and a **Tell me at
-   80% and 100%** toggle. Both fields are `UserDefaults` on this iPhone and are never uploaded.
-   The two crossings post one local notification each per calendar month.
-4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
-   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
-   **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
-   section is `{input} in · {output} out`, then one line `{cost-basis} · Priced N of M rows`
-   from that period's cost row counts (the priced sentence shares the cost-basis row so later
-   List sections stay on screen), `Cache hit {percent} · saved $X.XX`
-   when the period's cache reads could be priced, and **Some hours in this period were scanned
-   incompletely.** when `partial` is true. Cache hit and its saving follow
-   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text
-   styles, primary color, so contrast and Dynamic Type stay system-owned. A period this iPhone
-   added up itself carries no cache saving, so that line is absent there.
-5. When the period was added up here rather than read from the summary, one line saying so, in
+1. A `QuotaCard` at the top with the segmented period control and the stepper. Segments are
+   **Day**, **Week**, **Month**, **7D**, **30D**, and **All**, whose VoiceOver names are the full
+   ones in Shared product vocabulary. Default is **Last 30 days**. A custom range selects none of
+   the six, so the control shows nothing selected. The selection lives in memory for the signed-in
+   session. It is a system content filter, not a floating navigation action, and it scrolls with
+   the List. The stepper is a **Previous period** chevron, the range the period covers in
+   `support`, a **Next period** chevron, and a calendar button. Stepping applies to Day, Week, and
+   Month only, and the current unit is the last, so both chevrons are disabled on a fixed window
+   and **Next period** is disabled on the current one. The calendar button opens a **Custom range**
+   sheet of two `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
+2. Totals as the hero: a `QuotaCard` with a `QuotaStatGrid` — **Cost** (`statValue`, first),
+   **Tokens**, **Cache hit** (caption: `saved $x` when the period's cache reads could be priced),
+   and **Reasoning** as `remainingValue`. `usage.headline` is on the cost tile's value. Under the grid, `{input} in ·
+   {output} out` and `{cost-basis} · Priced N of M rows` as `meta`. Complete cost is `$X.XX`,
+   partial is `≥ $X.XX`, unavailable is **— unpriced**. Cache hit is a whole percent, or **—** for
+   a period with no input. Reasoning is tokens of output. **Some hours in this period were scanned
+   incompletely.** when `partial` is true, as a `Label` with `exclamationmark.triangle` in
+   `QuotaTheme.warning`. Cache hit and its saving follow
+   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). A period this iPhone added up
+   itself carries no cache saving, so that caption is absent there.
+3. A `QuotaCard(title: "Monthly budget")`: a `QuotaMeter`-style bar whose fill is spend, not
+   remaining — `QuotaTheme.color(for:)` healthy below 80%, warning at or above 80%, critical at or
+   above 100% — the monospaced `spent / budget · percent` line, and a trailing `.bordered` compact
+   **Set budget** / **Edit budget** button. Empty: **No budget is set for this month.** The button
+   opens a sheet with the amount in USD and a **Tell me at 80% and 100%** toggle. Both fields are
+   `UserDefaults` on this iPhone and are never uploaded. The two crossings post one local
+   notification each per calendar month.
+4. When the period was added up here rather than read from the summary, one line saying so, in
    place of the model sections: the breakdown is on Today, Last 7 days, Last 30 days, and All.
-6. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+5. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
 6a. Daily section, headed **Daily**, for any period but All and only when those days reported
    something. It covers the days the period covers, bounded by the activity days this phone holds.
    A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
    bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
-   is one fill. The bars are `Color.primary` at 25% / 55% / 90%, and a day with nothing in it is
-   drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
-   days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
-   messages` beneath. The section footer names the calendar: **UTC days.** The All period has no
-   Daily section.
+   is one emerald fill. Tokens bars use the brand ramp: cached input
+   `QuotaTheme.emerald.opacity(0.35)`, fresh input `QuotaTheme.emerald`, output
+   `Color.primary.opacity(0.85)`. A day with nothing in it is `tertiarySystemFill`, drawn at 12%
+   rather than left out. A caption legend of three 8pt squares (Cached, Fresh, Output) sits above
+   the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
+   as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
+   section footer names the calendar: **UTC days.** The All period has no Daily section.
 6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
    and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
-   same five emerald Activity steps; 24 bars under it are the hour-of-day totals. The read is
+   same five emerald Activity steps; 24 bars under it are the hour-of-day totals, emerald, with
+   the busiest hour at full opacity and the others scaled (minimum 0.25). The read is
    `detail=hours` on the period's dates in this iPhone's zone
    ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
 7. Activity section, headed **Activity**:
@@ -445,18 +450,22 @@ Body, in order:
      `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
      last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
      adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
-     increment/decrement changes the same selection. Under the grid, the selected day is visible
-     text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
-     that day.
+     increment/decrement changes the same selection. Under the grid, the selected-day panel is a
+     two-tile row: the long UTC date as `caption`, tokens and cost as `remainingValue`, then a
+     44-point `.borderedProminent` **View day** button that presents that day.
 7a. Top models section, headed **Top models**, when the period has more than one model leaf: the
-   three largest, each as `{share} · {tokens}`.
-8. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
-   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`) ending in that
-   provider's whole-percent share of the period, with a 4pt share bar under them; models are
-   standard rows with the model name leading and `{tokens} · {cost} · {share}` trailing. The model `other` is
-   **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
-   **Show fewer** collapses them again. Both are standard 44-point List buttons with expanded /
-   collapsed accessibility state.
+   three largest as ranked rows — rank numeral (`caption`, secondary, monospaced), model name,
+   trailing `{share} · {tokens}`, and a 4pt emerald bar under each proportional to its share of
+   the top model. `usage.top-model` stays.
+8. Each agent is a `QuotaCard(title: agent.displayName)` with an SF Symbol (codex `terminal`,
+   claudeCode `sparkles`, grok `bolt`, cursor `cursorarrow`, gemini `star.circle`, copilot
+   `airplane`, opencode / pi / kilo / antigravity / unknown
+   `chevron.left.forwardslash.chevron.right`). Agents are not providers; do not use
+   `ProviderMark`. Provider names are subhead rows (`InferenceProvider.displayName`) ending in
+   that provider's whole-percent share of the period, with a 4pt emerald share bar under them;
+   models keep `{tokens} · {cost} · {share}` trailing. The model `other` is **Other**. Each
+   provider shows at most five models until **Show N more** reveals the rest; **Show fewer**
+   collapses them again. Both are 44-point buttons with expanded / collapsed accessibility state.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
 accessibility text sizes. Individual heatmap cells are not accessibility elements. The combined
@@ -464,11 +473,12 @@ chart value remains date, tokens, and cost.
 
 **View day** presents a `NavigationStack` sheet for the selected UTC day: the long UTC date as the
 inline title, system **Done** as the confirmation toolbar item, `presentationDetents` medium and
-large, and the system drag indicator. The body is an inset-grouped List of totals and agent
-Sections — the same rows as the period view, including **Some hours on this day were scanned
-incompletely.** when `partial` is true. Loading text: **Loading this day's usage…**. Failure:
-**Couldn't load this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet
-asks `detail=agents` for that date. There is no custom material.
+large, and the system drag indicator. The body is an inset-grouped List of the same hero totals
+card as the period view (identifiers `usage.day.headline` etc. stay) and agent `QuotaCard`s like
+the tab, including **Some hours on this day were scanned incompletely.** when `partial` is true.
+Loading text: **Loading this day's usage…**. Failure: **Couldn't load this day's usage.** with
+**Retry**. Empty: **No usage on this day.** The sheet asks `detail=agents` for that date. There is
+no custom material.
 
 ### Devices
 
@@ -719,7 +729,8 @@ material, or glass of their own. The Overview provider mark is 22 points; the su
 header mark is 40. Remaining meters are `QuotaMeter` (8pt hero / detail, 4pt compact).
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
-**View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
+**View day** is a 44-point `.borderedProminent` button; **Retry**, **Show N more**, and **Show
+fewer** stay 44-point). Dynamic Type
 may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
 and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
 month labels on that grid use `caption` / `caption2`, keep the full month abbreviation, and cap
@@ -787,6 +798,11 @@ provider and support, and no custom card chrome beyond the system widget contain
     dims what is behind it, and that dimming is the system's;
   - contrast on `usage.activity.selected-day`: the date label shares its row container with the
     selected heatmap cell, whose accent ring the auditor reads as the label's background;
+  - contrast on `usage.headline.cache-hit` / `usage.day.headline.cache-hit`: the unpriced `—` is
+    `remainingValue` / primary on the card fill; at accessibility sizes the auditor samples the
+    thin glyph rather than the tile;
+  - contrast on `usage.budget`: the spent / budget line is `support` / primary on the card; at
+    accessibility sizes the auditor samples it against the meter track in the same card;
   - contrast on `settings.sign-in-methods.` rows: they already use the opaque label colour; the
     auditor still samples them as failing when they sit in the middle of the Settings hub;
   - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which

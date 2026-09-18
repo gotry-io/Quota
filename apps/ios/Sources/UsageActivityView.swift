@@ -65,7 +65,8 @@ struct UsageActivitySection: View {
       Button("View day") {
         Task { await model.openActivityDay(date: day.date) }
       }
-      .tint(.primary)
+      .buttonStyle(.borderedProminent)
+      .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
       .accessibilityHint("Shows usage for \(UsageActivityCalendar.longDate(day.date)).")
       .accessibilityIdentifier("usage.activity.view-day")
     }
@@ -73,12 +74,22 @@ struct UsageActivitySection: View {
 
   private func selectedDaySummary(_ day: UsageActivityChart.Day) -> some View {
     let costText = QuotaFormat.cost(day.cost ?? UsageActivityChart.emptyCost())
-    return VStack(alignment: .leading, spacing: 4) {
+    return VStack(alignment: .leading, spacing: QuotaDesign.Layout.rowSpacing) {
       Text(UsageActivityCalendar.longDate(day.date))
-        .font(.subheadline)
-      Text("\(QuotaFormat.compactCount(day.tokens)) · \(costText)")
-        .font(.subheadline.monospacedDigit())
+        .font(.caption)
         .foregroundStyle(.primary)
+      QuotaStatGrid {
+        QuotaStatTile(
+          label: "Tokens",
+          value: QuotaFormat.compactCount(day.tokens),
+          valueFont: QuotaDesign.Typography.remainingValue
+        )
+        QuotaStatTile(
+          label: "Cost",
+          value: costText,
+          valueFont: QuotaDesign.Typography.remainingValue
+        )
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityHidden(true)
@@ -320,13 +331,16 @@ struct UsageDayDetailSheet: View {
       Group {
         if let sheet = model.activityDaySheet {
           List {
-            UsageTotalsSection(
-              totals: sheet.headline.totals,
-              cost: sheet.headline.cost,
-              partial: sheet.headline.partial,
-              partialCopy: "Some hours on this day were scanned incompletely.",
-              identifier: "usage.day.headline"
-            )
+            Section {
+              UsageTotalsSection(
+                totals: sheet.headline.totals,
+                cost: sheet.headline.cost,
+                partial: sheet.headline.partial,
+                partialCopy: "Some hours on this day were scanned incompletely.",
+                identifier: "usage.day.headline"
+              )
+              .quotaCardRow()
+            }
             agents(sheet)
           }
           .listStyle(.insetGrouped)

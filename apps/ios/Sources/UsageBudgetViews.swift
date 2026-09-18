@@ -10,14 +10,23 @@ struct UsageBudgetSection: View {
   @Binding var editing: Bool
 
   var body: some View {
-    Section {
+    QuotaCard(
+      title: "Monthly budget",
+      titleIdentifier: "section.header.budget",
+      trailing: {
+        Button(model.budget.isSet ? "Edit budget" : "Set budget") { editing = true }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityIdentifier("usage.budget.edit")
+      }
+    ) {
       if let progress = model.budgetProgress {
         VStack(alignment: .leading, spacing: 8) {
-          ProgressView(value: progress.fraction)
-            .tint(.primary)
+          QuotaMeter(fraction: progress.fraction, tone: Self.tone(for: progress))
           Text(progress.text)
-            .font(.body.monospacedDigit())
-            .foregroundStyle(Color.primary)
+            .font(QuotaDesign.Typography.support.monospacedDigit())
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Monthly budget")
@@ -30,13 +39,14 @@ struct UsageBudgetSection: View {
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.budget.empty")
       }
-      Button(model.budget.isSet ? "Edit budget" : "Set budget") { editing = true }
-        .tint(.primary)
-        .accessibilityIdentifier("usage.budget.edit")
-    } header: {
-      Text("Monthly budget")
-        .accessibilityIdentifier("section.header.budget")
     }
+  }
+
+  /// Budget is spend, not remaining: map the crossings without `QuotaTone.remaining`.
+  private static func tone(for progress: UsageBudgetProgress) -> QuotaTone {
+    if progress.percent >= UsageBudget.exhaustedPercent { return .critical }
+    if progress.percent >= UsageBudget.warningPercent { return .warning }
+    return .healthy
   }
 }
 
