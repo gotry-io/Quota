@@ -1,11 +1,11 @@
+import QuotaPresentation
 import SwiftUI
 
 enum QuotaTheme {
   static let emerald = Color(
     uiColor: UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? UIColor(red: 0.510, green: 0.867, blue: 0.722, alpha: 1)
-        : UIColor(red: 0.031, green: 0.455, blue: 0.337, alpha: 1)
+      let rgb = traits.userInterfaceStyle == .dark ? QuotaBrand.mint : QuotaBrand.emerald
+      return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
     }
   )
 
@@ -21,6 +21,14 @@ enum QuotaTheme {
         : UIColor(red: 0.72, green: 0.36, blue: 0.0, alpha: 1)
     }
   )
+
+  static func color(for tone: QuotaTone) -> Color {
+    switch tone {
+    case .healthy: emerald
+    case .warning: warning
+    case .critical: .red
+    }
+  }
 
   static let minimumTouchTarget: CGFloat = 44
   /// Official status-page incident mark beside a provider name.

@@ -662,8 +662,8 @@ Accessibility text sizes and widget no-data
 layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
 truncation of the primary value).
 
-The accent is adaptive emerald (`#087456` light, `#82ddb8` dark). Ink, body, and mute follow
-`Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
+The accent is adaptive emerald (`#087456` light, `#82ddb8` dark, `QuotaBrand`). Ink, body, and mute
+follow `Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
 confirmations, and unrecoverable failure copy.
 
 Widgets stay denser: `title2` / `title3` / `headline` for remaining, `subheadline` / `caption` for

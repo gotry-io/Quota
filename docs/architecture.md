@@ -437,11 +437,12 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   quota, plan and account labels, compact counts, Usage cost, the cache saving line and the
   whole-percent share, the derived Usage metrics of
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
-  status-page copy, the observation-freshness rule each snapshot type conforms to, and the subscription selector every
-  Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
-  evaluator both Apple apps share, and `QuotaAlertDelivery`, the UserNotifications delivery layer
-  both Apple apps share: the sink, reset-reminder scheduler, notification-center slice, rules
-  UserDefaults adapter, and alert-state file store
+  status-page copy, the remaining-quota tone bands, the status indicator's tone, the brand color
+  values, the observation-freshness rule each snapshot type conforms to, and the subscription
+  selector every Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only
+  remaining-quota rule evaluator both Apple apps share, and `QuotaAlertDelivery`, the
+  UserNotifications delivery layer both Apple apps share: the sink, reset-reminder scheduler,
+  notification-center slice, rules UserDefaults adapter, and alert-state file store
   ([ADR 0053](decisions/0053-one-alert-delivery-package-for-both-apps.md)). It depends on neither
   app and does not own `ProviderID`, decode wire types, network, or reach Relay; `QuotaAlerts` may
   depend on `QuotaPresentation` and stays Foundation-only. `QuotaAlertDelivery` may depend on

@@ -19,4 +19,12 @@ struct ProviderServiceStatusCopyTests {
     #expect(ProviderServiceStatusCopy.showsDot(.major))
     #expect(ProviderServiceStatusCopy.showsDot(.critical))
   }
+
+  @Test
+  func toneMapsEachStatusIndicator() {
+    #expect(ProviderServiceStatusCopy.tone(.none) == nil)
+    #expect(ProviderServiceStatusCopy.tone(.minor) == .warning)
+    #expect(ProviderServiceStatusCopy.tone(.major) == .critical)
+    #expect(ProviderServiceStatusCopy.tone(.critical) == .critical)
+  }
 }

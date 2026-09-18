@@ -123,14 +123,10 @@ struct ProviderQuotaView: View {
   }
 
   private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
-    switch indicator {
-    case .none:
-      QuotaPalette.mute
-    case .minor:
-      QuotaPalette.warning
-    case .major, .critical:
-      QuotaPalette.critical
+    guard let tone = ProviderServiceStatusCopy.tone(indicator) else {
+      return QuotaPalette.mute
     }
+    return QuotaPalette.color(for: tone)
   }
 }
 

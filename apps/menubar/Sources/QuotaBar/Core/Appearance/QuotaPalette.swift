@@ -1,4 +1,5 @@
 import AppKit
+import QuotaPresentation
 import SwiftUI
 
 /// Palette for QuotaBar on native menu-bar chrome.
@@ -49,7 +50,15 @@ enum QuotaPalette {
   // MARK: Usage meters (remaining-based)
 
   static func usageColor(remainingPercent: Double) -> Color {
-    QuotaUsageTone.tone(remainingPercent: remainingPercent).meterColor
+    color(for: QuotaTone.remaining(percent: remainingPercent))
+  }
+
+  static func color(for tone: QuotaTone) -> Color {
+    switch tone {
+    case .healthy: accent
+    case .warning: warning
+    case .critical: critical
+    }
   }
 
   static func accessibleTextColor(for background: NSColor) -> NSColor {
@@ -165,16 +174,16 @@ enum QuotaPalette {
   }
 
   private static let brandEmeraldNSColor = NSColor(
-    srgbRed: 0.031_372_549,
-    green: 0.454_901_961,
-    blue: 0.337_254_902,
+    srgbRed: QuotaBrand.emerald.red,
+    green: QuotaBrand.emerald.green,
+    blue: QuotaBrand.emerald.blue,
     alpha: 1
   )
 
   private static let brandMintNSColor = NSColor(
-    srgbRed: 0.509_803_922,
-    green: 0.866_666_667,
-    blue: 0.721_568_627,
+    srgbRed: QuotaBrand.mint.red,
+    green: QuotaBrand.mint.green,
+    blue: QuotaBrand.mint.blue,
     alpha: 1
   )
 
@@ -186,27 +195,4 @@ enum QuotaPalette {
     }
     return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
   }
-}
-
-enum QuotaUsageTone: Equatable, Sendable {
-  case healthy
-  case warning
-  case critical
-
-  static func tone(remainingPercent: Double) -> QuotaUsageTone {
-    let remaining = min(max(remainingPercent, 0), 100)
-    if remaining >= 40 { return .healthy }
-    if remaining >= 15 { return .warning }
-    return .critical
-  }
-
-  /// Meter fill: accent when healthy, semantic colors for warning/critical.
-  var meterColor: Color {
-    switch self {
-    case .healthy: QuotaPalette.accent
-    case .warning: QuotaPalette.warning
-    case .critical: QuotaPalette.critical
-    }
-  }
-
 }

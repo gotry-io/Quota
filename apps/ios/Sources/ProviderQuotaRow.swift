@@ -67,14 +67,10 @@ struct ProviderQuotaRow: View {
   }
 
   private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
-    switch indicator {
-    case .none:
-      Color.secondary
-    case .minor:
-      Color.orange
-    case .major, .critical:
-      Color.red
+    guard let tone = ProviderServiceStatusCopy.tone(indicator) else {
+      return Color.secondary
     }
+    return QuotaTheme.color(for: tone)
   }
 
   private func accountLabel(_ label: String) -> some View {

@@ -27,4 +27,15 @@ public enum ProviderServiceStatusCopy {
   public static func showsDot(_ indicator: ProviderServiceStatusIndicator) -> Bool {
     indicator != .none
   }
+
+  public static func tone(_ indicator: ProviderServiceStatusIndicator) -> QuotaTone? {
+    switch indicator {
+    case .none:
+      nil
+    case .minor:
+      .warning
+    case .major, .critical:
+      .critical
+    }
+  }
 }
