@@ -1,4 +1,5 @@
 import AuthenticationServices
+import QuotaBrandIcons
 import QuotaProviderSessions
 import QuotaWire
 import SwiftUI
@@ -15,18 +16,28 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
+      accountSection
       Section {
         NavigationLink {
           SettingsNotificationsView(model: model, settings: settings)
         } label: {
-          Text(SettingsCopy.notifications)
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "bell.badge.fill", tint: .red)
+            Text(SettingsCopy.notifications)
+          }
         }
         .accessibilityIdentifier("settings.notifications")
 
         NavigationLink {
           SettingsAppearanceView(settings: settings)
         } label: {
-          LabeledContent(SettingsCopy.appearance, value: settings.appearance.title)
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "circle.lefthalf.filled", tint: .indigo)
+            Text(SettingsCopy.appearance)
+            Spacer(minLength: 8)
+            Text(settings.appearance.title)
+              .foregroundStyle(.secondary)
+          }
         }
         .accessibilityIdentifier("settings.appearance")
       } header: {
@@ -36,19 +47,28 @@ struct SettingsView: View {
       providersSection
       Section {
         Link(destination: QuotaWebLinks.privacy) {
-          Text(SettingsCopy.privacy)
-            .foregroundStyle(Color.primary)
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "hand.raised.fill", tint: .blue)
+            Text(SettingsCopy.privacy)
+              .foregroundStyle(Color.primary)
+          }
         }
         .buttonStyle(.plain)
         Link(destination: QuotaWebLinks.support) {
-          Text(SettingsCopy.support)
-            .foregroundStyle(Color.primary)
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "questionmark.circle.fill", tint: .green)
+            Text(SettingsCopy.support)
+              .foregroundStyle(Color.primary)
+          }
         }
         .buttonStyle(.plain)
         NavigationLink {
           SettingsAboutView()
         } label: {
-          Text(SettingsCopy.about)
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "info.circle.fill", tint: .gray)
+            Text(SettingsCopy.about)
+          }
         }
         .accessibilityIdentifier("settings.about")
       } header: {
@@ -56,7 +76,7 @@ struct SettingsView: View {
           .accessibilityIdentifier("section.header.privacy-and-support")
       }
       signInMethodsSection
-      accountSection
+      accountActionsSection
     }
     .task { await model.loadIdentities() }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
@@ -118,12 +138,42 @@ struct SettingsView: View {
     }
   }
 
-  /// The managed Account, when there is one. A phone that only reads its own providers has no
-  /// devices to manage and nothing to delete, so the group is the one invitation instead.
+  /// Identity first on the hub. Destructive account actions stay at the bottom so the
+  /// existing scroll-from-About tests still find them, and so Providers is not pushed off
+  /// the first screen.
   @ViewBuilder
   private var accountSection: some View {
     Section {
       if model.hasAccountSession {
+        NavigationLink {
+          SettingsAccountView(model: model)
+        } label: {
+          identityCard
+        }
+      } else {
+        Button(SettingsCopy.signIn) {
+          model.showSignIn()
+        }
+        .buttonStyle(.borderedProminent)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("settings.signin")
+      }
+    } header: {
+      Text(SettingsCopy.account)
+        .accessibilityIdentifier("section.header.account")
+    } footer: {
+      if !model.hasAccountSession {
+        Text(SettingsCopy.signInExplanation)
+          .accessibilityIdentifier("section.footer.account")
+      }
+    }
+  }
+
+  /// Manage / Delete / Log Out stay on the hub, after About, matching the UI-test scroll.
+  @ViewBuilder
+  private var accountActionsSection: some View {
+    if model.hasAccountSession {
+      Section {
         Link(SettingsCopy.manageDevices, destination: QuotaWebLinks.manageDevices)
         Button(SettingsCopy.deleteAccount, role: .destructive) {
           Task {
@@ -138,22 +188,48 @@ struct SettingsView: View {
         }
         .accessibilityLabel(SettingsCopy.logOut)
         .accessibilityIdentifier("settings.logout")
-      } else {
-        Button(SettingsCopy.signIn) {
-          model.showSignIn()
-        }
-        .accessibilityIdentifier("settings.signin")
+      } footer: {
+        Text(SettingsCopy.deleteAccountExplanation)
+          .accessibilityIdentifier("section.footer.account")
       }
-    } header: {
-      Text(SettingsCopy.account)
-        .accessibilityIdentifier("section.header.account")
-    } footer: {
-      Text(
-        model.hasAccountSession
-          ? SettingsCopy.deleteAccountExplanation
-          : SettingsCopy.signInExplanation
-      )
-      .accessibilityIdentifier("section.footer.account")
+    }
+  }
+
+  private var identityCard: some View {
+    ViewThatFits(in: .horizontal) {
+      identityCardRow
+      identityCardStack
+    }
+  }
+
+  private var identityCardRow: some View {
+    HStack(spacing: 12) {
+      QuotaIdentityAvatar(label: model.accountLabel)
+      identityCardText
+      Spacer(minLength: 0)
+    }
+    .padding(.vertical, 4)
+  }
+
+  private var identityCardStack: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      QuotaIdentityAvatar(label: model.accountLabel)
+      identityCardText
+    }
+    .padding(.vertical, 4)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var identityCardText: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(model.accountLabel)
+        .font(.headline)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+      Text(SettingsCopy.identityMethodLine(model.identities.identities))
+        .font(QuotaDesign.Typography.support)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
@@ -167,29 +243,160 @@ struct SettingsView: View {
   @ViewBuilder
   private var signInMethodsSection: some View {
     if model.hasAccountSession {
-      Section {
-        // Only a read that answered says which channels are bound. Until one has, the group is
-        // the way to the website and nothing else: rows would otherwise say Not linked about
-        // channels this app has not asked about yet.
-        if case .loaded = model.identities {
-          ForEach(IdentityProvider.offered, id: \.self) { provider in
-            signInMethodRow(provider)
-          }
+      SettingsSignInMethodsSection(model: model)
+    }
+  }
+
+  /// One row per connected account, then the row that adds another. A provider this phone holds
+  /// no session for shows only the second.
+  private var providersSection: some View {
+    Section {
+      ForEach(model.providers.rows) { row in
+        switch row.kind {
+        case .connected(let session):
+          connectedRow(session)
+        case .connect(let isFirst):
+          connectRow(provider: row.provider, isFirst: isFirst)
         }
-        Button(SettingsCopy.manageSignInMethods) {
-          Task { await model.presentSignInMethodsOnWeb() }
-        }
-        .foregroundStyle(Color.primary)
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("settings.sign-in-methods.manage")
-      } header: {
-        Text(SettingsCopy.signInMethods)
-          .accessibilityIdentifier("section.header.sign-in-methods")
-      } footer: {
-        Text(signInMethodsFooter)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("section.footer.sign-in-methods")
       }
+    } header: {
+      Text(ProvidersCopy.section)
+        .accessibilityIdentifier("section.header.providers")
+    } footer: {
+      Text(model.providers.isUnreadable ? ProvidersCopy.unreadable : ProvidersCopy.sectionFooter)
+        .accessibilityIdentifier("section.footer.providers")
+    }
+  }
+
+  private func connectedRow(_ session: StoredProviderSession) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .center, spacing: 12) {
+        ProviderMark(provider: session.provider, size: QuotaDesign.Layout.markSize)
+          .foregroundStyle(.primary)
+        Text(session.provider.displayName)
+          .font(.body)
+          .accessibilityLabel(connectedAccessibilityLabel(session))
+          .accessibilityIdentifier("providers.session.\(session.key)")
+        Spacer(minLength: 8)
+        connectedStatus(session)
+        Button(ProvidersCopy.remove) {
+          removing = session
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("providers.remove.\(session.key)")
+      }
+      if model.providers.needsSignIn(session) {
+        HStack {
+          Text(ProvidersCopy.refused)
+            .font(QuotaDesign.Typography.support)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 8)
+          Button(ProvidersCopy.signInAgain) {
+            loginProvider = session.provider
+          }
+          .buttonStyle(.borderless)
+          .accessibilityIdentifier("providers.signin-again.\(session.key)")
+        }
+      }
+    }
+  }
+
+  private func connectedAccessibilityLabel(_ session: StoredProviderSession) -> String {
+    let connected = ProvidersCopy.connectedAs(label: session.accountLabel)
+    if model.providers.needsSignIn(session) {
+      return "\(session.provider.displayName), \(connected), \(ProvidersCopy.refused)"
+    }
+    return
+      "\(session.provider.displayName), \(connected), "
+      + ProvidersCopy.checked(at: session.lastValidatedAt, now: Date())
+  }
+
+  private func connectedStatus(_ session: StoredProviderSession) -> some View {
+    HStack(spacing: 6) {
+      if let label = session.accountLabel, !label.isEmpty {
+        Text(label)
+          .font(QuotaDesign.Typography.support)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Circle()
+        .fill(QuotaTheme.emerald)
+        .frame(width: QuotaTheme.statusDotSize, height: QuotaTheme.statusDotSize)
+        .accessibilityHidden(true)
+    }
+    .accessibilityHidden(true)
+  }
+
+  private func connectRow(provider: ProviderID, isFirst: Bool) -> some View {
+    Button {
+      if model.providers.needsConsent(for: provider) {
+        consentProvider = provider
+      } else {
+        loginProvider = provider
+      }
+    } label: {
+      HStack(spacing: 12) {
+        ProviderMark(provider: provider, size: QuotaDesign.Layout.markSize)
+          .foregroundStyle(.primary)
+        LabeledContent(
+          provider.displayName,
+          value: isFirst ? ProvidersCopy.connect : ProvidersCopy.addAccount
+        )
+      }
+    }
+    .accessibilityIdentifier("providers.connect.\(provider.rawValue)")
+  }
+
+  private var consentAlertBinding: Binding<Bool> {
+    Binding(get: { consentProvider != nil }, set: { if !$0 { consentProvider = nil } })
+  }
+
+  private var removeDialogBinding: Binding<Bool> {
+    Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+  }
+}
+
+/// Sign-in methods as a Form destination from the identity card, and as a hub section.
+struct SettingsAccountView: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    Form {
+      SettingsSignInMethodsSection(model: model)
+    }
+    .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
+    .navigationTitle(model.accountLabel)
+  }
+}
+
+struct SettingsSignInMethodsSection: View {
+  @Bindable var model: AppModel
+  @Environment(\.colorScheme) private var colorScheme
+
+  var body: some View {
+    Section {
+      // Only a read that answered says which channels are bound. Until one has, the group is
+      // the way to the website and nothing else: rows would otherwise say Not linked about
+      // channels this app has not asked about yet.
+      if case .loaded = model.identities {
+        ForEach(IdentityProvider.offered, id: \.self) { provider in
+          signInMethodRow(provider)
+        }
+      }
+      Button(SettingsCopy.manageSignInMethods) {
+        Task { await model.presentSignInMethodsOnWeb() }
+      }
+      .foregroundStyle(Color.primary)
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("settings.sign-in-methods.manage")
+    } header: {
+      Text(SettingsCopy.signInMethods)
+        .accessibilityIdentifier("section.header.sign-in-methods")
+    } footer: {
+      Text(signInMethodsFooter)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("section.footer.sign-in-methods")
     }
   }
 
@@ -245,90 +452,5 @@ struct SettingsView: View {
     if let bound { return SettingsCopy.linkedLabel(bound.label) }
     if model.linkingProvider == provider { return SettingsCopy.linking }
     return SettingsCopy.notLinked
-  }
-
-  /// One row per connected account, then the row that adds another. A provider this phone holds
-  /// no session for shows only the second.
-  private var providersSection: some View {
-    Section {
-      ForEach(model.providers.rows) { row in
-        switch row.kind {
-        case .connected(let session):
-          connectedRow(session)
-        case .connect(let isFirst):
-          connectRow(provider: row.provider, isFirst: isFirst)
-        }
-      }
-    } header: {
-      Text(ProvidersCopy.section)
-        .accessibilityIdentifier("section.header.providers")
-    } footer: {
-      Text(model.providers.isUnreadable ? ProvidersCopy.unreadable : ProvidersCopy.sectionFooter)
-        .accessibilityIdentifier("section.footer.providers")
-    }
-  }
-
-  private func connectedRow(_ session: StoredProviderSession) -> some View {
-    HStack {
-      // Footnote-size rows carry `.primary`, the way a Devices row does: `.secondary` at this
-      // size does not clear the contrast bar this app's accessibility audit holds it to.
-      VStack(alignment: .leading, spacing: 3) {
-        Text(session.provider.displayName)
-          .font(.subheadline.weight(.medium))
-        Text(ProvidersCopy.connectedAs(label: session.accountLabel))
-          .font(.footnote)
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
-        Text(
-          model.providers.needsSignIn(session)
-            ? ProvidersCopy.refused
-            : ProvidersCopy.checked(at: session.lastValidatedAt, now: Date())
-        )
-        .font(.footnote)
-        .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
-      }
-      .accessibilityIdentifier("providers.session.\(session.key)")
-      Spacer(minLength: 12)
-      // The row's control is a standard button, not a red one: the system red on a Form row does
-      // not clear the contrast bar this app holds itself to. What is destructive about it is said
-      // by the confirmation it opens, whose Remove is the destructive one.
-      if model.providers.needsSignIn(session) {
-        Button(ProvidersCopy.signInAgain) {
-          loginProvider = session.provider
-        }
-        .buttonStyle(.borderless)
-        .accessibilityIdentifier("providers.signin-again.\(session.key)")
-      }
-      Button(ProvidersCopy.remove) {
-        removing = session
-      }
-      .buttonStyle(.borderless)
-      .accessibilityIdentifier("providers.remove.\(session.key)")
-    }
-  }
-
-  private func connectRow(provider: ProviderID, isFirst: Bool) -> some View {
-    Button {
-      if model.providers.needsConsent(for: provider) {
-        consentProvider = provider
-      } else {
-        loginProvider = provider
-      }
-    } label: {
-      LabeledContent(
-        provider.displayName,
-        value: isFirst ? ProvidersCopy.connect : ProvidersCopy.addAccount
-      )
-    }
-    .accessibilityIdentifier("providers.connect.\(provider.rawValue)")
-  }
-
-  private var consentAlertBinding: Binding<Bool> {
-    Binding(get: { consentProvider != nil }, set: { if !$0 { consentProvider = nil } })
-  }
-
-  private var removeDialogBinding: Binding<Bool> {
-    Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
   }
 }

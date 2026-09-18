@@ -106,6 +106,15 @@ struct SettingsModelTests {
     #expect(QuotaWebLinks.deleteAccountReturnTo == "/my/settings?delete=account")
   }
 
+  @Test func identityMethodLineListsBoundChannelsInSurfaceOrder() {
+    let now = Date(timeIntervalSince1970: 1_786_723_200)
+    #expect(SettingsCopy.identityMethodLine([]) == "Signed in")
+    let github = AccountIdentity(provider: .github, label: "octocat", linkedAt: now)
+    let apple = AccountIdentity(provider: .apple, label: nil, linkedAt: now)
+    #expect(SettingsCopy.identityMethodLine([github]) == "GitHub")
+    #expect(SettingsCopy.identityMethodLine([github, apple]) == "Apple · GitHub")
+  }
+
   @Test func versionLabelIsShortVersionAndBuild() {
     #expect(SettingsCopy.versionLabel(shortVersion: "0.0.1", build: "1") == "0.0.1 (1)")
     #expect(SettingsCopy.license == "License")

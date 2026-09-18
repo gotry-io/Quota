@@ -76,6 +76,10 @@ if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   export TEST_RUNNER_QUOTA_IOS_TEXT_SIZE="$QUOTA_IOS_TEXT_SIZE"
   printf '%s' "$QUOTA_IOS_TEXT_SIZE" >"$text_size_file"
 fi
+# `simctl ui` only reaches a booted device; against a shut-down one it fails, and with the
+# `|| true` below that failure used to leave a "dark" run rendering light.
+xcrun simctl boot "$simulator_name" >/dev/null 2>&1 || true
+xcrun simctl bootstatus "$simulator_name" -b >/dev/null 2>&1 || true
 if [ -n "${QUOTA_IOS_APPEARANCE:-}" ]; then
   export TEST_RUNNER_QUOTA_IOS_APPEARANCE="$QUOTA_IOS_APPEARANCE"
   printf '%s' "$QUOTA_IOS_APPEARANCE" >"$appearance_file"
@@ -127,7 +131,7 @@ const wanted = [
   "overview-empty",
   "overview-cached-error",
   "overview-scrolled",
-  "connect-signed-out",
+  "sign-in",
   "connect-connecting",
   "connect-error",
   "connect-expired",
@@ -186,7 +190,7 @@ for (const name of wanted) {
 
 if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   missing=""
-  for name in connect-signed-out confirm-account overview-content usage-content devices-content subscription-detail settings-main settings-notifications settings-appearance settings-about; do
+  for name in sign-in confirm-account overview-content usage-content devices-content subscription-detail settings-main settings-notifications settings-appearance settings-about; do
     if [ ! -f "$shots/$name.png" ]; then
       missing="$missing $name"
     fi

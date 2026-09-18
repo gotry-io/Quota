@@ -43,6 +43,16 @@ struct DeviceRowContent: Equatable {
 
   var details: String { "\(platform) · \(age)" }
 
+  var symbolName: String {
+    switch platform {
+    case "macOS": "laptopcomputer"
+    case "iOS": "iphone"
+    default: "questionmark.square.dashed"
+    }
+  }
+
+  var isActive: Bool { verdict == DeviceActivity.Status.active.rawValue }
+
   var accessibilityLabel: String {
     "\(displayName), \(verdict), \(platform), \(age)"
   }
@@ -68,6 +78,7 @@ struct DevicesView: View {
             .fixedSize(horizontal: false, vertical: true)
         } actions: {
           Button(DevicesCopy.signIn) { model.showSignIn() }
+            .buttonStyle(.borderedProminent)
             .frame(minHeight: QuotaTheme.minimumTouchTarget)
             .accessibilityIdentifier("devices.signin")
         }
@@ -89,6 +100,7 @@ struct DevicesView: View {
               .fixedSize(horizontal: false, vertical: true)
           } actions: {
             Link(MacSetupGuide.devicesAction, destination: MacSetupGuide.downloadURL)
+              .buttonStyle(.borderedProminent)
               .frame(minHeight: QuotaTheme.minimumTouchTarget)
           }
           .fixedSize(horizontal: false, vertical: true)
@@ -154,27 +166,42 @@ struct DeviceRowBody: View {
   let content: DeviceRowContent
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(content.displayName)
-          .font(.subheadline.weight(.medium))
-          .fixedSize(horizontal: false, vertical: true)
-        Spacer(minLength: 8)
-        // The verdict claims its own width: it is one of three fixed words, and **Not reporting**
-        // is long enough that leaving it to the remainder truncates it at the larger text sizes.
-        // The display name beside it is what wraps instead.
-        Text(content.verdict)
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.primary)
-          .multilineTextAlignment(.trailing)
-          .fixedSize()
-      }
-      Text(content.details)
-        .font(.footnote.monospacedDigit())
+    HStack(alignment: .center, spacing: 12) {
+      Image(systemName: content.symbolName)
+        .font(.body)
         .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(
+          width: QuotaDesign.Layout.deviceSymbolSize,
+          height: QuotaDesign.Layout.deviceSymbolSize
+        )
+        .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(content.displayName)
+          .font(.body)
+          .fixedSize(horizontal: false, vertical: true)
+        Text(content.details)
+          .font(QuotaDesign.Typography.support)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Spacer(minLength: 8)
+
+      Text(content.verdict)
+        .font(QuotaDesign.Typography.support.weight(.semibold))
+        .foregroundStyle(content.isActive ? QuotaTheme.emerald : Color.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(capsuleFill, in: Capsule())
+        .fixedSize()
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(content.accessibilityLabel)
+  }
+
+  private var capsuleFill: Color {
+    (content.isActive ? QuotaTheme.emerald : Color.secondary).opacity(0.18)
   }
 }

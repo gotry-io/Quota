@@ -38,7 +38,8 @@ merge those.
 
 Layout (`QuotaDesign.Layout`): card corner radius 20 continuous, card padding 16, section spacing
 24, row spacing 12, meter height 8, compact meter height 4, provider mark 22, detail mark 40, stat
-tile minimum width 140.
+tile minimum width 140, identity avatar 44, Settings row icon 28, device symbol 28, About mark 64,
+Connect mark 72.
 
 Type (`QuotaDesign.Typography`) scales with Dynamic Type:
 
@@ -71,8 +72,12 @@ remaining. Height 8 by default, 4 on compact Overview windows. Hidden from Voice
 remaining figure is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
 
 `ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows and 40
-points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. Widget
-extensions do not link the catalog.
+points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. `QuotaMark`
+is the Quota `quota.svg` asset from the same catalog. Widget extensions do not link the catalog.
+
+`SettingsRowIcon` is a 28-point continuous rounded square with a white SF Symbol on a tinted fill,
+for Settings hub rows. `QuotaIdentityAvatar` is a 44-point circle with the first letter of an
+account label in white on brand emerald (`QuotaBrand.emerald`), shared by Settings and Confirm.
 
 ## Shared product vocabulary
 
@@ -120,31 +125,43 @@ session returns to this confirmation flow (or its first-refresh failure state) a
 signed-in tabs. **Continue** is the only promotion of that same session to `active`. **Use a
 different account** and Log Out revoke and clear either state.
 
-- A 56-point Quota app mark, shared with confirmation. It is content, not glass. The glyph fills
-  the 56-point frame.
-- Three ways in, 12pt apart, in the order every Quota surface lists them — Apple, GitHub, Email.
-  Each is 50pt tall.
-- **Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control drawn by Apple,
-  capsule-clipped to match, black in light appearance and white in dark as Apple's guidelines pair
-  them. Its label, mark, and sheet are Apple's; the app draws no substitute glyph and adds no tint.
-- **Continue with GitHub** (`buttonStyle(.glassProminent)`, emerald tint) and **Continue with
-  Email** (neutral system `.glass`, explicit label-color foreground). Both open the same Relay
-  authorize URL, because that is one round trip: Relay's `/sign-in` page is what asks which Account
-  this is and offers every channel that reaches one
-  ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). Their accessibility
-  hint is **Opens Quota sign-in in your browser.**
-- While a sign-in is in flight the three are replaced by one disabled control, `connect.connecting`:
-  **Connecting…** with an inline ProgressView on neutral `.glass`. Its accessibility label is
-  **Connecting** and it is not actionable. Which channel opened the browser is not something the
-  app knows once the sheet is up — the page asks — so the busy label names none of them, and
-  Apple's control, which has no busy presentation of its own, is not drawn then rather than shown
-  disabled.
-- Footnote: **This iPhone only reads data reported by QuotaBar.**
-- No product title, value-proposition paragraph, card, banner container, or raw URL.
-- The longer product and privacy explanation lives on Settings › About, not on Connect.
-- Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
-  - expired: **Session expired. Connect again.**
-  - connect failure default: **Couldn't connect. Try again.**
+A welcome screen in a vertically centered, scroll-safe column with a maximum content width of 320
+points and system safe-area padding. Connecting and a pending session's first-refresh failure keep
+their copy inside this same layout.
+
+- Top: the Quota catalog mark (`quota.svg` via `QuotaMark`, 72 points, `QuotaTheme.emerald`) with
+  accessibility name **Quota**, the word **Quota** in `largeTitle.bold`, and **Your AI quota, on
+  every device.** in `title3` secondary.
+- Middle: three feature lines in `support`, each with a leading emerald SF Symbol —
+  `gauge.with.dots.needle.33percent` **Remaining quota for every provider**, `macbook.and.iphone`
+  **What your Macs report, on this iPhone**, `bell.badge` **Alerts before a window runs out**.
+- Bottom: three ways in, 12pt apart, in the order every Quota surface lists them — Apple, GitHub,
+  Email. Each is 50pt tall.
+
+**Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control drawn by Apple,
+capsule-clipped to match, black in light appearance and white in dark as Apple's guidelines pair
+them. Its label, mark, and sheet are Apple's; the app draws no substitute glyph and adds no tint.
+
+**Continue with GitHub** (`buttonStyle(.glassProminent)`, emerald tint) and **Continue with
+Email** (`.bordered`). Both open the same Relay authorize URL, because that is one round trip:
+Relay's `/sign-in` page is what asks which Account this is and offers every channel that reaches
+one ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). Their accessibility
+hint is **Opens Quota sign-in in your browser.**
+
+While a sign-in is in flight the three are replaced by one disabled control, `connect.connecting`:
+**Connecting…** with an inline ProgressView on neutral `.glass`. Its accessibility label is
+**Connecting** and it is not actionable. Which channel opened the browser is not something the
+app knows once the sheet is up — the page asks — so the busy label names none of them, and
+Apple's control, which has no busy presentation of its own, is not drawn then rather than shown
+disabled.
+
+Footnote: **Signing in shows what QuotaBar reports from your Macs, alongside what this iPhone
+reads.** The longer product and privacy explanation lives on Settings › About, not on Connect.
+
+Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
+
+- expired: **Session expired. Connect again.**
+- connect failure default: **Couldn't connect. Try again.**
 
 Continue with Apple asks on the device instead: `ASAuthorizationAppleIDProvider` requests the full
 name and email scopes and a nonce, and the identity token it returns is posted straight to Relay,
@@ -171,9 +188,9 @@ After Relay issues a session the first Account refresh must succeed and name a n
 `summary.account.displayLabel` before confirmation is constructed. The app does not open the
 signed-in tabs. It replaces Connect content on the same signed-out screen:
 
-- The 56-point Quota app mark (the same view Connect uses).
-- Title **Use this GitHub account?** (`title2` semibold).
-- Body **Connected as `<label>`.** with the label in bold.
+- A `QuotaCard` with the Settings identity circle (44-point, first letter of the account label on
+  brand emerald) and the account label (`headline`), plus **Connected as `<label>`.**
+- Question **Use this GitHub account?** (`title3`).
 - Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — promotes the pending
   session to `active` and enters the signed-in tabs.
 - Secondary **Use a different account** (`.bordered`) — revokes the session just opened and starts
@@ -181,13 +198,12 @@ signed-in tabs. It replaces Connect content on the same signed-out screen:
   login page. That second success confirms the same way.
 
 If that first refresh fails, the session stays `pending`. Connect is replaced by **Retry** (repeats
-the identifying read) and **Use a different account**. Continue is not shown, and the app does not
-invent a generic **Account** identity. A 401 or expired result revokes the pending session and
-shows the expired connect copy.
+the identifying read) and **Use a different account**, still under the welcome header and feature
+lines. Continue is not shown, and the app does not invent a generic **Account** identity. A 401 or
+expired result revokes the pending session and shows the expired connect copy.
 
-There is no sheet, card, `presentationDetents`, or `glassEffect` on the title or body. Layout is a
-vertically centered, scroll-safe column with a maximum content width of 320 points and system
-safe-area padding. Hit targets stay at least 44pt (Connect, Retry, and Continue 50pt).
+There is no sheet, `presentationDetents`, or `glassEffect` on the title or body. Hit targets stay
+at least 44pt (Connect, Retry, and Continue 50pt).
 
 Connect failures use a specific sentence when one is known, otherwise the default retry:
 
@@ -485,17 +501,22 @@ no custom material.
 The Account's list, so without an account it is one `ContentUnavailableView`: title **Sign in to
 see your Macs**, image `desktopcomputer`, description **Quota lists the Macs reporting to your
 account. This iPhone reads the providers you connect here whether or not you sign in.**, action
-**Sign in to Quota**. The Manage Devices toolbar link is absent then, and so is the This iPhone row:
-there is no list for it to end.
+**Sign in to Quota** as `.borderedProminent`. The Manage Devices toolbar link is absent then, and
+so is the This iPhone row: there is no list for it to end.
 
 With an account, an inset-grouped `List` of the Account's collection devices, then **This iPhone**
 as the last row — platform **iOS**, verdict and age from the last local collection. It is not an
 Account Device and carries no Manage or Remove control; what it reads is removed by removing a
-provider sign-in in Settings. Do not repeat **Devices** inside the body. Each row is display name,
-an **Active** / **Idle** / **Not reporting** verdict, platform, and the last-reading age that
-verdict came from. Use text as well as any symbol; color cannot carry the
-verdict. VoiceOver speaks name, verdict, platform, and age. Never infer failure from sleep,
-shutdown, or a closed app, and never show raw Device IDs or request a remote Device's credentials.
+provider sign-in in Settings. Do not repeat **Devices** inside the body.
+
+Each row leads with a 28-point circle of `tertiarySystemFill` holding the device symbol
+(`laptopcomputer` for macOS, `iphone` for iOS, `questionmark.square.dashed` unknown). The name is
+`body`. `platform · last reading` is `support` secondary. The trailing verdict is a small capsule:
+**Active** uses an emerald tint, **Idle** / **Not reporting** use secondary. Use text as well as
+any symbol; color cannot carry the verdict. VoiceOver speaks name, verdict, platform, and age.
+Never infer failure from sleep, shutdown, or a closed app, and never show raw Device IDs or
+request a remote Device's credentials. **This iPhone** keeps `devices.this-iphone`; other rows
+keep `devices.row`.
 
 A top-trailing system toolbar `Link` uses the `arrow.up.right` symbol. Visible and accessibility
 label: **Manage Devices on Web**. Destination is `https://quota.gotry.io/my/devices`, the same
@@ -503,8 +524,9 @@ URL Settings uses. The toolbar supplies its own Liquid Glass.
 
 An account with no Macs is `ContentUnavailableView`: title **No Macs connected**, image
 `desktopcomputer`, description **Install QuotaBar on a Mac signed in with this GitHub account.**,
-action **Download QuotaBar** — with the This iPhone row still beneath it. No QR code or custom
-surface. Root loading covers summary loading. Device status is last-good account content.
+action **Download QuotaBar** as `.borderedProminent` — with the This iPhone row still beneath it.
+No QR code or custom surface. Root loading covers summary loading. Device status is last-good
+account content.
 
 ### Settings
 
@@ -513,26 +535,39 @@ About are pushed destinations that share `SettingsModel`. Account actions sit on
 are reachable without scrolling through alert groups. Every control is a standard Form toggle,
 picker, link, or button. Settings has no custom loading state.
 
-**Preferences.** NavigationLink **Notifications**. NavigationLink **Appearance** with the current
-value **System**, **Light**, or **Dark** trailing.
+**Account first.** When signed in, the top section is an identity card: a 44-point circle with the
+first letter of the account label on brand emerald, the label (`headline`), the bound sign-in
+methods as a `support` secondary line (Apple · GitHub · Email, or **Signed in** until identities
+load), and a chevron into the Sign-in methods page. Signed out: the same slot shows **Sign in to
+Quota** as a `.borderedProminent` row button (`settings.signin`), with footer **Sign in to see
+what QuotaBar reports from your Macs, and your usage across them.** Manage Devices on Web,
+**Delete Account…**, and **Log Out** stay on the hub after About so their identifiers remain on
+`settings.root`; the delete-account explanation is that group's footer.
+
+**Preferences.** NavigationLink **Notifications** with a leading 28-point rounded-square icon
+(white `bell.badge.fill` on red). NavigationLink **Appearance** with white `circle.lefthalf.filled`
+on indigo and the current value **System**, **Light**, or **Dark** trailing. Icons are
+`SettingsRowIcon(symbol:tint:)`.
 
 **Providers.** One row per provider account this iPhone signed in to, then the row that adds
-another. A provider with nothing connected shows only that row, trailing **Connect**; a provider
-that already has an account shows **Add Account** instead, because a second account of one provider
-is a second row rather than a replacement. A connected row is the catalog `display_name`, then
-**Connected as <masked label>** and **Checked <age> ago** in footnote rows — primary foreground, as
-a Devices row does, because `.secondary` at that size does not clear this app's contrast bar — with
-a trailing **Remove**. When the last local collection was refused for that session, the second line
-is **Sign in again to keep reading this account.** and a **Sign in again** control precedes Remove:
-only a fresh sign-in fixes a refused cookie, so the row says that instead of an age that will never
-move. A provider that could not be reached leaves the row alone. That button is standard, not red:
-the system destructive red on a Form row does not clear this app's contrast bar, and what is
-destructive about it is said by the confirmation it opens, whose **Remove** is the destructive one.
-Remove confirms in a native dialog — **Remove this <Provider> sign-in?** — and says the
-cookies are deleted from this iPhone's Keychain and that Quota stops reading that provider here.
-The footer is **Sign-in cookies stay in this iPhone's Keychain. Quota never uploads them, and
-Remove deletes them.**, replaced by **Couldn't read the sign-ins saved on this iPhone.** when the
-Keychain refused the read — an empty list would say the opposite of what happened.
+another. Each row leads with a 22-point catalog `ProviderMark` and the provider name in `body`. A
+provider with nothing connected trails **Connect** as a tinted button (`providers.connect.*`); a
+provider that already has an account shows **Add Account** instead, because a second account of
+one provider is a second row rather than a replacement. A connected row trails the masked account
+label (`support`, secondary) and a green 8-point dot. **Connected as <masked label>** and
+**Checked <age> ago** remain as support lines — primary is not required at `subheadline` — with
+`providers.session.*` on that copy. When the last local collection was refused for that session,
+the second line is **Sign in again to keep reading this account.** and a **Sign in again** control
+precedes the status: only a fresh sign-in fixes a refused cookie, so the row says that instead of
+an age that will never move. A provider that could not be reached leaves the row alone. **Remove**
+stays on the row (`providers.remove.*`) and also in the swipe action and context menu. That button
+is standard, not red: the system destructive red on a Form row does not clear this app's contrast
+bar, and what is destructive about it is said by the confirmation it opens, whose **Remove** is the
+destructive one. Remove confirms in a native dialog — **Remove this <Provider> sign-in?** — and
+says the cookies are deleted from this iPhone's Keychain and that Quota stops reading that
+provider here. The footer is **Sign-in cookies stay in this iPhone's Keychain. Quota never uploads
+them, and Remove deletes them.**, replaced by **Couldn't read the sign-ins saved on this iPhone.**
+when the Keychain refused the read — an empty list would say the opposite of what happened.
 
 The first Connect for a provider shows one confirmation, **Sign in to <Provider>?**, naming that
 provider's cookies and hosts from the catalog, that they stay in this iPhone's Keychain, that they
@@ -556,6 +591,8 @@ so this is a group of channels, not one account name. Each row is the channel na
 `subheadline` medium over a footnote line — primary foreground, as a Providers row is — reading
 the bound channel's label, **Linked** when it is bound with no label (Apple hands over an address
 only while the person is sharing one), **Linking…** while a bind is in flight, or **Not linked**.
+The group lives on the hub and on the identity card's destination, so the identifiers stay on
+`settings.root`.
 
 A channel that is not bound carries its own way to bind it. Apple's is
 `SignInWithAppleButton(.continue)` at 132 × 36pt, drawn by Apple in the same pairing as the
@@ -576,12 +613,15 @@ the opposite of what happened — or by the last bind's failure, **Couldn't add 
 again.** or **That Apple ID already belongs to another Quota account.** Cancelling at Apple leaves
 the Account exactly as it was and says nothing.
 
-**Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`). Link **Support**
-(`https://quota.gotry.io/support`). NavigationLink **About**.
+**Privacy & Support.** Link **Privacy** (`https://quota.gotry.io/privacy`) with white
+`hand.raised.fill` on blue. Link **Support** (`https://quota.gotry.io/support`) with white
+`questionmark.circle.fill` on green. NavigationLink **About** with white `info.circle.fill` on
+gray.
 
-**Account.** With an account: Link **Manage Devices on Web**
-(`https://quota.gotry.io/my/devices`). **Delete Account…** explains that deletion happens on the website after signing in again, then
-opens `ASWebAuthenticationSession` (shared Safari cookies, not ephemeral) at
+**Account.** With an account: the identity card at the top of the hub, and at the bottom Link
+**Manage Devices on Web** (`https://quota.gotry.io/my/devices`). **Delete Account…** explains that
+deletion happens on the website after signing in again, then opens `ASWebAuthenticationSession`
+(shared Safari cookies, not ephemeral) at
 `https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount` — the page that
 asks which Account this browser is, not one channel's round trip. The
 callback scheme is nil: the sheet ending returns to the app. Quota then prompts **If you deleted
@@ -619,10 +659,12 @@ default and leaves the scheme unset. No custom preview panel or glass.
 
 #### About
 
-Navigation title **About**. The Quota app mark as plain content, then:
+Navigation title **About**. The Quota catalog mark (`quota.svg` at 64 points, emerald) with the
+version under it, centred, then:
 
-- **Quota shows remaining quota and usage reported by QuotaBar on your Mac.**
-- **This iPhone does not collect or upload local usage.**
+- **Quota shows remaining quota this iPhone reads from the providers you connect, and the quota
+  and usage QuotaBar reports from your Macs.**
+- **This iPhone never uploads its sign-ins. Only the readings it takes reach your Account.**
 
 Native rows **Version** (`CFBundleShortVersionString (CFBundleVersion)`), **Website**
 (`https://quota.gotry.io`), **GitHub** (the repository), and **License** with value **MIT**. No
@@ -669,6 +711,7 @@ There is no third-party UI kit, no custom glass shader, and no app-owned glass o
 | Tab bar | System `Tab` chrome; `tabBarMinimizeBehavior(.onScrollDown)` |
 | Navigation / toolbar | System navigation chrome |
 | Connect with GitHub | `.glassProminent` with emerald tint |
+| Continue with Email | `.bordered` |
 | Continue with Apple | `SignInWithAppleButton`, `.black` in light appearance and `.white` in dark |
 | Confirm Continue | `.glassProminent` with the system accent; no extra `.tint` |
 | Sheets | System sheet chrome |
@@ -706,7 +749,7 @@ Rules:
 | Provider refused a stored session | That Providers row reads **Sign in again to keep reading this account.** with a **Sign in again** control |
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
-| Confirm GitHub account | Same signed-out screen: mark, **Use this GitHub account?**, **Connected as `<label>`.**, **Continue**, **Use a different account**. No sheet. |
+| Confirm GitHub account | Same signed-out screen: `QuotaCard` with the identity circle and account label, **Use this GitHub account?** in `title3`, **Continue**, **Use a different account**. No sheet. |
 | Notification permission denied | **Allow notifications for Quota in Settings.** with **Open Settings** |
 | No quota alerts | **No quota alerts are available yet.** below the Notifications master controls |
 | Widget no-data | **No data yet** (or accessory em dash); no error chrome |
@@ -719,14 +762,16 @@ carries status alone. There is no status card or glass.
 
 Signed-in tabs use the system grouped background supplied by List/Form. Overview, subscription
 detail, and Devices are inset-grouped Lists. There is no root background modifier and no ambient
-wash. Settings is a compact hub Form; Notifications, Appearance, and About are pushed destination
-Forms with the same system background. Type roles are `QuotaDesign.Typography`: `remainingValue` for
-a window's remaining figure, `cardTitle` for provider names, `support` for window titles, `meta`
-for reset and pace. Connect content is a 320-point column. Each Overview subscription and each
-subscription-detail window, Today block, and Readings block sits in a `QuotaCard`.
-`ProviderQuotaRow` and `QuotaWindowBlock` are content only: no padding, corner, stroke, shadow,
-material, or glass of their own. The Overview provider mark is 22 points; the subscription-detail
-header mark is 40. Remaining meters are `QuotaMeter` (8pt hero / detail, 4pt compact).
+wash. Settings is a compact hub Form; Notifications, Appearance, About, and the identity card's
+Sign-in methods page are pushed destination Forms with the same system background. Type roles are
+`QuotaDesign.Typography`: `remainingValue` for a window's remaining figure, `cardTitle` for
+provider names, `support` for window titles, `meta` for reset and pace. Connect content is a
+320-point column. Each Overview subscription and each subscription-detail window, Today block, and
+Readings block sits in a `QuotaCard`. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no
+padding, corner, stroke, shadow, material, or glass of their own. The Overview provider mark is 22
+points; the subscription-detail header mark is 40. Remaining meters are `QuotaMeter` (8pt hero /
+detail, 4pt compact). The Connect mark is 72 points; the About mark is 64 points; the identity
+avatar is 44 points.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
 **View day** is a 44-point `.borderedProminent` button; **Retry**, **Show N more**, and **Show
@@ -749,8 +794,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 ## Accessibility
 
 - Icon-only controls have accessibility labels.
-- The Connect mark is one static element named **Quota**. The button's accessibility label is
-  exactly **Connect with GitHub**; its hint is **Opens GitHub sign-in in your browser.** While
+- The Connect mark is one static element named **Quota**. The GitHub button's accessibility label
+  is exactly **Continue with GitHub**; its hint is **Opens Quota sign-in in your browser.** While
   connecting, the value is **Connecting** and the control does not respond to interaction.
 - Remaining meters are hidden from VoiceOver; the window block speaks remaining percent and window
   title.
@@ -833,7 +878,8 @@ provider and support, and no custom card chrome beyond the system widget contain
     `overview.today.cost`, `overview.today.input`, `overview.today.output`,
     `overview.today.empty`, `subscription.account`, `subscription.plan`, `settings.about.version`,
     `settings.about.license`, `settings.notifications`, `settings.appearance`, `settings.about`,
-    `overview.subscription`, `devices.manage`, `usage.activity.selected-day`,
+    `overview.subscription`, `devices.manage`, `providers.connect.`, `providers.session.`,
+    `usage.activity.selected-day`,
     `usage.provider.<provider id>`, the totals-row labels **Tokens**, **API-equivalent cost**,
     **Cache hit**, and **Reasoning**, the Daily **Daily breakdown** disclosure label, the
     About **License** and **Version** labels, the
@@ -853,8 +899,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 ## Visual QA
 
-Inspect Connect with GitHub and Continue with Apple (mark, both buttons, and footnote only in
-the normal state), connecting,
+Inspect Connect with GitHub and Continue with Apple (72-point mark, **Quota** title, tagline,
+three feature lines, three buttons, and footnote in the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, loading, signed-in
 Overview (quota cards first, Today card second, trailing chevron on each card, no device-summary
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
@@ -870,7 +916,7 @@ no-data states. Check iPhone, light and dark, standard and accessibility text si
 labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display labels
 only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `connect-signed-out`, `connect-connecting`,
+`scripts/ios-ui-screenshots.sh` exports the `sign-in`, `connect-connecting`,
 `connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
 `overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
 `overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
@@ -913,12 +959,12 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | Fixture | UI state |
 | --- | --- |
 | `signed-out` | Signed-in tabs with nothing read: **No quota yet** and both invitations. No session restore |
-| `sign-in` | The sign-in sheet over a phone that read its own providers: **Continue with Apple**, **Continue with GitHub**, **Continue with Email** |
+| `sign-in` | The sign-in sheet over a phone that read its own providers: welcome mark and title, three feature lines, **Continue with Apple**, **Continue with GitHub**, **Continue with Email** |
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Empty Overview plus the **Couldn't connect. Try again.** status |
 | `expired` | Empty Overview plus the **Session expired. Connect again.** status |
 | `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
-| `confirm-account` | Inline signed-out confirmation for **octocat**: mark, **Use this GitHub account?**, **Continue**, **Use a different account** |
+| `confirm-account` | Inline signed-out confirmation for **octocat**: identity `QuotaCard`, **Use this GitHub account?**, **Continue**, **Use a different account** |
 | `loading` | Centered **Loading account…** |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
