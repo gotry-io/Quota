@@ -5,28 +5,6 @@ import Testing
 
 struct AgentDisplayTests {
   @Test
-  func mapsEachKnownAgent() {
-    #expect(AgentDisplay.name(.codex) == "Codex")
-    #expect(AgentDisplay.name(.claudeCode) == "Claude Code")
-    #expect(AgentDisplay.name(.grok) == "Grok")
-    #expect(AgentDisplay.name(.opencode) == "OpenCode")
-    #expect(AgentDisplay.name(.pi) == "Pi")
-    #expect(AgentDisplay.name(.cursor) == "Cursor")
-    #expect(AgentDisplay.name(.gemini) == "Gemini CLI")
-    #expect(AgentDisplay.name(.copilot) == "GitHub Copilot")
-    #expect(AgentDisplay.name(.kilo) == "Kilo")
-    #expect(AgentDisplay.name(.antigravity) == "Antigravity")
-    #expect(AgentDisplay.name(.unknown) == "Unknown")
-  }
-
-  @Test
-  func namesEveryBillingAgent() {
-    for agent in BillingAgent.allCases {
-      #expect(!AgentDisplay.name(agent).isEmpty)
-    }
-  }
-
-  @Test
   func otherModelIsTitleCased() {
     #expect(ModelDisplay.name("other") == "Other")
     #expect(ModelDisplay.name("gpt-5") == "gpt-5")

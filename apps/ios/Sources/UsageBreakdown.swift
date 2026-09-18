@@ -9,7 +9,7 @@ enum UsageBreakdown {
     let providers: [ProviderSection]
 
     var id: String { agent.rawValue }
-    var displayName: String { AgentDisplay.name(agent) }
+    var displayName: String { agent.displayName }
   }
 
   struct ProviderSection: Identifiable, Equatable, Sendable {
