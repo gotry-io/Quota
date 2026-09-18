@@ -400,8 +400,8 @@ The panel inherits the menu extra's system material. The main window uses
 Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
 supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
 `critical` only for failure or destructive meaning. Native system red remains the destructive color.
-Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15; `critical` on text
-stays failure-only.
+Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15 (`QuotaTone`);
+`critical` on text stays failure-only.
 
 Do not add decorative gradients, a second card language, colored page backgrounds, or custom window
 chrome. Main-window Quota / Today / Usage cards are the 20pt `quotaCardSurface()`.

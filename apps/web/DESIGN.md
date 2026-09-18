@@ -229,8 +229,8 @@ choosing System removes it. Do not render three permanent footer buttons.
 ### Meter thresholds
 
 Remaining-percent meters use `--meter-good` at 40 and above, `--meter-warn` from 15 through 39,
-and `--meter-critical` below 15, in both appearances — the same bands as QuotaBar's
-`QuotaUsageTone`. Color never carries status alone: the percent
+and `--meter-critical` below 15, in both appearances — the same bands as
+`QuotaTone`. Color never carries status alone: the percent
 label stays next to the bar.
 
 ### Shape and spacing

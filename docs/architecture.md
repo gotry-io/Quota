@@ -436,9 +436,10 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
   quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
-  status-page copy, the observation-freshness rule each snapshot type conforms to, and the subscription selector every
-  Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
-  evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
+  status-page copy, the remaining-quota tone bands, the status indicator's tone, the brand color
+  values, the observation-freshness rule each snapshot type conforms to, and the subscription
+  selector every Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only
+  remaining-quota rule evaluator both Apple apps share. It depends on neither app and does not own `ProviderID`, decode
   wire types, network, persist, or reach Relay; `QuotaAlerts` may depend on `QuotaPresentation`.
   `QuotaObservations`, beside them, owns the subscription key and the observation merge — the one
   Swift statement of [ADR 0003](decisions/0003-observation-preserving-subscription-merge.md),
