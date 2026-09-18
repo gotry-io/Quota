@@ -117,6 +117,10 @@ pnpm build:menubar:app
 pnpm test:menubar:helper
 ```
 
+Pull requests reach main through a merge queue: `gh pr merge --auto` queues one when its checks
+pass, and the queue verifies it on top of main and whatever is ahead of it before merging, so a
+branch is never re-synced by hand (`AGENTS.md`, Development commands).
+
 Relay and the website ship together as one image, `ghcr.io/gotry-io/quota-relay`, built on a
 `relay-v*` tag and deployed to the dmit VPS by the owner ([runbook](docs/relay-self-host.md)).
 Local Wrangler dry runs are verification; do not deploy anywhere without explicit authorization.
