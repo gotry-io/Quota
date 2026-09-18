@@ -2,19 +2,23 @@ import SwiftUI
 
 struct QuotaCard<Content: View>: View {
   var title: String? = nil
+  var titleIdentifier: String? = nil
   let content: Content
 
-  init(title: String? = nil, @ViewBuilder content: () -> Content) {
+  init(
+    title: String? = nil,
+    titleIdentifier: String? = nil,
+    @ViewBuilder content: () -> Content
+  ) {
     self.title = title
+    self.titleIdentifier = titleIdentifier
     self.content = content()
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Layout.rowSpacing) {
       if let title {
-        Text(title)
-          .font(QuotaDesign.Typography.cardTitle)
-          .foregroundStyle(.primary)
+        titleLabel(title)
       }
       content
     }
@@ -27,6 +31,19 @@ struct QuotaCard<Content: View>: View {
         style: .continuous
       )
     )
+  }
+
+  @ViewBuilder
+  private func titleLabel(_ title: String) -> some View {
+    let text = Text(title)
+      .font(QuotaDesign.Typography.cardTitle)
+      .foregroundStyle(.primary)
+      .accessibilityAddTraits(.isHeader)
+    if let titleIdentifier {
+      text.accessibilityIdentifier(titleIdentifier)
+    } else {
+      text
+    }
   }
 }
 

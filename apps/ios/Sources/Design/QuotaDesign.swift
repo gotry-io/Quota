@@ -7,7 +7,9 @@ enum QuotaDesign {
     static let sectionSpacing: CGFloat = 24
     static let rowSpacing: CGFloat = 12
     static let meterHeight: CGFloat = 8
+    static let compactMeterHeight: CGFloat = 4
     static let markSize: CGFloat = 22
+    static let detailMarkSize: CGFloat = 40
     static let statTileMinWidth: CGFloat = 140
   }
 
