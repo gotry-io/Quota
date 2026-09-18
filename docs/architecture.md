@@ -434,7 +434,8 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   committed, the way Quota iOS's is; `apps/menubar/Package.swift` stays the library and `swift test`
   view of the same sources.
 - `packages/apple-shared` owns reusable Apple presentation semantics over scalar inputs — remaining
-  quota, plan and account labels, compact counts, Usage cost, the derived Usage metrics of
+  quota, plan and account labels, compact counts, Usage cost, the cache saving line and the
+  whole-percent share, the derived Usage metrics of
   [ADR 0036](decisions/0036-usage-derived-metrics.md), compact relative age, official
   status-page copy, the observation-freshness rule each snapshot type conforms to, and the subscription selector every
   Apple client hashes the same way — and `QuotaAlerts`, the Foundation-only remaining-quota rule
@@ -455,7 +456,7 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   itself; `QuotaSnapshot` conforms to `QuotaObservationSnapshot` there, so neither Apple product
   restates how a reading is addressed. QuotaWire's `ProviderID` carries only
   providers that sync to an account, because a local-only collector there would force QuotaBar's
-  enum to diverge again.
+  enum to diverge again. QuotaWire owns the `BillingAgent` display name beside `ProviderID`'s.
 - `QuotaProviderSessions`, in `packages/apple-client`, keeps the provider web sessions a device
   signed in for: one Keychain item per provider and account fingerprint, device-only and not
   synchronized, holding the cookie header, masked label, and the two dates Settings shows. It

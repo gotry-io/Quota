@@ -41,4 +41,26 @@ struct UsageCostFormatTests {
     )
     #expect(UsageCostFormat.accessible(status: .unavailable, amountMicrousd: nil) == "unpriced")
   }
+
+  @Test
+  func savedWithNoAmountIsNil() {
+    #expect(UsageCostFormat.saved(status: .complete, amountMicrousd: nil) == nil)
+    #expect(UsageCostFormat.saved(status: .partial, amountMicrousd: nil) == nil)
+    #expect(UsageCostFormat.saved(status: .unavailable, amountMicrousd: nil) == nil)
+  }
+
+  @Test
+  func savedCompletePrefixesTheCompactAmount() {
+    let value = UsageCostFormat.saved(status: .complete, amountMicrousd: "50239770")
+    #expect(value?.hasPrefix("saved ") == true)
+    #expect(value?.contains("50.24") == true)
+    #expect(value?.contains("≥") == false)
+  }
+
+  @Test
+  func savedPartialPrefixesInequality() {
+    let value = UsageCostFormat.saved(status: .partial, amountMicrousd: "50239770")
+    #expect(value?.hasPrefix("saved ≥ ") == true)
+    #expect(value?.contains("50.24") == true)
+  }
 }

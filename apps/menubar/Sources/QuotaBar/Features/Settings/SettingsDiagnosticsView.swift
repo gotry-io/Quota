@@ -58,7 +58,7 @@ enum DiagnosticsPresentation {
       // An id outside the catalog is `.unknown`, which names itself the same way everywhere.
       return (ProviderID(rawValue: identity) ?? .unknown(identity)).displayName
     case "agent":
-      return BillingAgent(rawValue: identity).map(UsageValueFormatter.agent) ?? unnamed
+      return BillingAgent(rawValue: identity)?.displayName ?? unnamed
     default:
       return unnamed
     }
