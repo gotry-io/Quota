@@ -89,6 +89,8 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
 - **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
   the only place a provider is named for a person. No surface keeps a second table and none derives
   a name from an identifier.
+- **Billing agent names come from `BillingAgent.displayName`.** QuotaWire owns that table beside
+  `ProviderID.displayName`. No surface keeps a second table.
 - **Quota window titles are Title Case.** Cadence names are **5 Hours**, **Weekly**, and
   **Monthly**. Acronyms keep their standard forms: **GPT**, **API**, **OAuth**, **USD**. Extra Codex
   limit names follow that rule (`gpt-reserve` reads **GPT Reserve**). Collectors write these titles;

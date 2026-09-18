@@ -15,6 +15,25 @@ public enum BillingAgent: String, CaseIterable, Codable, Sendable, TolerantWireE
   case unknown
 }
 
+extension BillingAgent {
+  /// What a person calls this agent. One table for every Apple surface.
+  public var displayName: String {
+    switch self {
+    case .codex: "Codex"
+    case .claudeCode: "Claude Code"
+    case .grok: "Grok"
+    case .opencode: "OpenCode"
+    case .pi: "Pi"
+    case .cursor: "Cursor"
+    case .gemini: "Gemini CLI"
+    case .copilot: "GitHub Copilot"
+    case .kilo: "Kilo"
+    case .antigravity: "Antigravity"
+    case .unknown: "Unknown"
+    }
+  }
+}
+
 public enum BillingChannel: String, Codable, Sendable, TolerantWireEnum {
   case openaiDirect = "openai_direct"
   case azureOpenAI = "azure_openai"

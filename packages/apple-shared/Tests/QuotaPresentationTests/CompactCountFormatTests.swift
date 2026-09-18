@@ -16,4 +16,20 @@ struct CompactCountFormatTests {
     #expect(!CompactCountFormat.accessible(1_234_567).contains("M"))
     #expect(!CompactCountFormat.accessible(1_234_567).contains("k"))
   }
+
+  @Test
+  func shareOfNothingIsNil() {
+    #expect(CompactCountFormat.share(1, of: 0) == nil)
+  }
+
+  @Test
+  func shareRoundsHalfUpToWholePercent() {
+    #expect(CompactCountFormat.share(1, of: 200) == "1%")
+    #expect(CompactCountFormat.share(1, of: 201) == "0%")
+  }
+
+  @Test
+  func shareOfTheWholeIsOneHundredPercent() {
+    #expect(CompactCountFormat.share(7, of: 7) == "100%")
+  }
 }

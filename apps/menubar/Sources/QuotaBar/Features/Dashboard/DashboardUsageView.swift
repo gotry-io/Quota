@@ -279,7 +279,7 @@ struct DashboardUsageView: View {
         ForEach(models, id: \.id) { model in
           let title =
             if duplicateNames.contains(model.model), let agent = model.agent {
-              "\(model.model) · \(UsageValueFormatter.agent(agent))"
+              "\(model.model) · \(agent.displayName)"
             } else {
               model.model
             }
@@ -573,7 +573,7 @@ struct DashboardUsageView: View {
     summary: String,
     active: Bool
   ) -> String {
-    var parts = [UsageValueFormatter.agent(session.agent), session.projectKey, age, summary]
+    var parts = [session.agent.displayName, session.projectKey, age, summary]
     if active { parts.insert("Active", at: 0) }
     return parts.joined(separator: ", ")
   }

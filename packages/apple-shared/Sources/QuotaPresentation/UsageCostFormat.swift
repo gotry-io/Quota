@@ -24,6 +24,12 @@ public enum UsageCostFormat: Sendable {
     }
   }
 
+  /// The saving beside a cache hit rate, or `nil` when nothing behind it could be priced.
+  public static func saved(status: UsageCostCoverage, amountMicrousd: String?) -> String? {
+    guard amountMicrousd != nil else { return nil }
+    return "saved \(compact(status: status, amountMicrousd: amountMicrousd))"
+  }
+
   private static func usd(_ microusd: String?) -> String? {
     guard let microusd,
       let decimal = Decimal(string: microusd, locale: Locale(identifier: "en_US_POSIX"))

@@ -53,14 +53,15 @@ enum UsageValueFormatter {
 
   /// The saving beside a cache hit rate, or `nil` when nothing behind it could be priced.
   static func cacheSaved(_ saved: UsageCacheSaved) -> String? {
-    guard saved.amountMicrousd != nil else { return nil }
-    return "saved \(UsageCostFormat.compact(status: UsageCostCoverage(saved.status), amountMicrousd: saved.amountMicrousd))"
+    UsageCostFormat.saved(
+      status: UsageCostCoverage(saved.status),
+      amountMicrousd: saved.amountMicrousd
+    )
   }
 
   /// One part of a whole as whole percent. A whole of nothing has no share to state.
   static func share(_ part: Int, of whole: Int) -> String? {
-    guard whole > 0 else { return nil }
-    return "\((part * 200 + whole) / (whole * 2))%"
+    CompactCountFormat.share(part, of: whole)
   }
 
   static func tokensAndCost(_ tokens: Int, _ cost: UsageCostOutcome) -> String {
@@ -85,23 +86,6 @@ enum UsageValueFormatter {
     }
     if leftTokens != rightTokens { return leftTokens > rightTokens }
     return leftName.localizedStandardCompare(rightName) == .orderedAscending
-  }
-
-  static func agent(_ agent: BillingAgent) -> String {
-    switch agent {
-    case .codex: "Codex"
-    case .claudeCode: "Claude Code"
-    case .grok: "Grok"
-    case .opencode: "OpenCode"
-    case .pi: "Pi"
-    case .cursor: "Cursor"
-    case .gemini: "Gemini CLI"
-    case .copilot: "GitHub Copilot"
-    case .kilo: "Kilo"
-    case .antigravity: "Antigravity"
-    // An agent this build has never heard of is named as what it is.
-    case .unknown: "Unknown"
-    }
   }
 
   private static func normalizedMicrousd(_ value: String?) -> String? {

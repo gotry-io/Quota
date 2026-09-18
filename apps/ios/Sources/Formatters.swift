@@ -49,14 +49,15 @@ enum QuotaFormat {
 
   /// The saving beside a cache hit rate, or `nil` when nothing behind it could be priced.
   static func cacheSaved(_ saved: UsageCacheSaved) -> String? {
-    guard saved.amountMicrousd != nil else { return nil }
-    return "saved \(UsageCostFormat.compact(status: UsageCostCoverage(saved.status), amountMicrousd: saved.amountMicrousd))"
+    UsageCostFormat.saved(
+      status: UsageCostCoverage(saved.status),
+      amountMicrousd: saved.amountMicrousd
+    )
   }
 
   /// One part of a whole as whole percent. A whole of nothing has no share to state.
   static func share(_ part: Int, of whole: Int) -> String? {
-    guard whole > 0 else { return nil }
-    return "\((part * 200 + whole) / (whole * 2))%"
+    CompactCountFormat.share(part, of: whole)
   }
 
   /// How many of this period's rows the catalog priced, matching the website coverage line.
