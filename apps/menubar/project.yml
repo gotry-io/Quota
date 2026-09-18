@@ -92,6 +92,8 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
+      - package: QuotaAppleShared
+        product: QuotaAlertDelivery
       - package: SweetCookieKit
         product: SweetCookieKit
       - package: Sparkle

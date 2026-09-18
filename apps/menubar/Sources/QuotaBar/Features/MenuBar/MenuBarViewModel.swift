@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaPresentation
 import QuotaWidgetData
@@ -320,10 +321,10 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private let statePollInterval: Duration
 
   @ObservationIgnored
-  private let notificationStore: any NotificationStateStore
+  private let notificationStore: any AlertStateStore
 
   @ObservationIgnored
-  private let notificationSink: any NotificationSink
+  private let notificationSink: any AlertSink
 
   @ObservationIgnored
   private let notificationDefaults: UserDefaults
@@ -350,7 +351,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var widgetPublishingStatus: DesktopWidgetPublishingStatus
 
   @ObservationIgnored
-  private let userNotificationSink: UserNotificationSink?
+  private let userNotificationSink: UserNotificationAlertSink?
 
   private(set) var notificationRules: AlertRules
   private(set) var notificationAuthorizationDenied = false
@@ -362,8 +363,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     accessProbe: (any BrowserAccessProbing)? = nil,
     grantPresenter: (any BrowserAccessGrantPresenting)? = nil,
     relauncher: (any QuotaBarRelaunching)? = nil,
-    notificationStore: (any NotificationStateStore)? = nil,
-    notificationSink: (any NotificationSink)? = nil,
+    notificationStore: (any AlertStateStore)? = nil,
+    notificationSink: (any AlertSink)? = nil,
     notificationCenter: (any NotificationCentering)? = nil,
     notificationDefaults: UserDefaults = .standard,
     budgetStore: UsageBudgetStore? = nil,
@@ -395,7 +396,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     self.loginPollInterval = loginPollInterval
     self.statePollInterval = statePollInterval
     self.notificationDefaults = notificationDefaults
-    self.notificationRules = NotificationRules.load(from: notificationDefaults)
+    self.notificationRules = NotificationRules.store(defaults: notificationDefaults).load()
     let resolvedCenter =
       notificationCenter
       ?? (injectedClient ? NoOpNotificationCenter() : SystemNotificationCenter())
@@ -405,19 +406,24 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       self.notificationSink = notificationSink
       self.userNotificationSink = nil
     } else if injectedClient && notificationCenter == nil {
-      self.notificationSink = NoOpNotificationSink()
+      self.notificationSink = NoOpAlertSink()
       self.userNotificationSink = nil
     } else {
-      let sink = UserNotificationSink(center: resolvedCenter)
+      let sink = UserNotificationAlertSink(center: resolvedCenter)
       self.notificationSink = sink
       self.userNotificationSink = sink
     }
     if let notificationStore {
       self.notificationStore = notificationStore
     } else if injectedClient {
-      self.notificationStore = InMemoryNotificationStateStore()
+      self.notificationStore = InMemoryAlertStateStore()
     } else {
-      self.notificationStore = FileNotificationStateStore.applicationSupport()
+      self.notificationStore = FileAlertStateStore(
+        fileURL: NotificationRules.stateFileURL(
+          applicationSupport: FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        )
+      )
     }
     if let client {
       self.client = client
@@ -456,8 +462,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
       loginPollInterval = MenuBarViewModel.loginPollInterval
       statePollInterval = MenuBarViewModel.statePollInterval
-      notificationStore = InMemoryNotificationStateStore()
-      notificationSink = NoOpNotificationSink()
+      notificationStore = InMemoryAlertStateStore()
+      notificationSink = NoOpAlertSink()
       notificationDefaults = .standard
       budgetStore = UsageBudgetStore(defaults: .standard)
       budget = UsageBudget(amountUSD: 50, alerts: true)
@@ -1889,7 +1895,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     var rules = notificationRules
     update(&rules)
     guard rules != notificationRules else { return }
-    NotificationRules.save(rules, to: notificationDefaults)
+    NotificationRules.store(defaults: notificationDefaults).save(rules)
     notificationRules = rules
     evaluateNotifications(overview: overview, now: Date())
   }

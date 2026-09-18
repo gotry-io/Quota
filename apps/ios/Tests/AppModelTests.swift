@@ -1,6 +1,8 @@
 import AuthenticationServices
 import Foundation
 import QuotaAccount
+import QuotaAlertDelivery
+import QuotaAlerts
 import QuotaProviderSessions
 import QuotaPresentation
 import QuotaProviderStatus
@@ -8,6 +10,7 @@ import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
 import Testing
+import UserNotifications
 
 @testable import Quota
 
@@ -1164,7 +1167,7 @@ func makeModel(
   widgetPublisher: any WidgetSnapshotPublishing = NoOpWidgetSnapshotPublisher(),
   backgroundRefresh: any BackgroundRefreshScheduling = NoOpBackgroundRefreshScheduler(),
   alertCoordinator: AlertCoordinator? = nil,
-  alertRulesStore: IOSAlertRulesStore? = nil,
+  alertRulesStore: AlertRulesStore? = nil,
   notificationCenter: (any NotificationCentering)? = nil,
   providerSessions: any ProviderSessionStoring = MemoryProviderSessionStore(),
   localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),

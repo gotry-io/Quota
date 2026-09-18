@@ -68,6 +68,8 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
+      - package: QuotaAppleShared
+        product: QuotaAlertDelivery
       - sdk: AuthenticationServices.framework
       - sdk: BackgroundTasks.framework
       - sdk: UserNotifications.framework
@@ -150,6 +152,8 @@ targets:
         product: QuotaPresentation
       - package: QuotaAppleShared
         product: QuotaAlerts
+      - package: QuotaAppleShared
+        product: QuotaAlertDelivery
       - sdk: UserNotifications.framework
   QuotaUITests:
     type: bundle.ui-testing

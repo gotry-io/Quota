@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaAlertDelivery
 import QuotaAlerts
 import QuotaRelay
 import QuotaWire
@@ -12,13 +13,13 @@ struct AlertCoordinatorTests {
   @Test func successfulRefreshDeliversOnePassAndARepeatDoesNotFireAgain() async throws {
     let defaults = isolatedAlertDefaults()
     defer { defaults.tearDown() }
-    IOSAlertRulesStore(defaults: defaults.store).save(
+    AlertCoordinator.rulesStore(defaults: defaults.store).save(
       AlertRules(enabled: true, resetReminders: true)
     )
-    let store = InMemoryIOSAlertStateStore()
+    let store = InMemoryAlertStateStore()
     let sink = RecordingAlertSink()
     let coordinator = AlertCoordinator(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       stateStore: store,
       sink: sink,
       now: { Fixtures.date("2026-08-14T16:00:00Z") }
@@ -58,8 +59,8 @@ struct AlertCoordinatorTests {
     let defaults = isolatedAlertDefaults()
     defer { defaults.tearDown() }
     let rules = AlertRules(enabled: true, resetReminders: true)
-    IOSAlertRulesStore(defaults: defaults.store).save(rules)
-    let store = InMemoryIOSAlertStateStore(
+    AlertCoordinator.rulesStore(defaults: defaults.store).save(rules)
+    let store = InMemoryAlertStateStore(
       state: AlertDedupState(
         fired: [
           AlertDedupKey(
@@ -73,7 +74,7 @@ struct AlertCoordinatorTests {
       )
     )
     let coordinator = AlertCoordinator(
-      rulesStore: IOSAlertRulesStore(defaults: defaults.store),
+      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
       stateStore: store,
       sink: RecordingAlertSink(),
       now: { Fixtures.date("2026-08-14T16:00:00Z") }
@@ -91,7 +92,7 @@ struct AlertCoordinatorTests {
     #expect(try store.load().fired.count == 1)
     await model.logout()
     #expect(try store.load() == .empty)
-    let loaded = IOSAlertRulesStore(defaults: defaults.store).load()
+    let loaded = AlertCoordinator.rulesStore(defaults: defaults.store).load()
     #expect(loaded.enabled)
     #expect(loaded.resetReminders)
   }
