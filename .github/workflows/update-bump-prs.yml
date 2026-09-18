@@ -1,0 +1,67 @@
+name: update-bump-prs
+
+# A version bump opened by release-menubar or release-ios waits on auto-merge, and auto-merge does
+# not re-sync a pull request that fell behind: every other merge to main would leave it waiting
+# for a person. This re-syncs the open bump pull requests whenever main moves. With the merge queue
+# on main a queued bump needs none of this; it remains for the window before a bump is queued and
+# for a repository where the queue is switched off.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-bump-prs
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the app credentials are configured
+        id: app
+        env:
+          CLIENT_ID: ${{ vars.APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLIENT_ID:-}" ] || [ -z "${PRIVATE_KEY:-}" ]; then
+            echo "::notice::APP_CLIENT_ID / APP_PRIVATE_KEY are unset; bump pull requests are not re-synced."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The automation app, not GITHUB_TOKEN: a branch update made with GITHUB_TOKEN starts no
+      # workflow run, so the re-synced pull request's required checks would never report.
+      - uses: actions/create-github-app-token@v3
+        id: token
+        if: steps.app.outputs.ready == 'true'
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Re-sync open bump pull requests that are behind main
+        if: steps.app.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Only the branches the release workflows name, so a person's pull request is never moved
+          # under them.
+          gh pr list --repo "$REPO" --state open --base main \
+            --json number,headRefName,mergeStateStatus \
+            --jq '.[] | select(.headRefName | test("^chore/bump-(menubar|ios)-[0-9]+\\.[0-9]+\\.[0-9]+$")) | select(.mergeStateStatus != "CLEAN") | .number' |
+          while IFS= read -r number; do
+            # GitHub computes BEHIND lazily, so right after a push the state is often UNKNOWN. Asking
+            # for an update is harmless when the branch already contains main.
+            echo "Re-syncing #${number}"
+            gh pr update-branch "$number" --repo "$REPO" || echo "::notice::#${number} needed no re-sync"
+          done

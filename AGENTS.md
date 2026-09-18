@@ -186,6 +186,14 @@ and warns that main was left on the released version. A job asking for that app 
 to the permissions it needs, so granting the app a new one for some other job never widens an
 existing one.
 
+main takes pull requests through a merge queue: `ci` also runs on `merge_group`, the queue builds
+each entry on top of main and the entries ahead of it, and only what passed there merges, so a pull
+request is not re-synced and re-run because something else landed first. A change that moves nothing
+but a product's version string answers every required check without running it
+(`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author), and
+`update-bump-prs` re-syncs an open bump pull request when main moves, so a bump never waits for a
+person.
+
 Targeted development entry points are defined by the root `package.json` scripts and each app's
 README. Do not duplicate their command lists in new documents.
 
