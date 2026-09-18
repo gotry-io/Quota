@@ -4,6 +4,8 @@ struct QuotaStatTile: View {
   let label: String
   let value: String
   var caption: String? = nil
+  var valueFont: Font = QuotaDesign.Typography.statValue
+  var valueIdentifier: String? = nil
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -11,8 +13,11 @@ struct QuotaStatTile: View {
         .font(QuotaDesign.Typography.support)
         .foregroundStyle(.secondary)
       Text(value)
-        .font(QuotaDesign.Typography.statValue)
+        .font(valueFont)
         .foregroundStyle(.primary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .modifier(QuotaOptionalIdentifier(valueIdentifier))
       if let caption {
         Text(caption)
           .font(QuotaDesign.Typography.meta)
@@ -25,6 +30,7 @@ struct QuotaStatTile: View {
 }
 
 struct QuotaStatGrid<Content: View>: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   private let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -32,10 +38,7 @@ struct QuotaStatGrid<Content: View>: View {
   }
 
   var body: some View {
-    ViewThatFits(in: .horizontal) {
-      grid(columns: 2)
-      grid(columns: 1)
-    }
+    grid(columns: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
   }
 
   private func grid(columns: Int) -> some View {
@@ -50,5 +53,6 @@ struct QuotaStatGrid<Content: View>: View {
     ) {
       content
     }
+    .fixedSize(horizontal: false, vertical: true)
   }
 }

@@ -75,4 +75,19 @@ struct AgentDisplayTests {
     )
     #expect(QuotaFormat.costPriced(partial) == "Priced 10 of 12 rows")
   }
+
+  @Test
+  func agentSystemImagesAreSymbolsNotProviderMarks() {
+    #expect(BillingAgent.codex.systemImage == "terminal")
+    #expect(BillingAgent.claudeCode.systemImage == "sparkles")
+    #expect(BillingAgent.grok.systemImage == "bolt")
+    #expect(BillingAgent.cursor.systemImage == "cursorarrow")
+    #expect(BillingAgent.gemini.systemImage == "star.circle")
+    #expect(BillingAgent.copilot.systemImage == "airplane")
+    #expect(BillingAgent.opencode.systemImage == "chevron.left.forwardslash.chevron.right")
+    #expect(BillingAgent.pi.systemImage == BillingAgent.opencode.systemImage)
+    #expect(BillingAgent.kilo.systemImage == BillingAgent.opencode.systemImage)
+    #expect(BillingAgent.antigravity.systemImage == BillingAgent.opencode.systemImage)
+    #expect(BillingAgent.unknown.systemImage == BillingAgent.opencode.systemImage)
+  }
 }
