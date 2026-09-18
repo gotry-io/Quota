@@ -13,7 +13,9 @@ struct ProviderQuotaRow: View {
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
     let stateLabel = snapshot.stateLabel()
-    return VStack(alignment: .leading, spacing: 12) {
+    let hero = snapshot.primaryCadenceWindows.first ?? snapshot.windows.first
+    let rest = snapshot.windows.filter { $0.id != hero?.id }
+    return VStack(alignment: .leading, spacing: QuotaDesign.Layout.rowSpacing) {
       HStack(alignment: .center, spacing: 8) {
         ProviderMark(provider: provider, size: QuotaDesign.Layout.markSize)
           .foregroundStyle(.primary)
@@ -26,6 +28,11 @@ struct ProviderQuotaRow: View {
             .frame(width: QuotaTheme.statusDotSize, height: QuotaTheme.statusDotSize)
             .accessibilityHidden(true)
         }
+        Spacer(minLength: 8)
+        Image(systemName: "chevron.right")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
       }
       .accessibilityElement(children: .combine)
       .accessibilityAddTraits(.isHeader)
@@ -38,11 +45,11 @@ struct ProviderQuotaRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           accountLabel(label)
           Spacer(minLength: 8)
-          if let plan { planCapsule(plan) }
+          if let plan { PlanCapsule(plan: plan) }
         }
         VStack(alignment: .leading, spacing: 6) {
           accountLabel(label)
-          if let plan { planCapsule(plan) }
+          if let plan { PlanCapsule(plan: plan) }
         }
       }
       // One element: the plan capsule is a label, not a target, so it must not be its own node.
@@ -51,11 +58,21 @@ struct ProviderQuotaRow: View {
 
       if snapshot.windows.isEmpty {
         Text("No quota windows yet.")
-          .font(.subheadline)
+          .font(QuotaDesign.Typography.support)
           .foregroundStyle(.primary)
-      } else {
-        ForEach(snapshot.windows) { window in
-          QuotaWindowBlock(window: window, stateLabel: stateLabel)
+      } else if let hero {
+        QuotaWindowBlock(
+          window: hero,
+          stateLabel: stateLabel,
+          presentation: .overviewHero
+        )
+        ForEach(rest) { window in
+          Divider()
+          QuotaWindowBlock(
+            window: window,
+            stateLabel: stateLabel,
+            presentation: .overviewCompact
+          )
         }
       }
     }
@@ -78,12 +95,16 @@ struct ProviderQuotaRow: View {
 
   private func accountLabel(_ label: String) -> some View {
     Text(label)
-      .font(.subheadline.weight(.medium))
-      .foregroundStyle(.primary)
+      .font(QuotaDesign.Typography.support)
+      .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
   }
+}
 
-  private func planCapsule(_ plan: String) -> some View {
+struct PlanCapsule: View {
+  let plan: String
+
+  var body: some View {
     Text(plan)
       .font(.caption.weight(.semibold))
       .foregroundStyle(.primary)
@@ -100,52 +121,78 @@ struct ProviderQuotaRow: View {
   }
 }
 
+enum QuotaWindowPresentation {
+  /// Overview primary cadence: large remaining, 8pt meter, reset and pace on one meta line.
+  case overviewHero
+  /// Overview secondary windows: compact remaining, 4pt meter, reset and pace as meta.
+  case overviewCompact
+  /// Subscription detail: large remaining, live countdown, optional pace line.
+  case detail
+}
+
 struct QuotaWindowBlock: View {
   let window: QuotaWindow
   /// Why the reading is not current, or `nil` while it is.
   var stateLabel: String? = nil
-  /// Detail uses a live timer under a day; Overview keeps the shared static reset copy.
-  var usesLiveCountdown: Bool = false
-  /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
-  var now: Date = Date()
+  var presentation: QuotaWindowPresentation = .detail
   /// The curve this device's own samples draw for the window, when it has any (ADR 0042).
   var history: QuotaHistory? = nil
+  /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
+  var now: Date = Date()
 
   var body: some View {
+    Group {
+      switch presentation {
+      case .overviewHero:
+        heroBody
+      case .overviewCompact:
+        compactBody
+      case .detail:
+        detailBody
+      }
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilityText)
+  }
+
+  private var heroBody: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(QuotaFormat.windowTitle(window))
-        .font(QuotaDesign.Typography.support)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      windowTitle
+      remainingValue
+      meter(height: QuotaDesign.Layout.meterHeight)
+      joinedMeta
+    }
+  }
 
-      Text(QuotaFormat.remaining(window))
-        .font(QuotaDesign.Typography.remainingValue)
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-      if window.showsPercentMeter {
-        QuotaMeter(remainingPercent: window.remainingPercent)
-          .allowsHitTesting(false)
-      }
-
-      if let history, !history.points.isEmpty {
-        QuotaPaceLineView(history: history)
-      }
-
-      if usesLiveCountdown {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-          countdownRow(now: context.date)
+  private var compactBody: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          windowTitle
+          Spacer(minLength: 8)
+          compactRemaining
         }
-      } else if let support = supportLine {
-        // No line limit: at accessibility text sizes a capped line clips the reset time.
-        Text(support)
-          .font(QuotaDesign.Typography.meta)
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 2) {
+          windowTitle
+          compactRemaining
+        }
       }
+      meter(height: QuotaDesign.Layout.compactMeterHeight)
+      joinedMeta
+    }
+  }
 
+  private var detailBody: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      windowTitle
+      remainingValue
+      meter(height: QuotaDesign.Layout.meterHeight)
+      if let history, !history.points.isEmpty {
+        QuotaPaceLineView(history: history, tint: windowTone)
+      }
+      TimelineView(.periodic(from: .now, by: 60)) { context in
+        countdownRow(now: context.date)
+      }
       if let paceLine {
         Text(paceLine.text)
           .font(QuotaDesign.Typography.meta)
@@ -153,8 +200,58 @@ struct QuotaWindowBlock: View {
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(accessibilityText)
+  }
+
+  private var windowTitle: some View {
+    Text(QuotaFormat.windowTitle(window))
+      .font(QuotaDesign.Typography.support)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private var remainingValue: some View {
+    Text(QuotaFormat.remaining(window))
+      .font(QuotaDesign.Typography.remainingValue)
+      .foregroundStyle(.primary)
+      .lineLimit(1)
+      .minimumScaleFactor(0.7)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var compactRemaining: some View {
+    Text(QuotaFormat.remaining(window))
+      .font(.body.monospacedDigit().weight(.semibold))
+      .foregroundStyle(.primary)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  @ViewBuilder
+  private func meter(height: CGFloat) -> some View {
+    if window.showsPercentMeter {
+      QuotaMeter(remainingPercent: window.remainingPercent, height: height)
+        .allowsHitTesting(false)
+    }
+  }
+
+  @ViewBuilder
+  private var joinedMeta: some View {
+    let reset = supportLine
+    if let reset, let paceLine {
+      Text("\(reset) · \(paceLine.text)")
+        .font(QuotaDesign.Typography.meta)
+        .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    } else if let reset {
+      Text(reset)
+        .font(QuotaDesign.Typography.meta)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    } else if let paceLine {
+      Text(paceLine.text)
+        .font(QuotaDesign.Typography.meta)
+        .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
   }
 
   @ViewBuilder
@@ -192,6 +289,10 @@ struct QuotaWindowBlock: View {
     guard let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt) else { return nil }
     if case .runsOut = pace { return (text, true) }
     return (text, false)
+  }
+
+  private var windowTone: Color {
+    QuotaTheme.color(for: QuotaTone.remaining(percent: window.remainingPercent))
   }
 
   private var accessibilityText: String {

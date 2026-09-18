@@ -16,11 +16,24 @@ struct UsageView: View {
         signedOutInvitation
       } else {
         Section {
-          periodPicker
-          periodStepper
+          QuotaCard {
+            periodPicker
+            periodStepper
+          }
+          .quotaCardRow()
         }
 
-        UsageBudgetSection(model: model, editing: $budgetEditor)
+        if let period = model.usagePeriodValue {
+          Section {
+            UsageTotalsSection(period: period)
+              .quotaCardRow()
+          }
+        }
+
+        Section {
+          UsageBudgetSection(model: model, editing: $budgetEditor)
+            .quotaCardRow()
+        }
 
         signedInContent
       }
@@ -85,7 +98,6 @@ struct UsageView: View {
   private var signedInContent: some View {
     if let period = model.usagePeriodValue {
       let sections = model.usagePeriodIsFolded ? [] : UsageBreakdown.sections(in: period)
-      UsageTotalsSection(period: period)
       if model.usagePeriodIsFolded {
         foldedPeriod
       } else if sections.isEmpty {
@@ -131,7 +143,6 @@ struct UsageView: View {
       }
     }
     .pickerStyle(.segmented)
-    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     .frame(minHeight: QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("usage.period")
   }
@@ -153,7 +164,7 @@ struct UsageView: View {
       .accessibilityIdentifier("usage.period.previous")
 
       Text(model.usagePeriodTitle)
-        .font(.subheadline)
+        .font(QuotaDesign.Typography.support)
         .foregroundStyle(Color.primary)
         .frame(maxWidth: .infinity)
         .accessibilityIdentifier("usage.period.title")
@@ -272,77 +283,82 @@ struct UsageTotalsSection: View {
   }
 
   var body: some View {
-    Section {
-      LabeledContent("Tokens") {
-        Text(QuotaFormat.compactCount(totals.totalTokens))
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(Color.primary)
+    QuotaCard {
+      QuotaStatGrid {
+        costTile
+        tokensTile
+        cacheHitTile
+        reasoningTile
       }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
-      )
-      .accessibilityIdentifier(identifier)
-
-      LabeledContent("API-equivalent cost") {
-        Text(QuotaFormat.cost(cost))
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(Color.primary)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(
-        "API-equivalent cost, \(QuotaFormat.costAccessibility(cost))"
-      )
-      .accessibilityIdentifier("\(identifier).cost")
-
-      LabeledContent("Cache hit") {
-        Text(cacheHitLabel)
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("Cache hit")
-      .accessibilityValue(cacheHitAccessibilityValue)
-      .accessibilityIdentifier("\(identifier).cache-hit")
-
-      LabeledContent("Reasoning") {
-        Text(QuotaFormat.compactCount(totals.reasoningTokens))
-          .font(.body.monospacedDigit().weight(.medium))
-          .foregroundStyle(.primary)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("Reasoning")
-      .accessibilityValue("\(QuotaFormat.accessibleCount(totals.reasoningTokens)) tokens of output")
-      .accessibilityIdentifier("\(identifier).reasoning")
 
       VStack(alignment: .leading, spacing: 4) {
         Text(
           "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out"
         )
-        .font(.body)
-        .foregroundStyle(Color.primary)
+        .font(QuotaDesign.Typography.meta)
+        .foregroundStyle(.primary)
         .accessibilityIdentifier("section.footer.\(identifier)")
         Text("\(QuotaFormat.costBasis(cost)) · \(QuotaFormat.costPriced(cost))")
-          .font(.body)
-          .foregroundStyle(Color.primary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+          .font(QuotaDesign.Typography.meta)
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("\(identifier).priced")
-        if let saved = cacheSaved.flatMap(QuotaFormat.cacheSaved) {
-          Text("Cache hit \(cacheHitLabel) · \(saved)")
-            .font(.body)
-            .foregroundStyle(Color.primary)
-            .accessibilityHidden(true)
-        }
-        if partial {
-          Text(partialCopy)
-            .font(.body)
-            .foregroundStyle(Color.primary)
-        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .ignore)
       .accessibilityLabel(footerAccessibilityLabel)
+
+      if partial {
+        Label(partialCopy, systemImage: "exclamationmark.triangle")
+          .font(QuotaDesign.Typography.meta)
+          .foregroundStyle(QuotaTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+      }
     }
+  }
+
+  private var costTile: some View {
+    QuotaStatTile(
+      label: "Cost",
+      value: QuotaFormat.cost(cost),
+      valueIdentifier: "\(identifier).cost"
+    )
+    .accessibilityLabel("Cost, \(QuotaFormat.costAccessibility(cost))")
+    .accessibilityIdentifier(identifier)
+  }
+
+  private var tokensTile: some View {
+    QuotaStatTile(
+      label: "Tokens",
+      value: QuotaFormat.compactCount(totals.totalTokens),
+      valueFont: QuotaDesign.Typography.remainingValue
+    )
+    .accessibilityLabel(
+      "\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens, \(QuotaFormat.accessibleCount(totals.inputTokens)) in, \(QuotaFormat.accessibleCount(totals.outputTokens)) out"
+    )
+  }
+
+  private var cacheHitTile: some View {
+    QuotaStatTile(
+      label: "Cache hit",
+      value: cacheHitLabel,
+      caption: cacheSaved.flatMap(QuotaFormat.cacheSaved),
+      valueFont: QuotaDesign.Typography.remainingValue
+    )
+    .accessibilityLabel("Cache hit")
+    .accessibilityValue(cacheHitAccessibilityValue)
+    .accessibilityIdentifier("\(identifier).cache-hit")
+  }
+
+  private var reasoningTile: some View {
+    QuotaStatTile(
+      label: "Reasoning",
+      value: QuotaFormat.compactCount(totals.reasoningTokens),
+      valueFont: QuotaDesign.Typography.remainingValue
+    )
+    .accessibilityLabel("Reasoning")
+    .accessibilityValue("\(QuotaFormat.accessibleCount(totals.reasoningTokens)) tokens of output")
+    .accessibilityIdentifier("\(identifier).reasoning")
   }
 
   private var cacheHitAccessibilityValue: String {
@@ -364,18 +380,25 @@ struct UsageTopModelsSection: View {
   var body: some View {
     let ranked = Array(UsageBreakdown.rankedModels(in: sections).prefix(3))
     if ranked.count > 1 {
+      let topTokens = ranked[0].totals.totalTokens
       Section {
-        ForEach(ranked) { row in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(row.displayName)
-              .font(.subheadline)
-              .foregroundStyle(Color.primary)
-            Spacer(minLength: 8)
-            Text(
-              "\(QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—") · \(QuotaFormat.compactCount(row.totals.totalTokens))"
-            )
-            .font(.subheadline.monospacedDigit())
-            .foregroundStyle(.primary)
+        ForEach(Array(ranked.enumerated()), id: \.element.id) { index, row in
+          let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—"
+          let fraction = topTokens > 0 ? Double(row.totals.totalTokens) / Double(topTokens) : 0
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              Text("\(index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+              Text(row.displayName)
+                .font(.subheadline)
+                .foregroundStyle(Color.primary)
+              Spacer(minLength: 8)
+              Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.primary)
+            }
+            QuotaShareBar(share: fraction)
           }
           .accessibilityElement(children: .ignore)
           .accessibilityLabel(row.displayName)
@@ -403,18 +426,22 @@ struct UsageAgentListSections: View {
   var body: some View {
     ForEach(sections) { section in
       Section {
-        ForEach(section.providers) { provider in
-          providerRows(provider, agentID: section.id)
+        QuotaCard(
+          title: section.displayName,
+          systemImage: section.agent.systemImage,
+          titleIdentifier: "section.header.\(section.id)"
+        ) {
+          ForEach(section.providers) { provider in
+            providerBlock(provider, agentID: section.id)
+          }
         }
-      } header: {
-        Text(section.displayName)
-          .accessibilityIdentifier("section.header.\(section.id)")
+        .quotaCardRow()
       }
     }
   }
 
   @ViewBuilder
-  private func providerRows(
+  private func providerBlock(
     _ provider: UsageBreakdown.ProviderSection,
     agentID: String
   ) -> some View {
@@ -422,48 +449,50 @@ struct UsageAgentListSections: View {
     let expanded = expandedProviderIDs.contains(key)
     let visible = provider.visibleModels(expanded: expanded)
     let hidden = provider.hiddenCount(expanded: expanded)
-
     let providerTokens = UsageBreakdown.providerTokens(provider)
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(provider.displayName)
-        .font(.subheadline)
-        .foregroundStyle(.primary)
-        .accessibilityAddTraits(.isHeader)
-      Spacer(minLength: 8)
-      Text(QuotaFormat.share(providerTokens, of: periodTokens) ?? "—")
-        .font(.subheadline.monospacedDigit())
-        .foregroundStyle(.primary)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(provider.displayName)
-    .accessibilityValue(
-      "\(QuotaFormat.share(providerTokens, of: periodTokens) ?? "no share") of this period"
-    )
-    .accessibilityIdentifier("usage.provider.\(provider.id)")
 
-    ProviderShareBar(share: shareFraction(providerTokens, of: periodTokens))
-      .accessibilityHidden(true)
-
-    ForEach(visible) { row in
-      modelRow(row)
-    }
-
-    if provider.foldsModels {
-      Button(expanded ? "Show fewer" : "Show \(hidden) more") {
-        if expanded {
-          expandedProviderIDs.remove(key)
-        } else {
-          expandedProviderIDs.insert(key)
-        }
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(provider.displayName)
+          .font(.subheadline)
+          .foregroundStyle(.primary)
+          .accessibilityAddTraits(.isHeader)
+        Spacer(minLength: 8)
+        Text(QuotaFormat.share(providerTokens, of: periodTokens) ?? "—")
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(.primary)
       }
-      .tint(.primary)
-      .accessibilityLabel(
-        expanded
-          ? "Show fewer \(provider.displayName) models"
-          : "Show \(hidden) more \(provider.displayName) models"
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(provider.displayName)
+      .accessibilityValue(
+        "\(QuotaFormat.share(providerTokens, of: periodTokens) ?? "no share") of this period"
       )
-      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-      .accessibilityIdentifier(expanded ? showFewerIdentifier : showMoreIdentifier)
+      .accessibilityIdentifier("usage.provider.\(provider.id)")
+
+      QuotaShareBar(share: shareFraction(providerTokens, of: periodTokens))
+
+      ForEach(visible) { row in
+        modelRow(row)
+      }
+
+      if provider.foldsModels {
+        Button(expanded ? "Show fewer" : "Show \(hidden) more") {
+          if expanded {
+            expandedProviderIDs.remove(key)
+          } else {
+            expandedProviderIDs.insert(key)
+          }
+        }
+        .tint(.primary)
+        .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget, alignment: .leading)
+        .accessibilityLabel(
+          expanded
+            ? "Show fewer \(provider.displayName) models"
+            : "Show \(hidden) more \(provider.displayName) models"
+        )
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier(expanded ? showFewerIdentifier : showMoreIdentifier)
+      }
     }
   }
 
@@ -494,20 +523,20 @@ struct UsageAgentListSections: View {
   }
 }
 
-/// A provider's share of the period, drawn once under its name.
-private struct ProviderShareBar: View {
+/// A share of a whole, drawn once under a name. Fill is emerald.
+struct QuotaShareBar: View {
   let share: Double
 
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .leading) {
-        Capsule().fill(Color.primary.opacity(0.12))
+        Capsule().fill(QuotaTheme.meterTrack)
         Capsule()
-          .fill(Color.primary.opacity(0.55))
+          .fill(QuotaTheme.emerald)
           .frame(width: proxy.size.width * share)
       }
     }
     .frame(height: 4)
-    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
+    .accessibilityHidden(true)
   }
 }

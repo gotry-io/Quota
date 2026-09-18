@@ -26,6 +26,9 @@ struct UsageDailySection: View {
       .frame(minHeight: QuotaTheme.minimumTouchTarget)
       .accessibilityIdentifier("usage.daily.mode")
 
+      legend
+        .accessibilityHidden(true)
+
       chart
         .frame(height: 96)
         .frame(maxWidth: .infinity)
@@ -53,6 +56,26 @@ struct UsageDailySection: View {
     }
   }
 
+  private var legend: some View {
+    HStack(spacing: 12) {
+      legendItem(QuotaTheme.emerald.opacity(0.35), "Cached")
+      legendItem(QuotaTheme.emerald, "Fresh")
+      legendItem(Color.primary.opacity(0.85), "Output")
+    }
+    .font(.caption)
+    .foregroundStyle(.primary)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func legendItem(_ color: Color, _ label: String) -> some View {
+    HStack(spacing: 6) {
+      RoundedRectangle(cornerRadius: 1, style: .continuous)
+        .fill(color)
+        .frame(width: 8, height: 8)
+      Text(label)
+    }
+  }
+
   private var chart: some View {
     GeometryReader { proxy in
       let maximum = rows.map(value(of:)).max() ?? 0
@@ -73,26 +96,46 @@ struct UsageDailySection: View {
 
   @ViewBuilder
   private func bar(_ row: UsageDailyFold.Row, maximum: Int, height: CGFloat) -> some View {
-    let scale = maximum > 0 ? CGFloat(value(of: row)) / CGFloat(maximum) : 0
-    let barHeight = max(2, height * scale)
+    let amount = value(of: row)
+    let scale = maximum > 0 ? CGFloat(amount) / CGFloat(maximum) : 0
     if mode == .tokens, row.totals.totalTokens > 0 {
+      let barHeight = max(2, height * scale)
       VStack(spacing: 0) {
-        segment(row.outputTokens, of: row.totals.totalTokens, height: barHeight, opacity: 0.9)
-        segment(row.freshInputTokens, of: row.totals.totalTokens, height: barHeight, opacity: 0.55)
-        segment(row.cachedInputTokens, of: row.totals.totalTokens, height: barHeight, opacity: 0.25)
+        segment(
+          row.outputTokens,
+          of: row.totals.totalTokens,
+          height: barHeight,
+          fill: Color.primary.opacity(0.85)
+        )
+        segment(
+          row.freshInputTokens,
+          of: row.totals.totalTokens,
+          height: barHeight,
+          fill: QuotaTheme.emerald
+        )
+        segment(
+          row.cachedInputTokens,
+          of: row.totals.totalTokens,
+          height: barHeight,
+          fill: QuotaTheme.emerald.opacity(0.35)
+        )
       }
       .frame(height: barHeight)
       .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+    } else if amount > 0 {
+      RoundedRectangle(cornerRadius: 2, style: .continuous)
+        .fill(QuotaTheme.emerald)
+        .frame(height: max(2, height * scale))
     } else {
       RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(Color.primary.opacity(value(of: row) > 0 ? 0.55 : 0.12))
-        .frame(height: barHeight)
+        .fill(Color(uiColor: .tertiarySystemFill))
+        .frame(height: max(2, height * 0.12))
     }
   }
 
-  private func segment(_ part: Int, of whole: Int, height: CGFloat, opacity: Double) -> some View {
+  private func segment(_ part: Int, of whole: Int, height: CGFloat, fill: Color) -> some View {
     Rectangle()
-      .fill(Color.primary.opacity(opacity))
+      .fill(fill)
       .frame(height: whole > 0 ? height * CGFloat(part) / CGFloat(whole) : 0)
   }
 

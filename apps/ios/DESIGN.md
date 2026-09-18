@@ -37,8 +37,9 @@ on `QuotaTheme`. Brand RGB stays on `QuotaBrand`. Remaining-quota tone stays on 
 merge those.
 
 Layout (`QuotaDesign.Layout`): card corner radius 20 continuous, card padding 16, section spacing
-24, row spacing 12, meter height 8, provider mark 22, stat tile minimum width 140, identity avatar
-44, Settings row icon 28, device symbol 28, About mark 64, Connect mark 72.
+24, row spacing 12, meter height 8, compact meter height 4, provider mark 22, detail mark 40, stat
+tile minimum width 140, identity avatar 44, Settings row icon 28, device symbol 28, About mark 64,
+Connect mark 72.
 
 Type (`QuotaDesign.Typography`) scales with Dynamic Type:
 
@@ -55,22 +56,24 @@ Supporting copy may be `.secondary` at `subheadline` and larger. `footnote` / `c
 stays `.primary`.
 
 `QuotaCard` is the content card: `secondarySystemGroupedBackground`, 20-point continuous corners,
-16-point padding, optional `cardTitle` above the content. It is not glass. Inside a List row,
-`quotaCardRow()` clears insets, the row background, and the separator so pull-to-refresh and
-`NavigationLink` rows keep working.
+16-point padding, optional `cardTitle` above the content, optional leading SF Symbol, optional
+trailing accessory. It is not glass. Inside a List row, `quotaCardRow()` clears insets, the row
+background, and the separator so pull-to-refresh and `NavigationLink` rows keep working.
 
-`QuotaStatTile` is a `support` / `.secondary` label over a `statValue`, with an optional `meta`
-caption, combined into one VoiceOver element. `QuotaStatGrid` lays tiles in two columns and falls
-back to one column at accessibility sizes (`ViewThatFits`).
+`QuotaStatTile` is a `support` / `.secondary` label over a `statValue` (or `remainingValue` when
+the pair is a supporting tile), with an optional `meta` caption, combined into one VoiceOver
+element. `QuotaStatGrid` lays tiles in two columns and falls back to one column at accessibility
+sizes.
 
 `QuotaMeter` is a capsule track (`QuotaTheme.meterTrack`) whose fill is
 `QuotaTheme.color(for: QuotaTone.remaining(percent:))` — healthy at or above 40 remaining, warning
-at or above 15, otherwise critical. Height 8. Hidden from VoiceOver; the window's remaining figure
-is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
+at or above 15, otherwise critical — or a caller-supplied `QuotaTone` when the bar is spend, not
+remaining. Height 8 by default, 4 on compact Overview windows. Hidden from VoiceOver; the window's
+remaining figure is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
 
-`ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows, tinted
-by the caller, hidden from VoiceOver. `QuotaMark` is the Quota `quota.svg` asset from the same
-catalog. Widget extensions do not link the catalog.
+`ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows and 40
+points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. `QuotaMark`
+is the Quota `quota.svg` asset from the same catalog. Widget extensions do not link the catalog.
 
 `SettingsRowIcon` is a 28-point continuous rounded square with a white SF Symbol on a tinted fill,
 for Settings hub rows. `QuotaIdentityAvatar` is a 44-point circle with the first letter of an
@@ -229,7 +232,7 @@ one Today fetch. A refresh in flight ignores additional refresh requests.
 Header:
 
 - Title is the account display label, or **Account** when the label is absent. The body does not
-  repeat that label.
+  repeat that label. The navigation title stays large; `.navigationSubtitle` is not used.
 
 Body, in order:
 
@@ -237,34 +240,43 @@ Body, in order:
    standard list-row background. Cached: **Showing saved data. Couldn't refresh.** No cache:
    **Couldn't refresh. Pull to try again.** Keep provider-state and freshness vocabulary from the
    shared formatters unchanged.
-2. Quota. Each subscription is one standard `NavigationLink` row (`ProviderQuotaRow`): a 22pt
-   catalog `ProviderMark`, then the provider name with an 8pt incident dot after the name when this
+2. Quota. Each subscription is one `QuotaCard` (`quotaCardRow()`), still a `NavigationLink` to
+   the detail (`ProviderQuotaRow`). Cards sit 12pt apart. Card header: a 22pt catalog
+   `ProviderMark`, the provider name in `cardTitle`, an 8pt incident dot after the name when this
    device's last-good status-page reading is `minor` or worse (VoiceOver speaks the status-page
-   description; there is no tooltip), masked account label, optional neutral plan capsule, and
-   `QuotaWindowBlock` children. The List row background is the only content container. Status
-   pages are fetched on this device (`QuotaProviderStatus`) on the helper's ten-minute cadence
-   while the app is in the foreground (`AppModel` holds the timer) and again on a background
-   refresh; a failed poll keeps the last reading. Relay does not forward them. Widgets do not show
-   the incident mark. Remaining is the strongest number, with one meter per percent window — filled
-   by the shared remaining-quota tone bands, not a flat emerald — and reset copy. A reading that is
-   not current names why in place of, or ahead of, that reset time, because the reset it names
-   may already have passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t
-   refresh** for a state its device reported, and **Not current** for one that aged past its
-   `valid_until`. Widgets apply the same rule at the instant they draw. Remaining has no "left"
-   or "remaining" suffix. Budget windows with an amount use `71% · $3.75`, percent-only windows
-   use `71%`, and balance-only windows use **Balance** plus the unit amount. Empty windows: **No
-   quota windows yet.** The canonical
-   **Updated** age is the quota Section footer; it wraps and is spoken in full.
+   description; there is no tooltip), and a trailing chevron. Second line: masked account label
+   (`support`, `.secondary`) and the optional plan capsule (`caption` semibold, hairline stroke).
+   The primary-cadence window (`snapshot.primaryCadenceWindows.first ?? windows.first`) is the
+   hero: window title in `support` / `.secondary`, remaining in `remainingValue`, `QuotaMeter`,
+   then one `meta` line joining reset copy and pace copy with ` · ` (pace warns →
+   `QuotaTheme.warning`). Every other window is a compact row under a hairline: title (`support`)
+   … remaining (`.body.monospacedDigit().weight(.semibold)`) with a 4pt meter beneath; reset and
+   pace as `meta`. Status pages are fetched on this device (`QuotaProviderStatus`) on the helper's
+   ten-minute cadence while the app is in the foreground (`AppModel` holds the timer) and again on
+   a background refresh; a failed poll keeps the last reading. Relay does not forward them.
+   Widgets do not show the incident mark. Remaining is the strongest number, with meters filled by
+   the shared remaining-quota tone bands, not a flat emerald. A reading that is not current names
+   why in place of, or ahead of, that reset time, because the reset it names may already have
+   passed: **Sign-in needed**, **Unavailable**, **Unsupported**, or **Can’t refresh** for a state
+   its device reported, and **Not current** for one that aged past its `valid_until`. Widgets
+   apply the same rule at the instant they draw. Remaining has no "left" or "remaining" suffix.
+   Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
+   balance-only windows use **Balance** plus the unit amount. Empty windows: **No quota windows
+   yet.** The canonical **Updated** age is the quota Section footer in `meta` under the last
+   card; it wraps and is spoken in full.
 3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
-   `gauge.with.dots.needle.33percent`, and the two ways to change that as buttons. Without an
-   account the description is **Connect a provider to read your quota on this iPhone, or sign in to
-   Quota to see what your Macs report.** with **Connect a provider** (switches to Settings, where
-   the Providers group is) and **Sign in to Quota**. With one it is **Set up QuotaBar on a Mac to
-   start reporting, or connect a provider to read it on this iPhone.** and only **Connect a
-   provider**.
-4. Today, only when an account answered, before setup or device support: Tokens, API-equivalent
-   cost, Input, and Output, with monospaced values. Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**.
-   Empty: **No usage today.**
+   `gauge.with.dots.needle.33percent`, and the two ways to change that as full-width buttons.
+   **Connect a provider** is `.borderedProminent` (switches to Settings, where the Providers group
+   is). **Sign in to Quota** is `.bordered`. Without an account the description is **Connect a
+   provider to read your quota on this iPhone, or sign in to Quota to see what your Macs report.**
+   with both buttons. With one it is **Set up QuotaBar on a Mac to start reporting, or connect a
+   provider to read it on this iPhone.** and only **Connect a provider**.
+4. Today, only when an account answered, before setup or device support: one
+   `QuotaCard(title: "Today")` holding a `QuotaStatGrid` of four `QuotaStatTile`s — Tokens,
+   API-equivalent cost, Input, and Output. Identifiers `overview.today.*` sit on the tiles; the
+   card carries `overview.today`; the header text keeps `section.header.today`. Complete cost is
+   `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**. Empty: the card with **No usage
+   today.**
 5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
@@ -277,26 +289,34 @@ Opened from an Overview quota row, and from `io.gotry.quota:/subscriptions/<sele
 that id matches a current subscription. An unmatched selection stays on Overview. The system back
 button is the only way back; there is no second close control.
 
-The title is the provider display name. An inset-grouped `List`:
+The inline navigation title is the provider display name; the header card carries it large, so the page does not print it twice. An inset-grouped `List`:
 
-- Identity: `LabeledContent` rows **Account** and, when present, **Plan** as plain text. Canonical
-  freshness is the Section footer.
-- Quota: one `QuotaWindowBlock` per window as native rows. Remaining is the strongest text. Empty:
-  **No quota windows yet.**
-- Today: one native row per window of the reading's own cadence that the reader's day already
-  holds — the local clock times it ran between, and its peak used percent — with the Section footer
-  naming the day in one line, **Today: 3 windows · 82% / 40% / 12%**. The section is absent unless
-  this phone read the subscription itself.
-- Readings: one native row per source. Leading column is display name, primary remaining, then
-  freshness; trailing text is **Reporting** only on the selected source. Empty: **No device
-  readings yet.**
+- Header card: a 40pt `ProviderMark` beside the provider name (`title2.bold`), then the masked
+  account label (`support`, `.secondary`) and the plan capsule. Identifiers `subscription.account`
+  and `subscription.plan` stay on the label and capsule. Canonical freshness is a `meta` line on
+  the card (`section.footer.subscription-updated`).
+- Quota: one `QuotaCard` per window. Title in `support` / `.secondary`, remaining in
+  `remainingValue`, `QuotaMeter`, the pace line (`QuotaPaceLineView`, tinted with the window's
+  remaining-quota tone; identifier `subscription.paceline`), the live countdown row, and pace
+  copy. Remaining is the strongest text. Empty: **No quota windows yet.**
+- Today (local readings only): a `QuotaCard(title: "Today")`. Each window is a row
+  `HH:MM–HH:MM … peak 82%` with a 4pt bar of the peak used fraction; identifiers
+  `subscription.today.current` / `subscription.today.window` stay on the rows. The footer line
+  naming the day stays (`section.footer.today`): **Today: 3 windows · 82% / 40% / 12%**. The
+  section is absent unless this phone read the subscription itself.
+- Readings: a `QuotaCard(title: "Readings")`. Each source row has a device symbol
+  (`iphone` for **This iPhone**, `laptopcomputer` otherwise), the name (`body`), remaining and
+  freshness (`meta`), and a trailing **Reporting** capsule tinted emerald on the selected source.
+  Identifiers `subscription.source` / `subscription.reporting` stay. Empty: **No device readings
+  yet.**
 
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
 
-A window this phone has read more than once draws a 44pt pace line above its reset row: solid over
-the samples it took inside the running window, dashed from the last of them to where the ADR 0035
-projection lands at the reset, with the vertical axis the whole window from 0 to 100 percent used.
+A window this phone has read more than once draws a 44pt pace line above its reset row, tinted
+with that window's remaining-quota tone: solid over the samples it took inside the running window,
+dashed from the last of them to where the ADR 0035 projection lands at the reset, with the vertical
+axis the whole window from 0 to 100 percent used.
 Only a reading this phone took itself gets one — a reading Relay resolved was taken by some Mac,
 which keeps its own samples and never sends them — and the same rule governs the Today section. The
 fold is `packages/protocol/fixtures/quota-history-conformance.json`, answered here by
@@ -306,7 +326,8 @@ the space belongs to the number.
 
 Each device row is that device's display name — **This iPhone** for what this device read itself,
 or **Device** when a name is missing — the primary remaining figure from that source, and
-freshness. The page never shows a device id, fingerprint, subscription key, or a custom surface. There is no independent loading or error state on this
+freshness, with the device symbol as above. The page never shows a device id, fingerprint,
+subscription key, or a custom surface. There is no independent loading or error state on this
 pushed view; it renders the selected last-good subscription.
 
 ### Widget overview
@@ -383,49 +404,53 @@ Header:
 
 Body, in order:
 
-1. A segmented period control in the first List row: **Day**, **Week**, **Month**, **7D**, **30D**,
-   and **All**, whose VoiceOver names are the full ones in Shared product vocabulary. Default is
-   **Last 30 days**. A custom range selects none of the six, so the control shows nothing selected.
-   The selection lives in memory for the signed-in session. It is a system content filter, not a
-   floating navigation action, and it scrolls with the List.
-2. A stepper row under it: a **Previous period** chevron, the range the period covers, a **Next
-   period** chevron, and a calendar button. Stepping applies to Day, Week, and Month only, and the
-   current unit is the last, so both chevrons are disabled on a fixed window and **Next period** is
-   disabled on the current one. The calendar button opens a **Custom range** sheet of two
-   `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
-3. A **Monthly budget** section: a `ProgressView` and one monospaced-digit line of
-   `spent / budget · percent` for this month, or **No budget is set for this month.**, then a
-   **Set budget** / **Edit budget** row opening a sheet with the amount in USD and a **Tell me at
-   80% and 100%** toggle. Both fields are `UserDefaults` on this iPhone and are never uploaded.
-   The two crossings post one local notification each per calendar month.
-4. Totals section: `LabeledContent` rows for **Tokens** (`CompactCountFormat`, monospaced),
-   **API-equivalent cost** (`$X.XX`, `≥ $X.XX`, or **— unpriced**), **Cache hit** (whole percent, or
-   **—** for a period with no input), and **Reasoning** (tokens of output). Supporting copy in that
-   section is `{input} in · {output} out`, then one line `{cost-basis} · Priced N of M rows`
-   from that period's cost row counts (the priced sentence shares the cost-basis row so later
-   List sections stay on screen), `Cache hit {percent} · saved $X.XX`
-   when the period's cache reads could be priced, and **Some hours in this period were scanned
-   incompletely.** when `partial` is true. Cache hit and its saving follow
-   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). No custom card. Semantic text
-   styles, primary color, so contrast and Dynamic Type stay system-owned. A period this iPhone
-   added up itself carries no cache saving, so that line is absent there.
-5. When the period was added up here rather than read from the summary, one line saying so, in
+1. A `QuotaCard` at the top with the segmented period control and the stepper. Segments are
+   **Day**, **Week**, **Month**, **7D**, **30D**, and **All**, whose VoiceOver names are the full
+   ones in Shared product vocabulary. Default is **Last 30 days**. A custom range selects none of
+   the six, so the control shows nothing selected. The selection lives in memory for the signed-in
+   session. It is a system content filter, not a floating navigation action, and it scrolls with
+   the List. The stepper is a **Previous period** chevron, the range the period covers in
+   `support`, a **Next period** chevron, and a calendar button. Stepping applies to Day, Week, and
+   Month only, and the current unit is the last, so both chevrons are disabled on a fixed window
+   and **Next period** is disabled on the current one. The calendar button opens a **Custom range**
+   sheet of two `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
+2. Totals as the hero: a `QuotaCard` with a `QuotaStatGrid` — **Cost** (`statValue`, first),
+   **Tokens**, **Cache hit** (caption: `saved $x` when the period's cache reads could be priced),
+   and **Reasoning** as `remainingValue`. `usage.headline` is on the cost tile's value. Under the grid, `{input} in ·
+   {output} out` and `{cost-basis} · Priced N of M rows` as `meta`. Complete cost is `$X.XX`,
+   partial is `≥ $X.XX`, unavailable is **— unpriced**. Cache hit is a whole percent, or **—** for
+   a period with no input. Reasoning is tokens of output. **Some hours in this period were scanned
+   incompletely.** when `partial` is true, as a `Label` with `exclamationmark.triangle` in
+   `QuotaTheme.warning`. Cache hit and its saving follow
+   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). A period this iPhone added up
+   itself carries no cache saving, so that caption is absent there.
+3. A `QuotaCard(title: "Monthly budget")`: a `QuotaMeter`-style bar whose fill is spend, not
+   remaining — `QuotaTheme.color(for:)` healthy below 80%, warning at or above 80%, critical at or
+   above 100% — the monospaced `spent / budget · percent` line, and a trailing `.bordered` compact
+   **Set budget** / **Edit budget** button. Empty: **No budget is set for this month.** The button
+   opens a sheet with the amount in USD and a **Tell me at 80% and 100%** toggle. Both fields are
+   `UserDefaults` on this iPhone and are never uploaded. The two crossings post one local
+   notification each per calendar month.
+4. When the period was added up here rather than read from the summary, one line saying so, in
    place of the model sections: the breakdown is on Today, Last 7 days, Last 30 days, and All.
-6. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
+5. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** The Activity
    section still follows.
 6a. Daily section, headed **Daily**, for any period but All and only when those days reported
    something. It covers the days the period covers, bounded by the activity days this phone holds.
    A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
    bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
-   is one fill. The bars are `Color.primary` at 25% / 55% / 90%, and a day with nothing in it is
-   drawn at 12% rather than left out. A **Daily breakdown** `DisclosureGroup` under them lists the
-   days newest first, each as `date` / `tokens · cost` with `in · out · cached · reasoning ·
-   messages` beneath. The section footer names the calendar: **UTC days.** The All period has no
-   Daily section.
+   is one emerald fill. Tokens bars use the brand ramp: cached input
+   `QuotaTheme.emerald.opacity(0.35)`, fresh input `QuotaTheme.emerald`, output
+   `Color.primary.opacity(0.85)`. A day with nothing in it is `tertiarySystemFill`, drawn at 12%
+   rather than left out. A caption legend of three 8pt squares (Cached, Fresh, Output) sits above
+   the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
+   as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
+   section footer names the calendar: **UTC days.** The All period has no Daily section.
 6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
    and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
-   same five emerald Activity steps; 24 bars under it are the hour-of-day totals. The read is
+   same five emerald Activity steps; 24 bars under it are the hour-of-day totals, emerald, with
+   the busiest hour at full opacity and the others scaled (minimum 0.25). The read is
    `detail=hours` on the period's dates in this iPhone's zone
    ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
 7. Activity section, headed **Activity**:
@@ -441,18 +466,22 @@ Body, in order:
      `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
      last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
      adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
-     increment/decrement changes the same selection. Under the grid, the selected day is visible
-     text (long UTC date, tokens, cost) followed by a 44-point **View day** button that presents
-     that day.
+     increment/decrement changes the same selection. Under the grid, the selected-day panel is a
+     two-tile row: the long UTC date as `caption`, tokens and cost as `remainingValue`, then a
+     44-point `.borderedProminent` **View day** button that presents that day.
 7a. Top models section, headed **Top models**, when the period has more than one model leaf: the
-   three largest, each as `{share} · {tokens}`.
-8. Each agent is a Section headed by its display name (Codex, Claude Code, Grok, OpenCode, Pi,
-   Cursor). Provider names are subhead rows (`InferenceProvider.displayName`) ending in that
-   provider's whole-percent share of the period, with a 4pt share bar under them; models are
-   standard rows with the model name leading and `{tokens} · {cost} · {share}` trailing. The model `other` is
-   **Other**. Each provider shows at most five models until **Show N more** reveals the rest;
-   **Show fewer** collapses them again. Both are standard 44-point List buttons with expanded /
-   collapsed accessibility state.
+   three largest as ranked rows — rank numeral (`caption`, secondary, monospaced), model name,
+   trailing `{share} · {tokens}`, and a 4pt emerald bar under each proportional to its share of
+   the top model. `usage.top-model` stays.
+8. Each agent is a `QuotaCard(title: agent.displayName)` with an SF Symbol (codex `terminal`,
+   claudeCode `sparkles`, grok `bolt`, cursor `cursorarrow`, gemini `star.circle`, copilot
+   `airplane`, opencode / pi / kilo / antigravity / unknown
+   `chevron.left.forwardslash.chevron.right`). Agents are not providers; do not use
+   `ProviderMark`. Provider names are subhead rows (`InferenceProvider.displayName`) ending in
+   that provider's whole-percent share of the period, with a 4pt emerald share bar under them;
+   models keep `{tokens} · {cost} · {share}` trailing. The model `other` is **Other**. Each
+   provider shows at most five models until **Show N more** reveals the rest; **Show fewer**
+   collapses them again. Both are 44-point buttons with expanded / collapsed accessibility state.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
 accessibility text sizes. Individual heatmap cells are not accessibility elements. The combined
@@ -460,11 +489,12 @@ chart value remains date, tokens, and cost.
 
 **View day** presents a `NavigationStack` sheet for the selected UTC day: the long UTC date as the
 inline title, system **Done** as the confirmation toolbar item, `presentationDetents` medium and
-large, and the system drag indicator. The body is an inset-grouped List of totals and agent
-Sections — the same rows as the period view, including **Some hours on this day were scanned
-incompletely.** when `partial` is true. Loading text: **Loading this day's usage…**. Failure:
-**Couldn't load this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet
-asks `detail=agents` for that date. There is no custom material.
+large, and the system drag indicator. The body is an inset-grouped List of the same hero totals
+card as the period view (identifiers `usage.day.headline` etc. stay) and agent `QuotaCard`s like
+the tab, including **Some hours on this day were scanned incompletely.** when `partial` is true.
+Loading text: **Loading this day's usage…**. Failure: **Couldn't load this day's usage.** with
+**Retry**. Empty: **No usage on this day.** The sheet asks `detail=agents` for that date. There is
+no custom material.
 
 ### Devices
 
@@ -701,8 +731,8 @@ Rules:
 | State | Presentation |
 | --- | --- |
 | Loading, no cache | Centered progress and **Loading account…**. No surface. |
-| Empty quota, with an account | **No quota yet** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and **Connect a provider** |
-| Empty Today | **No usage today.** |
+| Empty quota, with an account | **No quota yet** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and a full-width `.borderedProminent` **Connect a provider** |
+| Empty Today | The Today `QuotaCard` with **No usage today.** |
 | Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
 | Usage with no account | `ContentUnavailableView` **Sign in to see your usage** / **Usage is what QuotaBar reports from your Macs. This iPhone reads quota here, and measures no usage of its own.** with **Sign in to Quota** |
 | Loading activity | Skeleton in the Activity section. Accessibility value **Loading activity** |
@@ -715,7 +745,7 @@ Rules:
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved data. Couldn't refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Couldn't refresh. Pull to try again.** |
 | Expired session | Overview status **Session expired. Connect again.** above whatever this phone still reads |
-| Signed out, nothing read | **No quota yet** with **Connect a provider** and **Sign in to Quota** |
+| Signed out, nothing read | **No quota yet** with full-width `.borderedProminent` **Connect a provider** and `.bordered` **Sign in to Quota** |
 | Provider refused a stored session | That Providers row reads **Sign in again to keep reading this account.** with a **Sign in again** control |
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
@@ -736,13 +766,16 @@ wash. Settings is a compact hub Form; Notifications, Appearance, About, and the 
 Sign-in methods page are pushed destination Forms with the same system background. Type roles are
 `QuotaDesign.Typography`: `remainingValue` for a window's remaining figure, `cardTitle` for
 provider names, `support` for window titles, `meta` for reset and pace. Connect content is a
-320-point column. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no padding, corner,
-stroke, shadow, material, or glass of their own. The provider mark is 22 points; the remaining
-meter is `QuotaMeter`. The Connect mark is 72 points; the About mark is 64 points; the identity
+320-point column. Each Overview subscription and each subscription-detail window, Today block, and
+Readings block sits in a `QuotaCard`. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no
+padding, corner, stroke, shadow, material, or glass of their own. The Overview provider mark is 22
+points; the subscription-detail header mark is 40. Remaining meters are `QuotaMeter` (8pt hero /
+detail, 4pt compact). The Connect mark is 72 points; the About mark is 64 points; the identity
 avatar is 44 points.
 
 Spacing uses 8, 12, 16, and 24pt. Hit targets stay at least 44pt (Connect with GitHub 50pt; Usage
-**View day**, **Retry**, **Show N more**, and **Show fewer** are 44-point List rows). Dynamic Type
+**View day** is a 44-point `.borderedProminent` button; **Retry**, **Show N more**, and **Show
+fewer** stay 44-point). Dynamic Type
 may wrap every label, including the Connect footnote, Usage period control, selected-day summary,
 and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes; weekday and
 month labels on that grid use `caption` / `caption2`, keep the full month abbreviation, and cap
@@ -810,6 +843,11 @@ provider and support, and no custom card chrome beyond the system widget contain
     dims what is behind it, and that dimming is the system's;
   - contrast on `usage.activity.selected-day`: the date label shares its row container with the
     selected heatmap cell, whose accent ring the auditor reads as the label's background;
+  - contrast on `usage.headline.cache-hit` / `usage.day.headline.cache-hit`: the unpriced `—` is
+    `remainingValue` / primary on the card fill; at accessibility sizes the auditor samples the
+    thin glyph rather than the tile;
+  - contrast on `usage.budget`: the spent / budget line is `support` / primary on the card; at
+    accessibility sizes the auditor samples it against the meter track in the same card;
   - contrast on `settings.sign-in-methods.` rows: they already use the opaque label colour; the
     auditor still samples them as failing when they sit in the middle of the Settings hub;
   - contrast on the `usage.top-model` rows by parent: the label colour on the row background, which
@@ -819,19 +857,21 @@ provider and support, and no custom card chrome beyond the system widget contain
     over the last visible rows, so the contrast auditor samples the glass, not the row, and the
     clipping auditor reads a covered row as cut off. This is geometric and system-owned; it never
     applies to rows away from the tab bar;
-  - contrast, Dynamic Type, and clipping on the Today rows of Overview, scoped by frame containment
-    to the elements this app marked `overview.today` or `overview.today.*`. Those rows are
-    grouped-Form `LabeledContent`, so iOS 26 `UIListContentConfiguration` owns their colours, how
-    much they grow, and how their label and value share the row, and the auditor names their inner label and value texts, which carry no identifier
-    of their own — which is why matching the `overview.today` identifier on the reported element
-    alone never reached them, and why the message on them reads "unsupported" rather than the
-    "partially unsupported" the identifier-named rows below report. Containment in a marked row's
-    frame is what ties a report back to a row: the exception is not by element type, not by how
+  - contrast, Dynamic Type, and clipping on the Today tiles of Overview, scoped by frame
+    containment to the elements this app marked `overview.today` or `overview.today.*`. Those
+    tiles are `QuotaStatTile`s inside a `QuotaCard`; the auditor still names inner label and value
+    texts, which carry no identifier of their own — which is why matching the `overview.today`
+    identifier on the reported element alone never reached them. Containment in a marked tile's
+    frame is what ties a report back to a tile: the exception is not by element type, not by how
     close the ratio came, and it is the only place either type is skipped by frame other than the
     tab-bar glass above;
+  - Dynamic Type "unsupported" / "partially unsupported" on inner Text of Overview
+    `overview.subscription` cards and of subscription-detail combined elements (empty identifier),
+    scoped by card frame or `subscription.detail`. Those nodes use scaling `QuotaDesign` fonts and
+    are merged for VoiceOver; the auditor names the inner text instead of the card;
   - iOS 26 `UIListContentConfiguration` List/Form Button, Link, and LabeledContent rows for the
     "Dynamic Type font sizes are partially unsupported" message only — they do not advertise
-    full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today rows the
+    full Dynamic Type. Contrast on those rows is not skipped, apart from the four Today tiles the
     bullet above names by frame. Named identifiers:
     `usage.activity.retry`, `usage.activity.view-day`, `usage.day.retry`, `usage.show-more`,
     `usage.show-fewer`, `usage.daily.table`, `usage.headline`, `usage.day.headline`, `overview.today.tokens`,
@@ -862,9 +902,10 @@ provider and support, and no custom card chrome beyond the system widget contain
 Inspect Connect with GitHub and Continue with Apple (72-point mark, **Quota** title, tagline,
 three feature lines, three buttons, and footnote in the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, loading, signed-in
-Overview (quota first, Today second, system NavigationLink chevron, no device-summary
+Overview (quota cards first, Today card second, trailing chevron on each card, no device-summary
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
-URL, cached content with a plain status Label, subscription detail (Account, Plan, Quota, Readings),
+URL, cached content with a plain status Label, subscription detail (header card, Quota window
+cards, Today, Readings),
 Devices content and empty, Usage at 30 Days as one native scrolling List (period control, totals,
 Activity heatmap with full month abbreviations, agent sections, no glass cards), Usage empty /
 activity loading / activity failed, a single-day sheet (populated, empty, failed) with system

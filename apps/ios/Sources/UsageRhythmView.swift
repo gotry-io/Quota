@@ -61,7 +61,11 @@ struct UsageRhythmSection: View {
                   ? weekdayHours[weekday][hour]
                   : 0
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                  .fill(QuotaTheme.activityFill(UsageActivityChart.activityLevel(tokens, maximum: maximum)))
+                  .fill(
+                    QuotaTheme.activityFill(
+                      UsageActivityChart.activityLevel(tokens, maximum: maximum)
+                    )
+                  )
                   .frame(width: cell, height: cell)
               }
             }
@@ -77,7 +81,9 @@ struct UsageRhythmSection: View {
       ForEach(hoursOfDay, id: \.hour) { hour in
         let share = maximum > 0 ? CGFloat(hour.totalTokens) / CGFloat(maximum) : 0
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(Color.primary.opacity(hour.totalTokens > 0 ? 0.55 : 0.12))
+          .fill(
+            QuotaTheme.emerald.opacity(hour.totalTokens > 0 ? max(0.25, share) : 0.12)
+          )
           .frame(maxWidth: .infinity)
           .frame(height: max(2, 36 * share))
       }
