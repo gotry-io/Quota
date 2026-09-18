@@ -175,7 +175,8 @@ pnpm version:bump:ios patch       # Quota iOS MARKETING_VERSION, then generate-i
 
 main carries the version being developed, not the one last released: after a stable
 `menubar-v*` release publishes, `release-menubar` opens the patch bump for the next one and lets
-it auto-merge, so a tag never waits on a version commit. Publishing is therefore the tag alone.
+it auto-merge, and `release-ios` does the same after an `ios-v*` upload, so a tag never waits on a
+version commit. Publishing is therefore the tag alone.
 A minor or major is the exception — close the bot's pull request and bump by hand. The bump opens
 its pull request as the repository's automation GitHub App (`APP_CLIENT_ID` variable,
 `APP_PRIVATE_KEY` secret) rather than with `GITHUB_TOKEN`, whose pull request would start no

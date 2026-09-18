@@ -18,6 +18,9 @@ concurrency:
 jobs:
   release:
     runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v6
 
@@ -47,6 +50,12 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # X.Y.Z is a release; anything after it (a suffix) is a prerelease and spends no version.
+          if printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Validate product version
         env:
@@ -235,3 +244,93 @@ jobs:
           rm -f "$RUNNER_TEMP/quota-ios-distribution.p12" apps/ios/Local.xcconfig
           rm -rf "$HOME/.appstoreconnect/private_keys" \
             "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+
+  # An uploaded version is spent: main moves to the next one so a later ios-v* tag has its
+  # MARKETING_VERSION already committed and `Validate product version` passes without a
+  # release-time scramble. Same shape and same reasons as `bump-next` in release-menubar: a pull
+  # request because main requires one, opened as the repository's automation GitHub App because a
+  # pull request opened with GITHUB_TOKEN starts no workflow run and would never satisfy the
+  # required checks.
+  bump-next:
+    needs: release
+    if: needs.release.outputs.prerelease != 'true'
+    # macOS because `scripts/bump-version.mjs ios` regenerates the committed Xcode project.
+    runs-on: macos-26
+    steps:
+      - name: Check the app credentials are configured
+        id: app
+        env:
+          CLIENT_ID: ${{ vars.APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLIENT_ID:-}" ] || [ -z "${PRIVATE_KEY:-}" ]; then
+            echo "::warning title=No bump app::APP_CLIENT_ID / APP_PRIVATE_KEY are unset, so main keeps ${{ needs.release.outputs.version }}. Bump it by hand before the next release."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Narrowed to what moving a version needs; see release-menubar for why it is an
+      # installation token rather than GITHUB_TOKEN.
+      - uses: actions/create-github-app-token@v3
+        id: token
+        if: steps.app.outputs.ready == 'true'
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@v6
+        if: steps.app.outputs.ready == 'true'
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Install XcodeGen
+        if: steps.app.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+
+      - name: Open the bump
+        if: steps.app.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          RELEASED: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          BOT_ID="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+          # check-ios-version.sh is the one reader of MARKETING_VERSION; it passes only on a match.
+          if ! ./scripts/check-ios-version.sh "$RELEASED" >/dev/null 2>&1; then
+            echo "::notice::main is already past the released ${RELEASED}. Nothing to bump."
+            exit 0
+          fi
+          NEXT="$(node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            if ([major, minor, patch].some(Number.isNaN)) throw new Error("unbumpable version");
+            console.log(`${major}.${minor}.${patch + 1}`);
+          ' "$RELEASED")"
+          BRANCH="chore/bump-ios-${NEXT}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::notice::${BRANCH} already exists."
+            exit 0
+          fi
+          git switch -c "$BRANCH"
+          node scripts/bump-version.mjs ios "$NEXT"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(ios): bump version to ${NEXT}" \
+            --body "$(printf '%s\n' \
+              "Quota iOS ${RELEASED} is uploaded, so main moves to ${NEXT}." \
+              "" \
+              "Opened by \`release-ios\`. A patch bump is the assumption; for a minor or major," \
+              "close this and bump by hand." )"
+          gh pr merge "$BRANCH" --auto --merge
