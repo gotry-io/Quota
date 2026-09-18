@@ -1,3 +1,4 @@
+import QuotaBrandIcons
 import QuotaPresentation
 import QuotaWire
 import SwiftUI
@@ -160,42 +161,109 @@ struct SubscriptionDetailView: View {
       readingsSection(content)
     }
     .listStyle(.insetGrouped)
+    .listRowSpacing(QuotaDesign.Layout.rowSpacing)
+    .listSectionSpacing(.custom(QuotaDesign.Layout.sectionSpacing))
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("subscription.detail")
     .navigationTitle(content.providerName)
-    .navigationBarTitleDisplayMode(.large)
+    .navigationBarTitleDisplayMode(.inline)
   }
 
   private func identitySection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      LabeledContent("Account", value: content.accountLabel)
-        .accessibilityIdentifier("subscription.account")
-      if let plan = content.plan {
-        LabeledContent("Plan", value: plan)
-          .accessibilityIdentifier("subscription.plan")
+      QuotaCard {
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .center, spacing: 12) {
+            headerMark
+            headerName(content.providerName)
+          }
+          VStack(alignment: .leading, spacing: 8) {
+            headerMark
+            headerName(content.providerName)
+          }
+        }
+
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            accountLabel(content.accountLabel)
+            Spacer(minLength: 8)
+            if let plan = content.plan { planCapsule(plan) }
+          }
+          VStack(alignment: .leading, spacing: 6) {
+            accountLabel(content.accountLabel)
+            if let plan = content.plan { planCapsule(plan) }
+          }
+        }
+
+        Text(content.freshness)
+          .font(QuotaDesign.Typography.meta.monospacedDigit())
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel(content.freshness)
+          .accessibilityIdentifier("section.footer.subscription-updated")
       }
-    } footer: {
-      Text(content.freshness)
-        .font(.footnote.monospacedDigit())
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityLabel(content.freshness)
-        .accessibilityIdentifier("section.footer.subscription-updated")
+      .quotaCardRow()
     }
+  }
+
+  private var headerMark: some View {
+    ProviderMark(
+      provider: subscription.snapshot.provider,
+      size: QuotaDesign.Layout.detailMarkSize
+    )
+    .foregroundStyle(.primary)
+  }
+
+  private func headerName(_ name: String) -> some View {
+    Text(name)
+      .font(.title2.bold())
+      .foregroundStyle(.primary)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func accountLabel(_ label: String) -> some View {
+    Text(label)
+      .font(QuotaDesign.Typography.support)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityIdentifier("subscription.account")
+      .accessibilityLabel("Account: \(label)")
+  }
+
+  private func planCapsule(_ plan: String) -> some View {
+    Text(plan)
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(.primary)
+      .fixedSize()
+      .layoutPriority(1)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .overlay {
+        Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1)
+      }
+      .accessibilityIdentifier("subscription.plan")
+      .accessibilityLabel("Plan: \(plan)")
   }
 
   @ViewBuilder
   private func quotaSection(_ content: SubscriptionDetailContent) -> some View {
     Section {
       if content.windows.isEmpty {
-        Text("No quota windows yet.")
-          .foregroundStyle(.primary)
+        QuotaCard {
+          Text("No quota windows yet.")
+            .foregroundStyle(.primary)
+        }
+        .quotaCardRow()
       } else {
         ForEach(content.windows) { window in
-          QuotaWindowBlock(
-            window: window,
-            usesLiveCountdown: true,
-            history: content.histories[window.id]
-          )
+          QuotaCard {
+            QuotaWindowBlock(
+              window: window,
+              presentation: .detail,
+              history: content.histories[window.id]
+            )
+          }
+          .quotaCardRow()
         }
       }
     } header: {
@@ -212,84 +280,164 @@ struct SubscriptionDetailView: View {
   private func todaySection(_ content: SubscriptionDetailContent) -> some View {
     if let todayLine = content.todayLine {
       Section {
-        ForEach(content.windowsToday, id: \.startedAt) { window in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(QuotaHistoryCopy.span(window))
-              .font(.subheadline)
-              .foregroundStyle(.primary)
-              .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Text(QuotaHistoryCopy.peak(window.peakUsedPercent))
-              .font(.body.monospacedDigit().weight(.medium))
-              .foregroundStyle(.primary)
+        QuotaCard(title: "Today", titleIdentifier: "section.header.today") {
+          ForEach(Array(content.windowsToday.enumerated()), id: \.element.startedAt) {
+            index,
+            window in
+            if index > 0 { Divider() }
+            todayWindowRow(window)
           }
-          .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
-          .accessibilityElement(children: .combine)
-          .accessibilityIdentifier(
-            window.isCurrent ? "subscription.today.current" : "subscription.today.window"
-          )
+          Text(todayLine)
+            .font(QuotaDesign.Typography.meta)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("section.footer.today")
         }
-      } header: {
-        Text("Today")
-          .accessibilityIdentifier("section.header.today")
-      } footer: {
-        Text(todayLine)
-          .font(.footnote)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("section.footer.today")
+        .quotaCardRow()
       }
     }
+  }
+
+  private func todayWindowRow(_ window: QuotaHistoryWindow) -> some View {
+    let span = QuotaHistoryCopy.span(window)
+    let peak = QuotaHistoryCopy.peak(window.peakUsedPercent)
+    return VStack(alignment: .leading, spacing: 6) {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(span)
+            .font(QuotaDesign.Typography.support)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 8)
+          Text("peak \(peak)")
+            .font(.body.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.primary)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(span)
+            .font(QuotaDesign.Typography.support)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+          Text("peak \(peak)")
+            .font(.body.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.primary)
+        }
+      }
+      usedFractionBar(window.peakUsedPercent)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier(
+      window.isCurrent ? "subscription.today.current" : "subscription.today.window"
+    )
+  }
+
+  private func usedFractionBar(_ usedPercent: Double) -> some View {
+    GeometryReader { proxy in
+      let fraction = min(max(usedPercent / 100, 0), 1)
+      ZStack(alignment: .leading) {
+        Capsule()
+          .fill(QuotaTheme.meterTrack)
+        Capsule()
+          .fill(
+            QuotaTheme.color(for: QuotaTone.remaining(percent: 100 - usedPercent))
+          )
+          .frame(width: proxy.size.width * CGFloat(fraction))
+      }
+    }
+    .frame(height: QuotaDesign.Layout.compactMeterHeight)
+    .accessibilityHidden(true)
   }
 
   @ViewBuilder
   private func readingsSection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      if content.sources.isEmpty {
-        Text("No device readings yet.")
-          .foregroundStyle(.primary)
-      } else {
-        ForEach(Array(content.sources.enumerated()), id: \.offset) { _, row in
-          sourceRow(row)
+      QuotaCard(title: "Readings", titleIdentifier: "section.header.readings") {
+        if content.sources.isEmpty {
+          Text("No device readings yet.")
+            .foregroundStyle(.primary)
+        } else {
+          ForEach(Array(content.sources.enumerated()), id: \.offset) { index, row in
+            if index > 0 { Divider() }
+            sourceRow(row)
+          }
         }
       }
-    } header: {
-      Text("Readings")
-        .accessibilityIdentifier("section.header.readings")
+      .quotaCardRow()
     }
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      VStack(alignment: .leading, spacing: 5) {
-        Text(row.displayName)
-          .font(.subheadline.weight(.medium))
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: 8) {
+        sourceSymbol(row)
+        sourceCopy(row)
+        Spacer(minLength: 8)
+        if row.isReporting { reportingCapsule }
+      }
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 8) {
+          sourceSymbol(row)
+          Text(row.displayName)
+            .font(.body)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         if let remaining = row.remaining {
-          // No line cap and no shrink: a reading scaled down stops following the reader's text
-          // size, which is what the accessibility audit refuses.
           Text(remaining)
-            .font(.body.monospacedDigit().weight(.medium))
+            .font(QuotaDesign.Typography.meta.monospacedDigit())
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
         }
         Text(row.freshness)
-          .font(.footnote.monospacedDigit())
+          .font(QuotaDesign.Typography.meta.monospacedDigit())
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
-      }
-      Spacer(minLength: 8)
-      if row.isReporting {
-        Text("Reporting")
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.primary)
-          .multilineTextAlignment(.trailing)
+        if row.isReporting { reportingCapsule }
       }
     }
-    .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(sourceAccessibility(row))
     .accessibilityIdentifier(row.isReporting ? "subscription.reporting" : "subscription.source")
+  }
+
+  private func sourceSymbol(_ row: SubscriptionDetailContent.SourceRow) -> some View {
+    Image(systemName: row.displayName == ThisDevice.displayName ? "iphone" : "laptopcomputer")
+      .font(.body)
+      .foregroundStyle(.secondary)
+      .frame(width: QuotaDesign.Layout.markSize, alignment: .center)
+      .accessibilityHidden(true)
+  }
+
+  private func sourceCopy(_ row: SubscriptionDetailContent.SourceRow) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(row.displayName)
+        .font(.body)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+      if let remaining = row.remaining {
+        Text(remaining)
+          .font(QuotaDesign.Typography.meta.monospacedDigit())
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Text(row.freshness)
+        .font(QuotaDesign.Typography.meta.monospacedDigit())
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private var reportingCapsule: some View {
+    Text("Reporting")
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(QuotaTheme.emerald)
+      .fixedSize()
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .overlay {
+        Capsule().strokeBorder(QuotaTheme.emerald, lineWidth: 1)
+      }
+      .accessibilityHidden(true)
   }
 
   private func sourceAccessibility(_ row: SubscriptionDetailContent.SourceRow) -> String {

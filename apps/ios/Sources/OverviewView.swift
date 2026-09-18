@@ -27,6 +27,8 @@ struct OverviewView: View {
       }
     }
     .listStyle(.insetGrouped)
+    .listRowSpacing(QuotaDesign.Layout.rowSpacing)
+    .listSectionSpacing(.custom(QuotaDesign.Layout.sectionSpacing))
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("overview.root")
     .refreshable {
@@ -59,17 +61,20 @@ struct OverviewView: View {
             index,
             subscription in
             NavigationLink(value: subscription.key) {
-              ProviderQuotaRow(
-                provider: card.provider,
-                snapshot: subscription.snapshot,
-                accountIndex: index,
-                serviceStatus: model.providerStatus[card.provider]
-              )
-              .foregroundStyle(.primary)
+              QuotaCard {
+                ProviderQuotaRow(
+                  provider: card.provider,
+                  snapshot: subscription.snapshot,
+                  accountIndex: index,
+                  serviceStatus: model.providerStatus[card.provider]
+                )
+                .foregroundStyle(.primary)
+              }
             }
             .buttonStyle(.plain)
             .tint(.primary)
-            .listRowBackground(Color(uiColor: .secondarySystemGroupedBackground))
+            .quotaCardRow()
+            .navigationLinkIndicatorVisibility(.hidden)
             .accessibilityHint("Opens subscription details")
             .accessibilityIdentifier("overview.subscription")
           }
@@ -78,7 +83,8 @@ struct OverviewView: View {
     } footer: {
       if let updatedAt = model.updatedAt {
         Text(QuotaFormat.updated(updatedAt))
-          .font(.footnote.monospacedDigit())
+          .font(QuotaDesign.Typography.meta.monospacedDigit())
+          .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("section.footer.updated")
       }
@@ -104,23 +110,35 @@ struct OverviewEmptyState: View {
   static let signIn = "Sign in to Quota"
 
   var body: some View {
-    ContentUnavailableView {
-      Label(Self.title, systemImage: "gauge.with.dots.needle.33percent")
-    } description: {
-      Text(model.hasAccountSession ? Self.accountOnly : Self.localAndAccount)
-        .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
-    } actions: {
-      VStack(spacing: 12) {
-        Button(Self.connectProvider) { model.showProviders() }
-          .frame(minHeight: QuotaTheme.minimumTouchTarget)
-          .accessibilityIdentifier("overview.connect-provider")
+    VStack(spacing: QuotaDesign.Layout.rowSpacing) {
+      ContentUnavailableView {
+        Label(Self.title, systemImage: "gauge.with.dots.needle.33percent")
+      } description: {
+        Text(model.hasAccountSession ? Self.accountOnly : Self.localAndAccount)
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      VStack(spacing: QuotaDesign.Layout.rowSpacing) {
+        Button(action: { model.showProviders() }) {
+          Text(Self.connectProvider)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
+        .accessibilityIdentifier("overview.connect-provider")
         if !model.hasAccountSession {
-          Button(Self.signIn) { model.showSignIn() }
-            .frame(minHeight: QuotaTheme.minimumTouchTarget)
-            .accessibilityIdentifier("overview.signin")
+          Button(action: { model.showSignIn() }) {
+            Text(Self.signIn)
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
+          .accessibilityIdentifier("overview.signin")
         }
       }
+      .frame(maxWidth: .infinity)
     }
     .fixedSize(horizontal: false, vertical: true)
     .frame(maxWidth: .infinity, minHeight: 200)
@@ -135,13 +153,12 @@ struct TodayUsageSection: View {
 
   var body: some View {
     Section {
-      todayContent
-    } header: {
-      Text("Today")
-        .accessibilityIdentifier("section.header.today")
-        .accessibilityAddTraits(.isHeader)
+      QuotaCard(title: "Today", titleIdentifier: "section.header.today") {
+        todayContent
+      }
+      .accessibilityIdentifier("overview.today")
+      .quotaCardRow()
     }
-    .accessibilityIdentifier("overview.today")
   }
 
   @ViewBuilder
@@ -150,54 +167,45 @@ struct TodayUsageSection: View {
     if usage.totals.messages > 0 || usage.totals.inputTokens > 0
       || usage.totals.outputTokens > 0
     {
-      todayRow(
-        label: "Tokens",
-        value: QuotaFormat.compactCount(usage.totals.totalTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens",
-        identifier: "overview.today.tokens"
-      )
-      todayRow(
-        label: "API-equivalent cost",
-        value: QuotaFormat.cost(usage.cost),
-        accessibility: "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))",
-        identifier: "overview.today.cost"
-      )
-      todayRow(
-        label: "Input",
-        value: QuotaFormat.compactCount(usage.totals.inputTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens",
-        identifier: "overview.today.input"
-      )
-      todayRow(
-        label: "Output",
-        value: QuotaFormat.compactCount(usage.totals.outputTokens),
-        accessibility: "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens",
-        identifier: "overview.today.output"
-      )
+      QuotaStatGrid {
+        QuotaStatTile(
+          label: "Tokens",
+          value: QuotaFormat.compactCount(usage.totals.totalTokens)
+        )
+        .accessibilityLabel(
+          "\(QuotaFormat.accessibleCount(usage.totals.totalTokens)) tokens"
+        )
+        .accessibilityIdentifier("overview.today.tokens")
+        QuotaStatTile(
+          label: "API-equivalent cost",
+          value: QuotaFormat.cost(usage.cost)
+        )
+        .accessibilityLabel(
+          "API-equivalent cost, \(QuotaFormat.costAccessibility(usage.cost))"
+        )
+        .accessibilityIdentifier("overview.today.cost")
+        QuotaStatTile(
+          label: "Input",
+          value: QuotaFormat.compactCount(usage.totals.inputTokens)
+        )
+        .accessibilityLabel(
+          "\(QuotaFormat.accessibleCount(usage.totals.inputTokens)) input tokens"
+        )
+        .accessibilityIdentifier("overview.today.input")
+        QuotaStatTile(
+          label: "Output",
+          value: QuotaFormat.compactCount(usage.totals.outputTokens)
+        )
+        .accessibilityLabel(
+          "\(QuotaFormat.accessibleCount(usage.totals.outputTokens)) output tokens"
+        )
+        .accessibilityIdentifier("overview.today.output")
+      }
     } else {
       Text("No usage today.")
         .font(.body)
         .foregroundStyle(.primary)
         .accessibilityIdentifier("overview.today.empty")
     }
-  }
-
-  private func todayRow(
-    label: String,
-    value: String,
-    accessibility: String,
-    identifier: String
-  ) -> some View {
-    LabeledContent {
-      Text(value)
-        .font(.body.monospacedDigit().weight(.medium))
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-    } label: {
-      Text(label)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(accessibility)
-    .accessibilityIdentifier(identifier)
   }
 }

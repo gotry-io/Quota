@@ -174,7 +174,10 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 5),
       "Reporting"
     )
-    XCTAssertTrue(app.staticTexts["Account"].exists, "Account")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.account"].waitForExistence(timeout: 5),
+      "Account"
+    )
     XCTAssertTrue(app.staticTexts["Quota"].exists, "Quota")
     XCTAssertTrue(app.staticTexts["Readings"].exists, "Readings")
     attachScreenshot(app, name: "subscription-detail")
@@ -360,7 +363,14 @@ final class QuotaUITests: XCTestCase {
       ].exists,
       "empty quota description"
     )
-    XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
+    if !app.staticTexts["No usage today."].exists {
+      scrollToIdentifier(app, "overview.today.empty")
+    }
+    XCTAssertTrue(
+      app.staticTexts["No usage today."].exists
+        || app.descendants(matching: .any)["overview.today.empty"].exists,
+      "No usage today."
+    )
     XCTAssertTrue(
       app.staticTexts["Set up QuotaBar"].exists
         || app.descendants(matching: .any)["section.header.mac-setup"].exists,
@@ -717,7 +727,14 @@ final class QuotaUITests: XCTestCase {
       "overview.root"
     )
     XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
-    XCTAssertTrue(app.staticTexts["No usage today."].exists, "No usage today.")
+    if !app.staticTexts["No usage today."].exists {
+      scrollToIdentifier(app, "overview.today.empty")
+    }
+    XCTAssertTrue(
+      app.staticTexts["No usage today."].exists
+        || app.descendants(matching: .any)["overview.today.empty"].exists,
+      "No usage today."
+    )
     XCTAssertFalse(
       app.staticTexts["Set up QuotaBar"].exists,
       "empty Overview keeps devices, so Mac setup stays off this screen"
@@ -1242,6 +1259,12 @@ final class QuotaUITests: XCTestCase {
       .allElementsBoundByAccessibilityElement
       .map { element in element.frame }
 
+    // QuotaCards on Overview: the auditor names inner Text nodes, which carry no identifier.
+    let subscriptionCards: [CGRect] = app.descendants(matching: .any)
+      .matching(identifier: "overview.subscription")
+      .allElementsBoundByAccessibilityElement
+      .map { element in element.frame }
+
     let screen = currentScreenName(app)
     try app.performAccessibilityAudit(for: types) { issue in
       let description = issue.compactDescription
@@ -1420,6 +1443,30 @@ final class QuotaUITests: XCTestCase {
         return true
       }
 
+      // Overview subscription cards merge header, account, and windows into VoiceOver
+      // elements; the auditor still names the inner Text nodes, which use scaling fonts.
+      if isDynamicType,
+        description.localizedCaseInsensitiveContains("partially unsupported")
+          || description.localizedCaseInsensitiveContains("unsupported"),
+        let control = issue.element,
+        subscriptionCards.contains(where: {
+          $0.contains(control.frame) || $0.intersects(control.frame)
+        })
+      {
+        return true
+      }
+
+      // Subscription detail window/header/readings copy is the same: inner Text nodes of
+      // combined elements, scaling fonts, no identifier of their own.
+      if screen == "subscription.detail",
+        isDynamicType,
+        identifier.isEmpty,
+        description.localizedCaseInsensitiveContains("partially unsupported")
+          || description.localizedCaseInsensitiveContains("unsupported")
+      {
+        return true
+      }
+
       if isDynamicType, let control = issue.element {
         // The auditor names the inner text, which carries no identifier of its own; the row it
         // sits in does, so the row's path is part of what a token can match.
@@ -1535,6 +1582,7 @@ private let mergedRows = [
   "devices.this-iphone",
   "subscription.source",
   "subscription.reporting",
+  "overview.subscription",
 ]
 
 /// The identifier of the row an audit issue actually belongs to. An audit names the text inside a

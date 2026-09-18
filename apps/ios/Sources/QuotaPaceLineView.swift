@@ -9,6 +9,7 @@ import SwiftUI
 /// ([ADR 0042](../../../docs/decisions/0042-quota-history-is-local-samples.md)).
 struct QuotaPaceLineView: View {
   let history: QuotaHistory
+  var tint: Color = QuotaTheme.emerald
 
   /// Tall enough for the shape of a day to be legible under a meter, short enough not to push
   /// the reset line off a compact row.
@@ -28,7 +29,7 @@ struct QuotaPaceLineView: View {
       for point in history.points.dropFirst() {
         curve.addLine(to: plot(point))
       }
-      context.stroke(curve, with: .color(QuotaTheme.emerald), lineWidth: 2)
+      context.stroke(curve, with: .color(tint), lineWidth: 2)
 
       guard let last = history.points.last, let projection = history.projection else { return }
       var dashed = Path()
@@ -36,7 +37,7 @@ struct QuotaPaceLineView: View {
       dashed.addLine(to: plot(projection))
       context.stroke(
         dashed,
-        with: .color(QuotaTheme.emerald.opacity(0.6)),
+        with: .color(tint.opacity(0.6)),
         style: StrokeStyle(lineWidth: 2, dash: [4, 4])
       )
     }
