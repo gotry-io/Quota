@@ -185,15 +185,20 @@ jobs:
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: >-
           ./scripts/ci-changed-paths.sh any
-          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
+          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
       - name: Install XcodeGen
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
+      # The generated project is committed; a project.yml edit that was not regenerated fails
+      # here rather than shipping a project that disagrees with its source, as QuotaBar's does.
       - name: Generate the iOS Xcode project
         if: ${{ steps.ios.outputs.run == 'true' }}
-        run: ./scripts/generate-ios.sh
+        run: |
+          set -euo pipefail
+          ./scripts/generate-ios.sh
+          git diff --exit-code -- apps/ios/Quota.xcodeproj
 
       # `xcodebuild test` builds the app and the test bundles itself; a separate build step
       # first was the same simulator build twice. `pnpm build:ios` remains for a local check.
@@ -220,7 +225,7 @@ jobs:
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: >-
           ./scripts/ci-changed-paths.sh any
-          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
+          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
       - name: Install XcodeGen
         if: ${{ steps.ios.outputs.run == 'true' }}

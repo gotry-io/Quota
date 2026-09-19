@@ -76,6 +76,25 @@ jobs:
             echo "prerelease=$PRERELEASE"
           } >> "$GITHUB_OUTPUT"
 
+      # main only takes what the merge queue verified, so a stable release is a commit main already
+      # carries. A tag cut from a branch would ship code no required check ever saw.
+      - name: Require a stable tag to name a commit on main
+        if: steps.version.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          STATUS="$(gh api "repos/${REPO}/compare/main...${SHA}" --jq .status)"
+          case "$STATUS" in
+            identical | behind) echo "${SHA} is on main (${STATUS})." ;;
+            *)
+              echo "${SHA} is not on main (compare status: ${STATUS}); merge it first, then tag." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Validate product version
         env:
           VERSION: ${{ steps.version.outputs.version }}

@@ -10,7 +10,10 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling, plus the read-only `quota` command it bundles beside
   it ([ADR 0046](docs/decisions/0046-a-read-only-quota-command.md)).
-- **QuotaRelay** — managed account/device service on Cloudflare Workers and D1.
+- **QuotaRelay** — managed account/device service: one Hono source tree, run in production as a
+  Node + SQLite image on a VPS ([ADR 0049](docs/decisions/0049-one-relay-two-runtimes.md),
+  [ADR 0050](docs/decisions/0050-the-worker-and-d1-are-retired.md)); the Cloudflare Workers + D1
+  adapters remain a supported runtime and are no longer deployed.
 - **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
   `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
 
@@ -58,7 +61,7 @@ The canonical documents are [architecture](docs/architecture.md),
 ```text
 apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
-apps/relay/               Managed Hono Worker and D1 adapters
+apps/relay/               Managed Hono Relay: shared app, Node + SQLite and Workers + D1 adapters
 apps/web/                 Public site and authenticated account UI
 packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, brand marks, and provider web-session and Keychain modules
 packages/apple-shared/    Foundation-only Apple presentation, alerting, alert delivery, and observation-merge semantics
@@ -184,15 +187,11 @@ phone presents an installation, Sparkle in-app updates, and the
 Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
 and file failures are isolated.
 
-Production sign-in and D1 deployment require the Worker secrets `GITHUB_CLIENT_ID`,
-`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`,
-`APPLE_SIGNIN_PRIVATE_KEY`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and
-`QUOTA_SESSION_HASH_KEY`, the HMAC keys each at least 32 random characters and all documented by
-[`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
-Production GitHub OAuth, email sign-in, and D1 deployment require the Worker secrets
-`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`,
-`QUOTA_SESSION_HASH_KEY`, and `RESEND_API_KEY`, each at least 32 random characters and documented
-by [`apps/relay/README.md`](apps/relay/README.md). The checked-in deployment workflow is the only authorized production path.
+Production is the Node + SQLite image deployed by the owner ([runbook](docs/relay-self-host.md)).
+Its secrets — the GitHub and Apple sign-in credentials, `RESEND_API_KEY`, and the HMAC keys
+`IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY` and `QUOTA_SESSION_HASH_KEY` — live in that
+deployment's environment and are listed once, with their constraints, in
+[`apps/relay/README.md`](apps/relay/README.md); they are never in git.
 
 ## License
 
