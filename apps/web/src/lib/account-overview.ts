@@ -26,6 +26,11 @@ export function meterToneForUsedPercent(usedPercent: number): MeterTone {
   return meterTone(remainingPercent(usedPercent));
 }
 
+/** Accessible name for a remaining-quota meter: window title plus remaining, spoken once. */
+export function quotaMeterName(title: string, remainingText: string): string {
+  return `${title} ${remainingText}`;
+}
+
 /** Stable hue in 0–359 from a provider id, for letter-mark fallbacks. */
 export function providerMarkHue(providerId: string): number {
   let hash = 2166136261;

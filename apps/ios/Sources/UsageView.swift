@@ -9,6 +9,7 @@ struct UsageView: View {
   @State private var budgetEditor = false
 
   var body: some View {
+    @Bindable var usage = model.usage
     List {
       // Usage is the Account's fold across every device. This phone measures none of it, so
       // without an account there is nothing to pick a period of.
@@ -23,7 +24,7 @@ struct UsageView: View {
           .quotaCardRow()
         }
 
-        if let period = model.usagePeriodValue {
+        if let period = usage.usagePeriodValue {
           Section {
             UsageTotalsSection(period: period)
               .quotaCardRow()
@@ -41,13 +42,13 @@ struct UsageView: View {
     .listStyle(.insetGrouped)
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
-      await model.loadActivity()
+      await usage.loadActivity()
     }
-    .task(id: "\(model.selectedTab)-\(model.usagePeriodTitle)") {
+    .task(id: "\(model.selectedTab)-\(usage.usagePeriodTitle)") {
       guard model.selectedTab == .usage else { return }
-      await model.loadRhythm()
+      await usage.loadRhythm()
     }
-    .sheet(item: $model.activityDaySheet) { _ in
+    .sheet(item: $usage.activityDaySheet) { _ in
       UsageDayDetailSheet(model: model)
     }
     .sheet(isPresented: $rangeEditor) {
@@ -65,10 +66,10 @@ struct UsageView: View {
   ///
   /// The table covers the period's own days, bounded by the activity days this phone holds.
   private var dailyRows: [UsageDailyFold.Row] {
-    guard let days = model.activityChart.days, let range = model.usagePeriodRange else {
+    guard let days = model.usage.activityChart.days, let range = model.usage.usagePeriodRange else {
       return []
     }
-    let available = UsageActivityCalendar.range(endingOn: model.activityToday)
+    let available = UsageActivityCalendar.range(endingOn: model.usage.activityToday)
     return UsageDailyFold.rows(
       reported: days,
       from: max(range.from, available.from),
@@ -96,9 +97,9 @@ struct UsageView: View {
 
   @ViewBuilder
   private var signedInContent: some View {
-    if let period = model.usagePeriodValue {
-      let sections = model.usagePeriodIsFolded ? [] : UsageBreakdown.sections(in: period)
-      if model.usagePeriodIsFolded {
+    if let period = model.usage.usagePeriodValue {
+      let sections = model.usage.usagePeriodIsFolded ? [] : UsageBreakdown.sections(in: period)
+      if model.usage.usagePeriodIsFolded {
         foldedPeriod
       } else if sections.isEmpty {
         emptyPeriod
@@ -107,7 +108,7 @@ struct UsageView: View {
         if UsageDailyFold.hasUsage(dailyRows) {
           UsageDailySection(rows: dailyRows)
         }
-        if let hours = model.activityRhythm.hours {
+        if let hours = model.usage.activityRhythm.hours {
           UsageRhythmSection(hoursOfDay: hours.hoursOfDay, weekdayHours: hours.weekdayHours)
         }
         UsageActivitySection(model: model)
@@ -150,7 +151,9 @@ struct UsageView: View {
   private var periodStepper: some View {
     HStack(spacing: 12) {
       Button {
-        if let previous = model.usagePeriod.previous { model.selectUsagePeriod(previous) }
+        if let previous = model.usage.usagePeriod.previous {
+          model.usage.selectUsagePeriod(previous)
+        }
       } label: {
         Image(systemName: "chevron.left")
           .frame(
@@ -159,18 +162,18 @@ struct UsageView: View {
           )
           .contentShape(Rectangle())
       }
-      .disabled(model.usagePeriod.previous == nil)
+      .disabled(model.usage.usagePeriod.previous == nil)
       .accessibilityLabel("Previous period")
       .accessibilityIdentifier("usage.period.previous")
 
-      Text(model.usagePeriodTitle)
+      Text(model.usage.usagePeriodTitle)
         .font(QuotaDesign.Typography.support)
         .foregroundStyle(Color.primary)
         .frame(maxWidth: .infinity)
         .accessibilityIdentifier("usage.period.title")
 
       Button {
-        if let next = model.usagePeriod.next { model.selectUsagePeriod(next) }
+        if let next = model.usage.usagePeriod.next { model.usage.selectUsagePeriod(next) }
       } label: {
         Image(systemName: "chevron.right")
           .frame(
@@ -179,7 +182,7 @@ struct UsageView: View {
           )
           .contentShape(Rectangle())
       }
-      .disabled(model.usagePeriod.next == nil)
+      .disabled(model.usage.usagePeriod.next == nil)
       .accessibilityLabel("Next period")
       .accessibilityIdentifier("usage.period.next")
 
@@ -203,10 +206,12 @@ struct UsageView: View {
 
   private var segmentBinding: Binding<UsagePeriodSegment?> {
     Binding(
-      get: { model.usagePeriod.segment == .custom ? nil : model.usagePeriod.segment },
+      get: {
+        model.usage.usagePeriod.segment == .custom ? nil : model.usage.usagePeriod.segment
+      },
       set: { segment in
         guard let segment else { return }
-        model.selectUsagePeriod(.selection(for: segment, custom: nil))
+        model.usage.selectUsagePeriod(.selection(for: segment, custom: nil))
       }
     )
   }

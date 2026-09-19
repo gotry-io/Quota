@@ -5,7 +5,7 @@ import Foundation
 ///
 /// A device that is asleep or closed is quiet, not broken, so nothing here calls a device
 /// unhealthy. A row states one verdict and the one age it came from, never a list of instants —
-/// the rule is **Shared product vocabulary** in `apps/menubar/DESIGN.md`, and this is the one
+/// the rule is **Shared product vocabulary** in `docs/design.md`, and this is the one
 /// place every Apple client answers it.
 public struct DeviceActivity: Equatable, Sendable {
   public enum Status: String, Equatable, Sendable {

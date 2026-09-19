@@ -1,35 +1,28 @@
 # Quota Web Design
 
-This file is the canonical visual and interaction contract for `apps/web`. Product boundaries and
-data ownership belong in [`docs/architecture.md`](../../docs/architecture.md); authentication,
-credentials, CSRF, and deletion safety belong in
-[`docs/security.md`](../../docs/security.md).
+This file lists only Quota Web platform deltas and links [`docs/design.md`](../../docs/design.md).
+
+Product boundaries and data ownership belong in
+[`docs/architecture.md`](../../docs/architecture.md); authentication, credentials, CSRF, and
+deletion safety belong in [`docs/security.md`](../../docs/security.md). QuotaBar belongs in
+[`apps/menubar/DESIGN.md`](../menubar/DESIGN.md). Quota iOS belongs in
+[`apps/ios/DESIGN.md`](../ios/DESIGN.md).
 
 ## Character
 
 Quota Web is an editorial account surface: quiet, direct, and precise. It should feel like a useful
 open-source tool, not a hosting console or a promotional SaaS dashboard.
 
-- Lead with remaining quota, normalized Usage, and the privacy boundary.
 - Use black type, white space, thin neutral rules, and mint only for brand or healthy state.
 - Support light and dark appearance. Follow the system until the user chooses one in the footer.
 - Prefer clear labels and real values over decoration.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
-- Product names are Quota, QuotaBar, and QuotaRelay.
 
-## Shared product vocabulary
-
-Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
-**Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json` and
-`packages/protocol/fixtures/quota-pace-conformance.json`, reset copy is
-`packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
-`packages/protocol/fixtures/remaining-copy-conformance.json`, which `src/lib/format.ts`
-answers in its tests. A window's pace prints under its reset line, in `--meter-warn` when the rate
-runs the window out before it resets and in the meta color otherwise: **Expected to last until
-reset** or **May run out about 2h before reset**, with the even-pace explanation only on
-subscription detail. The site does not restate those rules and does not keep a provider or agent
-name table of its own.
+Copy, remaining, reset, pace, freshness, periods, and Devices vocabulary:
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). `src/lib/format.ts`
+answers the freshness, reset, remaining, and pace fixtures. A window's pace prints under its reset
+line; glance cards print the headline, subscription detail adds the even-pace explanation. The
+site keeps no provider or agent name table of its own.
 
 ## Information architecture
 
@@ -110,10 +103,12 @@ The site has these routes:
    devices are reporting. Usage's status line is the selected period and whether that period is
    partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
-   - `/my` — overview: remaining quota. A Subscriptions grid (each card a
+   - `/my` — overview: remaining quota. Compact subscription groups (each a
      link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
      today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
-     linking `/my/devices`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
+     linking `/my/devices`. Groups size to their content in a bounded two-column grid
+     (one column below 620 px; max width `--content-width`). Remaining is the 28 px tabular
+     primary numeric; meters do not grow past `--quota-meter-max`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
      or `--meter-critical` (major and critical) with `title` set to the official status-page
      description, from public `GET /api/v2/providers/status`, matching QuotaBar: no dot for
      `none` or `unknown`. `/u/<handle>` does not draw it. Overview does not repeat a cost block
@@ -159,12 +154,14 @@ The site has these routes:
    Quota remaining has no "left"/"remaining" suffix; usd/credits remaining of a cap use
    `$12.50 of $40.00` without a meter; other budget windows with an amount use `71% · $3.75`;
    percent-only windows use `71%`; and balance-only windows use **Balance** plus `$12.34`.
-   Quota cards follow the same provider / account / remaining / meter / metadata order
-   as QuotaBar Overview, in a denser web layout. The card head is the provider mark
-   (`/providers/*.svg`, or a first-letter color block), provider name, plan badge, and masked
-   account; each window is a row of name, remaining-percent meter, percent, and `Resets in 45m`;
-   the foot is `Studio Mac · 1m ago`. Quota cards share `.quota-grid`: two columns on
-   desktop and one column below 620 px. Cursor's Other Models percentage and included-usage
+   Overview quota groups follow the same provider / account / remaining / meter / metadata order
+   as QuotaBar Overview, in a denser web layout. The group head is one row: the provider mark
+   (`/providers/*.svg`, or a first-letter color block), provider name, masked account line, and
+   plan capsule. Each window is the title, remaining as the 28 px tabular primary numeric, a
+   remaining-percent meter capped at `--quota-meter-max`, reset copy, and the pace headline when
+   present; the foot is `Studio Mac · 1m ago`. Groups share `.quota-grid`: two columns at wide
+   widths (max `--content-width`) and one column below 620 px, aligned to the start so they do
+   not stretch to equal height. Cursor's Other Models percentage and included-usage
    dollar amount are separate provider meters: compact Quota cards show only the percentage; the
    subscription detail page shows both. Empty quota states span the full row and show the Mac
    setup sentence once. Selecting an Activity day loads that day's Usage under the grid. The
@@ -195,34 +192,25 @@ in the Web UI.
 
 ## Tokens
 
-Colour roles, remaining-quota bands, spacing, and radii come from
+Colour, remaining-quota bands, spacing, and radii:
+[`docs/design.md`](../../docs/design.md#colour) and
 [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
 `src/app.css` imports the generated CSS custom properties; do not hand-copy those values.
-Web card radius is 16. The table below is this surface's mapping, not a second palette.
+Web card radius is 16.
 
-### Color
+Web-only surfaces that are not in the shared token file: brand surface for quiet highlighted
+regions, inverted surface for a bounded opposite-tone section, and deep ink for primary-action
+hover. Marketing supporting prose may use a quieter body colour than account-shell secondary.
 
-| Role | Light | Dark | Use |
-| --- | --- | --- | --- |
-| Ink | `#000000` | `#f4f4f4` | Primary type and primary actions |
-| Deep ink | `#090909` | `#ffffff` | Primary-action hover |
-| Charcoal | `#525252` | `#c4c4c4` | Secondary labels and navigation |
-| Body | `#737373` | `#a3a3a3` | Supporting prose |
-| Muted | `#6b6b6b` | `#8f8f8f` | Tertiary metadata; 4.5:1 or better on the canvas in both themes |
-| Emerald / mint | `#087456` / `#82ddb8` | `#82ddb8` | Brand and healthy/complete meaning |
-| Brand surface | `#f2f8f5` | `#10231c` | Quiet highlighted regions |
-| Canvas | `#ffffff` | `#111111` | Page and cards |
-| Soft surface | `#fafafa` | `#1b1b1b` | Hover and low-contrast grouping |
-| Inverted surface | `#171717` | `#f4f4f4` | Bounded opposite-tone section |
-| Hairline | `#e5e5e5` | `#2a2a2a` | Dividers and card outlines |
-
-Color never carries status alone. Every state also has a text label. The footer has one conventional
-appearance control with **System**, **Light**, and **Dark** options. System is the default, leaves no
-`data-theme` override, and follows the browser's `color-scheme` immediately when the operating-system
-appearance changes. Light or Dark writes the explicit `quota-theme` override to local storage;
-choosing System removes it. Do not render three permanent footer buttons.
+The footer has one conventional appearance control with **System**, **Light**, and **Dark**
+options. System is the default, leaves no `data-theme` override, and follows the browser's
+`color-scheme` immediately when the operating-system appearance changes. Light or Dark writes the
+explicit `quota-theme` override to local storage; choosing System removes it. Do not render three
+permanent footer buttons.
 
 ### Type
+
+Type roles are in [`docs/design.md`](../../docs/design.md#type). Web deltas:
 
 - Body and controls: `Inter`, then the native sans-serif stack.
 - Display headings: `ui-rounded`, `SF Pro Rounded`, then the system stack.
@@ -232,13 +220,6 @@ choosing System removes it. Do not render three permanent footer buttons.
   `--fs-body` (15 px), and `--fs-caption` (13 px) from `src/app.css`.
 - Monospace is reserved for values whose literal representation matters, such as authorization
   codes. Do not use it as a decorative product motif.
-
-### Meter thresholds
-
-Remaining-percent meters use `--meter-good` at 40 and above, `--meter-warn` from 15 through 39,
-and `--meter-critical` below 15, in both appearances — the same bands as
-`QuotaTone`. Color never carries status alone: the percent
-label stays next to the bar.
 
 ### Shape and spacing
 
@@ -288,8 +269,9 @@ The landing is six blocks, in this order. It does not use slogan sections.
 ## Account dashboard
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
-Account nav in the site header. The overview leads with remaining quota: subscription cards
-(a 6 pt incident dot beside the provider name when official status is minor or worse), then a
+Account nav in the site header. The overview leads with remaining quota: compact subscription
+groups (a 6 pt incident dot beside the provider name when official status is minor or worse),
+each sized to its windows rather than stretched to the tallest neighbour, then a
 Today strip (tokens, API-equivalent cost, today's top model), then a Devices summary line
 (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's verdict). It does
 not repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as
@@ -299,8 +281,9 @@ Cost always says how it was arrived at; unavailable cost renders as an em dash p
 partial cost uses a lower bound marker. Under the totals headline, one line `Priced N of M rows`
 from that period's cost row counts, or `Cost covers every row` / `Cost skips N rows this catalog
 can't price` when those counts are absent. The Usage page period tabs are **Day**, **Week**, **Month**,
-**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
-vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
+**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary), which are also their
+accessible names; **Last 30 days** is the default. Under the tabs
 sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and
 Month only, and **Next period** is disabled on the current unit. **Custom** opens two native date
 inputs bounded by the activity range and an **Apply**. The selection is
@@ -352,10 +335,11 @@ Relay response uses the same retry notice as the rest of the dashboard. An empty
 reads **No Usage on this day.** A 401 starts GitHub sign-in. The dashboard does not repeat the
 GitHub username in the page heading; the header account menu is the identity.
 
-Quota cards show one subscription, not one upload: an account collected on several Macs is one card
-carrying the reading that still describes it, with the reporting device and age on the foot
-(`Studio Mac · 1m ago`). A reading that aged out names why — **Not current — last reading 2d ago**
-— rather than as a current number, so the card needs no separate status pill. Other reporting
+Quota groups show one subscription, not one upload: an account collected on several Macs is one
+group carrying the reading that still describes it, with the reporting device and age on the foot
+(`Studio Mac · 1m ago`). Remaining is the dominant value; the plan capsule and device line are
+supporting. A reading that aged out names why — **Not current — last reading 2d ago**
+— rather than as a current number, so the group needs no separate status pill. Other reporting
 devices stay on the subscription detail page.
 
 The subscription detail page is `/my/subscriptions/<sel>`. Its header matches an Overview card:
@@ -392,7 +376,8 @@ In / Out / Cached / Reasoning / Messages / Cost. In Tokens the bar stacks cached
 input, and output, which add up to the day's total, using the three darkest activity steps. A
 date absent from `days[]` keeps its axis slot and tick — a gap, not a $0 / 0-token day — and the
 table says **no usage recorded**. Empty and unpriced days that the period named follow **An empty
-day is a tick, not a bar** in Shared product vocabulary. The panel is labelled **Local**. **Up to
+day is a tick, not a bar** in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). The panel is labelled **Local**. **Up to
 2 years** has no Daily panel: its per-day shape is the Activity graph beside it.
 
 Under Daily, for every period but **Up to 2 years**, a **Rhythm** panel: a Sunday-first weekday ×

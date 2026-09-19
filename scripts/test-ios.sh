@@ -96,6 +96,14 @@ if [ -n "${QUOTA_IOS_ONLY_TESTING:-}" ]; then
   only_testing=("-only-testing:${QUOTA_IOS_ONLY_TESTING}")
 fi
 
+# QUOTA_IOS_RESULT_BUNDLE is the xcresult path (CI's verify-ios-ui and local audit summary).
+result_args=()
+if [ -n "${QUOTA_IOS_RESULT_BUNDLE:-}" ]; then
+  mkdir -p "$(dirname -- "$QUOTA_IOS_RESULT_BUNDLE")"
+  rm -rf -- "$QUOTA_IOS_RESULT_BUNDLE"
+  result_args=(-resultBundlePath "$QUOTA_IOS_RESULT_BUNDLE")
+fi
+
 xcodebuild \
   -project apps/ios/Quota.xcodeproj \
   -scheme Quota \
@@ -104,4 +112,5 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   ${only_testing[@]+"${only_testing[@]}"} \
+  ${result_args[@]+"${result_args[@]}"} \
   test

@@ -99,5 +99,5 @@ part of `test:e2e`). QuotaBar panel shots are a one-off DEBUG Swift test that ho
 `overview-content.png` from `./scripts/ios-ui-screenshots.sh`, copied to
 `ios-overview-{light,dark}.png`. Compress each PNG below 300 KB (`pngquant` or `sips`).
 
-The site follows [`DESIGN.md`](./DESIGN.md) in this package. QuotaBar has a separate design system at
-[`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
+The site follows [`docs/design.md`](../../docs/design.md) and [`DESIGN.md`](./DESIGN.md) in this
+package. QuotaBar's platform deltas are at [`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).

@@ -688,11 +688,19 @@ for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const)
 
 async function chooseAppearance(page: Page, name: "Light" | "Dark"): Promise<void> {
   const toggle = page.locator("#theme-toggle");
+  const expected = name.toLowerCase();
   await toggle.scrollIntoViewIfNeeded();
-  await toggle.click();
-  const option = page.getByRole("button", { name, exact: true });
-  await expect(option).toBeVisible();
-  await option.click();
+  // The landing paints screenshot CSS before ThemeToggle hydrates; a native click
+  // on the still-inert option does not write data-theme. Retry until it does.
+  await expect(async () => {
+    if (!(await page.locator(".appearance-options").isVisible())) {
+      await toggle.click();
+    }
+    const option = page.getByRole("button", { name, exact: true });
+    await expect(option).toBeVisible();
+    await option.click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", expected);
+  }).toPass();
 }
 
 test("landing screenshots follow an explicit Dark theme on a light OS", async ({ page }) => {
