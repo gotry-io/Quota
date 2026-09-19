@@ -3,7 +3,8 @@ import QuotaWire
 import SwiftUI
 
 /// Today's windows as columns: the same facts `QuotaHistoryCopy.todayLine` names, laid out
-/// for width. The sentence itself stays on the panel.
+/// for width. Shown on Usage when the selected period is Today. The sentence itself stays on
+/// the panel.
 struct DashboardTodayTable: View {
   let rows: [DashboardTodayRow]
 

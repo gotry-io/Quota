@@ -3,7 +3,7 @@ import SwiftUI
 /// Tahoe-only glass and scroll-edge modifiers, with the existing material fallbacks below 26.
 /// Views use these helpers instead of branching on availability themselves.
 extension View {
-  /// Quota / Today / Usage cards: glass on 26, group fill otherwise, 20pt continuous corners.
+  /// Quota / Usage cards: glass on 26, group fill otherwise, 20pt continuous corners.
   @ViewBuilder
   func quotaCardSurface() -> some View {
     if #available(macOS 26.0, *) {
@@ -94,7 +94,7 @@ extension View {
     }
   }
 
-  /// One centred reading column for Quota / Today / Usage.
+  /// One centred reading column for Quota and Usage.
   func quotaWindowColumn() -> some View {
     frame(maxWidth: QuotaDesign.Layout.contentMaxWidth, alignment: .topLeading)
       .frame(maxWidth: .infinity)

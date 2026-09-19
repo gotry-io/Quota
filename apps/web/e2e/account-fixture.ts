@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AccountUsageActivityResponseReadSchema } from "@gotry-io/quota-protocol";
+import {
+  AccountUsageActivityResponseReadSchema,
+  AccountUsagePeriodResponseReadSchema,
+  USAGE_HOUR_GRID_RULE,
+} from "@gotry-io/quota-protocol";
 import { parseAccountResponse, parseAccountSummaryBody } from "../src/lib/account-reads.ts";
 
 type WireCase = { name: string; accepted: boolean; payload: unknown };
@@ -171,6 +175,143 @@ export const accountActivity = {
     },
   ],
 };
+
+function nextUtcDate(date: string): string {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + 1);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function inclusiveDays(from: string, to: string): number {
+  return (
+    Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
+  );
+}
+
+function usageForSpan(summary: AccountSummary, from: string, to: string): UsagePeriod {
+  const span = inclusiveDays(from, to);
+  if (span === 1) return summary.usage.today;
+  if (span === 7) return summary.usage.last_7_days;
+  if (span <= 31) return summary.usage.last_30_days;
+  return summary.usage.all;
+}
+
+function distribute(value: number, n: number): number[] {
+  if (n <= 0) return [];
+  const base = Math.floor(value / n);
+  const parts = Array.from({ length: n }, () => base);
+  parts[n - 1] = (parts[n - 1] ?? 0) + (value - base * n);
+  return parts;
+}
+
+function presentLocalDates(from: string, to: string): string[] {
+  const dates = utcDates(from, to);
+  if (dates.length < 2) return dates;
+  const dropAt = dates.length >= 4 ? 3 : 1;
+  return dates.filter((_, index) => index !== dropAt);
+}
+
+function periodDays(
+  from: string,
+  to: string,
+  usage: UsagePeriod,
+): Array<{ date: string; totals: UsageTotals; cost: UsageCost; partial: boolean }> {
+  const dates = presentLocalDates(from, to);
+  if (dates.length === 1) {
+    const date = dates[0];
+    if (date === undefined) return [];
+    return [
+      {
+        date,
+        totals: structuredClone(usage.totals),
+        cost: structuredClone(usage.cost),
+        partial: usage.partial,
+      },
+    ];
+  }
+  const n = dates.length;
+  const inputs = distribute(usage.totals.input_tokens, n);
+  const outputs = distribute(usage.totals.output_tokens, n);
+  const cacheReads = distribute(usage.totals.cache_read_input_tokens, n);
+  const cacheWrites = distribute(usage.totals.cache_write_input_tokens, n);
+  const reasonings = distribute(usage.totals.reasoning_tokens, n);
+  const messages = distribute(usage.totals.messages, n);
+  const micros = distribute(Number(usage.cost.amount_microusd ?? "0"), n);
+  return dates.map((date, index) => {
+    const input = inputs[index] ?? 0;
+    const output = outputs[index] ?? 0;
+    const cacheRead = Math.min(cacheReads[index] ?? 0, input);
+    const cacheWrite = Math.min(cacheWrites[index] ?? 0, Math.max(0, input - cacheRead));
+    const amount = micros[index] ?? 0;
+    return {
+      date,
+      totals: {
+        total_tokens: input + output,
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_input_tokens: cacheRead,
+        cache_write_input_tokens: cacheWrite,
+        reasoning_tokens: Math.min(reasonings[index] ?? 0, output),
+        messages: messages[index] ?? 0,
+      },
+      cost: {
+        ...structuredClone(usage.cost),
+        amount_microusd: String(amount),
+        calculated_rows: 1,
+        reported_rows: 0,
+        unpriced_rows: 0,
+        status: "complete",
+        basis: "calculated",
+        unpriced: [],
+      },
+      partial: usage.partial,
+    };
+  });
+}
+
+export function accountUsagePeriod(
+  from: string,
+  to: string,
+  timezone: string,
+  options: { breakdown?: boolean; summary?: unknown } = {},
+): unknown {
+  const summary = (options.summary ?? accountSummary) as AccountSummary;
+  const usage = usageForSpan(summary, from, to);
+  const days = periodDays(from, to, usage);
+  const payload = {
+    protocol_version: 6,
+    request: { from, to, timezone },
+    bounds: {
+      start: `${from}T00:00:00Z`,
+      end: `${nextUtcDate(to)}T00:00:00Z`,
+      grid: USAGE_HOUR_GRID_RULE,
+    },
+    totals: structuredClone(usage.totals),
+    cost: structuredClone(usage.cost),
+    cache_saved: structuredClone(usage.cache_saved),
+    days,
+    ...(options.breakdown === true ? { agents: structuredClone(usage.agents) } : {}),
+    coverage: {
+      partial: usage.partial,
+      daily_retained_from: null,
+      hourly_retained_from: null,
+      truncated_by_retention: false,
+    },
+    revision: {
+      usage_revision: 1,
+      device_generation: 1,
+      account_updated_at: "2026-08-12T12:00:00Z",
+      pricing_revision: "pricing_1",
+      model_catalog_revision: "models_1",
+      fold_version: 1,
+    },
+  };
+  const parsed = AccountUsagePeriodResponseReadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`accountUsagePeriod failed schema: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
 
 export function accountActivityDay(date: string) {
   return {

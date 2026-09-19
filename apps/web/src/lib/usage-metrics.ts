@@ -87,6 +87,8 @@ export function shareFraction(part: number, whole: number): number {
 
 export type UsageDailyRow = {
   date: string;
+  /** False when this local date is in the asked range but absent from `days[]`. */
+  recorded: boolean;
   totals: TotalsView;
   cost: CostView;
   partial: boolean;
@@ -94,13 +96,13 @@ export type UsageDailyRow = {
   segments: { freshInput: number; cachedInput: number; output: number };
 };
 
+export const NO_USAGE_RECORDED = "no usage recorded";
+
 /**
- * The UTC days a period's table shows, oldest first, including the ones with no Usage.
+ * One slot per local date in the period's asked `[from, to]`, oldest first.
  *
- * The activity read answers UTC dates — 400 local days would cut 400 UTC days, which is the
- * history the rollup exists to keep closed (ADR 0024) — so this table is UTC too, and says so.
- * The range is the period's own dates, already clamped to the days the page holds; `all` passes
- * `null`, because two years of rows is what the activity graph beside it already answers.
+ * A date absent from `days[]` keeps its axis slot and is a gap, not a $0 / 0-token day
+ * (ADR 0055). `all` has no Daily panel; its per-day shape is the Activity graph.
  */
 export function usageDailyRows(
   days: readonly { date: string; totals: TotalsView; cost: CostView; partial: boolean }[],
@@ -111,16 +113,20 @@ export function usageDailyRows(
   const rows: UsageDailyRow[] = [];
   for (let date = range.from; date <= range.to; date = shiftUtcDate(date, 1)) {
     const day = byDate.get(date);
-    const totals = day?.totals ?? emptyTotals();
+    if (day === undefined) {
+      rows.push(missingDailyRow(date));
+      continue;
+    }
     rows.push({
       date,
-      totals,
-      cost: day?.cost ?? { amount_microusd: null, status: "unavailable", basis: "none" },
-      partial: day?.partial ?? false,
+      recorded: true,
+      totals: day.totals,
+      cost: day.cost,
+      partial: day.partial,
       segments: {
-        freshInput: totals.input_tokens - totals.cache_read_input_tokens,
-        cachedInput: totals.cache_read_input_tokens,
-        output: totals.output_tokens,
+        freshInput: day.totals.input_tokens - day.totals.cache_read_input_tokens,
+        cachedInput: day.totals.cache_read_input_tokens,
+        output: day.totals.output_tokens,
       },
     });
   }
@@ -141,8 +147,9 @@ export function dailyValue(row: UsageDailyRow, mode: "tokens" | "cost"): number 
 
 export type DailyBarKind = "amount" | "empty" | "unpriced";
 
-/** How one UTC day is drawn: a quantitative bar, a baseline tick, or an unpriced mark. */
+/** How one local day is drawn: a quantitative bar, a baseline tick, or an unpriced mark. */
 export function dailyBarKind(row: UsageDailyRow, mode: "tokens" | "cost"): DailyBarKind {
+  if (!row.recorded) return "empty";
   if (mode === "tokens") return row.totals.total_tokens > 0 ? "amount" : "empty";
   if (row.totals.total_tokens === 0) return "empty";
   if (row.cost.status === "unavailable") return "unpriced";
@@ -151,6 +158,7 @@ export function dailyBarKind(row: UsageDailyRow, mode: "tokens" | "cost"): Daily
 
 /** The one line a day's bar carries for a pointer and for a screen reader. */
 export function dailyTooltip(row: UsageDailyRow, mode: "tokens" | "cost" = "tokens"): string {
+  if (!row.recorded) return `${row.date} · ${NO_USAGE_RECORDED}`;
   if (mode === "tokens") {
     return `${row.date} · ${formatCount(row.totals.total_tokens)} tokens`;
   }
@@ -160,12 +168,13 @@ export function dailyTooltip(row: UsageDailyRow, mode: "tokens" | "cost" = "toke
 
 /** Spoken summary of the plot, following Tokens / Cost mode. */
 export function dailyChartSummary(rows: readonly UsageDailyRow[], mode: "tokens" | "cost"): string {
+  const recorded = rows.filter((row) => row.recorded);
   if (mode === "tokens") {
-    const total = rows.reduce((sum, row) => sum + row.totals.total_tokens, 0);
+    const total = recorded.reduce((sum, row) => sum + row.totals.total_tokens, 0);
     return `${rows.length} days, ${formatCount(total)} tokens in total`;
   }
-  const unpriced = rows.filter((row) => dailyBarKind(row, "cost") === "unpriced").length;
-  const priced = rows.filter((row) => dailyBarKind(row, "cost") === "amount");
+  const unpriced = recorded.filter((row) => dailyBarKind(row, "cost") === "unpriced").length;
+  const priced = recorded.filter((row) => dailyBarKind(row, "cost") === "amount");
   if (priced.length === 0) {
     return unpriced > 0
       ? `${rows.length} days, ${unpriced} unpriced`
@@ -177,15 +186,22 @@ export function dailyChartSummary(rows: readonly UsageDailyRow[], mode: "tokens"
   return `${rows.length} days, ${costText} in total, ${unpriced} unpriced`;
 }
 
-function emptyTotals(): TotalsView {
+function missingDailyRow(date: string): UsageDailyRow {
   return {
-    total_tokens: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_input_tokens: 0,
-    cache_write_input_tokens: 0,
-    reasoning_tokens: 0,
-    messages: 0,
+    date,
+    recorded: false,
+    totals: {
+      total_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      reasoning_tokens: 0,
+      messages: 0,
+    },
+    cost: { amount_microusd: null, status: "unavailable", basis: "none" },
+    partial: false,
+    segments: { freshInput: 0, cachedInput: 0, output: 0 },
   };
 }
 

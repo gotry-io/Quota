@@ -4,13 +4,16 @@ import SwiftUI
 
 /// Dashboard Usage: the panel Usage page at width. Period stepping, custom range, totals,
 /// a cost-per-day chart, Projects on This Mac, and the monthly budget keep their existing
-/// behaviour and copy.
+/// behaviour and copy. The Today period also shows the per-window table that used to be its own
+/// page.
 struct DashboardUsageView: View {
   var dashboard: DashboardModel
   let now: Date
   @State private var rangeEditor = false
   @State private var draftFrom = Date()
   @State private var draftTo = Date()
+  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
+    ResetCopyStylePreference.fallback
 
   var body: some View {
     let state = dashboard.presentedUsage(now: now)
@@ -33,6 +36,12 @@ struct DashboardUsageView: View {
 
       if rangeEditor {
         rangeEditorRow
+      }
+
+      if dashboard.showsTodayWindows {
+        DashboardTodayTable(
+          rows: dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
+        )
       }
 
       if let progress = state.budget {

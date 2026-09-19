@@ -135,8 +135,6 @@ struct QuotaWindowBlock: View {
   /// Why the reading is not current, or `nil` while it is.
   var stateLabel: String? = nil
   var presentation: QuotaWindowPresentation = .detail
-  /// The curve this device's own samples draw for the window, when it has any (ADR 0042).
-  var history: QuotaHistory? = nil
   /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
   var now: Date = Date()
 
@@ -187,9 +185,6 @@ struct QuotaWindowBlock: View {
       windowTitle
       remainingValue
       meter(height: QuotaDesign.Layout.meterHeight)
-      if let history, !history.points.isEmpty {
-        QuotaPaceLineView(history: history, tint: windowTone)
-      }
       TimelineView(.periodic(from: .now, by: 60)) { context in
         countdownRow(now: context.date)
       }
@@ -320,10 +315,6 @@ struct QuotaWindowBlock: View {
   private var paceWarns: Bool {
     if case .runsOut = pace { return true }
     return false
-  }
-
-  private var windowTone: Color {
-    QuotaTheme.color(for: QuotaTone.remaining(percent: window.remainingPercent))
   }
 
   private var accessibilityText: String {

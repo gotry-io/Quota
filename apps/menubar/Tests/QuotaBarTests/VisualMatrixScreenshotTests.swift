@@ -73,8 +73,8 @@
         )
         configuration.prepareEnvironment()
         let model = configuration.makeModel()
-        if configuration.mainPage?.isQuotaGroup == true {
-          model.usage.selectUsagePeriod(.last7Days)
+        if let usagePeriod = configuration.usagePeriod {
+          model.usage.selectUsagePeriod(usagePeriod)
         }
         for (size, suffix) in captureSizes(for: configuration, route: route) {
           for (scheme, appearance) in appearances {
@@ -100,7 +100,9 @@
 
     private func captureSize(for configuration: VisualTestConfiguration) -> CGSize {
       if configuration.hostsMainWindow {
-        if configuration.route == .mainUsage || configuration.route == .mainUsageLocal {
+        if configuration.route == .mainUsage || configuration.route == .mainUsageLocal
+          || configuration.route == .mainToday
+        {
           return CGSize(width: QuotaDesign.Layout.mainWindowMinSize.width, height: 2_200)
         }
         return QuotaDesign.Layout.mainWindowMinSize

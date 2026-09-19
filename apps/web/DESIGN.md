@@ -169,11 +169,13 @@ The site has these routes:
    **Sign out**. Session cookies stay HttpOnly. SvelteKit renders the header from
    `WebDocumentPort.getViewer` on the first HTML byte. The `/my` document is a signed-in shell
    and does not carry Account data: one client store holds the summary, activity (keyed by
-   `from|to`), and per-day detail, and loads `GET /api/v6/account/summary` with the browser's IANA
-   timezone. The account shell re-runs `ensureSummary()` on account navigations without blocking
-   first paint or replacing cached data with a skeleton. Usage loads and revalidates activity
-   when that route is entered. The activity range is a UTC date taken from the 60-second display
-   clock, so the cache key and fetch change at the UTC day boundary even if the page stays open;
+   `from|to`), period (keyed by `from|to|timezone|breakdown`), and per-day detail, and loads
+   `GET /api/v6/account/summary` with the browser's IANA timezone. The account shell re-runs
+   `ensureSummary()` on account navigations without blocking first paint or replacing cached data
+   with a skeleton. Usage loads and revalidates activity and, for every selection except All, the
+   period read when that route is entered. The activity range is a UTC date taken from the
+   60-second display clock, so the cache key and fetch change at the UTC day boundary even if the
+   page stays open;
    minutes within the same UTC day do not refetch. Fresh reads are reused for 60 seconds
    (stale-while-revalidate); an immediate tab switch does not refetch. Unsigned
    visits to `/my` and its sub-routes are a server redirect to `/`. The shipped `/app` bookmark
@@ -286,13 +288,17 @@ sit **Previous period**, the range title, and **Next period**; the arrows apply 
 Month only, and **Next period** is disabled on the current unit. **Custom** opens two native date
 inputs bounded by the activity range and an **Apply**. The selection is
 `?period=day|week|month|7d|30d|all|custom`, plus `&offset=` on a stepped period and `&from=&to=` on
-a custom one, so a refresh keeps it. Today, 7D, 30D, and All are read from the Account summary;
-every other period is folded in the browser from the activity days the page already holds, so it
-shows totals and cost and says in one line that the model breakdown is on the four the summary
-carries.
+a custom one, so a refresh keeps it. Every selection except All reads
+`GET /api/v6/account/usage/period` with those inclusive local dates and this browser's IANA
+timezone, `breakdown=1` for the agent/model tree — presets included, so one path answers them.
+`all` stays the summary's 730 UTC-day window. Overview Today still reads the summary. A matching
+`If-None-Match` reuses the last-good period the way the summary already does. Incomplete hours
+print **some hours incomplete**; a range that retention cuts prints **some of this range is no
+longer kept** and **This range goes past what Quota still keeps.**
 
 Above the totals is a **Monthly budget** card: an amount in USD, a **Tell me at 80% and 100%**
-switch, and a meter reading `spent / budget · percent` against this month's fold. Both fields live
+switch, and a meter reading `spent / budget · percent` against this browser's `YYYY-MM` local
+month from the same period read. Both fields live
 in `localStorage` and never reach Relay. Crossing 80% and then 100% shows one `role="status"` line
 each per calendar month with a **Got it** button that records the crossing, because a browser page
 posts no notification. With no budget set the card reads **No budget is set for this month.**
@@ -363,15 +369,16 @@ Reasoning. Cache hit is whole percent with `saved $X.XX` under it, or **—** wi
 compare** when the period's cache reads could not be priced
 ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). At 640 px the card is one column.
 
-Under it, for every period but **Up to 2 years**, a **Daily** panel: one bar per UTC day of the
-period, a **Tokens** / **Cost** pair of `aria-pressed` text buttons deciding what they measure, and
-a **Show daily breakdown** disclosure over a semantic table with Date / Total / In / Out / Cached /
-Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input, and output, which
-add up to the day's total, using the three darkest activity steps. Empty and unpriced days follow
-**An empty day is a tick, not a bar** in
-[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). The panel is labelled **UTC**,
-the calendar the activity read answers. **Up to 2 years** has no Daily panel: its per-day shape is
-the Activity graph beside it.
+Under it, for every period but **Up to 2 years**, a **Daily** panel: one slot per local date in
+the asked `[from, to]`, a **Tokens** / **Cost** pair of `aria-pressed` text buttons deciding what
+they measure, and a **Show daily breakdown** disclosure over a semantic table with Date / Total /
+In / Out / Cached / Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh
+input, and output, which add up to the day's total, using the three darkest activity steps. A
+date absent from `days[]` keeps its axis slot and tick — a gap, not a $0 / 0-token day — and the
+table says **no usage recorded**. Empty and unpriced days that the period named follow **An empty
+day is a tick, not a bar** in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). The panel is labelled **Local**. **Up to
+2 years** has no Daily panel: its per-day shape is the Activity graph beside it.
 
 Under Daily, for every period but **Up to 2 years**, a **Rhythm** panel: a Sunday-first weekday ×
 hour heatmap using the same `--activity-0`…`--activity-4` steps as the Activity graph, then 24 bars

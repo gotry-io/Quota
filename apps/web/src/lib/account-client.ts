@@ -5,28 +5,45 @@ import {
   type AccountActivityResult,
   type AccountResult,
   type AccountSummaryResult,
+  type AccountUsagePeriodQuery,
+  type AccountUsagePeriodResult,
   accountActivityPath,
   accountActivityRange,
   accountPath,
   accountSummaryPath,
+  accountUsagePeriodPath,
   browserTimezone,
   parseAccountActivityResponse,
   parseAccountResponse,
   parseAccountSummaryBody,
+  parseAccountUsagePeriodResponse,
+  storedPeriod,
+  storedPeriodETag,
   storedSummary,
   storedSummaryETag,
+  storePeriod,
   storeSummary,
+  usagePeriodResourceKey,
 } from "./account-reads.ts";
 import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
 
-export type { AccountActivityResult, AccountError, AccountResult, AccountSummaryResult };
+export type {
+  AccountActivityResult,
+  AccountError,
+  AccountResult,
+  AccountSummaryResult,
+  AccountUsagePeriodQuery,
+  AccountUsagePeriodResult,
+};
 export {
   ACTIVITY_DAYS,
   accountActivityPath,
   accountActivityRange,
   accountPath,
   accountSummaryPath,
+  accountUsagePeriodPath,
   browserTimezone,
+  usagePeriodResourceKey,
 };
 
 const jsonRequest = {
@@ -106,6 +123,34 @@ export async function fetchAccount(): Promise<AccountResult> {
     const response = await fetch(accountPath(), jsonRequest);
     if (!response.ok) return classifyAccountError(response);
     return parseAccountResponse(response.status, await response.json());
+  } catch {
+    return classifyAccountError(null);
+  }
+}
+
+export async function fetchAccountUsagePeriod(
+  query: AccountUsagePeriodQuery,
+): Promise<AccountUsagePeriodResult> {
+  const key = usagePeriodResourceKey(query);
+  const etag = storedPeriodETag(key);
+  const headers = etag
+    ? { Accept: "application/json", "If-None-Match": etag }
+    : jsonRequest.headers;
+  try {
+    const response = await fetch(accountUsagePeriodPath(query), {
+      ...jsonRequest,
+      headers,
+    });
+    if (response.status === 304) {
+      const cached = storedPeriod(key);
+      return cached ? { status: "ok", period: cached } : classifyAccountError(response);
+    }
+    if (!response.ok) return classifyAccountError(response);
+    const parsed = parseAccountUsagePeriodResponse(response.status, await response.json());
+    if (parsed.status !== "ok") return parsed;
+    const nextETag = response.headers.get("ETag");
+    if (nextETag) storePeriod(key, nextETag, parsed.period);
+    return parsed;
   } catch {
     return classifyAccountError(null);
   }

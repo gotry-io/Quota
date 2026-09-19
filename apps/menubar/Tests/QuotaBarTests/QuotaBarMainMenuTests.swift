@@ -78,7 +78,7 @@ func mainMenuHasEditMenuWithPaste() throws {
 }
 
 @Test @MainActor
-func viewMenuCommand1Through3SelectQuotaTodayAndUsage() throws {
+func viewMenuCommand1Through3SelectQuotaUsageAndSettings() throws {
   let previous = UserDefaults.standard.object(forKey: MainPage.storageKey)
   defer {
     if let previous {
@@ -90,21 +90,22 @@ func viewMenuCommand1Through3SelectQuotaTodayAndUsage() throws {
 
   let view = try submenu(QuotaBarMainMenu.make(), titled: "View")
   let quota = try item(view, titled: "Quota")
-  let today = try item(view, titled: "Today")
   let usage = try item(view, titled: "Usage")
+  let settings = try item(view, titled: "Settings")
+  #expect(view.items.first { $0.title == "Today" } == nil)
   #expect(quota.action == #selector(QuotaBarMainMenu.Actions.showQuota(_:)))
-  #expect(today.action == #selector(QuotaBarMainMenu.Actions.showToday(_:)))
   #expect(usage.action == #selector(QuotaBarMainMenu.Actions.showUsage(_:)))
+  #expect(settings.action == #selector(QuotaBarMainMenu.Actions.openSettings(_:)))
   #expect(quota.keyEquivalent == "1")
-  #expect(today.keyEquivalent == "2")
-  #expect(usage.keyEquivalent == "3")
+  #expect(usage.keyEquivalent == "2")
+  #expect(settings.keyEquivalent == "3")
 
   QuotaBarMainMenu.Actions.shared.showQuota(nil)
   #expect(MainPage.stored == .quota)
-  QuotaBarMainMenu.Actions.shared.showToday(nil)
-  #expect(MainPage.stored == .today)
   QuotaBarMainMenu.Actions.shared.showUsage(nil)
   #expect(MainPage.stored == .usage)
+  QuotaBarMainMenu.Actions.shared.openSettings(nil)
+  #expect(MainPage.stored == .account)
 }
 
 @Test @MainActor
