@@ -46,6 +46,7 @@ enum SettingsCopy {
   static let privacySentence = "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
+  static let devices = "Devices"
   static let manageDevices = "Manage Devices on Web"
   static let deleteAccount = "Delete Account…"
   static let deleteAccountExplanation =

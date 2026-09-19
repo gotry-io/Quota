@@ -117,7 +117,12 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
       <p class="subscription-freshness">
         {observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}
       </p>
-      <QuotaWindows windows={snapshot.windows} provider={subscription.provider} now={now} />
+      <QuotaWindows
+        windows={snapshot.windows}
+        provider={subscription.provider}
+        now={now}
+        showPaceDetail={true}
+      />
     </article>
     <div class="subscription-sources">
       <h2 id="subscription-sources-title">Devices</h2>

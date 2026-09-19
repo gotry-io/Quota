@@ -1,5 +1,5 @@
 {
-  "$comment": "Whether a quota window's current burn rate lasts to its reset, derived from the reading alone. `used_percent`, `resets_at`, and `duration_seconds` are the whole input; `now` is the reader's clock. Every runtime answers this file: `packages/quota-model` (`quotaPace`), `packages/service` (`pace`), and `packages/apple-shared` (`QuotaPace`). `expected_copy` is the one line every surface prints, answered by `apps/web/src/lib/format.ts` and `QuotaPaceCopy`; it is null where there is no pace. See ADR 0035.",
+  "$comment": "Whether a quota window's current burn rate lasts to its reset, derived from the reading alone. `used_percent`, `resets_at`, and `duration_seconds` are the whole input; `now` is the reader's clock. Every runtime answers this file: `packages/quota-model` (`quotaPace`), `packages/service` (`pace`), and `packages/apple-shared` (`QuotaPace`). `expected_headline` is the glance-surface sentence (`Expected to last until reset` / `May run out about 2h before reset`); `expected_detail` is the detail-surface tempo explanation (`Using quota faster than an even pace (+70 points)` / slower / at an even pace). Both are answered by `apps/web/src/lib/format.ts` and `QuotaPaceCopy`; they are null where there is no pace. See ADR 0035.",
   "cases": [
     {
       "name": "half the allowance at half the window is on track and lasts",
@@ -18,7 +18,8 @@
         "delta_percent": 0,
         "projected_at_reset": 100.0
       },
-      "expected_copy": "On track · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota at an even pace"
     },
     {
       "name": "burning ahead of the window runs out before it resets",
@@ -38,7 +39,8 @@
         "projected_at_reset": 170.0,
         "exhausts_at": "2026-09-05T09:56:28Z"
       },
-      "expected_copy": "Ahead +70% · runs out ~2h before reset"
+      "expected_headline": "May run out about 2h before reset",
+      "expected_detail": "Using quota faster than an even pace (+70 points)"
     },
     {
       "name": "spending slower than the week lasts to reset",
@@ -57,7 +59,8 @@
         "delta_percent": -30,
         "projected_at_reset": 70.0
       },
-      "expected_copy": "Behind −30% · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota slower than an even pace (−30 points)"
     },
     {
       "name": "a window that just reset has too little of itself behind it",
@@ -72,7 +75,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "the smallest sample the rule accepts still answers",
@@ -91,7 +95,8 @@
         "projected_at_reset": 200.0,
         "exhausts_at": "2026-09-05T09:30:00Z"
       },
-      "expected_copy": "Ahead +100% · runs out ~2h before reset"
+      "expected_headline": "May run out about 2h before reset",
+      "expected_detail": "Using quota faster than an even pace (+100 points)"
     },
     {
       "name": "under two percent used is not a pace",
@@ -106,7 +111,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "exactly two percent used is",
@@ -124,7 +130,8 @@
         "delta_percent": -96,
         "projected_at_reset": 4.0
       },
-      "expected_copy": "Behind −96% · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota slower than an even pace (−96 points)"
     },
     {
       "name": "a window with no cadence has no pace",
@@ -138,7 +145,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "a window with no reset instant has no pace",
@@ -152,7 +160,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "a balance-only wallet has no pace",
@@ -169,7 +178,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "a budget window with a limit does have one",
@@ -191,7 +201,8 @@
         "projected_at_reset": 140.0,
         "exhausts_at": "2026-09-05T10:34:17Z"
       },
-      "expected_copy": "Ahead +40% · runs out ~1h before reset"
+      "expected_headline": "May run out about 1h before reset",
+      "expected_detail": "Using quota faster than an even pace (+40 points)"
     },
     {
       "name": "the upper tempo boundary is on track, not ahead",
@@ -210,7 +221,8 @@
         "projected_at_reset": 110.0,
         "exhausts_at": "2026-09-05T11:32:44Z"
       },
-      "expected_copy": "On track · runs out ~27m before reset"
+      "expected_headline": "May run out about 27m before reset",
+      "expected_detail": "Using quota at an even pace"
     },
     {
       "name": "the lower tempo boundary is on track, not behind",
@@ -228,7 +240,8 @@
         "delta_percent": -10,
         "projected_at_reset": 90.0
       },
-      "expected_copy": "On track · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota at an even pace"
     },
     {
       "name": "a clock before the window start reads as no sample",
@@ -243,7 +256,8 @@
       "expected": {
         "kind": "none"
       },
-      "expected_copy": null
+      "expected_headline": null,
+      "expected_detail": null
     },
     {
       "name": "past the reset the window is fully elapsed",
@@ -261,7 +275,8 @@
         "delta_percent": -60,
         "projected_at_reset": 40.0
       },
-      "expected_copy": "Behind −60% · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota slower than an even pace (−60 points)"
     },
     {
       "name": "an offset instant answers the same as its UTC equivalent",
@@ -279,7 +294,8 @@
         "delta_percent": 0,
         "projected_at_reset": 100.0
       },
-      "expected_copy": "On track · lasts to reset"
+      "expected_headline": "Expected to last until reset",
+      "expected_detail": "Using quota at an even pace"
     },
     {
       "name": "a projection past the cap is stated at the cap",
@@ -298,7 +314,8 @@
         "projected_at_reset": 999.0,
         "exhausts_at": "2026-09-05T07:15:00Z"
       },
-      "expected_copy": "Ahead +899% · runs out ~4h before reset"
+      "expected_headline": "May run out about 4h before reset",
+      "expected_detail": "Using quota faster than an even pace (+899 points)"
     }
   ]
 }

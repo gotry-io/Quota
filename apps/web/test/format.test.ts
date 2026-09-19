@@ -18,7 +18,8 @@ import {
   formatUtcDateRange,
   lastReadingCopy,
   observationFreshnessCopy,
-  paceCopy,
+  paceDetail,
+  paceHeadline,
   relativeAge,
   resetCopy,
   showsNoResetTime,
@@ -235,8 +236,8 @@ test("classifies wallet windows as balance-only and metered windows as percent m
 });
 
 /**
- * The pace line is the same sentence on the website, in QuotaBar, and in the iOS app.
- * `QuotaPaceCopy` answers this file too, so a phrase one of them changes fails the other.
+ * Glance and detail pace copy are the same sentences on the website, in QuotaBar, and in the
+ * iOS app. `QuotaPaceCopy` answers this file too, so a phrase one of them changes fails the other.
  */
 const paceFixture = JSON.parse(
   readFileSync(
@@ -251,7 +252,8 @@ const paceFixture = JSON.parse(
     name: string;
     now: string;
     window: { used_percent: number; resets_at?: string; duration_seconds?: number };
-    expected_copy: string | null;
+    expected_headline: string | null;
+    expected_detail: string | null;
   }[];
 };
 
@@ -259,6 +261,11 @@ test("pace copy matches the shared fixture", () => {
   assert.ok(paceFixture.cases.length >= 12);
   for (const testCase of paceFixture.cases) {
     const pace = quotaPace(testCase.window, new Date(testCase.now));
-    assert.equal(paceCopy(pace, testCase.window.resets_at), testCase.expected_copy, testCase.name);
+    assert.equal(
+      paceHeadline(pace, testCase.window.resets_at),
+      testCase.expected_headline,
+      testCase.name,
+    );
+    assert.equal(paceDetail(pace), testCase.expected_detail, testCase.name);
   }
 });

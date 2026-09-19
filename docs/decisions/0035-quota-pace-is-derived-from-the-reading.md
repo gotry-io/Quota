@@ -8,6 +8,7 @@
   readings a device takes and draws them. Pace stays a pure function of one window: what 0042
   adds is a second reader of `projected_at_reset`, the point the dashed line ends on, so the
   line and the phrase can never state two different projections.
+- Amended 2026-09-19: the printed words changed; the derivation did not.
 
 ## Context
 
@@ -40,9 +41,11 @@ spent, `exhausts_at`, stated to the whole second so every runtime names the same
 The cap is on the projection, and the tempo delta is that same capped projection restated, so a
 reader is never shown two different sizes of the same overrun.
 
-**One phrase, three surfaces.** `On track · lasts to reset`, `Ahead +42% · runs out ~2h before
-reset`, `Behind −30% · lasts to reset`, where the duration is the shared compact format over
-`resets_at − exhausts_at`. The words live in `apps/menubar/DESIGN.md` Shared product vocabulary.
+**Glance headline, detail explanation.** Glance surfaces print **Expected to last until reset**
+or **May run out about 2h before reset**, where the duration is the shared compact format over
+`resets_at − exhausts_at`. Detail surfaces add **Using quota faster than an even pace (+70
+points)**, **Using quota slower than an even pace (−30 points)**, or **Using quota at an even
+pace**. The words live in `apps/menubar/DESIGN.md` Shared product vocabulary.
 
 **Each runtime owns one implementation, and `packages/protocol/fixtures/quota-pace-conformance.json`
 is the judge all of them answer** — `quotaPace` in `packages/quota-model`, `pace` in
@@ -72,3 +75,13 @@ with that window's other keys.
   fails in its own test run.
 - The alert dedup key gained a rule discriminator, so a stored key names which of the three rules
   fired it rather than inferring it from whether a threshold is present.
+
+## Amended 2026-09-19
+
+The printed words changed; the derivation did not. Readers decoded *Ahead* and *Behind* as good
+and bad rather than faster and slower than an even burn, and the signed figure is percentage
+points off that even rate, not percent of the window. Glance surfaces now print only the outcome
+— **Expected to last until reset** or **May run out about 2h before reset** — and detail
+surfaces add **Using quota faster than an even pace (+70 points)** (or slower, or at an even
+pace). The math, the fixture's `expected` object, and the warning colour for a window that runs
+out are unchanged.

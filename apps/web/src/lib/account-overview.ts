@@ -1,4 +1,5 @@
 import { remainingPercent } from "@gotry-io/quota-model";
+import { QUOTA_HEALTHY_PERCENT, QUOTA_WARNING_PERCENT } from "./tokens.generated.ts";
 import type {
   AccountDeviceRead,
   AccountSummaryRead,
@@ -16,8 +17,8 @@ type DeviceRow = Pick<
 
 /** Remaining-quota meter fill, the same bands QuotaBar paints: ≥40 good, 15–39 warn, <15 critical. */
 export function meterTone(remaining: number): MeterTone {
-  if (remaining >= 40) return "good";
-  if (remaining >= 15) return "warn";
+  if (remaining >= QUOTA_HEALTHY_PERCENT) return "good";
+  if (remaining >= QUOTA_WARNING_PERCENT) return "warn";
   return "critical";
 }
 

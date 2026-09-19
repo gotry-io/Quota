@@ -29,7 +29,7 @@
     }
 
     @Test
-    func pacePhraseEqualsThePanelForTheSameReading() throws {
+    func paceHeadlineEqualsThePanelForTheSameReading() throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
@@ -45,8 +45,11 @@
       for provider in dashboard.providers(now: referenceDate) {
         let snapshot = try #require(model.displaySnapshots(for: provider.provider).first?.snapshot)
         let window = try #require(snapshot.primaryCadenceWindows.first ?? snapshot.windows.first)
-        let expected = window.pace.flatMap { QuotaPaceCopy.line($0, resetsAt: window.resetsAt) }
-        #expect(provider.pacePhrase == expected)
+        let expectedHeadline = window.pace.flatMap {
+          QuotaPaceCopy.headline($0, resetsAt: window.resetsAt)
+        }
+        #expect(provider.paceHeadline == expectedHeadline)
+        #expect(provider.paceDetail == window.pace.flatMap { QuotaPaceCopy.detail($0) })
       }
     }
 

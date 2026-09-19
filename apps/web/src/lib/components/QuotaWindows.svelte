@@ -9,7 +9,8 @@ import { meterTone } from "$lib/account-overview";
 import {
   formatQuotaRemaining,
   NO_RESET_TIME_COPY,
-  paceCopy,
+  paceDetail,
+  paceHeadline,
   resetCopy,
   showsNoResetTime,
 } from "$lib/format";
@@ -29,10 +30,12 @@ let {
   windows,
   provider,
   now,
+  showPaceDetail = false,
 }: {
   windows: readonly WindowItem[];
   provider?: string;
   now?: Date;
+  showPaceDetail?: boolean;
 } = $props();
 </script>
 
@@ -45,7 +48,8 @@ let {
       {@const reset = window.resets_at ? resetCopy(window.resets_at, now) : null}
       {@const tone = meterTone(remaining)}
       {@const pace = quotaPace(window, now ?? new Date())}
-      {@const paceLine = paceCopy(pace, window.resets_at)}
+      {@const headline = paceHeadline(pace, window.resets_at)}
+      {@const detail = showPaceDetail && headline ? paceDetail(pace) : null}
       <div class="quota-window-card">
         <div class="quota-window-heading">
           <span>{formatWindowTitle(window.title, window)}</span>
@@ -61,10 +65,13 @@ let {
         {:else if !window.resets_at && showsNoResetTime(window)}
           <p class="quota-window-meta">{NO_RESET_TIME_COPY}</p>
         {/if}
-        {#if paceLine}
+        {#if headline}
           <p class="quota-window-meta" class:quota-window-pace-warn={pace.kind === "runs_out"}>
-            {paceLine}
+            {headline}
           </p>
+        {/if}
+        {#if detail}
+          <p class="quota-window-meta">{detail}</p>
         {/if}
       </div>
     {/each}

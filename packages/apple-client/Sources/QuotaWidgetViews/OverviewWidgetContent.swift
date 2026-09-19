@@ -286,6 +286,9 @@ public enum OverviewWidgetContent {
     if let state = item.stateLabel(now: now) {
       parts.append(state)
     }
+    if let pace = item.pace, let headline = QuotaPaceCopy.headline(pace, resetsAt: item.resetsAt) {
+      parts.append(headline)
+    }
     if let resetsAt = item.resetsAt,
       let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
     {

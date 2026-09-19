@@ -5,54 +5,33 @@ enum QuotaTheme {
   static let emerald = Color(
     uiColor: UIColor { traits in
       let rgb = traits.userInterfaceStyle == .dark ? QuotaBrand.mint : QuotaBrand.emerald
-      return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+      return uiColor(rgb)
     }
   )
 
   static let meterTrack = Color(uiColor: .tertiarySystemFill)
 
   /// Support text. System `secondaryLabel` is 3.3:1 on a light grouped background and 3.4:1
-  /// on a light card; this opaque grey is 4.7:1 / 5.3:1 there. Dark keeps `secondaryLabel`,
-  /// which already clears 4.5:1.
+  /// on a light card; the Apple light override in `tokens.json` is 4.7:1 / 5.3:1 there. Dark
+  /// keeps `secondaryLabel`, which already clears 4.5:1.
   static let secondary = Color(
     uiColor: UIColor { traits in
       traits.userInterfaceStyle == .dark
         ? .secondaryLabel
-        : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+        : uiColor(DesignTokens.Color.textSecondary.light)
     }
   )
 
   /// Cached-input chart fill. Translucent emerald on the card was 1.7:1 in light and 2.4:1
-  /// in dark; these solids keep a lighter step than fresh emerald and stay ≥ 3:1 on the card.
-  static let cachedFill = Color(
-    uiColor: UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? UIColor(red: 0.175, green: 0.578, blue: 0.453, alpha: 1)
-        : UIColor(red: 0.225, green: 0.564, blue: 0.470, alpha: 1)
-    }
-  )
+  /// in dark; the Apple `chart.cache` override stays a lighter step than fresh emerald and
+  /// ≥ 3:1 on the card.
+  static let cachedFill = color(DesignTokens.Color.chartCache)
 
   /// The one warning color: a window whose pace runs it out before its reset.
-  /// System orange is 2.9:1 on a light card; this darkens it to 4.6:1 there and keeps the
-  /// system colour on dark grounds, where it already passes.
-  static let warning = Color(
-    uiColor: UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? .systemOrange
-        : UIColor(red: 0.72, green: 0.36, blue: 0.0, alpha: 1)
-    }
-  )
+  static let warning = color(DesignTokens.Color.quotaWarning)
 
   /// Remaining-quota critical, budget-exhausted meter, and status-dot red.
-  /// System red is ~3.5:1 as text on a light card; this darkens it to 5.3:1 there and keeps
-  /// the system colour on dark grounds, where it already passes 4.5:1.
-  static let critical = Color(
-    uiColor: UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? .systemRed
-        : UIColor(red: 0.80, green: 0.18, blue: 0.15, alpha: 1)
-    }
-  )
+  static let critical = color(DesignTokens.Color.quotaCritical)
 
   static func color(for tone: QuotaTone) -> Color {
     switch tone {
@@ -78,41 +57,48 @@ enum QuotaTheme {
   /// Five-step Activity fill, matching the website's emerald ramp. Non-text contrast is the
   /// cell outline, not each fill step (WCAG 1.4.11: the graphical object is distinguishable).
   static func activityFill(_ level: Int) -> Color {
-    Color(
-      uiColor: UIColor { traits in
-        let dark = traits.userInterfaceStyle == .dark
-        switch level {
-        case 1:
-          return dark
-            ? UIColor(red: 0.075, green: 0.302, blue: 0.227, alpha: 1)
-            : UIColor(red: 0.776, green: 0.929, blue: 0.863, alpha: 1)
-        case 2:
-          return dark
-            ? UIColor(red: 0.102, green: 0.478, blue: 0.345, alpha: 1)
-            : UIColor(red: 0.510, green: 0.867, blue: 0.722, alpha: 1)
-        case 3:
-          return UIColor(red: 0.184, green: 0.639, blue: 0.478, alpha: 1)
-        case 4:
-          return dark
-            ? UIColor(red: 0.510, green: 0.867, blue: 0.722, alpha: 1)
-            : UIColor(red: 0.031, green: 0.455, blue: 0.337, alpha: 1)
-        default:
-          return dark
-            ? UIColor(red: 0.165, green: 0.165, blue: 0.165, alpha: 1)
-            : UIColor(red: 0.937, green: 0.937, blue: 0.937, alpha: 1)
-        }
-      })
+    color(activityFills[min(max(level, 0), 4)])
   }
 
   /// Outline for heatmap cells. Level 0 is the quiet separator. Levels 1–4 are ≥ 3:1 on the
-  /// card: light `#2FA37A`, dark a mint that clears the dark card.
+  /// card: the Apple activity-border override in `tokens.json`.
   static func activityBorder(_ level: Int) -> Color {
     Color(
       uiColor: UIColor { traits in
         guard level >= 1, level <= 4 else { return .separator }
-        return traits.userInterfaceStyle == .dark
-          ? UIColor(red: 0.318, green: 0.702, blue: 0.568, alpha: 1)
-          : UIColor(red: 0.184, green: 0.639, blue: 0.478, alpha: 1)
+        let pair = activityBorders[level - 1]
+        return uiColor(traits.userInterfaceStyle == .dark ? pair.dark : pair.light)
       })
+  }
+
+  private static let activityFills = [
+    DesignTokens.Color.activity0Fill,
+    DesignTokens.Color.activity1Fill,
+    DesignTokens.Color.activity2Fill,
+    DesignTokens.Color.activity3Fill,
+    DesignTokens.Color.activity4Fill,
+  ]
+
+  private static let activityBorders = [
+    DesignTokens.Color.activity1Border,
+    DesignTokens.Color.activity2Border,
+    DesignTokens.Color.activity3Border,
+    DesignTokens.Color.activity4Border,
+  ]
+
+  private static func color(_ pair: DesignTokens.AdaptiveRGB) -> Color {
+    Color(
+      uiColor: UIColor { traits in
+        uiColor(traits.userInterfaceStyle == .dark ? pair.dark : pair.light)
+      }
+    )
+  }
+
+  private static func uiColor(_ rgb: DesignTokens.RGB) -> UIColor {
+    UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+  }
+
+  private static func uiColor(_ rgb: QuotaBrand.RGB) -> UIColor {
+    UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
   }
 }
