@@ -12,26 +12,29 @@ struct SubscriptionDetailContent: Equatable {
     var isReporting: Bool
   }
 
+  var provider: ProviderID
   var providerName: String
   var accountLabel: String
   var plan: String?
   var freshness: String
   var windows: [QuotaWindow]
   var sources: [SourceRow]
-  /// The curve each window's own samples draw, keyed by window id. Empty unless the reading on
-  /// screen is the one this phone took: nothing else has samples behind it (ADR 0042).
-  var histories: [String: QuotaHistory]
-  /// The windows of the reading's own cadence that the reader's day already holds.
-  var windowsToday: [QuotaHistoryWindow]
-
-  var todayLine: String? { QuotaHistoryCopy.todayLine(windowsToday) }
+  /// Remaining history for each window id. Empty unless the reading on screen is the one this
+  /// phone took: nothing else has samples behind it (ADR 0042).
+  var remainingHistories: [String: QuotaRemainingHistory]
+  /// Whether the reading on screen is the one this phone took for itself.
+  var isLocalReading: Bool
+  /// A window menu is only useful when this phone has readings to plot for at least one window.
+  var showsHistoryWindowPicker: Bool {
+    windows.count > 1
+      && remainingHistories.values.contains { !$0.observedPoints.isEmpty }
+  }
 
   static func make(
     subscription: QuotaSubscription,
     deviceNames: [String: String],
     samples: LocalQuotaSamples = LocalQuotaSamples(),
-    now: Date = Date(),
-    utcOffsetSeconds: Int = TimeZone.autoupdatingCurrent.secondsFromGMT()
+    now: Date = Date()
   ) -> SubscriptionDetailContent {
     let snapshot = subscription.snapshot
     let sources = subscription.sources
@@ -51,29 +54,32 @@ struct SubscriptionDetailContent: Equatable {
           isReporting: isReporting(source, subscription: subscription)
         )
       }
-    let histories = isLocalReading(subscription)
-      ? snapshot.windows.reduce(into: [String: QuotaHistory]()) { result, window in
-        result[window.id] = QuotaHistory.fold(
+    let local = isLocalReading(subscription)
+    let remainingHistories =
+      local
+      ? snapshot.windows.reduce(into: [String: QuotaRemainingHistory]()) { result, window in
+        result[window.id] = QuotaRemainingHistory.fold(
           window: QuotaHistoryReading(
             resetsAt: window.resetsAt,
             cadenceSeconds: window.durationSeconds
           ),
           samples: samples.samples(for: subscription, windowID: window.id),
+          usedPercent: window.usedPercent,
           now: now,
-          utcOffsetSeconds: utcOffsetSeconds
+          isBalanceOnly: window.isBalanceOnly
         )
       }
       : [:]
-    let primary = snapshot.primaryCadenceWindows.first ?? snapshot.windows.first
     return SubscriptionDetailContent(
+      provider: snapshot.provider,
       providerName: snapshot.provider.displayName,
       accountLabel: PlanDisplay.accountLabel(snapshot.account.label) ?? "Account",
       plan: QuotaFormat.planBadge(snapshot.account.plan),
       freshness: QuotaFormat.observation(snapshot, now: now),
       windows: snapshot.windows,
       sources: sources,
-      histories: histories,
-      windowsToday: primary.flatMap { histories[$0.id] }?.windowsToday ?? []
+      remainingHistories: remainingHistories,
+      isLocalReading: local
     )
   }
 
@@ -89,20 +95,29 @@ struct SubscriptionDetailContent: Equatable {
   var displayedStrings: [String] {
     var strings = [providerName, accountLabel, freshness]
     if let plan { strings.append(plan) }
+    strings.append("\(accountLabel) · \(freshness)")
     if windows.isEmpty {
       strings.append("No quota windows yet.")
     } else {
       strings.append(contentsOf: windows.map { QuotaFormat.windowTitle($0) })
       strings.append(contentsOf: windows.map { QuotaFormat.remaining($0) })
     }
-    if let todayLine {
-      strings.append(todayLine)
-      strings.append(contentsOf: windowsToday.map(QuotaHistoryCopy.span))
-      strings.append(contentsOf: windowsToday.map { QuotaHistoryCopy.peak($0.peakUsedPercent) })
+    if isLocalReading {
+      strings.append(ThisDevice.displayName)
+      strings.append(SubscriptionDetailCopy.remainingHistory)
+      if remainingHistories.values.contains(where: { $0.estimate != nil }) {
+        strings.append("Estimate")
+      }
+      if remainingHistories.values.allSatisfy({ $0.observedPoints.isEmpty }) {
+        strings.append(SubscriptionDetailCopy.notEnoughHistory)
+      }
+    } else if !windows.isEmpty {
+      strings.append(SubscriptionDetailCopy.remoteOnlyHistory)
     }
     if sources.isEmpty {
       strings.append("No device readings yet.")
     } else {
+      strings.append(SubscriptionDetailCopy.readings(sources.count))
       for row in sources {
         strings.append(row.displayName)
         strings.append(row.freshness)
@@ -139,6 +154,18 @@ struct SubscriptionDetailContent: Equatable {
   }
 }
 
+enum SubscriptionDetailCopy {
+  static let remainingHistory = "Remaining history"
+  static let remoteOnlyHistory =
+    "This iPhone has no readings of its own for this subscription."
+  static let notEnoughHistory =
+    "This iPhone has not collected enough readings to draw remaining history yet."
+
+  static func readings(_ count: Int) -> String {
+    count == 1 ? "Readings from 1 device" : "Readings from \(count) devices"
+  }
+}
+
 struct SubscriptionDetailView: View {
   let subscription: QuotaSubscription
   /// What to call each source: the Account's Macs, and **This iPhone** for what this device read
@@ -148,16 +175,23 @@ struct SubscriptionDetailView: View {
   /// drawn from these (ADR 0042).
   var samples = LocalQuotaSamples()
 
+  @State private var selectedWindowID: String?
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
   var body: some View {
+    let now = Date()
     let content = SubscriptionDetailContent.make(
       subscription: subscription,
       deviceNames: deviceNames,
-      samples: samples
+      samples: samples,
+      now: now
     )
     List {
-      identitySection(content)
-      quotaSection(content)
-      todaySection(content)
+      if dynamicTypeSize.isAccessibilitySize {
+        identitySection(content)
+      }
+      quotaSection(content, now: now)
+      historySection(content)
       readingsSection(content)
     }
     .listStyle(.insetGrouped)
@@ -167,67 +201,85 @@ struct SubscriptionDetailView: View {
     .accessibilityIdentifier("subscription.detail")
     .navigationTitle(content.providerName)
     .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      if !dynamicTypeSize.isAccessibilitySize {
+        ToolbarItem(placement: .principal) {
+          identityHeader(content, compact: true)
+            .frame(maxWidth: 280)
+        }
+      }
+    }
   }
 
   private func identitySection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      QuotaCard {
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .center, spacing: 12) {
-            headerMark
-            headerName(content.providerName)
-          }
-          VStack(alignment: .leading, spacing: 8) {
-            headerMark
-            headerName(content.providerName)
-          }
-        }
-
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            accountLabel(content.accountLabel)
-            Spacer(minLength: 8)
-            if let plan = content.plan { planCapsule(plan) }
-          }
-          VStack(alignment: .leading, spacing: 6) {
-            accountLabel(content.accountLabel)
-            if let plan = content.plan { planCapsule(plan) }
-          }
-        }
-
-        Text(content.freshness)
-          .font(QuotaDesign.Typography.meta.monospacedDigit())
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityLabel(content.freshness)
-          .accessibilityIdentifier("section.footer.subscription-updated")
-      }
-      .quotaCardRow()
+      identityHeader(content, compact: false)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
   }
 
-  private var headerMark: some View {
+  private func identityHeader(_ content: SubscriptionDetailContent, compact: Bool) -> some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: 8) {
+        headerMark(content.provider)
+        VStack(alignment: .leading, spacing: compact ? 1 : 4) {
+          nameAndPlan(content, compact: compact)
+          supportingText(content.accountLabel, freshness: content.freshness, compact: compact)
+        }
+      }
+      VStack(alignment: .leading, spacing: 8) {
+        headerMark(content.provider)
+        nameAndPlan(content, compact: compact)
+        supportingText(content.accountLabel, freshness: content.freshness, compact: compact)
+      }
+    }
+  }
+
+  private func headerMark(_ provider: ProviderID) -> some View {
     ProviderMark(
-      provider: subscription.snapshot.provider,
-      size: QuotaDesign.Layout.detailMarkSize
+      provider: provider,
+      size: QuotaDesign.Layout.markSize
     )
     .foregroundStyle(.primary)
   }
 
-  private func headerName(_ name: String) -> some View {
-    Text(name)
-      .font(.title2.bold())
-      .foregroundStyle(.primary)
-      .fixedSize(horizontal: false, vertical: true)
+  @ViewBuilder
+  private func nameAndPlan(_ content: SubscriptionDetailContent, compact: Bool) -> some View {
+    HStack(alignment: .center, spacing: 6) {
+      Text(content.providerName)
+        .font(compact ? .headline : .title2.bold())
+        .foregroundStyle(.primary)
+        .lineLimit(compact ? 1 : nil)
+        .fixedSize(horizontal: false, vertical: true)
+      if let plan = content.plan {
+        planCapsule(plan)
+      }
+    }
   }
 
-  private func accountLabel(_ label: String) -> some View {
-    Text(label)
-      .font(QuotaDesign.Typography.support)
-      .foregroundStyle(QuotaTheme.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-      .accessibilityIdentifier("subscription.account")
-      .accessibilityLabel("Account: \(label)")
+  private func supportingText(_ account: String, freshness: String, compact: Bool) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 0) {
+      Text(account)
+        .font(compact ? .caption : QuotaDesign.Typography.support)
+        .foregroundStyle(QuotaTheme.secondary)
+        .accessibilityIdentifier("subscription.account")
+        .accessibilityLabel("Account: \(account)")
+      Text(" · ")
+        .font(compact ? .caption : QuotaDesign.Typography.support)
+        .foregroundStyle(QuotaTheme.secondary)
+        .accessibilityHidden(true)
+      Text(freshness)
+        .font(
+          (compact ? Font.caption : QuotaDesign.Typography.meta)
+            .monospacedDigit()
+        )
+        .foregroundStyle(QuotaTheme.secondary)
+        .accessibilityLabel(freshness)
+        .accessibilityIdentifier("section.footer.subscription-updated")
+    }
+    .lineLimit(compact ? 1 : nil)
+    .fixedSize(horizontal: false, vertical: true)
   }
 
   private func planCapsule(_ plan: String) -> some View {
@@ -246,7 +298,7 @@ struct SubscriptionDetailView: View {
   }
 
   @ViewBuilder
-  private func quotaSection(_ content: SubscriptionDetailContent) -> some View {
+  private func quotaSection(_ content: SubscriptionDetailContent, now: Date) -> some View {
     Section {
       if content.windows.isEmpty {
         QuotaCard {
@@ -260,7 +312,7 @@ struct SubscriptionDetailView: View {
             QuotaWindowBlock(
               window: window,
               presentation: .detail,
-              history: content.histories[window.id]
+              now: now
             )
           }
           .quotaCardRow()
@@ -272,97 +324,129 @@ struct SubscriptionDetailView: View {
     }
   }
 
-  /// The windows of this subscription's own cadence that the reader's day already holds.
-  ///
-  /// Absent for a reading that came from an Account: those were taken by a Mac, which keeps its
-  /// own samples and never sends them here.
   @ViewBuilder
-  private func todaySection(_ content: SubscriptionDetailContent) -> some View {
-    if let todayLine = content.todayLine {
+  private func historySection(_ content: SubscriptionDetailContent) -> some View {
+    if content.windows.isEmpty {
+      EmptyView()
+    } else {
       Section {
-        QuotaCard(title: "Today", titleIdentifier: "section.header.today") {
-          ForEach(Array(content.windowsToday.enumerated()), id: \.element.startedAt) {
-            index,
-            window in
-            if index > 0 { Divider() }
-            todayWindowRow(window)
+        QuotaCard {
+          historyHeader(content)
+          if !content.isLocalReading {
+            Text(SubscriptionDetailCopy.remoteOnlyHistory)
+              .font(QuotaDesign.Typography.support)
+              .foregroundStyle(.primary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("subscription.history")
+          } else if let window = selectedWindow(content),
+            let history = content.remainingHistories[window.id],
+            !history.observedPoints.isEmpty
+          {
+            QuotaRemainingHistoryView(
+              history: history,
+              tint: QuotaTheme.color(for: QuotaTone.remaining(percent: window.remainingPercent)),
+              windowTitle: QuotaFormat.windowTitle(window)
+            )
+          } else {
+            Text(SubscriptionDetailCopy.notEnoughHistory)
+              .font(QuotaDesign.Typography.support)
+              .foregroundStyle(.primary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("subscription.history")
           }
-          Text(todayLine)
-            .font(QuotaDesign.Typography.meta)
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("section.footer.today")
         }
         .quotaCardRow()
       }
     }
   }
 
-  private func todayWindowRow(_ window: QuotaHistoryWindow) -> some View {
-    let span = QuotaHistoryCopy.span(window)
-    let peak = QuotaHistoryCopy.peak(window.peakUsedPercent)
-    return VStack(alignment: .leading, spacing: 6) {
+  private func historyHeader(_ content: SubscriptionDetailContent) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
       ViewThatFits(in: .horizontal) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(span)
-            .font(QuotaDesign.Typography.support)
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
+          remainingHistoryTitle
           Spacer(minLength: 8)
-          Text("peak \(peak)")
-            .font(.body.monospacedDigit().weight(.semibold))
-            .foregroundStyle(.primary)
+          if content.isLocalReading {
+            historyScope
+          }
         }
-        VStack(alignment: .leading, spacing: 2) {
-          Text(span)
-            .font(QuotaDesign.Typography.support)
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-          Text("peak \(peak)")
-            .font(.body.monospacedDigit().weight(.semibold))
-            .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 4) {
+          remainingHistoryTitle
+          if content.isLocalReading {
+            historyScope
+          }
         }
       }
-      usedFractionBar(window.peakUsedPercent)
+      if content.showsHistoryWindowPicker {
+        Picker("Window", selection: windowSelection(content)) {
+          ForEach(content.windows) { window in
+            Text(QuotaFormat.windowTitle(window)).tag(window.id)
+          }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .frame(minHeight: QuotaTheme.minimumTouchTarget)
+        .accessibilityLabel("History window")
+        .accessibilityIdentifier("subscription.history.window")
+      }
     }
-    .accessibilityElement(children: .combine)
-    .accessibilityIdentifier(
-      window.isCurrent ? "subscription.today.current" : "subscription.today.window"
+  }
+
+  private var remainingHistoryTitle: some View {
+    Text(SubscriptionDetailCopy.remainingHistory)
+      .font(QuotaDesign.Typography.cardTitle)
+      .foregroundStyle(.primary)
+      .accessibilityAddTraits(.isHeader)
+      .accessibilityIdentifier("section.header.history")
+  }
+
+  private var historyScope: some View {
+    Text(ThisDevice.displayName)
+      .font(QuotaDesign.Typography.support)
+      .foregroundStyle(QuotaTheme.secondary)
+      .fixedSize()
+      .accessibilityIdentifier("subscription.history.scope")
+  }
+
+  private func windowSelection(_ content: SubscriptionDetailContent) -> Binding<String> {
+    Binding(
+      get: {
+        if let selectedWindowID,
+          content.windows.contains(where: { $0.id == selectedWindowID })
+        {
+          return selectedWindowID
+        }
+        return content.windows.first?.id ?? ""
+      },
+      set: { selectedWindowID = $0 }
     )
   }
 
-  private func usedFractionBar(_ usedPercent: Double) -> some View {
-    GeometryReader { proxy in
-      let fraction = min(max(usedPercent / 100, 0), 1)
-      ZStack(alignment: .leading) {
-        Capsule()
-          .fill(QuotaTheme.meterTrack)
-        Capsule()
-          .fill(
-            QuotaTheme.color(for: QuotaTone.remaining(percent: 100 - usedPercent))
-          )
-          .frame(width: proxy.size.width * CGFloat(fraction))
-      }
-    }
-    .frame(height: QuotaDesign.Layout.compactMeterHeight)
-    .accessibilityHidden(true)
+  private func selectedWindow(_ content: SubscriptionDetailContent) -> QuotaWindow? {
+    let id = windowSelection(content).wrappedValue
+    return content.windows.first { $0.id == id } ?? content.windows.first
   }
 
   @ViewBuilder
   private func readingsSection(_ content: SubscriptionDetailContent) -> some View {
     Section {
-      QuotaCard(title: "Readings", titleIdentifier: "section.header.readings") {
-        if content.sources.isEmpty {
-          Text("No device readings yet.")
-            .foregroundStyle(.primary)
-        } else {
-          ForEach(Array(content.sources.enumerated()), id: \.offset) { index, row in
-            if index > 0 { Divider() }
-            sourceRow(row)
-          }
+      if content.sources.isEmpty {
+        Text("No device readings yet.")
+          .foregroundStyle(.primary)
+          .accessibilityIdentifier("subscription.sources")
+      } else {
+        ForEach(Array(content.sources.enumerated()), id: \.offset) { _, row in
+          sourceRow(row)
         }
       }
-      .quotaCardRow()
+    } header: {
+      Text(
+        content.sources.isEmpty
+          ? "Readings"
+          : SubscriptionDetailCopy.readings(content.sources.count)
+      )
+      .accessibilityIdentifier("subscription.sources")
+      .accessibilityAddTraits(.isHeader)
     }
   }
 
