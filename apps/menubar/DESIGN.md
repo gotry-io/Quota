@@ -410,6 +410,11 @@ The panel inherits the menu extra's system material. The main window uses
   `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
 - Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group or card.
 
+Colour roles, remaining-quota bands, spacing, and radii come from
+[`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
+`QuotaBrand`, `QuotaTone`, and `QuotaPalette` brand/tone colours read the generated
+Swift. System label colours stay; card radius is 20.
+
 Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
 supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
 `critical` only for failure or destructive meaning. Native system red remains the destructive color.

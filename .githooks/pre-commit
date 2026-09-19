@@ -1,6 +1,6 @@
 #!/bin/bash
 # Refuse a commit over the failures that cost a full CI round trip to learn about:
-# unformatted sources and a stale generated provider catalog.
+# unformatted sources and stale generated provider catalog or design tokens.
 # Set QUOTA_HOOKS_SKIP=1 (or pass --no-verify) to bypass.
 
 set -euo pipefail
@@ -19,3 +19,4 @@ fi
 
 pnpm format:check
 pnpm check:provider-catalog
+pnpm check:design-tokens
