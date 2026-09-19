@@ -22,10 +22,48 @@ struct UsageRhythmSection: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Usage by hour of the day")
         .accessibilityIdentifier("usage.rhythm.bars")
+
+      legend
+        .accessibilityHidden(true)
     } header: {
       Text("Rhythm")
         .accessibilityIdentifier("section.header.rhythm")
+    } footer: {
+      Text(UsageTimeZoneCopy.name())
+        .accessibilityIdentifier("section.footer.rhythm")
     }
+  }
+
+  private var legend: some View {
+    let cell = QuotaTheme.activityCellSize
+    let gap: CGFloat = 6
+    let labelWidth: CGFloat = 36
+    let width = labelWidth + gap + 5 * (cell + gap) + labelWidth
+    return Canvas { context, _ in
+      context.draw(
+        Text("Less").font(.caption2).foregroundColor(.primary),
+        at: CGPoint(x: 0, y: cell / 2),
+        anchor: .leading
+      )
+      var x = labelWidth + gap
+      for level in 0..<5 {
+        let rect = CGRect(x: x, y: 0, width: cell, height: cell)
+        let path = RoundedRectangle(
+          cornerRadius: QuotaTheme.activityCellCorner,
+          style: .continuous
+        ).path(in: rect)
+        context.fill(path, with: .color(QuotaTheme.activityFill(level)))
+        context.stroke(path, with: .color(QuotaTheme.activityBorder(level)), lineWidth: 1)
+        x += cell + gap
+      }
+      context.draw(
+        Text("More").font(.caption2).foregroundColor(.primary),
+        at: CGPoint(x: x, y: cell / 2),
+        anchor: .leading
+      )
+    }
+    .frame(width: width, height: cell)
+    .accessibilityHidden(true)
   }
 
   private var heatmapHeight: CGFloat {
@@ -45,14 +83,19 @@ struct UsageRhythmSection: View {
         )
       )
       HStack(alignment: .top, spacing: 4) {
-        VStack(spacing: gap) {
-          ForEach(0..<7, id: \.self) { weekday in
-            Text(Self.weekdayLabels[weekday])
-              .font(.caption2)
-              .foregroundStyle(QuotaTheme.secondary)
-              .frame(width: labelWidth, height: cell, alignment: .leading)
+        Canvas { context, _ in
+          for weekday in 0..<7 {
+            let y = CGFloat(weekday) * (cell + gap) + cell / 2
+            context.draw(
+              Text(Self.weekdayLabels[weekday]).font(.caption2).foregroundColor(
+                QuotaTheme.secondary),
+              at: CGPoint(x: 0, y: y),
+              anchor: .leading
+            )
           }
         }
+        .frame(width: labelWidth, height: 7 * (cell + gap) - gap)
+        .accessibilityHidden(true)
         VStack(spacing: gap) {
           ForEach(0..<7, id: \.self) { weekday in
             HStack(spacing: gap) {

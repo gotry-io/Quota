@@ -1,11 +1,15 @@
+import Charts
+import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// One bar per UTC day of the selected period, and the numbers behind them.
+/// One bar per day of the selected period, with axes, a Tokens/Cost switch, and day selection.
 struct UsageDailySection: View {
   let rows: [UsageDailyFold.Row]
+  var onSelectDay: (String) -> Void = { _ in }
+
   @State private var mode: Mode = .tokens
-  @State private var tableOpen = false
+  @State private var selectedDate: String?
 
   enum Mode: String, CaseIterable, Identifiable {
     case tokens
@@ -26,33 +30,31 @@ struct UsageDailySection: View {
       .frame(minHeight: QuotaTheme.minimumTouchTarget)
       .accessibilityIdentifier("usage.daily.mode")
 
-      legend
-        .accessibilityHidden(true)
-
       chart
-        .frame(height: 96)
+        .frame(height: 168)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Usage by day")
         .accessibilityValue(chartAccessibilityValue)
+        .accessibilityHint("Shows usage for the selected day.")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "View day") {
+          openSelectedDay()
+        }
         .accessibilityIdentifier("usage.daily.chart")
 
-      DisclosureGroup(isExpanded: $tableOpen) {
-        ForEach(rows.reversed()) { row in
-          tableRow(row)
-        }
-      } label: {
-        Text("Daily breakdown")
-          .font(.body)
+      if metric == .tokens {
+        legend
+          .accessibilityHidden(true)
       }
-      .tint(.primary)
-      .accessibilityIdentifier("usage.daily.table")
-    } header: {
-      Text("Daily")
-        .accessibilityIdentifier("section.header.daily")
     } footer: {
-      Text("UTC days. \(legendCopy)")
+      Text(legendCopy)
         .accessibilityIdentifier("section.footer.daily")
+    }
+    .onAppear {
+      if selectedDate == nil {
+        selectedDate = defaultSelectedDate
+      }
     }
   }
 
@@ -77,130 +79,173 @@ struct UsageDailySection: View {
   }
 
   private var chart: some View {
-    GeometryReader { proxy in
-      let maximum = UsageDailyFold.quantitativeMaximum(rows, metric: metric)
-      let spacing: CGFloat = 2
-      let width = max(
-        2,
-        (proxy.size.width - spacing * CGFloat(max(0, rows.count - 1))) / CGFloat(max(1, rows.count))
-      )
-      HStack(alignment: .bottom, spacing: spacing) {
-        ForEach(rows) { row in
-          bar(row, maximum: maximum, height: proxy.size.height)
-            .frame(width: width)
+    Chart {
+      ForEach(rows) { row in
+        marks(for: row)
+      }
+    }
+    .chartLegend(.hidden)
+    .chartYScale(domain: 0...yTop)
+    .chartYAxis {
+      AxisMarks(position: .leading, values: yTicks) { value in
+        AxisGridLine()
+        AxisValueLabel {
+          if let amount = value.as(Double.self) {
+            Text(yLabel(amount))
+          }
         }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
-  }
-
-  @ViewBuilder
-  private func bar(_ row: UsageDailyFold.Row, maximum: Int, height: CGFloat) -> some View {
-    switch UsageDailyFold.barKind(row, metric: metric) {
-    case .amount(let amount):
-      quantitativeBar(row, amount: amount, maximum: maximum, height: height)
-    case .empty:
-      RoundedRectangle(cornerRadius: 1, style: .continuous)
-        .fill(Color(uiColor: .tertiarySystemFill))
-        .frame(height: 2)
-    case .unpriced:
-      RoundedRectangle(cornerRadius: 1, style: .continuous)
-        .strokeBorder(
-          Color(uiColor: .tertiaryLabel),
-          style: StrokeStyle(lineWidth: 1, dash: [1.5, 1])
-        )
-        .frame(height: 2)
-    }
-  }
-
-  @ViewBuilder
-  private func quantitativeBar(
-    _ row: UsageDailyFold.Row,
-    amount: Int,
-    maximum: Int,
-    height: CGFloat
-  ) -> some View {
-    let scale = maximum > 0 ? CGFloat(amount) / CGFloat(maximum) : 0
-    if metric == .tokens, row.totals.totalTokens > 0 {
-      let barHeight = max(2, height * scale)
-      VStack(spacing: 0) {
-        segment(
-          row.outputTokens,
-          of: row.totals.totalTokens,
-          height: barHeight,
-          fill: Color.primary.opacity(0.85)
-        )
-        segment(
-          row.freshInputTokens,
-          of: row.totals.totalTokens,
-          height: barHeight,
-          fill: QuotaTheme.emerald
-        )
-        segment(
-          row.cachedInputTokens,
-          of: row.totals.totalTokens,
-          height: barHeight,
-          fill: QuotaTheme.cachedFill
-        )
+    .chartXAxis {
+      AxisMarks(values: xTickTexts) { value in
+        AxisValueLabel(anchor: xLabelAnchor(value)) {
+          if let text = value.as(String.self) {
+            Text(UsageDailyAxis.dateLabel(text))
+              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
+          }
+        }
       }
-      .frame(height: barHeight)
-      .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-    } else {
-      RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(QuotaTheme.emerald)
-        .frame(height: max(2, height * scale))
+    }
+    .chartXSelection(value: $selectedDate)
+    .chartOverlay { proxy in
+      GeometryReader { geometry in
+        Rectangle()
+          .fill(.clear)
+          .contentShape(Rectangle())
+          .onTapGesture(count: 1, coordinateSpace: .local) { location in
+            select(at: location, proxy: proxy, geometry: geometry)
+            openSelectedDay()
+          }
+      }
     }
   }
 
-  private func segment(_ part: Int, of whole: Int, height: CGFloat, fill: Color) -> some View {
-    Rectangle()
-      .fill(fill)
-      .frame(height: whole > 0 ? height * CGFloat(part) / CGFloat(whole) : 0)
+  @ChartContentBuilder
+  private func marks(for row: UsageDailyFold.Row) -> some ChartContent {
+    let dimmed = selectedDate.map { $0 != row.date } ?? false
+    let opacity = dimmed ? 0.45 : 1
+    switch UsageDailyFold.barKind(row, metric: metric) {
+    case .amount:
+      if metric == .tokens {
+        BarMark(
+          x: .value("Day", row.date),
+          y: .value("Tokens", Double(row.cachedInputTokens))
+        )
+        .foregroundStyle(QuotaTheme.cachedFill)
+        .opacity(opacity)
+        BarMark(
+          x: .value("Day", row.date),
+          y: .value("Tokens", Double(row.freshInputTokens))
+        )
+        .foregroundStyle(QuotaTheme.emerald)
+        .opacity(opacity)
+        BarMark(
+          x: .value("Day", row.date),
+          y: .value("Tokens", Double(row.outputTokens))
+        )
+        .foregroundStyle(Color.primary.opacity(0.85))
+        .opacity(opacity)
+      } else {
+        BarMark(
+          x: .value("Day", row.date),
+          y: .value("Cost", UsageDailyFold.plotValue(row, metric: .cost))
+        )
+        .foregroundStyle(QuotaTheme.emerald)
+        .opacity(opacity)
+      }
+    case .empty:
+      BarMark(
+        x: .value("Day", row.date),
+        y: .value("Value", 0)
+      )
+      .foregroundStyle(.clear)
+      .annotation(position: .overlay, alignment: .bottom) {
+        Capsule()
+          .fill(Color(uiColor: .tertiarySystemFill))
+          .frame(height: 2)
+      }
+    case .unpriced:
+      BarMark(
+        x: .value("Day", row.date),
+        y: .value("Value", 0)
+      )
+      .foregroundStyle(.clear)
+      .annotation(position: .overlay, alignment: .bottom) {
+        Capsule()
+          .strokeBorder(
+            Color(uiColor: .tertiaryLabel),
+            style: StrokeStyle(lineWidth: 1, dash: [1.5, 1])
+          )
+          .frame(height: 2)
+      }
+    }
   }
 
   private var metric: UsageDailyMetric { mode == .tokens ? .tokens : .cost }
 
+  private var yTicks: [Double] {
+    UsageDailyAxis.valueTicks(
+      maximum: Double(UsageDailyFold.quantitativeMaximum(rows, metric: metric))
+        / (metric == .cost ? 1_000_000 : 1)
+    )
+  }
+
+  private var yTop: Double { yTicks.last ?? 1 }
+
+  private var xTickTexts: [String] {
+    UsageDailyAxis.dateTicks(dates: rows.map(\.date))
+  }
+
+  private func xLabelAnchor(_ value: AxisValue) -> UnitPoint {
+    guard let text = value.as(String.self),
+      let index = xTickTexts.firstIndex(of: text)
+    else { return .top }
+    switch UsageDailyAxis.dateTickAnchor(index: index, count: xTickTexts.count) {
+    case .leading: return .topLeading
+    case .center: return .top
+    case .trailing: return .topTrailing
+    }
+  }
+
   private var legendCopy: String {
-    mode == .tokens ? "Bars stack cached input, fresh input, and output." : "Bars are cost."
+    mode == .tokens
+      ? "Bars stack cached input, fresh input, and output."
+      : "Bars are cost."
   }
 
   private var chartAccessibilityValue: String {
     UsageDailyFold.chartAccessibilityValue(rows, metric: metric)
   }
 
-  private func tableRow(_ row: UsageDailyFold.Row) -> some View {
-    VStack(alignment: .leading, spacing: 2) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(row.date)
-          .font(.subheadline)
-        Spacer(minLength: 8)
-        Text("\(QuotaFormat.compactCount(row.totals.totalTokens)) · \(QuotaFormat.cost(row.cost))")
-          .font(.subheadline.monospacedDigit())
-      }
-      Text(detailLine(row))
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(Color.primary)
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(QuotaFormat.utcLongDate(row.date))
-    .accessibilityValue(tableAccessibilityValue(row))
-    .accessibilityIdentifier("usage.daily.row")
+  private var defaultSelectedDate: String? {
+    rows.last { $0.totals.totalTokens > 0 }?.date ?? rows.last?.date
   }
 
-  private func tableAccessibilityValue(_ row: UsageDailyFold.Row) -> String {
-    switch UsageDailyFold.barKind(row, metric: metric) {
-    case .unpriced:
-      return
-        "\(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, unpriced. \(detailLine(row))"
-    default:
-      return
-        "\(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost)). \(detailLine(row))"
+  private func yLabel(_ amount: Double) -> String {
+    if metric == .cost {
+      return UsageBudgetProgress.usd(Decimal(amount))
+    }
+    return CompactCountFormat.compact(Int(amount.rounded()))
+  }
+
+  private func select(
+    at location: CGPoint,
+    proxy: ChartProxy,
+    geometry: GeometryProxy
+  ) {
+    guard let plotFrame = proxy.plotFrame else { return }
+    let frame = geometry[plotFrame]
+    let x = location.x - frame.origin.x
+    guard let text: String = proxy.value(atX: x) else { return }
+    if rows.contains(where: { $0.date == text }) {
+      selectedDate = text
     }
   }
 
-  private func detailLine(_ row: UsageDailyFold.Row) -> String {
-    let totals = row.totals
-    return
-      "\(QuotaFormat.compactCount(totals.inputTokens)) in · \(QuotaFormat.compactCount(totals.outputTokens)) out · \(QuotaFormat.compactCount(totals.cacheReadInputTokens)) cached · \(QuotaFormat.compactCount(totals.reasoningTokens)) reasoning · \(QuotaFormat.compactCount(totals.messages)) messages"
+  private func openSelectedDay() {
+    if let date = selectedDate ?? defaultSelectedDate {
+      onSelectDay(date)
+    }
   }
 }

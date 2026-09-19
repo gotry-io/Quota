@@ -4,39 +4,26 @@ import SwiftUI
 
 struct UsageView: View {
   @Bindable var model: AppModel
-  @State private var expandedProviderIDs: Set<String> = []
   @State private var rangeEditor = false
   @State private var budgetEditor = false
 
   var body: some View {
     @Bindable var usage = model.usage
     List {
-      // Usage is the Account's fold across every device. This phone measures none of it, so
-      // without an account there is nothing to pick a period of.
       if !model.hasAccountSession {
         signedOutInvitation
       } else {
-        Section {
-          QuotaCard {
-            periodPicker
-            periodStepper
-          }
-          .quotaCardRow()
-        }
+        periodSection
 
-        if let period = usage.usagePeriodValue {
+        if let period = usage.usagePeriodValue, period.totals.totalTokens > 0 {
           Section {
-            UsageTotalsSection(period: period)
+            UsageHeadlineSection(period: period)
               .quotaCardRow()
           }
         }
 
-        Section {
-          UsageBudgetSection(model: model, editing: $budgetEditor)
-            .quotaCardRow()
-        }
-
         signedInContent
+        destinations
       }
     }
     .listStyle(.insetGrouped)
@@ -62,7 +49,7 @@ struct UsageView: View {
     .navigationBarTitleDisplayMode(.large)
   }
 
-  /// The days the Daily section draws, which the Activity read has already fetched.
+  /// The days the Daily chart draws, which the Activity read has already fetched.
   ///
   /// The table covers the period's own days, bounded by the activity days this phone holds.
   private var dailyRows: [UsageDailyFold.Row] {
@@ -95,33 +82,72 @@ struct UsageView: View {
     .listRowSeparator(.hidden)
   }
 
+  private var periodSection: some View {
+    Section {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .center, spacing: 12) {
+          periodPicker
+          Spacer(minLength: 8)
+          periodStepping
+        }
+        VStack(alignment: .leading, spacing: 8) {
+          periodPicker
+          periodStepping
+        }
+      }
+      .frame(minHeight: QuotaTheme.minimumTouchTarget)
+
+      Text(periodRangeLine)
+        .font(QuotaDesign.Typography.support)
+        .foregroundStyle(Color.primary)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("usage.period.title")
+    }
+  }
+
   @ViewBuilder
   private var signedInContent: some View {
     if let period = model.usage.usagePeriodValue {
-      let sections = model.usage.usagePeriodIsFolded ? [] : UsageBreakdown.sections(in: period)
-      if model.usage.usagePeriodIsFolded {
-        foldedPeriod
-      } else if sections.isEmpty {
+      if period.totals.totalTokens == 0 {
         emptyPeriod
       }
-      if model.selectedTab == .usage {
-        if UsageDailyFold.hasUsage(dailyRows) {
-          UsageDailySection(rows: dailyRows)
+      if model.selectedTab == .usage, UsageDailyFold.hasUsage(dailyRows) {
+        UsageDailySection(rows: dailyRows) { date in
+          Task { await model.usage.openActivityDay(date: date) }
         }
-        if let hours = model.usage.activityRhythm.hours {
-          UsageRhythmSection(hoursOfDay: hours.hoursOfDay, weekdayHours: hours.weekdayHours)
-        }
-        UsageActivitySection(model: model)
-        UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
-        UsageAgentListSections(
-          sections: sections,
-          periodTokens: period.totals.totalTokens,
-          expandedProviderIDs: $expandedProviderIDs
-        )
       }
     } else if model.selectedTab == .usage {
       emptyPeriod
-      UsageActivitySection(model: model)
+    }
+  }
+
+  @ViewBuilder
+  private var destinations: some View {
+    Section {
+      NavigationLink {
+        UsageBreakdownDestination(model: model)
+      } label: {
+        Text("By provider / By model")
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("usage.open-breakdown")
+      }
+
+      NavigationLink {
+        UsagePatternsView(model: model)
+      } label: {
+        Text("Activity patterns")
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("usage.open-patterns")
+      }
+
+      if model.usage.budget.isSet {
+        NavigationLink {
+          UsageBudgetDetail(model: model, editing: $budgetEditor)
+        } label: {
+          UsageBudgetRowLabel(progress: model.usage.budgetProgress)
+            .accessibilityIdentifier("usage.budget")
+        }
+      }
     }
   }
 
@@ -133,58 +159,52 @@ struct UsageView: View {
     static let signIn = "Sign in to Quota"
   }
 
-  /// The six periods a segment names. A custom range selects none of them and says so in the
-  /// title row instead.
   private var periodPicker: some View {
-    Picker("Usage period", selection: segmentBinding) {
-      ForEach(UsagePeriodSegment.allCases.filter { $0 != .custom }) { segment in
-        Text(segment.title)
-          .tag(Optional(segment))
+    Picker("Usage period", selection: periodBinding) {
+      ForEach(UsagePeriodSegment.allCases) { segment in
+        Text(segment.accessibilityTitle)
+          .tag(segment)
           .accessibilityLabel(segment.accessibilityTitle)
       }
     }
-    .pickerStyle(.segmented)
+    .pickerStyle(.menu)
     .frame(minHeight: QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("usage.period")
   }
 
-  private var periodStepper: some View {
-    HStack(spacing: 12) {
-      Button {
-        if let previous = model.usage.usagePeriod.previous {
-          model.usage.selectUsagePeriod(previous)
+  private var periodStepping: some View {
+    HStack(spacing: 4) {
+      if model.usage.usagePeriod.segment.steps {
+        Button {
+          if let previous = model.usage.usagePeriod.previous {
+            model.usage.selectUsagePeriod(previous)
+          }
+        } label: {
+          Image(systemName: "chevron.left")
+            .frame(
+              minWidth: QuotaTheme.minimumTouchTarget,
+              minHeight: QuotaTheme.minimumTouchTarget
+            )
+            .contentShape(Rectangle())
         }
-      } label: {
-        Image(systemName: "chevron.left")
-          .frame(
-            minWidth: QuotaTheme.minimumTouchTarget,
-            minHeight: QuotaTheme.minimumTouchTarget
-          )
-          .contentShape(Rectangle())
-      }
-      .disabled(model.usage.usagePeriod.previous == nil)
-      .accessibilityLabel("Previous period")
-      .accessibilityIdentifier("usage.period.previous")
+        .disabled(model.usage.usagePeriod.previous == nil)
+        .accessibilityLabel("Previous period")
+        .accessibilityIdentifier("usage.period.previous")
 
-      Text(model.usage.usagePeriodTitle)
-        .font(QuotaDesign.Typography.support)
-        .foregroundStyle(Color.primary)
-        .frame(maxWidth: .infinity)
-        .accessibilityIdentifier("usage.period.title")
-
-      Button {
-        if let next = model.usage.usagePeriod.next { model.usage.selectUsagePeriod(next) }
-      } label: {
-        Image(systemName: "chevron.right")
-          .frame(
-            minWidth: QuotaTheme.minimumTouchTarget,
-            minHeight: QuotaTheme.minimumTouchTarget
-          )
-          .contentShape(Rectangle())
+        Button {
+          if let next = model.usage.usagePeriod.next { model.usage.selectUsagePeriod(next) }
+        } label: {
+          Image(systemName: "chevron.right")
+            .frame(
+              minWidth: QuotaTheme.minimumTouchTarget,
+              minHeight: QuotaTheme.minimumTouchTarget
+            )
+            .contentShape(Rectangle())
+        }
+        .disabled(model.usage.usagePeriod.next == nil)
+        .accessibilityLabel("Next period")
+        .accessibilityIdentifier("usage.period.next")
       }
-      .disabled(model.usage.usagePeriod.next == nil)
-      .accessibilityLabel("Next period")
-      .accessibilityIdentifier("usage.period.next")
 
       Button {
         rangeEditor = true
@@ -201,31 +221,23 @@ struct UsageView: View {
     }
     .buttonStyle(.plain)
     .tint(.primary)
-    .frame(minHeight: QuotaTheme.minimumTouchTarget)
   }
 
-  private var segmentBinding: Binding<UsagePeriodSegment?> {
+  private var periodBinding: Binding<UsagePeriodSegment> {
     Binding(
-      get: {
-        model.usage.usagePeriod.segment == .custom ? nil : model.usage.usagePeriod.segment
-      },
+      get: { model.usage.usagePeriod.segment },
       set: { segment in
-        guard let segment else { return }
+        if segment == .custom {
+          rangeEditor = true
+          return
+        }
         model.usage.selectUsagePeriod(.selection(for: segment, custom: nil))
       }
     )
   }
 
-  private var foldedPeriod: some View {
-    Section {
-      Text(
-        "This range was added up on this iPhone, so it carries totals only. The model breakdown is on Today, Last 7 days, Last 30 days, and All."
-      )
-      .font(.body)
-      .foregroundStyle(Color.primary)
-      .fixedSize(horizontal: false, vertical: true)
-    }
-    .accessibilityIdentifier("usage.folded")
+  private var periodRangeLine: String {
+    "\(model.usage.usagePeriodTitle) · \(UsageTimeZoneCopy.name())"
   }
 
   private var emptyPeriod: some View {
@@ -238,11 +250,68 @@ struct UsageView: View {
       }
       .foregroundStyle(Color.primary)
       .frame(maxWidth: .infinity)
-      // The row takes the view's ideal height, so the wrapped description is never cut by a
-      // row sized before the text wrapped.
       .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityIdentifier("usage.empty")
+  }
+}
+
+/// Two headline values: tokens and API-equivalent cost, with coverage under them.
+struct UsageHeadlineSection: View {
+  let totals: UsageSummaryTotals
+  let cost: UsageCostOutcome
+  let partial: Bool
+  var partialCopy: String = "Some hours in this period were scanned incompletely."
+  var identifier: String = "usage.headline"
+
+  init(period: UsagePeriod, identifier: String = "usage.headline") {
+    totals = period.totals
+    cost = period.cost
+    partial = period.partial
+    self.identifier = identifier
+  }
+
+  var body: some View {
+    QuotaCard {
+      QuotaStatGrid {
+        tokensTile
+        costTile
+      }
+
+      Text("\(QuotaFormat.costBasis(cost)) · \(QuotaFormat.costPriced(cost))")
+        .font(QuotaDesign.Typography.meta)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("\(identifier).priced")
+
+      if partial {
+        Label(partialCopy, systemImage: "exclamationmark.triangle")
+          .font(QuotaDesign.Typography.meta)
+          .foregroundStyle(QuotaTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier(identifier)
+  }
+
+  private var tokensTile: some View {
+    QuotaStatTile(
+      label: "Tokens",
+      value: QuotaFormat.compactCount(totals.totalTokens)
+    )
+    .accessibilityLabel("\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens")
+    .accessibilityIdentifier("\(identifier).tokens")
+  }
+
+  private var costTile: some View {
+    QuotaStatTile(
+      label: "API-equivalent",
+      value: QuotaFormat.cost(cost)
+    )
+    .accessibilityLabel("API-equivalent cost, \(QuotaFormat.costAccessibility(cost))")
+    .accessibilityIdentifier("\(identifier).cost")
   }
 }
 
@@ -393,19 +462,39 @@ struct UsageTopModelsSection: View {
           let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—"
           let fraction = topTokens > 0 ? Double(row.totals.totalTokens) / Double(topTokens) : 0
           VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              Text("\(index + 1)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(QuotaTheme.secondary)
-              Text(row.displayName)
-                .font(.subheadline)
-                .foregroundStyle(Color.primary)
-              Spacer(minLength: 8)
-              Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.primary)
+            ViewThatFits(in: .horizontal) {
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(index + 1)")
+                  .font(.caption.monospacedDigit())
+                  .foregroundStyle(QuotaTheme.secondary)
+                  .accessibilityHidden(true)
+                Text(row.displayName)
+                  .font(.subheadline)
+                  .foregroundStyle(Color.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+                Spacer(minLength: 8)
+                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
+                  .font(.subheadline.monospacedDigit())
+                  .foregroundStyle(.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+              }
+              VStack(alignment: .leading, spacing: 2) {
+                Text(row.displayName)
+                  .font(.subheadline)
+                  .foregroundStyle(Color.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
+                  .font(.subheadline.monospacedDigit())
+                  .foregroundStyle(.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+              }
             }
             QuotaShareBar(share: fraction)
+              .accessibilityHidden(true)
           }
           .accessibilityElement(children: .ignore)
           .accessibilityLabel(row.displayName)
@@ -463,11 +552,14 @@ struct UsageAgentListSections: View {
         Text(provider.displayName)
           .font(.subheadline)
           .foregroundStyle(.primary)
-          .accessibilityAddTraits(.isHeader)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
         Spacer(minLength: 8)
         Text(QuotaFormat.share(providerTokens, of: periodTokens) ?? "—")
           .font(.subheadline.monospacedDigit())
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(provider.displayName)
@@ -512,17 +604,35 @@ struct UsageAgentListSections: View {
     let tokens = QuotaFormat.compactCount(row.totals.totalTokens)
     let cost = QuotaFormat.cost(row.cost)
     let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens)
-    return HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(row.displayName)
-        .font(.subheadline)
-        .foregroundStyle(Color.primary)
-      Spacer(minLength: 8)
-      Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
-        .font(.subheadline.monospacedDigit())
-        .foregroundStyle(Color.primary)
-        .multilineTextAlignment(.trailing)
+    return ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(row.displayName)
+          .font(.subheadline)
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+        Spacer(minLength: 8)
+        Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(.trailing)
+          .accessibilityHidden(true)
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        Text(row.displayName)
+          .font(.subheadline)
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+        Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+      }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .ignore)
     .accessibilityLabel(
       "\(row.displayName), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost))"
     )

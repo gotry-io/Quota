@@ -1,3 +1,4 @@
+import Foundation
 import QuotaWire
 
 enum ModelDisplay {
@@ -20,5 +21,12 @@ extension BillingAgent {
     case .opencode, .pi, .kilo, .antigravity, .unknown:
       "chevron.left.forwardslash.chevron.right"
     }
+  }
+}
+
+/// The timezone a Usage period and the Activity patterns page name.
+enum UsageTimeZoneCopy {
+  static func name(_ timeZone: TimeZone = .current) -> String {
+    timeZone.identifier
   }
 }
