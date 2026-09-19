@@ -296,8 +296,6 @@
       if let provider = agentsProvider {
         UserDefaults.standard.set(provider.rawValue, forKey: MainPage.agentsProviderStorageKey)
       }
-      UserDefaults.standard.set(
-        DashboardRange.fallback.rawValue, forKey: DashboardRange.storageKey)
     }
 
     private static func argument<Value: RawRepresentable>(

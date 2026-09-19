@@ -15,7 +15,6 @@
       let keys = [
         MainPage.storageKey,
         MainPage.agentsProviderStorageKey,
-        DashboardRange.storageKey,
         ResetCopyStylePreference.storageKey,
         DockVisibilityPreference.storageKey,
         LaunchWindowPreference.storageKey,

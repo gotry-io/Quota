@@ -86,48 +86,15 @@ struct MainWindowView: View {
       }
     }
     .toolbar {
-      if page.isQuotaGroup {
+      if page == .usage, dashboard.showsUsageSourcePicker {
         ToolbarItem {
-          Picker(selection: $dashboard.selection) {
-            Text("All providers").tag(Optional<ProviderID>.none)
-            ForEach(dashboard.sidebarProviders, id: \.self) { provider in
-              Label {
-                Text(provider.displayName)
-              } icon: {
-                ProviderBrandIcon(
-                  provider: provider, size: QuotaDesign.Layout.settingsIconColumnWidth)
-              }
-              .tag(Optional(provider))
-            }
-          } label: {
-            providerMenuLabel
+          Picker("Usage source", selection: $dashboard.usageSource) {
+            Text("Account").tag(UsageSource.account)
+            Text("This Mac").tag(UsageSource.local)
           }
           .pickerStyle(.menu)
-          .accessibilityLabel("Provider")
-          .accessibilityValue(dashboard.selection?.displayName ?? "All providers")
-        }
-        QuotaToolbarSpacer.Fixed()
-        ToolbarItem {
-          Picker("Range", selection: $dashboard.range) {
-            ForEach(DashboardRange.allCases) { range in
-              Text(range.label).tag(range)
-            }
-          }
-          .pickerStyle(.segmented)
-          .frame(maxWidth: 240)
-          .accessibilityLabel("History range")
-        }
-        if dashboard.showsUsageSourcePicker {
-          QuotaToolbarSpacer.Fixed()
-          ToolbarItem {
-            Picker("Usage source", selection: $dashboard.usageSource) {
-              Text("Account").tag(UsageSource.account)
-              Text("This Mac").tag(UsageSource.local)
-            }
-            .pickerStyle(.menu)
-            .accessibilityLabel("Usage source")
-            .accessibilityValue(dashboard.usageSource == .account ? "Account" : "This Mac")
-          }
+          .accessibilityLabel("Usage source")
+          .accessibilityValue(dashboard.usageSource == .account ? "Account" : "This Mac")
         }
       }
       QuotaToolbarSpacer.Flexible()
@@ -176,21 +143,6 @@ struct MainWindowView: View {
   }
 
   @ViewBuilder
-  private var providerMenuLabel: some View {
-    if let provider = dashboard.selection {
-      ProviderBrandIcon(
-        provider: provider,
-        size: QuotaDesign.Layout.settingsIconColumnWidth
-      )
-    } else {
-      BrandAssetIcon(
-        assetName: QuotaBrandAssets.assetName,
-        size: QuotaDesign.Layout.settingsIconColumnWidth
-      )
-    }
-  }
-
-  @ViewBuilder
   private func sidebarLabel(_ item: MainPage) -> some View {
     if item == .agents {
       Label(item.title, systemImage: item.systemImage)
@@ -221,9 +173,8 @@ struct MainWindowView: View {
   private func detail(now: Date, dashboard: DashboardModel) -> some View {
     switch page {
     case .quota:
-      QuotaWindowScroll {
-        DashboardView(dashboard: dashboard, now: now)
-      }
+      DashboardView(dashboard: dashboard, now: now)
+        .quotaScrollEdge()
     case .usage:
       QuotaWindowScroll {
         DashboardUsageView(dashboard: dashboard, now: now)
