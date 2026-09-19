@@ -93,24 +93,38 @@ struct UsageBreakdownDestination: View {
     identifier: String
   ) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(label)
-          .font(.body)
-          .foregroundStyle(Color.primary)
-        Spacer(minLength: 8)
-        Text(value)
-          .font(.body.monospacedDigit())
-          .foregroundStyle(Color.primary)
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          countText(label, monospaced: false, identifier: identifier)
+          Spacer(minLength: 8)
+          countText(value, monospaced: true, identifier: identifier)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          countText(label, monospaced: false, identifier: identifier)
+          countText(value, monospaced: true, identifier: identifier)
+        }
       }
       if let caption {
         Text(caption)
           .font(QuotaDesign.Typography.meta)
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+          .accessibilityIdentifier(identifier)
       }
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibility)
     .accessibilityIdentifier(identifier)
+  }
+
+  private func countText(_ value: String, monospaced: Bool, identifier: String) -> some View {
+    Text(value)
+      .font(monospaced ? .body.monospacedDigit() : .body)
+      .foregroundStyle(Color.primary)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityHidden(true)
+      .accessibilityIdentifier(identifier)
   }
 
   private var foldedPeriod: some View {

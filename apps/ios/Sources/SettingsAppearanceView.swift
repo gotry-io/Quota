@@ -15,6 +15,7 @@ struct SettingsAppearanceView: View {
         ) {
           ForEach(AppearancePreference.allCases) { option in
             Text(option.title)
+              .fixedSize(horizontal: false, vertical: true)
               .tag(option)
               .accessibilityIdentifier("settings.appearance.\(option.rawValue)")
           }

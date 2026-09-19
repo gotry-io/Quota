@@ -244,7 +244,9 @@ struct QuotaWindowRow: View {
       }
 
       if window.showsPercentMeter {
-        QuotaProgressBar(value: window.remainingPercent, fill: meterColor)
+        QuotaRemainingMeter(value: window.remainingPercent, fill: meterColor)
+          .accessibilityLabel("Remaining quota")
+          .accessibilityValue(QuotaWindow.formattedPercent(window.remainingPercent))
       }
 
       if showsPaceLines, let history = window.history, !history.points.isEmpty {
@@ -277,25 +279,5 @@ struct QuotaWindowRow: View {
       }
     }
     .padding(.top, 2)
-  }
-}
-
-private struct QuotaProgressBar: View {
-  let value: Double
-  let fill: Color
-
-  var body: some View {
-    GeometryReader { geometry in
-      ZStack(alignment: .leading) {
-        Capsule()
-          .fill(QuotaPalette.progressTrack)
-        Capsule()
-          .fill(fill)
-          .frame(width: geometry.size.width * min(max(value / 100, 0), 1))
-      }
-    }
-    .frame(height: QuotaDesign.Layout.progressHeight)
-    .accessibilityLabel("Remaining quota")
-    .accessibilityValue(QuotaWindow.formattedPercent(value))
   }
 }

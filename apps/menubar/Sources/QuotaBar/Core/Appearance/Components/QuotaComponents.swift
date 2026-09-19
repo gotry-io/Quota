@@ -75,3 +75,22 @@ struct QuotaCommandRow: View {
     isCopied = false
   }
 }
+
+/// Linear remaining 0…100. Hidden from VoiceOver when the remaining figure is already spoken.
+struct QuotaRemainingMeter: View {
+  let value: Double
+  let fill: Color
+
+  var body: some View {
+    GeometryReader { geometry in
+      ZStack(alignment: .leading) {
+        Capsule()
+          .fill(QuotaPalette.progressTrack)
+        Capsule()
+          .fill(fill)
+          .frame(width: geometry.size.width * min(max(value / 100, 0), 1))
+      }
+    }
+    .frame(height: QuotaDesign.Layout.progressHeight)
+  }
+}

@@ -7,13 +7,25 @@ struct UsageBudgetRowLabel: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text("Monthly budget")
-        Spacer(minLength: 8)
-        if let progress {
-          Text(UsageBudgetCopy.remaining(progress))
-            .foregroundStyle(QuotaTheme.secondary)
-            .font(QuotaDesign.Typography.support.monospacedDigit())
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text("Monthly budget")
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityHidden(true)
+            .accessibilityIdentifier("usage.budget")
+          Spacer(minLength: 8)
+          if let progress {
+            remainingText(progress)
+          }
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Monthly budget")
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityHidden(true)
+            .accessibilityIdentifier("usage.budget")
+          if let progress {
+            remainingText(progress)
+          }
         }
       }
       if let progress {
@@ -23,6 +35,15 @@ struct UsageBudgetRowLabel: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Monthly budget")
     .accessibilityValue(progress.map(UsageBudgetCopy.accessibility) ?? "Set")
+  }
+
+  private func remainingText(_ progress: UsageBudgetProgress) -> some View {
+    Text(UsageBudgetCopy.remaining(progress))
+      .foregroundStyle(QuotaTheme.secondary)
+      .font(QuotaDesign.Typography.support.monospacedDigit())
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityHidden(true)
+      .accessibilityIdentifier("usage.budget")
   }
 }
 

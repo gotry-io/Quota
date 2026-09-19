@@ -2,13 +2,13 @@ import Charts
 import QuotaPresentation
 import SwiftUI
 
-/// Labelled remaining 0–100 over calendar time for one window this iPhone read itself.
+/// Labelled remaining 0–100 over calendar time for one window this Mac read itself.
 ///
 /// Solid segments are observations; a reset starts a new segment; a dashed segment is the
 /// ADR 0035 estimate at reset, the same projection the pace headline uses. See ADR 0042.
-struct QuotaRemainingHistoryView: View {
+struct QuotaRemainingHistoryChart: View {
   let history: QuotaRemainingHistory
-  var tint: Color = QuotaTheme.emerald
+  var tint: Color = QuotaPalette.accent
   var windowTitle: String = ""
 
   @State private var observedListOpen = false
@@ -17,41 +17,29 @@ struct QuotaRemainingHistoryView: View {
   static let height: CGFloat = 168
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
       chart
         .frame(height: Self.height)
         .frame(maxWidth: .infinity)
         .accessibilityElement()
-        .accessibilityLabel("Remaining history")
+        .accessibilityLabel(DashboardQuotaCopy.remainingHistory)
         .accessibilityValue(summary)
         .accessibilityChartDescriptor(descriptor)
-        .accessibilityIdentifier("subscription.history")
+        .accessibilityIdentifier("quota.history")
 
       legend
         .accessibilityHidden(true)
 
       DisclosureGroup(isExpanded: $observedListOpen) {
         ForEach(dataList, id: \.id) { row in
-          ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              Text(row.label)
-                .font(QuotaDesign.Typography.support)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-              Spacer(minLength: 8)
-              Text(row.value)
-                .font(QuotaDesign.Typography.meta.monospacedDigit())
-                .foregroundStyle(.primary)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-              Text(row.label)
-                .font(QuotaDesign.Typography.support)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-              Text(row.value)
-                .font(QuotaDesign.Typography.meta.monospacedDigit())
-                .foregroundStyle(.primary)
-            }
+          HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.sm) {
+            Text(row.label)
+              .quotaSecondaryStyle()
+              .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: QuotaDesign.Spacing.sm)
+            Text(row.value)
+              .quotaMetaStyle()
+              .monospacedDigit()
           }
           .accessibilityElement(children: .ignore)
           .accessibilityLabel(row.label)
@@ -59,11 +47,9 @@ struct QuotaRemainingHistoryView: View {
         }
       } label: {
         Text("Observed remaining, \(history.spanDescription)")
-          .font(.body)
-          .foregroundStyle(.primary)
-          .accessibilityIdentifier("subscription.history.observed")
+          .quotaSecondaryStyle()
+          .accessibilityIdentifier("quota.history.observed")
       }
-      .tint(.primary)
     }
   }
 
@@ -96,14 +82,14 @@ struct QuotaRemainingHistoryView: View {
           series: .value("Window", "Estimate")
         )
         .foregroundStyle(tint.opacity(0.65))
-        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
+        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4]))
         LineMark(
           x: .value("Time", estimate.date),
           y: .value("Remaining", estimate.remainingPercent),
           series: .value("Window", "Estimate")
         )
         .foregroundStyle(tint.opacity(0.65))
-        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
+        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4]))
         PointMark(
           x: .value("Time", estimate.date),
           y: .value("Remaining", estimate.remainingPercent)
@@ -121,7 +107,7 @@ struct QuotaRemainingHistoryView: View {
         AxisValueLabel {
           if let amount = value.as(Double.self) {
             Text("\(Int(amount))%")
-              .foregroundStyle(QuotaTheme.secondary)
+              .foregroundStyle(QuotaPalette.body)
           }
         }
       }
@@ -131,25 +117,24 @@ struct QuotaRemainingHistoryView: View {
         AxisGridLine()
         AxisTick()
         AxisValueLabel()
-          .foregroundStyle(QuotaTheme.secondary)
+          .foregroundStyle(QuotaPalette.body)
       }
     }
   }
 
   private var legend: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: QuotaDesign.Spacing.md) {
       legendItem(label: "Observed", dashed: false)
       if history.estimate != nil {
         legendItem(label: "Estimate", dashed: true)
       }
     }
-    .font(QuotaDesign.Typography.meta)
-    .foregroundStyle(QuotaTheme.secondary)
+    .quotaMetaStyle()
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func legendItem(label: String, dashed: Bool) -> some View {
-    HStack(spacing: 6) {
+    HStack(spacing: QuotaDesign.Spacing.xs) {
       if dashed {
         Capsule()
           .stroke(
@@ -173,10 +158,10 @@ struct QuotaRemainingHistoryView: View {
   private var summary: String {
     var parts: [String] = []
     if windowTitle.isEmpty {
-      parts.append("Remaining history on this iPhone, \(history.spanDescription)")
+      parts.append("Remaining history on this Mac, \(history.spanDescription)")
     } else {
       parts.append(
-        "Remaining history on this iPhone for \(windowTitle), \(history.spanDescription)"
+        "Remaining history on this Mac for \(windowTitle), \(history.spanDescription)"
       )
     }
     if let first = history.observedPoints.first, let last = history.observedPoints.last {
@@ -289,7 +274,9 @@ private struct QuotaRemainingHistoryChartDescriptor: AXChartDescriptorRepresenta
       )
     }
     let title =
-      windowTitle.isEmpty ? "Remaining history" : "Remaining history, \(windowTitle)"
+      windowTitle.isEmpty
+      ? DashboardQuotaCopy.remainingHistory
+      : "\(DashboardQuotaCopy.remainingHistory), \(windowTitle)"
     return AXChartDescriptor(
       title: title,
       summary: summary,

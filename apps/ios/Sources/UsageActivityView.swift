@@ -19,6 +19,7 @@ struct UsageActivitySection: View {
         Text("Couldn't load activity.")
           .font(.body)
           .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.activity.failed")
         Button("Retry") {
           Task { await model.usage.retryActivity() }
@@ -378,6 +379,7 @@ struct UsageDayDetailSheet: View {
       Section {
         Text("Couldn't load this day's usage.")
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
         Button("Retry") {
           Task { await model.usage.retryActivityDay() }
         }
@@ -388,6 +390,7 @@ struct UsageDayDetailSheet: View {
       Section {
         Text("No usage on this day.")
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.day.empty")
       }
     case .loaded(let agents):

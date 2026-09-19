@@ -128,6 +128,7 @@ struct UsageView: View {
         UsageBreakdownDestination(model: model)
       } label: {
         Text("By provider / By model")
+          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.open-breakdown")
       }
 
@@ -135,6 +136,7 @@ struct UsageView: View {
         UsagePatternsView(model: model)
       } label: {
         Text("Activity patterns")
+          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.open-patterns")
       }
 
@@ -244,6 +246,7 @@ struct UsageView: View {
         Label("No usage", systemImage: "chart.bar")
       } description: {
         Text("No usage was reported for this period.")
+          .fixedSize(horizontal: false, vertical: true)
       }
       .foregroundStyle(Color.primary)
       .frame(maxWidth: .infinity)
@@ -296,8 +299,7 @@ struct UsageHeadlineSection: View {
   private var tokensTile: some View {
     QuotaStatTile(
       label: "Tokens",
-      value: QuotaFormat.compactCount(totals.totalTokens),
-      valueIdentifier: "\(identifier).tokens"
+      value: QuotaFormat.compactCount(totals.totalTokens)
     )
     .accessibilityLabel("\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens")
     .accessibilityIdentifier("\(identifier).tokens")
@@ -306,8 +308,7 @@ struct UsageHeadlineSection: View {
   private var costTile: some View {
     QuotaStatTile(
       label: "API-equivalent",
-      value: QuotaFormat.cost(cost),
-      valueIdentifier: "\(identifier).cost"
+      value: QuotaFormat.cost(cost)
     )
     .accessibilityLabel("API-equivalent cost, \(QuotaFormat.costAccessibility(cost))")
     .accessibilityIdentifier("\(identifier).cost")
@@ -461,19 +462,39 @@ struct UsageTopModelsSection: View {
           let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—"
           let fraction = topTokens > 0 ? Double(row.totals.totalTokens) / Double(topTokens) : 0
           VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              Text("\(index + 1)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(QuotaTheme.secondary)
-              Text(row.displayName)
-                .font(.subheadline)
-                .foregroundStyle(Color.primary)
-              Spacer(minLength: 8)
-              Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.primary)
+            ViewThatFits(in: .horizontal) {
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(index + 1)")
+                  .font(.caption.monospacedDigit())
+                  .foregroundStyle(QuotaTheme.secondary)
+                  .accessibilityHidden(true)
+                Text(row.displayName)
+                  .font(.subheadline)
+                  .foregroundStyle(Color.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+                Spacer(minLength: 8)
+                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
+                  .font(.subheadline.monospacedDigit())
+                  .foregroundStyle(.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+              }
+              VStack(alignment: .leading, spacing: 2) {
+                Text(row.displayName)
+                  .font(.subheadline)
+                  .foregroundStyle(Color.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
+                  .font(.subheadline.monospacedDigit())
+                  .foregroundStyle(.primary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityHidden(true)
+              }
             }
             QuotaShareBar(share: fraction)
+              .accessibilityHidden(true)
           }
           .accessibilityElement(children: .ignore)
           .accessibilityLabel(row.displayName)
@@ -531,11 +552,14 @@ struct UsageAgentListSections: View {
         Text(provider.displayName)
           .font(.subheadline)
           .foregroundStyle(.primary)
-          .accessibilityAddTraits(.isHeader)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
         Spacer(minLength: 8)
         Text(QuotaFormat.share(providerTokens, of: periodTokens) ?? "—")
           .font(.subheadline.monospacedDigit())
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(provider.displayName)
@@ -580,17 +604,35 @@ struct UsageAgentListSections: View {
     let tokens = QuotaFormat.compactCount(row.totals.totalTokens)
     let cost = QuotaFormat.cost(row.cost)
     let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens)
-    return HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(row.displayName)
-        .font(.subheadline)
-        .foregroundStyle(Color.primary)
-      Spacer(minLength: 8)
-      Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
-        .font(.subheadline.monospacedDigit())
-        .foregroundStyle(Color.primary)
-        .multilineTextAlignment(.trailing)
+    return ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(row.displayName)
+          .font(.subheadline)
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+        Spacer(minLength: 8)
+        Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(.trailing)
+          .accessibilityHidden(true)
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        Text(row.displayName)
+          .font(.subheadline)
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+        Text("\(tokens) · \(cost)" + (share.map { " · \($0)" } ?? ""))
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+      }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .ignore)
     .accessibilityLabel(
       "\(row.displayName), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost))"
     )

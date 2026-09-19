@@ -12,16 +12,17 @@ struct QuotaStatTile: View {
       Text(label)
         .font(QuotaDesign.Typography.support)
         .foregroundStyle(QuotaTheme.secondary)
+        .fixedSize(horizontal: false, vertical: true)
       Text(value)
         .font(valueFont)
         .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.5)
+        .fixedSize(horizontal: false, vertical: true)
         .modifier(QuotaOptionalIdentifier(valueIdentifier))
       if let caption {
         Text(caption)
           .font(QuotaDesign.Typography.meta)
           .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .frame(minWidth: QuotaDesign.Layout.statTileMinWidth, alignment: .leading)

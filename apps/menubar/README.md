@@ -169,7 +169,7 @@ Build the deterministic visual app with `pnpm build:menubar:visual`. It accepts:
 The required Visual QA matrix is every `--route` above, in `--appearance light` and `dark`, at
 `--text-size standard` and `accessibility`. `--text-size extra-large` is available for spot
 checks. `overview` and `provider-codex` stay on the panel. The `main-*` routes host the main
-window: `main-quota` is All providers on Quota (also captured at 1280×800), `main-quota-codex` selects Codex, `main-today`
+window: `main-quota` is the Quota workspace (subscription list and the first subscription's detail; also captured at 1280×800), `main-quota-codex` selects the Codex subscription, `main-today`
 is Usage with the Today period (the folded windows table), `main-usage` and `main-usage-local` are Usage on Account and This Mac, and the
 remaining `main-*` routes are the Settings group. `scripts/test-swift.sh`
 renders that matrix to PNGs after the ordinary suite (`QUOTABAR_SCREENSHOTS` names the directory);

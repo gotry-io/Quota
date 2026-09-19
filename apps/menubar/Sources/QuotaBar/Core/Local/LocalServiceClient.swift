@@ -55,7 +55,7 @@ struct LocalServiceClientTimings: Sendable {
   var termination: Duration = .seconds(2)
 }
 
-protocol LocalServiceServing: UsageTransport {
+protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
@@ -85,13 +85,6 @@ protocol LocalServiceServing: UsageTransport {
   func validateProviderBrowserSession(
     _ provider: ProviderID, cookieHeader: String
   ) async throws -> LocalServiceProviderBrowserSessionCandidate
-  func setProviderBrowserScan(_ provider: ProviderID, enabled: Bool) async throws
-    -> LocalServiceProviderBrowserScanSetting
-  func replaceProviderBrowserSessions(
-    _ provider: ProviderID,
-    cookieHeaders: [String],
-    accessDenials: [BrowserAccessDenial]
-  ) async throws
   func shutdown() async
 }
 

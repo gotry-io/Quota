@@ -33,32 +33,26 @@ struct SettingsView: View {
         NavigationLink {
           SettingsAppearanceView(settings: settings)
         } label: {
-          HStack(spacing: 12) {
-            SettingsRowIcon(symbol: "circle.lefthalf.filled", tint: .indigo)
-            Text(SettingsCopy.appearance)
-            Spacer(minLength: 8)
-            Text(settings.appearance.title)
-              .foregroundStyle(QuotaTheme.secondary)
-          }
+          preferenceRow(
+            symbol: "circle.lefthalf.filled",
+            tint: .indigo,
+            title: SettingsCopy.appearance,
+            value: settings.appearance.title
+          )
           .accessibilityIdentifier("settings.appearance")
         }
 
         NavigationLink {
           UsageBudgetEditorPage(model: model)
         } label: {
-          HStack(spacing: 12) {
-            SettingsRowIcon(symbol: "dollarsign.circle.fill", tint: .green)
-            Text(
-              model.usage.budget.isSet
-                ? SettingsCopy.monthlyBudget : SettingsCopy.setMonthlyBudget
-            )
-            Spacer(minLength: 8)
-            if let amount = model.usage.budget.amountUSD {
-              Text(UsageBudgetProgress.usd(amount))
-                .foregroundStyle(QuotaTheme.secondary)
-                .accessibilityHidden(true)
-            }
-          }
+          preferenceRow(
+            symbol: "dollarsign.circle.fill",
+            tint: .green,
+            title: model.usage.budget.isSet
+              ? SettingsCopy.monthlyBudget : SettingsCopy.setMonthlyBudget,
+            value: model.usage.budget.amountUSD.map(UsageBudgetProgress.usd),
+            hideValueFromAccessibility: true
+          )
           .accessibilityIdentifier("settings.budget")
         }
       } header: {
@@ -155,6 +149,43 @@ struct SettingsView: View {
       ProviderLoginView(provider: provider, store: model.providers.sessionStore) { session in
         model.providers.keep(session)
         Task { await model.providerSessionsChanged() }
+      }
+    }
+  }
+
+  /// Title and value share a line while they fit; they stack at accessibility sizes so
+  /// the iOS 26.3 auditor does not report a clipped preference row.
+  private func preferenceRow(
+    symbol: String,
+    tint: Color,
+    title: String,
+    value: String?,
+    hideValueFromAccessibility: Bool = false
+  ) -> some View {
+    HStack(spacing: 12) {
+      SettingsRowIcon(symbol: symbol, tint: tint)
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          Text(title)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 8)
+          if let value {
+            Text(value)
+              .foregroundStyle(QuotaTheme.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityHidden(hideValueFromAccessibility)
+          }
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .fixedSize(horizontal: false, vertical: true)
+          if let value {
+            Text(value)
+              .foregroundStyle(QuotaTheme.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityHidden(hideValueFromAccessibility)
+          }
+        }
       }
     }
   }

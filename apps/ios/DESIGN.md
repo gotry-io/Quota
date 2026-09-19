@@ -291,14 +291,19 @@ An inset-grouped `List` after the header:
 - Remaining history: a `QuotaCard` titled **Remaining history** with **This iPhone** beside the
   title (DECISIONS K2; this phone has history only for readings it took itself). A menu picks
   the window when there is more than one and this phone has readings for at least one of them;
-  remote-only detail has no picker. The chart plots remaining 0–100 with y-axis labels
+  remote-only detail has no picker. The chart plots remaining 0–100 over the last visible
+  span — `min` of sample retention and `max(24 hours, 4 × the window)`: 5 Hours is last 24
+  hours, Weekly last 4 weeks, monthly the 30-day retention — with y-axis labels
   **0 / 50 / 100 %** and time ticks: solid segments for observed readings, a dashed segment
-  for the estimate to reset (the same ADR 0035 projection the pace headline uses). A small
+  for the estimate to reset (the same ADR 0035 projection the pace headline uses). Segments
+  wholly before the span are dropped; a segment that crosses the start is clipped there. The
+  estimate is unchanged. A small
   legend under the chart names **Observed** (solid) and **Estimate** (dashed) in secondary
   text; it is hidden from VoiceOver because the audio graph and list already carry that.
   A reset starts a new segment; a missing window stays a gap. VoiceOver
-  names it **Remaining history** (identifier `subscription.history`), speaks a summary, and
-  exposes an audio graph plus an **Observed remaining** list. A reading Relay resolved has no
+  names it **Remaining history** (identifier `subscription.history`), speaks a summary that
+  includes the span (**last 24 hours**, and so on), and exposes an audio graph plus an
+  **Observed remaining** list of that span. A reading Relay resolved has no
   samples here, so the card prints **This iPhone has no readings of its own for this
   subscription.** instead of an empty chart. Local with nothing to plot: **This iPhone has not
   collected enough readings to draw remaining history yet.**
@@ -837,11 +842,13 @@ provider and support, and no custom card chrome beyond the system widget contain
   still runs on every fixture screen and gates every type except contrast: the iOS 26
   pixel-sampling contrast pass persistently reports low contrast on system label colour, which
   is not low contrast.
-- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26 auditor still
-  reports Dynamic Type "partially unsupported" twice on system list configuration and on inner
-  text of scaling fonts (`section.header.` / `section.footer.`, `overview.today` /
-  `overview.subscription` rows, app-owned identifiers, Form labels, the sheet **Done** button);
-  clipping on `usage.activity.empty` also reproduces. Those stay, counted per exemption rule.
+- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26.3 auditor
+  still reports Dynamic Type "partially unsupported" on specific system list headers/footers,
+  Form/Link inner labels, combined-row inner text (Usage budget, Settings appearance/budget,
+  breakdown Cache hit / Reasoning / Messages), identified empty/error copy, wrapping
+  subscription-detail history and readings titles, and the sheet **Done** button. Each kept
+  exemption is one audit type, one identifier or exact label, and one screen, counted per
+  rule. A prefix or parent skip is not an exemption.
   Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
   (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
   finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
@@ -892,7 +899,9 @@ detail, and each Settings destination at one accessibility text size.
 `QuotaUITests.testLargeTypeScreenshots` always launches at `accessibilityExtraLarge` (including
 CI's `verify-ios-ui`) and visits **View day** / the day sheet, Settings › About, hub Log Out after
 pop, and the first connected Providers session, so a below-the-fold regression fails that job
-instead of only a local screenshot run.
+instead of only a local screenshot run. It asserts remaining percent, tokens, and cost on
+Overview, subscription detail, and Usage: each is hittable, carries the full accessibility
+label, and is not clipped by the window.
 
 ### DEBUG visual fixtures
 
