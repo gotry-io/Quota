@@ -27,6 +27,6 @@ export default defineConfig({
     env: {
       RELAY_TEST_DRIVER: "sqlite",
     },
-    exclude: [...configDefaults.exclude, "test/**/*.integration.test.ts"],
+    exclude: [...configDefaults.exclude, "test/**/*.integration.test.ts", "bench/**"],
   },
 });
