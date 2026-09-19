@@ -10,7 +10,7 @@
       now: Date,
       days: Int = 7
     ) -> LocalServiceQuotaHistory {
-      var samplesByProvider: [String: [String: [QuotaSample]]] = [:]
+      var samplesBySubscription: [String: [String: [QuotaSample]]] = [:]
       for result in report.results {
         guard let snapshot = result.snapshots.first else { continue }
         var byWindow: [String: [QuotaSample]] = [:]
@@ -21,11 +21,17 @@
           }
         }
         if !byWindow.isEmpty {
-          samplesByProvider[snapshot.provider.rawValue] = byWindow
+          let key = SubscriptionSelector.make(
+            provider: snapshot.provider.rawValue,
+            fingerprint: snapshot.account.fingerprint,
+            fingerprintScope: snapshot.account.fingerprintScope.rawValue,
+            sourceID: snapshot.account.fingerprintScope == .source ? "local" : nil
+          )
+          samplesBySubscription[key] = byWindow
         }
       }
       return LocalServiceQuotaHistory(
-        samplesByProvider: samplesByProvider,
+        samplesBySubscription: samplesBySubscription,
         utcOffsetSeconds: 0
       )
     }

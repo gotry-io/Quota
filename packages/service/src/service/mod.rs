@@ -3419,8 +3419,10 @@ mod tests {
         let observed = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let resets =
             (now + chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let key = QuotaOverviewIdentity::selector_for("codex", "account_test", "global", None);
         state
             .record_quota_samples(
+                &key,
                 "codex",
                 &observed,
                 &[serde_json::json!({
@@ -3452,7 +3454,7 @@ mod tests {
         let response = service.handle(ok);
         let result = response.result.expect("result");
         assert_eq!(
-            result["samples_by_provider"]["codex"]["five_hour"][0]["used_percent"],
+            result["samples_by_subscription"][key]["five_hour"][0]["used_percent"],
             40.0
         );
         assert!(result["utc_offset_seconds"].as_i64().is_some());

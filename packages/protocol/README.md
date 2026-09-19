@@ -50,7 +50,8 @@ shape of a released contract still moves its version.
   answer the copy ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
 - `fixtures/quota-history-conformance.json` states how a window's own local samples fold into the
   curve behind the reader, the dashed projection to its reset, and the windows the reader's day
-  holds. `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer it;
+  holds. Samples are keyed by the local subscription selector, not by provider.
+  `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer it;
   no sample is a wire field, so no other runtime does
   ([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)).
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota

@@ -349,6 +349,16 @@ struct LocalServiceOverviewIdentity: Decodable, Sendable {
   let scope: LocalServiceOverviewScope
   let sourceID: String?
 
+  /// The local opaque key samples and `quota_history` use for this subscription.
+  var subscriptionSelector: String {
+    SubscriptionSelector.make(
+      provider: provider.rawValue,
+      fingerprint: fingerprint,
+      fingerprintScope: scope.rawValue,
+      sourceID: sourceID
+    )
+  }
+
   private enum CodingKeys: String, CodingKey {
     case provider
     case fingerprint
@@ -824,31 +834,32 @@ extension LocalServiceUsagePeriodValues {
 /// This Mac's stored quota samples, as `quota_history` returns them.
 ///
 /// Dashboard folds these with ``QuotaHistory``. The state push keeps the current-window slice
-/// Overview already draws (ADR 0051).
+/// Overview already draws (ADR 0051). Samples are keyed by the local subscription selector,
+/// so two accounts of one provider stay apart.
 struct LocalServiceQuotaHistory: Decodable, Equatable, Sendable {
-  let samplesByProvider: [String: [String: [QuotaSample]]]
+  let samplesBySubscription: [String: [String: [QuotaSample]]]
   let utcOffsetSeconds: Int
 
   init(
-    samplesByProvider: [String: [String: [QuotaSample]]] = [:],
+    samplesBySubscription: [String: [String: [QuotaSample]]] = [:],
     utcOffsetSeconds: Int = 0
   ) {
-    self.samplesByProvider = samplesByProvider
+    self.samplesBySubscription = samplesBySubscription
     self.utcOffsetSeconds = utcOffsetSeconds
   }
 
   private enum CodingKeys: String, CodingKey {
-    case samplesByProvider
+    case samplesBySubscription
     case utcOffsetSeconds
   }
 }
 
 extension LocalServiceQuotaHistory {
   init(from decoder: Decoder) throws {
-    try decoder.rejectUnknownWireKeys(["samplesByProvider", "utcOffsetSeconds"])
+    try decoder.rejectUnknownWireKeys(["samplesBySubscription", "utcOffsetSeconds"])
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    samplesByProvider = try container.decode(
-      [String: [String: [QuotaSample]]].self, forKey: .samplesByProvider)
+    samplesBySubscription = try container.decode(
+      [String: [String: [QuotaSample]]].self, forKey: .samplesBySubscription)
     utcOffsetSeconds = try container.decode(Int.self, forKey: .utcOffsetSeconds)
   }
 }

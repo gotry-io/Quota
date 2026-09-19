@@ -158,8 +158,8 @@ struct LocalServiceClientTests {
         assert request["operation"] == "quota_history"
         assert "since" in request["payload"]
         result = {
-            "samples_by_provider": {
-                "codex": {
+            "samples_by_subscription": {
+                "ccfc96629357": {
                     "five_hour": [{
                         "resets_at": "2026-09-05T12:00:00Z",
                         "observed_at": "2026-09-05T09:30:00Z",
@@ -182,7 +182,7 @@ struct LocalServiceClientTests {
       since: Date(timeIntervalSince1970: 1_786_300_000)
     )
     #expect(history.utcOffsetSeconds == 0)
-    #expect(history.samplesByProvider["codex"]?["five_hour"]?.first?.usedPercent == 40)
+    #expect(history.samplesBySubscription["ccfc96629357"]?["five_hour"]?.first?.usedPercent == 40)
     await client.shutdown()
   }
 

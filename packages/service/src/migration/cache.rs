@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 7;
+const CURRENT_SCHEMA: i64 = 8;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -40,6 +40,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
             5 => migration_v5(&tx)?,
             6 => migration_v6(&tx)?,
             7 => migration_v7(&tx)?,
+            8 => migration_v8(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -475,6 +476,29 @@ fn migration_v7(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Quota samples belong to a subscription, not to a provider. Rows written under the v6
+/// primary key cannot be attributed, and `cache.sqlite` is disposable, so they are dropped
+/// (ADR 0042, ADR 0021).
+fn migration_v8(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS quota_samples;
+         CREATE TABLE quota_samples (
+            subscription_key TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            window_id TEXT NOT NULL,
+            resets_at TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            used_percent REAL NOT NULL,
+            remaining REAL,
+            \"limit\" REAL,
+            value_unit TEXT,
+            PRIMARY KEY(subscription_key, window_id, resets_at, observed_at)
+         );
+         CREATE INDEX quota_samples_age ON quota_samples(observed_at);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,16 +707,17 @@ mod tests {
         apply(&mut conn, 0).expect("upgrade");
         conn.execute_batch(
             "INSERT INTO quota_samples(
-                provider, window_id, resets_at, observed_at, used_percent, remaining,
-                \"limit\", value_unit
+                subscription_key, provider, window_id, resets_at, observed_at, used_percent,
+                remaining, \"limit\", value_unit
              ) VALUES (
-                'codex', 'five_hour', '2026-09-05T12:00:00Z', '2026-09-05T09:30:00Z', 50.0,
-                NULL, NULL, NULL
+                'ccfc96629357', 'codex', 'five_hour', '2026-09-05T12:00:00Z',
+                '2026-09-05T09:30:00Z', 50.0, NULL, NULL, NULL
              );
              INSERT OR IGNORE INTO quota_samples(
-                provider, window_id, resets_at, observed_at, used_percent
+                subscription_key, provider, window_id, resets_at, observed_at, used_percent
              ) VALUES (
-                'codex', 'five_hour', '2026-09-05T12:00:00Z', '2026-09-05T09:30:00Z', 51.0
+                'ccfc96629357', 'codex', 'five_hour', '2026-09-05T12:00:00Z',
+                '2026-09-05T09:30:00Z', 51.0
              );",
         )
         .expect("sample rows");
@@ -704,6 +729,71 @@ mod tests {
             )
             .expect("count");
         assert_eq!((count, used), (1, 50.0));
+    }
+
+    /// Ambiguous v6 rows cannot be attributed to a subscription, so the disposable cache
+    /// drops them and the new primary key starts with `subscription_key`.
+    #[test]
+    fn a_cache_below_v8_drops_unattributed_quota_samples() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+        )
+        .expect("ladder");
+        let tx = conn.transaction().expect("transaction");
+        migration_v1(&tx, 0).expect("v1");
+        migration_v6(&tx).expect("v6");
+        tx.execute_batch(
+            "INSERT INTO schema_migrations(version, applied_at)
+             VALUES (1, '2026-08-25T00:00:00Z'), (6, '2026-09-07T00:00:00Z');
+             INSERT INTO quota_samples(
+                provider, window_id, resets_at, observed_at, used_percent
+             ) VALUES (
+                'codex', 'five_hour', '2026-09-05T12:00:00Z', '2026-09-05T09:30:00Z', 50.0
+             );",
+        )
+        .expect("v6 sample");
+        tx.commit().expect("commit");
+
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM quota_samples", [], |row| row.get(0))
+            .expect("before");
+        assert_eq!(before, 1);
+
+        apply(&mut conn, 0).expect("upgrade");
+
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM quota_samples", [], |row| row.get(0))
+            .expect("after");
+        assert_eq!(after, 0);
+        conn.execute(
+            "INSERT INTO quota_samples(
+                subscription_key, provider, window_id, resets_at, observed_at, used_percent
+             ) VALUES (
+                'ccfc96629357', 'codex', 'five_hour', '2026-09-05T12:00:00Z',
+                '2026-09-05T09:30:00Z', 20.0
+             ), (
+                'peerkey000001', 'codex', 'five_hour', '2026-09-05T12:00:00Z',
+                '2026-09-05T09:30:00Z', 80.0
+             )",
+            [],
+        )
+        .expect("two subscriptions at the same instant");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM quota_samples", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 2);
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(quota_samples)")
+            .expect("pragma")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("columns");
+        assert_eq!(
+            columns.first().map(String::as_str),
+            Some("subscription_key")
+        );
     }
 
     #[test]

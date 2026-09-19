@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-07
+- Amended: 2026-09-19
 - Extends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md), and follows
   [ADR 0017](0017-derived-observation-freshness.md),
   [ADR 0021](0021-identity-store-and-disposable-cache.md), and
@@ -23,10 +24,14 @@ The device already takes those readings. What it did not do was remember them.
 **A sample is one reading of one window, kept by the device that took it, and it never leaves.**
 
 QuotaBar's service writes one row per window per collection into `cache.sqlite`'s `quota_samples`
-(`provider`, `window_id`, `resets_at`, `observed_at`, `used_percent`, `remaining`, `limit`,
-`value_unit`), keyed on the reading itself. Quota iOS keeps the same journal as a file in its own
-Application Support container, beside the last local collection. Neither is uploaded: no
-`UsageRow`, no quota envelope, and no managed contract names a sample, and Relay gains no route.
+(`subscription_key`, `provider`, `window_id`, `resets_at`, `observed_at`, `used_percent`,
+`remaining`, `limit`, `value_unit`), keyed on the subscription and the reading itself.
+`subscription_key` is the local opaque selector both Apple clients already compute
+(`SubscriptionSelector.make` / `QuotaOverviewIdentity::selector`): the first 12 lowercase hex
+characters of SHA-256 of `provider|fingerprint|scope|source_id`. It never leaves the device.
+Quota iOS keeps the same journal as a file in its own Application Support container, beside the
+last local collection. Neither is uploaded: no `UsageRow`, no quota envelope, and no managed
+contract names a sample, and Relay gains no route.
 A projection a producer stamped is a projection its readers cannot check
 ([ADR 0035](0035-quota-pace-is-derived-from-the-reading.md)); a *history* a producer stamped is
 worse, because it also asserts what some other device saw. The website and the Account show no
@@ -67,8 +72,9 @@ reader's clock, and the reader's offset from UTC, and gives:
 **The holder of the samples folds them.** QuotaBar's service states `history` on the windows of a
 reading this Mac collected, in the IPC state it publishes, and states none on a reading Relay
 resolved from another device — that reading has no samples here and inventing a curve for it would
-draw a line no device ever saw. `ipc_version` becomes 3. Quota iOS folds its own samples the same
-way and draws a line only for the reading it took itself.
+draw a line no device ever saw. `ipc_version` becomes 3. The `quota_history { since }` answer is
+keyed by subscription, not by provider, so two accounts of one provider keep two histories.
+Quota iOS folds its own samples the same way and draws a line only for the reading it took itself.
 
 **What the surfaces show.** QuotaBar's Overview draws a sparkline under each window meter — solid
 for the samples, dashed to the reset, 0–100 percent vertically and window start to reset
@@ -90,3 +96,12 @@ a **Today** section.
 - QuotaBar's Dashboard reads this history through the private `quota_history { since }` IPC
   operation; the state push keeps the current-window slice Overview already draws
   ([ADR 0051](0051-the-panel-glances-and-the-windows-explain.md)).
+
+## Amendment 2026-09-19
+
+The original schema keyed `quota_samples` on `(provider, window_id, resets_at, observed_at)`.
+Two accounts of one provider share a window id, so equal timestamps overwrote each other and
+unequal timestamps mixed into one curve. Identity is the subscription selector both clients
+already compute; it stays local. Old `cache.sqlite` rows cannot be attributed and are dropped
+on the disposable-store migration (ADR 0021). A Quota iOS journal written without a
+subscription key (0.0.4) is discarded on load for the same reason.

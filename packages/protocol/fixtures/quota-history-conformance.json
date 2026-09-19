@@ -1,5 +1,5 @@
 {
-  "$comment": "How a window's local samples fold into the one history every Quota surface draws: the curve behind the reader, the dashed line to the reset, and the windows that belong to the reader's today. Samples are local to the device that took them and never travel (ADR 0042). `window` is the current reading, `samples` are that provider and window id's stored rows, `now` is the reader's clock, and `utc_offset_seconds` places the reader's day. `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer this file. `expected` is null where there is no history to draw. Projection is ADR 0035's `projected_at_reset` over the last sample, so the two files move together.",
+  "$comment": "How a window's local samples fold into the one history every Quota surface draws: the curve behind the reader, the dashed line to the reset, and the windows that belong to the reader's today. Samples are local to the device that took them, keyed by the subscription selector, and never travel (ADR 0042). `window` is the current reading, `samples` are that subscription and window id's stored rows, `now` is the reader's clock, and `utc_offset_seconds` places the reader's day. A case may name `identity` and `peer` so two subscriptions of one provider with equal timestamps stay apart. `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer this file. `expected` is null where there is no history to draw. Projection is ADR 0035's `projected_at_reset` over the last sample, so the two files move together.",
   "rounding": {
     "$comment": "Every runtime states these to the same precision so one file can judge all of them.",
     "elapsed_fraction_decimals": 4,
@@ -416,6 +416,70 @@
       },
       "samples": [],
       "expected": null
+    },
+    {
+      "name": "two subscriptions of one provider keep equal-time samples apart",
+      "$comment": "The fold itself is per subscription: each identity's samples are folded on their own. Storage keys rows by the local selector of provider|fingerprint|scope|source_id so these two histories never share a primary key, even when provider, window id, observed_at, and resets_at are identical.",
+      "now": "2026-09-05T09:30:00Z",
+      "utc_offset_seconds": 0,
+      "window": {
+        "id": "five_hour",
+        "title": "5 Hours",
+        "used_percent": 20,
+        "resets_at": "2026-09-05T12:00:00Z",
+        "duration_seconds": 18000,
+        "primary_cadence": "five_hour"
+      },
+      "identity": {
+        "provider": "codex",
+        "fingerprint": "account_a",
+        "fingerprint_scope": "global"
+      },
+      "samples": [
+        {
+          "resets_at": "2026-09-05T12:00:00Z",
+          "observed_at": "2026-09-05T09:30:00Z",
+          "used_percent": 20
+        }
+      ],
+      "expected": {
+        "points": [{ "elapsed_fraction": 0.5, "used_percent": 20.0 }],
+        "projection": { "elapsed_fraction": 1.0, "used_percent": 40.0 },
+        "windows_today": [
+          {
+            "started_at": "2026-09-05T07:00:00Z",
+            "resets_at": "2026-09-05T12:00:00Z",
+            "peak_used_percent": 20.0,
+            "is_current": true
+          }
+        ]
+      },
+      "peer": {
+        "identity": {
+          "provider": "codex",
+          "fingerprint": "account_b",
+          "fingerprint_scope": "global"
+        },
+        "samples": [
+          {
+            "resets_at": "2026-09-05T12:00:00Z",
+            "observed_at": "2026-09-05T09:30:00Z",
+            "used_percent": 80
+          }
+        ],
+        "expected": {
+          "points": [{ "elapsed_fraction": 0.5, "used_percent": 80.0 }],
+          "projection": { "elapsed_fraction": 1.0, "used_percent": 160.0 },
+          "windows_today": [
+            {
+              "started_at": "2026-09-05T07:00:00Z",
+              "resets_at": "2026-09-05T12:00:00Z",
+              "peak_used_percent": 80.0,
+              "is_current": true
+            }
+          ]
+        }
+      }
     },
     {
       "name": "a window with no cadence cannot be placed in time and takes no history",
