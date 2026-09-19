@@ -299,40 +299,48 @@ Opened from an Overview quota row, and from `io.gotry.quota:/subscriptions/<sele
 that id matches a current subscription. An unmatched selection stays on Overview. The system back
 button is the only way back; there is no second close control.
 
-The inline navigation title is the provider display name; the header card carries it large, so the page does not print it twice. An inset-grouped `List`:
+Identity sits in the navigation/header area, not on its own card: a 22pt `ProviderMark` beside
+the provider name and the plan capsule, then the masked account label · canonical freshness as
+supporting text (`account · Updated 1m ago`). At accessibility sizes the same header is the first
+list section so it can reflow. Identifiers `subscription.account` and `subscription.plan` stay
+on the label and capsule; freshness keeps `section.footer.subscription-updated`. The inline
+navigation title is the provider display name.
 
-- Header card: a 40pt `ProviderMark` beside the provider name (`title2.bold`), then the masked
-  account label (`support`, `.secondary`) and the plan capsule. Identifiers `subscription.account`
-  and `subscription.plan` stay on the label and capsule. Canonical freshness is a `meta` line on
-  the card (`section.footer.subscription-updated`).
+An inset-grouped `List` after the header:
+
 - Quota: one `QuotaCard` per window. Title in `support` / `.secondary`, remaining in
-  `remainingValue`, `QuotaMeter`, the pace line (`QuotaPaceLineView`, tinted with the window's
-  remaining-quota tone; identifier `subscription.paceline`), the live countdown row, and pace
-  copy. Remaining is the strongest text. Empty: **No quota windows yet.**
-- Today (local readings only): a `QuotaCard(title: "Today")`. Each window is a row
-  `HH:MM–HH:MM … peak 82%` with a 4pt bar of the peak used fraction; identifiers
-  `subscription.today.current` / `subscription.today.window` stay on the rows. The footer line
-  naming the day stays (`section.footer.today`): **Today: 3 windows · 82% / 40% / 12%**. The
-  section is absent unless this phone read the subscription itself.
-- Readings: a `QuotaCard(title: "Readings")`. Each source row has a device symbol
-  (`iphone` for **This iPhone**, `laptopcomputer` otherwise), the name (`body`), remaining and
-  freshness (`meta`), and a trailing **Reporting** capsule tinted emerald on the selected source.
+  `remainingValue`, `QuotaMeter`, the live countdown row, and pace headline plus even-pace
+  detail. Remaining is the strongest text. Empty: **No quota windows yet.**
+- Remaining history: a `QuotaCard` titled **Remaining history** with **This iPhone** beside the
+  title (DECISIONS K2; this phone has history only for readings it took itself). A menu picks
+  the window when there is more than one and this phone has readings for at least one of them;
+  remote-only detail has no picker. The chart plots remaining 0–100 with y-axis labels
+  **0 / 50 / 100 %** and time ticks: solid segments for observed readings, a dashed segment
+  for the estimate to reset (the same ADR 0035 projection the pace headline uses). A small
+  legend under the chart names **Observed** (solid) and **Estimate** (dashed) in secondary
+  text; it is hidden from VoiceOver because the audio graph and list already carry that.
+  A reset starts a new segment; a missing window stays a gap. VoiceOver
+  names it **Remaining history** (identifier `subscription.history`), speaks a summary, and
+  exposes an audio graph plus an **Observed remaining** list. A reading Relay resolved has no
+  samples here, so the card prints **This iPhone has no readings of its own for this
+  subscription.** instead of an empty chart. Local with nothing to plot: **This iPhone has not
+  collected enough readings to draw remaining history yet.**
+- Readings: a list section titled **Readings from N devices** (identifier `subscription.sources`
+  on the section header). Each source row has a device symbol (`iphone`
+  for **This iPhone**, `laptopcomputer` otherwise), the name (`body`), remaining and freshness
+  (`meta`), and a trailing **Reporting** capsule tinted emerald on the selected source.
   Identifiers `subscription.source` / `subscription.reporting` stay. Empty: **No device readings
   yet.**
 
 A window still in the future by less than a day uses a live countdown (`Text(timerInterval:)`). A
 later reset uses the shared reset copy. A reset that has already passed prints no Resets line.
 
-A window this phone has read more than once draws a 44pt pace line above its reset row, tinted
-with that window's remaining-quota tone: solid over the samples it took inside the running window,
-dashed from the last of them to where the ADR 0035 projection lands at the reset, with the vertical
-axis the whole window from 0 to 100 percent used.
-Only a reading this phone took itself gets one — a reading Relay resolved was taken by some Mac,
-which keeps its own samples and never sends them — and the same rule governs the Today section. The
-fold is `packages/protocol/fixtures/quota-history-conformance.json`, answered here by
-`QuotaHistory`; samples are kept 30 days in the app's own container and are never uploaded
-([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)). Widgets draw no line:
-the space belongs to the number.
+The remaining-history fold is `QuotaRemainingHistory` in `packages/apple-shared`; observed points
+are thinned the same way `QuotaHistory` answers
+`packages/protocol/fixtures/quota-history-conformance.json`. Samples are kept 30 days in the
+app's own container and are never uploaded
+([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)). Widgets draw no
+history: the space belongs to the number.
 
 Each device row is that device's display name — **This iPhone** for what this device read itself,
 or **Device** when a name is missing — the primary remaining figure from that source, and

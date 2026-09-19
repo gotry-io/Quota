@@ -184,14 +184,26 @@ final class QuotaUITests: XCTestCase {
     )
     let reporting = app.descendants(matching: .any)["subscription.reporting"]
     if !reporting.waitForExistence(timeout: 2) {
+      revealSources(app)
       scrollToIdentifier(app, "subscription.reporting", attempts: 12)
     }
     XCTAssertTrue(reporting.waitForExistence(timeout: 5), "Reporting")
     XCTAssertTrue(
       app.staticTexts["Readings"].exists
         || app.descendants(matching: .any)["section.header.readings"].exists
+        || app.descendants(matching: .any)["subscription.sources"].exists
         || reporting.exists,
       "Readings"
+    )
+    scrollToIdentifier(app, "subscription.history")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.history"].waitForExistence(timeout: 5),
+      "subscription.history"
+    )
+    XCTAssertTrue(
+      app.staticTexts["This iPhone has no readings of its own for this subscription."].exists
+        || app.descendants(matching: .any)["subscription.history"].exists,
+      "remote-only remaining history"
     )
     attachScreenshot(app, name: "subscription-detail")
     try audit(app)
@@ -587,25 +599,24 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
-    // What this phone read for itself has samples behind it, so the window draws its own curve
-    // and the day it belongs to is listed.
+    // What this phone read for itself has samples behind it, so remaining history plots them.
+    let localHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !localHistory.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
     XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.paceline"].firstMatch.waitForExistence(
-        timeout: 5),
-      "subscription.paceline"
+      localHistory.waitForExistence(timeout: 5),
+      "subscription.history"
     )
+    XCTAssertTrue(app.staticTexts["Remaining history"].waitForExistence(timeout: 5), "history title")
+    XCTAssertTrue(app.staticTexts["This iPhone"].exists, "This iPhone beside remaining history")
     attachScreenshot(app, name: "subscription-detail-local")
     try audit(app)
 
-    // The day and the readings sit below the pace lines, so the page is several screens long.
-    scrollToIdentifier(app, "subscription.today.current")
+    revealSources(app)
     XCTAssertTrue(
-      app.descendants(matching: .any)["section.header.today"].exists,
-      "section.header.today"
-    )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.today.current"].firstMatch.exists,
-      "the window that is still running"
+      app.descendants(matching: .any)["subscription.sources"].exists,
+      "subscription.sources"
     )
     scrollToIdentifier(app, "subscription.reporting")
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
@@ -626,13 +637,40 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
+    let mergedHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !mergedHistory.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
+    XCTAssertTrue(
+      mergedHistory.waitForExistence(timeout: 5),
+      "subscription.history"
+    )
     attachScreenshot(app, name: "subscription-detail-merged")
     try audit(app)
 
+    revealSources(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.sources"].exists,
+      "subscription.sources"
+    )
     scrollToIdentifier(app, "subscription.reporting")
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
-    XCTAssertTrue(app.staticTexts["Studio Mac"].exists, "Studio Mac")
-    XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
+    let studio = app.staticTexts["Studio Mac"]
+    if !studio.waitForExistence(timeout: 2) {
+      for _ in 0..<8 where !studio.exists {
+        scrollContent(app, up: true)
+        _ = studio.waitForExistence(timeout: 1)
+      }
+    }
+    XCTAssertTrue(studio.waitForExistence(timeout: 5), "Studio Mac")
+    let kitchen = app.staticTexts["Kitchen Mac"]
+    if !kitchen.waitForExistence(timeout: 2) {
+      for _ in 0..<8 where !kitchen.exists {
+        scrollContent(app, up: true)
+        _ = kitchen.waitForExistence(timeout: 1)
+      }
+    }
+    XCTAssertTrue(kitchen.waitForExistence(timeout: 5), "Kitchen Mac")
   }
 
   /// The one page that offers every way in, over the tabs it was asked from.
@@ -1172,6 +1210,22 @@ final class QuotaUITests: XCTestCase {
   /// A SwiftUI `List` builds its rows lazily, so a row several screens down does not exist yet;
   /// one drag is not always enough to reach it. Accessibility Extra Large needs more than a
   /// couple of screens on Settings and Usage.
+  /// Expand **Readings from N devices** when the source rows are still collapsed.
+  private func revealSources(_ app: XCUIApplication) {
+    let sources = app.descendants(matching: .any)["subscription.sources"].firstMatch
+    if !sources.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.sources", attempts: 12)
+    }
+    guard sources.exists else { return }
+    if app.descendants(matching: .any)["subscription.reporting"].exists
+      || app.descendants(matching: .any)["subscription.source"].exists
+    {
+      return
+    }
+    sources.tap()
+    _ = app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 2)
+  }
+
   private func scrollToIdentifier(
     _ app: XCUIApplication,
     _ identifier: String,
@@ -1258,6 +1312,18 @@ final class QuotaUITests: XCTestCase {
   }
 
   private func scrollableList(in app: XCUIApplication) -> XCUIElement {
+    let named = [
+      "subscription.detail",
+      "usage.day",
+      "usage.root",
+      "overview.root",
+      "settings.root",
+      "devices.root",
+    ]
+    for identifier in named {
+      let element = app.descendants(matching: .any)[identifier].firstMatch
+      if element.exists { return element }
+    }
     if app.collectionViews.firstMatch.exists { return app.collectionViews.firstMatch }
     if app.tables.firstMatch.exists { return app.tables.firstMatch }
     return app

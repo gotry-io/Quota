@@ -135,7 +135,7 @@ public struct QuotaHistory: Codable, Equatable, Sendable {
   ///
   /// Inside one window a provider only ever spends, so a reading that came back lower is the
   /// provider disagreeing with itself; the curve keeps the higher number rather than dipping.
-  private static func rising(
+  static func rising(
     _ group: [QuotaSample]
   ) -> [(sample: QuotaSample, usedPercent: Double)] {
     var peak = -Double.greatestFiniteMagnitude
@@ -145,14 +145,10 @@ public struct QuotaHistory: Codable, Equatable, Sendable {
     }
   }
 
-  /// The thinned curve: the first reading, one reading per decimation interval after it, and
-  /// always the last, which is the point the reader is standing on.
-  private static func curve(
-    _ rising: [(sample: QuotaSample, usedPercent: Double)],
-    resetsAt: Date,
-    cadence: Double
-  ) -> [QuotaHistoryPoint] {
-    let windowStart = resetsAt.addingTimeInterval(-cadence)
+  /// The first reading, one reading per decimation interval after it, and always the last.
+  static func keepDecimated(
+    _ rising: [(sample: QuotaSample, usedPercent: Double)]
+  ) -> [(sample: QuotaSample, usedPercent: Double)] {
     var kept: [(sample: QuotaSample, usedPercent: Double)] = []
     for entry in rising {
       guard let last = kept.last else {
@@ -166,7 +162,18 @@ public struct QuotaHistory: Codable, Equatable, Sendable {
     if let last = rising.last, kept.last?.sample.observedAt != last.sample.observedAt {
       kept.append(last)
     }
-    return kept.map { entry in
+    return kept
+  }
+
+  /// The thinned curve: the first reading, one reading per decimation interval after it, and
+  /// always the last, which is the point the reader is standing on.
+  private static func curve(
+    _ rising: [(sample: QuotaSample, usedPercent: Double)],
+    resetsAt: Date,
+    cadence: Double
+  ) -> [QuotaHistoryPoint] {
+    let windowStart = resetsAt.addingTimeInterval(-cadence)
+    return keepDecimated(rising).map { entry in
       let elapsed = min(
         max(entry.sample.observedAt.timeIntervalSince(windowStart) / cadence, 0), 1)
       return QuotaHistoryPoint(
