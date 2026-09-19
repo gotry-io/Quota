@@ -37,8 +37,8 @@ links to it rather than restating it.
   `quotabar://dashboard` opens the main window on Quota.
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
-  Node server over local SQLite in production; the same process runs as a Cloudflare Worker
-  over D1 for local development and tests
+  Node server over local SQLite in production and for local `dev`; the same source still
+  runs as a Cloudflare Worker over D1 via `dev:workers` and the Workers test project
   ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
   [ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md), [self-host runbook](relay-self-host.md)).
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Relay
