@@ -58,7 +58,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary == nil)
       #expect(model.banner == nil)
       #expect(model.expiredMessage == nil)
-      #expect(model.activityChart == .idle)
+      #expect(model.usage.activityChart == .idle)
       // Signed out is not a wall: the tabs are up and the Overview offers both ways in.
       #expect(model.subscriptions.isEmpty)
       #expect(model.overviewSources.isEmpty)
@@ -211,9 +211,9 @@ struct VisualFixtureParserTests {
         .models ?? []
       #expect(openaiModels.count > 5)
       #expect(openaiModels.contains { $0.model == "other" })
-      #expect(model.usagePeriod == .last30Days)
+      #expect(model.usage.usagePeriod == .last30Days)
 
-      guard case .loaded(let days) = model.activityChart else {
+      guard case .loaded(let days) = model.usage.activityChart else {
         Issue.record("content fixture should preload activity")
         return
       }
@@ -282,7 +282,7 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
       #expect(model.summary?.devices.isEmpty == false)
       #expect(model.banner == nil)
-      #expect(model.activityChart == .loaded([]))
+      #expect(model.usage.activityChart == .loaded([]))
     }
 
     @Test
@@ -291,9 +291,9 @@ struct VisualFixtureParserTests {
       #expect(model.skipsRestore)
       #expect(model.phase == .signedIn)
       #expect(model.selectedTab == .usage)
-      #expect(model.activityChart == .loading)
+      #expect(model.usage.activityChart == .loading)
       #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
-      #expect(model.activityDaySheet == nil)
+      #expect(model.usage.activityDaySheet == nil)
     }
 
     @Test
@@ -301,7 +301,7 @@ struct VisualFixtureParserTests {
       let model = AppModel.visualFixture(.activityFailed, now: VisualFixture.referenceDate)
       #expect(model.phase == .signedIn)
       #expect(model.selectedTab == .usage)
-      #expect(model.activityChart == .failed)
+      #expect(model.usage.activityChart == .failed)
       #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
     }
 
@@ -309,17 +309,17 @@ struct VisualFixtureParserTests {
     func activityDayEmptyPresentsASheetWithNoAgents() {
       let model = AppModel.visualFixture(.activityDayEmpty, now: VisualFixture.referenceDate)
       #expect(model.selectedTab == .usage)
-      #expect(model.activityDaySheet?.agents == .empty)
-      #expect(model.activityDaySheet?.headline.agents == nil)
-      #expect(model.activityDaySheet?.headline.totals.totalTokens == 0)
+      #expect(model.usage.activityDaySheet?.agents == .empty)
+      #expect(model.usage.activityDaySheet?.headline.agents == nil)
+      #expect(model.usage.activityDaySheet?.headline.totals.totalTokens == 0)
     }
 
     @Test
     func activityDayFailedPresentsASheetWithRetryPhase() {
       let model = AppModel.visualFixture(.activityDayFailed, now: VisualFixture.referenceDate)
       #expect(model.selectedTab == .usage)
-      #expect(model.activityDaySheet?.agents == .failed)
-      #expect(model.activityDaySheet?.date == "2026-08-14")
+      #expect(model.usage.activityDaySheet?.agents == .failed)
+      #expect(model.usage.activityDaySheet?.date == "2026-08-14")
     }
 
     @Test
