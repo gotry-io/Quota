@@ -1,7 +1,9 @@
 # ADR 0004: Anonymous Relay owners
 
-- Status: Superseded by [ADR 0006](./0006-managed-account-device-usage.md) on 2026-08-10
+- Status: Superseded
 - Date: 2026-08-03
+- Superseded by: 0006
+- Amended: 2026-08-10
 
 QuotaRelay had no human identity model. Devices were isolated under anonymous owners represented
 only by a high-entropy capability credential, and managed and self-hosted runtimes shared one

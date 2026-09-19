@@ -48,6 +48,7 @@ jobs:
           pnpm format:check:js
           pnpm check:provider-catalog
           pnpm check:design-tokens
+          pnpm check:adr-index
           pnpm check:schema
           pnpm -r --if-present check
           pnpm -r --if-present test

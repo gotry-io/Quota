@@ -3,59 +3,82 @@
 Quota is the monorepo behind [quota.gotry.io](https://quota.gotry.io). It keeps coding-agent
 subscription quota and privacy-preserving Usage together across a user's devices.
 
-- **Quota** — native iOS 26+ Account viewer. It signs in with the registered `quota-ios` public
-  client, reads remaining quota and Today Usage, publishes a non-secret App Group snapshot for
-  Home Screen and Lock Screen widgets, and writes nothing to Relay. Settings › Providers also signs
-  in to a provider's own web session inside the app; those cookies stay in that iPhone's Keychain.
-- **QuotaBar** — native macOS menu-bar UI with a bundled private Rust service for local collection,
+- **QuotaBar** — native macOS menu-bar app with a bundled private Rust service for local collection,
   durable state, account sync, and scheduling, plus the read-only `quota` command it bundles beside
   it ([ADR 0046](docs/decisions/0046-a-read-only-quota-command.md)).
+- **Quota** — native iOS 26+ companion. It signs in with the registered `quota-ios` public client,
+  reads remaining quota and Today Usage, publishes a non-secret App Group snapshot for Home Screen
+  and Lock Screen widgets, and can connect a provider's own web session on the phone; those cookies
+  stay in that iPhone's Keychain.
 - **QuotaRelay** — managed account/device service: one Hono source tree, run in production as a
-  Node + SQLite image on a VPS ([ADR 0049](docs/decisions/0049-one-relay-two-runtimes.md),
-  [ADR 0050](docs/decisions/0050-the-worker-and-d1-are-retired.md)); the Cloudflare Workers + D1
-  adapters remain a supported runtime and are no longer deployed.
+  Node + SQLite image on a VPS ([ADR 0050](docs/decisions/0050-the-worker-and-d1-are-retired.md));
+  the Cloudflare Workers + D1 adapters remain a supported runtime and are not deployed.
 - **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
   `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
 
-Quota collection supports Codex, Claude Code, Grok, OpenRouter, DeepSeek, Kimi Code, LiteLLM,
-Cursor, Gemini CLI, GitHub Copilot, Antigravity, and OpenCode Go; local Usage analytics supports
-Codex, Claude Code, Grok, OpenCode, Pi, Cursor, Gemini CLI, GitHub Copilot, Kilo, and Antigravity
-logs.
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
-never upload. Codex, Claude Code, Grok, Kimi Code, and Cursor can each be read from a browser
-session as their ladder's last rung, and QuotaBar asks before it opens a cookie store — see
-[security baseline](docs/security.md).
+never upload. See the [security baseline](docs/security.md).
 
-The QuotaBar Settings **Support › Diagnostics** page renders one service-owned report. It lists the four
-user-visible surfaces — Quota Overview, this Mac's Usage, Account Usage, and Account — and the
-sources behind them, each with one sentence naming what happened and what to do about it. The
-service writes that sentence; QuotaBar renders it
-([ADR 0022](docs/decisions/0022-minimal-diagnostics.md)).
+## Install
 
-## Architecture
+QuotaBar: `brew install gotry-io/tap/quotabar`, or the `.dmg` from [quota.gotry.io](https://quota.gotry.io).
+The Cask installs only `QuotaBar.app`; it does not expose the private service as a command.
 
-QuotaBar starts a fixed signed `Contents/Helpers/quota-service` child and communicates over bounded,
-versioned stdin/stdout NDJSON. The child waits up to twenty seconds for a previous QuotaBar's helper
-to release the state owner lock, announces `ready` once its local state is open, and
-QuotaBar holds every request until then. Requests have no deadline of their own: a `ping` the child
-answers without taking a lock is what says it is alive, and only a child that leaves two consecutive
-pings unanswered is killed and replaced. The Rust service immediately returns its last valid state,
-then collects provider quota, incrementally indexes Usage logs, refreshes pricing and report-time
-model aliases, and synchronizes a signed-in account in the background. Collection cadence is a
-stored preference (1, 2, 5, 10, or 15 minutes; default five). Account summary is read every
-minute with a conditional GET. The scheduler lives only for the QuotaBar process lifetime, so
-quitting QuotaBar stops local work and synchronization.
+Quota iOS publishes through an `ios-vX.Y.Z` tag that must match `apps/ios/project.yml`
+`MARKETING_VERSION`. Signing identities are not in git; see [`apps/ios/README.md`](apps/ios/README.md).
 
-Swift owns presentation, UI preferences, accessibility, and Launch at Login; shared remaining-quota,
-plan, count, cost, and compact-age copy lives in `packages/apple-shared`, and wire decoding and Relay
-access in each app or `packages/apple-client`. Rust owns provider and Usage semantics, credentials,
-OAuth, Relay traffic, persistence, and scheduling. QuotaRelay and Quota Web are TypeScript.
+## Quick start
 
-The canonical documents are [architecture](docs/architecture.md),
-[security baseline](docs/security.md), [provider strategies](docs/provider-collection.md),
-[CodexBar platform capabilities](docs/codexbar-platform-capabilities.md), and
-[design language](docs/design.md);
-[`AGENTS.md`](AGENTS.md) indexes the decision records behind each area.
+Requirements: Node.js 24+, pnpm 10+, stable Rust, and Swift 6.2+ on macOS. Both Apple apps are
+built by Xcode from a checked-in project generated by the installed XcodeGen CLI; Quota iOS also
+needs the iOS 26 SDK.
+
+```bash
+pnpm install
+pnpm format:check
+pnpm check
+pnpm test
+pnpm build
+```
+
+The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
+only; they intentionally do not compile the iOS app. `pnpm test` runs every Swift package, not only
+QuotaBar. Development recipes, hooks, the merge queue, and review expectations are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+`pnpm dev:relay` runs the Node Relay against `apps/relay/data/relay.sqlite`. Workers remains
+`pnpm --filter @gotry-io/quota-relay dev:workers`.
+
+Relay and the website ship together as one image, `ghcr.io/gotry-io/quota-relay`, built on a
+`relay-v*` tag and deployed to the dmit VPS by the owner ([runbook](docs/relay-self-host.md)).
+Local Wrangler dry runs are verification; do not deploy anywhere without explicit authorization.
+
+## Current status
+
+**2026-09-20 (owner).** Production Relay is the Node + SQLite image
+`ghcr.io/gotry-io/quota-relay:0.0.6` on dmit ([runbook](docs/relay-self-host.md)). The website and
+QuotaBar read Account periods as local dates on the hour grid
+([ADR 0055](docs/decisions/0055-an-account-period-is-a-local-date-range.md)). Quota iOS is three
+tabs (Quota · Usage · Settings). QuotaBar is a resident menu-bar app with a Quota · Usage ·
+Settings window. Workers + D1 remain a supported runtime and are not deployed. This statement is
+not generated from git tags.
+
+## Links
+
+- [Architecture](docs/architecture.md)
+- [Security](docs/security.md)
+- [Design language](docs/design.md)
+- [Provider collection](docs/provider-collection.md)
+- [Self-host runbook](docs/relay-self-host.md)
+- [ADR index](docs/decisions/README.md)
+- [Agent instructions](AGENTS.md)
+- [Contributing](CONTRIBUTING.md)
+- App READMEs: [`apps/menubar`](apps/menubar/README.md), [`apps/ios`](apps/ios/README.md),
+  [`apps/web`](apps/web/README.md), [`apps/relay`](apps/relay/README.md)
+
+A dated CodexBar comparison lives at
+[`docs/research/codexbar-platform-capabilities-2026-09-19.md`](docs/research/codexbar-platform-capabilities-2026-09-19.md);
+it is research, not a compatibility contract.
 
 ## Repository layout
 
@@ -72,132 +95,12 @@ packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
 packages/quota-model/     Relay/Web runtime-neutral quota and pricing models
 packages/relay-core/      Runtime-neutral account and Usage state contracts
-docs/                     Architecture, security, provider, design language, and decision records
+docs/                     Architecture, security, provider, design language, runbook, research, and decision records
 ```
 
-Provider registration starts in `packages/provider/catalog.json`; run
-`pnpm generate:provider-catalog` after a catalog change to regenerate the Rust, Swift, and
-TypeScript provider IDs. Colour, remaining-quota bands, spacing, and radii start in
-`packages/design-tokens/tokens.json`; run `pnpm generate:design-tokens` after a token change. Wire JSON uses `snake_case`. OAuth and Device control remain on v2, while
-quota, Usage, and Account summary use managed-data v6, the only data contract Relay serves. Bundled
-private IPC v1 changes atomically with QuotaBar; the local Usage report and state snapshots ride
-that version rather than naming their own. Summary totals are total, input, output, cache-read
-input, cache-write input, reasoning, and usage-bearing output messages; sessions are not collected.
-The service precomputes Today, 7 Days, 30 Days, and All detail for This Mac and the signed-in
-Account, so QuotaBar switches periods without collection or network work; Overview stays quota-only.
-
-## Development
-
-Requirements: Node.js 24+, pnpm 10+, stable Rust, and Swift 6.2+ on macOS. Both Apple apps are
-built by Xcode from a checked-in project generated by the installed XcodeGen CLI; Quota iOS also
-needs the iOS 26 SDK.
-
-```bash
-pnpm install
-pnpm format:check
-pnpm check
-pnpm test
-pnpm build
-```
-
-The root `pnpm check`, `pnpm test`, and `pnpm build` commands cover the macOS service and QuotaBar
-only; they intentionally do not compile the iOS app. Run the iOS commands on macOS. `pnpm test`
-runs every Swift package, not only QuotaBar.
-
-`pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
-rejects unformatted sources and a stale generated provider catalog; pre-push runs the tests for the
-areas the pushed commits touch. Bypass either with `QUOTA_HOOKS_SKIP=1` or `--no-verify`.
-
-Useful entry points:
-
-```bash
-pnpm dev:web
-pnpm dev:relay
-pnpm test:service
-pnpm test:swift
-pnpm generate:ios
-pnpm test:ios
-pnpm build:ios
-pnpm generate:menubar
-pnpm build:menubar:app
-pnpm test:menubar:helper
-```
-
-`pnpm dev:relay` runs the Node Relay against `apps/relay/data/relay.sqlite`. Workers remains
-`pnpm --filter @gotry-io/quota-relay dev:workers`.
-
-Pull requests reach main through a merge queue: `gh pr merge --auto` queues one when its checks
-pass, and the queue verifies it on top of main and whatever is ahead of it before merging, so a
-branch is never re-synced by hand (`AGENTS.md`, Development commands).
-
-Relay and the website ship together as one image, `ghcr.io/gotry-io/quota-relay`, built on a
-`relay-v*` tag and deployed to the dmit VPS by the owner ([runbook](docs/relay-self-host.md)).
-Local Wrangler dry runs are verification; do not deploy anywhere without explicit authorization.
-
-## Distribution
-
-QuotaBar is the only released product, and it resolves updates through the repository `latest`
-alias (see [architecture](docs/architecture.md)). A `menubar-vX.Y.Z` tag builds one signed and
-notarized Apple Silicon app, a drag-install `.dmg`, a Sparkle `appcast.xml` for in-app updates, and
-updates the Homebrew Cask. The Cask installs only `QuotaBar.app`; it does not expose the private
-service as a command. Install with `brew install gotry-io/tap/quotabar` or the website `.dmg`.
-
-```bash
-pnpm version:bump:menubar patch  # or minor | major | explicit semver
-```
-
-The marketing version lives in `apps/menubar/Support/Info.plist`.
-
-Quota iOS publishes through an `ios-vX.Y.Z` tag that must match `apps/ios/project.yml`
-`MARKETING_VERSION`. The owner-only workflow archives, exports, and uploads to App Store Connect
-when the secrets listed in [`apps/ios/README.md`](apps/ios/README.md) are set. Signing identities
-are not in git.
-
-## Current status
-
-The menu bar shows the tightest current subscription Overview still counts as live, and stacks that
-subscription's 5 Hours and Weekly remaining percents when both exist. Overview closes with a Today
-line for spend and tokens. Local state is two
-owner-only SQLite files: an identity store holding what this Mac cannot regenerate, and a cache that
-is deleted and rebuilt rather than repaired when SQLite refuses to read it. The bundled helper
-announces `ready` when that state is open and answers `ping` while it works, so QuotaBar waits on
-what the child says rather than on a clock. `diagnose` answers one `schema_version: 3` report —
-four surfaces, the sources behind them, and up to 100 recent attempts — and no device asserts
-anything about another.
-
-Managed data is v6. A Usage upload names whole UTC hours carrying the version of the scan behind
-each one, Relay replaces an hour only for a strictly newer scan and folds the days it touched into a
-rollup every read answers from, and an Account summary resolves subscriptions once so an account
-collected on three Macs reads as one subscription everywhere. Relay owns GitHub sign-in itself
-through a hand-written OAuth round trip, and every client — browser, QuotaBar, iOS — holds one
-session in one table, scoped by what that client is for
-([ADR 0027](docs/decisions/0027-one-token-per-client.md)).
-Five providers can fall back to a browser session as their last rung, behind a consent sheet and
-an explicit access-denied outcome. Quota iOS refreshes its Account and republishes its widget snapshot in the
-background as well as on screen.
-
-An Account can publish one read-only page of its Usage totals at `quota.gotry.io/u/<handle>`, with
-a saved share card drawn in the browser. It carries tokens, messages, optional API-equivalent cost,
-provider and model shares, and a year of activity bands — never remaining quota, devices,
-providers, or the account behind it
-([ADR 0037](docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)). A published page may
-also ask to be ranked at `quota.gotry.io/leaderboard`, which lists a handle, a 30-day token and
-message total, and a place. That switch is off until it is asked for
-([ADR 0045](docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)).
-
-Around those: ten Rust quota collectors, eight Usage parsers that read an appended log from where
-the last parse stopped, local hourly facts a scan recomputes only where records moved,
-effective-dated cost calculation with a separately versioned model catalog that regroups reports
-without rewriting facts, a registered `quota-ios` client whose session names a Device once the
-phone presents an installation, Sparkle in-app updates, and the
-Web account dashboard. Valid facts stay usable when pricing or model aliases are unknown, and record
-and file failures are isolated.
-
-Production is the Node + SQLite image deployed by the owner ([runbook](docs/relay-self-host.md)).
-Its secrets — the GitHub and Apple sign-in credentials, `RESEND_API_KEY`, and the HMAC keys
-`IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY` and `QUOTA_SESSION_HASH_KEY` — live in that
-deployment's environment and are listed once, with their constraints, in
-[`apps/relay/README.md`](apps/relay/README.md); they are never in git.
+Provider registration starts in `packages/provider/catalog.json`. Colour, remaining-quota bands,
+spacing, and radii start in `packages/design-tokens/tokens.json`. Wire JSON uses `snake_case`. OAuth
+and Device control remain on v2; quota, Usage, and Account summary use managed-data v6.
 
 ## License
 

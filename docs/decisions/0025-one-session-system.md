@@ -2,13 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-08-26
-- Updates: [ADR 0006](0006-managed-account-device-usage.md), [ADR 0011](0011-sveltekit-document-worker.md)
-- Updated 2026-08-26 by [ADR 0027](0027-one-token-per-client.md), which renamed the table `sessions`
+- Amended: 2026-08-26 by [ADR 0027](0027-one-token-per-client.md), which renamed the table `sessions`
   and made it one row per client rather than a second one for a Device
-- Updated 2026-09-05 by [ADR 0032](0032-an-account-owns-its-identities.md), which made GitHub one
+- Amended: 2026-09-05 by [ADR 0032](0032-an-account-owns-its-identities.md), which made GitHub one
   identity provider behind a port instead of the Account itself, renamed `GITHUB_SUBJECT_KEY` to
   `IDENTITY_SUBJECT_KEY`, put the provider and the intent in the handoff, and sent every sign-in
   through `/sign-in`
+- Updates: [ADR 0006](0006-managed-account-device-usage.md), [ADR 0011](0011-sveltekit-document-worker.md)
 
 ## Decision
 

@@ -1,16 +1,15 @@
 # Self-hosting QuotaRelay
 
-QuotaRelay is one process. It can run as a Cloudflare Worker over D1, or as a Node
-server over a local SQLite file ([ADR 0049](decisions/0049-one-relay-two-runtimes.md)).
-Switching between the two is an operations action, not a product migration: the
-origin, OAuth callbacks, and data contract stay `https://quota.gotry.io`.
+Production is the Node + SQLite process on the `dmit` VPS. The same source still runs as a
+Cloudflare Worker over D1 for local development and tests
+([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Switching runtimes is an operations
+action, not a product migration: the origin, OAuth callbacks, and data contract stay
+`https://quota.gotry.io`. The 2026-09-14 Worker → Node cutover is recorded in
+[ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md); do not re-run it.
 
-Since 2026-09-14 production is the Node runtime on the `dmit` VPS. The production
-Worker and its D1 database were deleted the same day
-([ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md)); the Workers runtime
-remains for local development and tests. This runbook is the host-side procedure
-for the dmit deployment; the Node entry, migration runner, and `build:node` output
-live with the Relay package and are not restated here.
+This runbook is the host-side procedure for the dmit deployment: current topology, update,
+rollback, backup, and restore. The Node entry, migration runner, and `build:node` output live
+with the Relay package and are not restated here.
 
 ## Topology
 
@@ -100,15 +99,16 @@ value refuses to start.
 4. Check `docker logs quota-relay` for `relay_migrations_applied` and
    `https://quota.gotry.io/api/v2/info` for the new version.
 
-## How production got here (2026-09-14)
+## Rollback
 
-The Worker → Node cutover ran once and is recorded for the history, not for
-re-use: stop `relay`, delete the Worker custom domain (freeze), `wrangler d1 export`,
-`scripts/relay-sqlite-import.sh` (refuses to overwrite; exits 1 unless
-`d1_migrations` has one row per migration file), place the file on the volume with
-the container stopped, start it, add the proxied A record, verify `via: 1.1 Caddy`
-and a real device sync. The window was about 40 seconds. A final D1 export was
-taken before the database was deleted and is kept by the owner off the repository.
+Roll back by deploying a previous `ghcr.io/gotry-io/quota-relay:<version>` image the same way
+as an update (pull, set the Portainer stack tag, redeploy). Do not restore the retired Worker
+or D1 ([ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md)).
+
+An older image can boot only if it understands every `d1_migrations` row already on the SQLite
+file. Applied migrations are never rewritten. If the previous image predates a migration this
+database has applied, restore a snapshot taken before that migration (Backup and restore
+below), then start that older image.
 
 ## Backup and restore
 

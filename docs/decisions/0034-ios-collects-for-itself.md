@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-05
-- Updated: 2026-09-06 — where those readings live and how they reach Overview, inline below
+- Amended: 2026-09-06 — where those readings live and how they reach Overview, inline below
 - Related: [ADR 0010](./0010-provider-browser-session-auth.md),
   [ADR 0013](./0013-readonly-ios-account-client.md),
   [ADR 0014](./0014-nonsecret-ios-widget-snapshot.md)

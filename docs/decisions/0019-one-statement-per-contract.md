@@ -2,10 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-24
-- Updated 2026-08-25 by [ADR 0023](./0023-strict-writes-tolerant-reads.md), inline below
-- Updated 2026-09-05: the provider browser-session rung answers its own conformance fixture,
+- Amended: 2026-08-25 by [ADR 0023](./0023-strict-writes-tolerant-reads.md), inline below
+- Amended: 2026-09-05: the provider browser-session rung answers its own conformance fixture,
   inline below
-- Updated 2026-09-06: the observation merge is written once per runtime rather than once in total,
+- Amended: 2026-09-06: the observation merge is written once per runtime rather than once in total,
   inline below
 
 ## Decision

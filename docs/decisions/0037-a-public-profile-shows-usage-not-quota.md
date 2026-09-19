@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-06
-- Updated 2026-09-07 by [ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md), which adds an
+- Amended: 2026-09-07 by [ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md), which adds an
   opt-in leaderboard. The refusal below stands for a board every published page is on; a page is
   now listed only when its owner asks, and being listed publishes nothing this record's field list
   does not already allow.
