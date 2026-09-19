@@ -158,7 +158,7 @@ project. Pass `--no-commit` to skip the commit.
 ### UI tests
 
 `QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
-`overview.root` / `overview.today` for `content`, switches that fixture to the Usage tab for
+`overview.root` / `overview.today` for `content`, opens Usage from that Today row (Today period) for
 `usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
 sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
 opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac

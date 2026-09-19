@@ -18,6 +18,7 @@
     "test:workers": "vitest run --config vitest.config.ts",
     "test:workers:integration": "vitest run --config vitest.integration.config.ts",
     "test:node:integration": "vitest run --config vitest.node.integration.config.ts",
+    "test:restore-drill": "vitest run --config vitest.node.integration.config.ts test/restore-drill.integration.test.ts",
     "build:node": "esbuild src/node.ts --bundle --platform=node --format=esm --target=node24 --external:better-sqlite3 --alias:quota-sveltekit-server=../web/.svelte-kit/output/server/quota-sveltekit-server.js --outfile=dist/node/server.mjs",
     "start:node": "node dist/node/server.mjs"
   },
