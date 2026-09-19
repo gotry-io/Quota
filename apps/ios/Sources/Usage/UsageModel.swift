@@ -36,13 +36,22 @@ final class UsageModel {
   var activityRhythm: ActivityRhythmPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
+  /// The selected period's Account period read, except All which stays on the summary.
+  var periodRead: PeriodReadPhase = .idle
 
   @ObservationIgnored private var activityGeneration = 0
   @ObservationIgnored private var rhythmGeneration = 0
   @ObservationIgnored private var dayGeneration = 0
+  @ObservationIgnored private var periodGeneration = 0
+  @ObservationIgnored private var budgetPeriodGeneration = 0
   @ObservationIgnored private var lastActivityToday: String?
   @ObservationIgnored private var lastActivitySummaryETag: String?
   @ObservationIgnored private var lastRhythmKey: RhythmLoadKey?
+  @ObservationIgnored private var lastPeriodKey: PeriodLoadKey?
+  @ObservationIgnored private var lastBudgetPeriodKey: PeriodLoadKey?
+  @ObservationIgnored private var lastPeriodSummaryETag: String?
+  @ObservationIgnored private var periodCache: [PeriodLoadKey: AccountUsagePeriodResponse] = [:]
+  @ObservationIgnored private var budgetPeriod: AccountUsagePeriodResponse?
   /// The Account usage fold last accepted from a summary. Nil after the account goes away.
   @ObservationIgnored private var acceptedSummary: AccountSummary?
   @ObservationIgnored private var summaryETag: String?
@@ -73,12 +82,20 @@ final class UsageModel {
     activityChart = .idle
     activityRhythm = .idle
     activityDaySheet = nil
+    periodRead = .idle
     lastActivityToday = nil
     lastActivitySummaryETag = nil
     lastRhythmKey = nil
+    lastPeriodKey = nil
+    lastBudgetPeriodKey = nil
+    lastPeriodSummaryETag = nil
+    periodCache = [:]
+    budgetPeriod = nil
     activityGeneration += 1
     rhythmGeneration += 1
     dayGeneration += 1
+    periodGeneration += 1
+    budgetPeriodGeneration += 1
   }
 
   var activityToday: String {
@@ -99,41 +116,47 @@ final class UsageModel {
     UsagePeriodTitle.text(for: usagePeriod, today: now())
   }
 
-  /// The days a folded period may reach back over, which is what the activity read answered.
+  /// The earliest day a custom range may name, which is what the activity read still answers.
   var usageEarliestDay: String {
     activityDateRange.from
   }
 
-  /// The activity days this device has, which is what a folded period is added up from.
+  /// The activity days this device has, which the year heatmap draws.
   var activityDays: [UsageActivityDay] {
     activityChart.days ?? []
   }
 
-  /// The selected period, read from the summary when it folds it and added up here when not.
-  ///
-  /// The summary answers four periods exactly, in the caller's own calendar. Anything else is
-  /// the activity days the page already holds, which are UTC days: a range is chosen in this
-  /// device's calendar and folded from the UTC days carrying those dates.
+  /// The selected period. All stays on the summary's 730 UTC-day window; every other selection
+  /// is the Account period read for that local range.
   var usagePeriodValue: UsagePeriod? {
-    if let key = usagePeriod.summaryKey, let usage = acceptedSummary?.usage {
-      return period(usage, key)
+    if usagePeriod == .all {
+      return acceptedSummary?.usage.all
     }
-    guard let range = usagePeriodRange, let days = activityChart.days else { return nil }
-    return UsageDayFold.period(days, from: range.from, to: range.to)
+    guard let range = usagePeriodRange, let response = periodRead.response,
+      lastPeriodKey?.from == range.from, lastPeriodKey?.to == range.to
+    else { return nil }
+    return response.usagePeriod
   }
 
-  /// Whether the shown period was added up here, which is why it has no model breakdown.
-  var usagePeriodIsFolded: Bool {
-    usagePeriod.summaryKey == nil
+  /// Local `days[]` for the selected period's asked dates. All has none.
+  var usagePeriodDays: [UsagePeriodDayBucket] {
+    guard usagePeriod != .all, let range = usagePeriodRange, let response = periodRead.response,
+      lastPeriodKey?.from == range.from, lastPeriodKey?.to == range.to
+    else { return [] }
+    return response.days
+  }
+
+  /// Retention cut the asked local range, which the Usage page names in one line.
+  var usagePeriodTruncated: Bool {
+    guard usagePeriod != .all, let range = usagePeriodRange, let response = periodRead.response,
+      lastPeriodKey?.from == range.from, lastPeriodKey?.to == range.to
+    else { return false }
+    return response.coverage.truncatedByRetention
   }
 
   /// How far into this month's budget its spend has gone, or nil when there is no budget yet.
   var budgetProgress: UsageBudgetProgress? {
-    guard let amount = budget.amountUSD,
-      let range = UsagePeriodSelection.thisMonth.range(today: now()),
-      let days = activityChart.days
-    else { return nil }
-    let month = UsageDayFold.period(days, from: range.from, to: range.to)
+    guard let amount = budget.amountUSD, let month = budgetPeriod else { return nil }
     let spent = UsageBudgetProgress.dollars(microusd: month.cost.amountMicrousd) ?? 0
     return UsageBudgetProgress(
       spentUSD: spent,
@@ -147,25 +170,20 @@ final class UsageModel {
     activityRhythm = .idle
     lastRhythmKey = nil
     rhythmGeneration += 1
+    periodGeneration += 1
   }
 
   func setBudget(_ next: UsageBudget) {
     budget = budgetStore.save(next)
+    Task { @MainActor in
+      await loadBudgetPeriod(force: true)
+    }
     evaluateBudgetAlerts()
   }
 
   /// Says once per month that 80% and then 100% of the budget has been spent.
   func evaluateBudgetAlerts() {
     evaluateBudget(budget, budgetProgress)
-  }
-
-  private func period(_ usage: AccountUsage, _ key: UsageSummaryPeriodKey) -> UsagePeriod {
-    switch key {
-    case .today: usage.today
-    case .last7Days: usage.last7Days
-    case .last30Days: usage.last30Days
-    case .all: usage.all
-    }
   }
 
   /// First visit to Usage asks once. Last-good stays on screen while a later read revalidates.
@@ -209,6 +227,105 @@ final class UsageModel {
     )
     guard generation == activityGeneration, epoch == sessionEpoch(), isSignedIn() else { return }
     applyActivity(result, lastGood: lastGood)
+  }
+
+  /// Every selection except All reads the period route. Presets are the same path.
+  func loadPeriod(force: Bool = false) async {
+    guard isSignedIn() else { return }
+    guard let range = usagePeriodRange else {
+      periodRead = .idle
+      lastPeriodKey = nil
+      return
+    }
+    if force, case .idle = periodRead, lastPeriodKey == nil { return }
+    #if DEBUG
+      if skipsUnforcedLoad(), !force {
+        switch periodRead {
+        case .loading, .failed: return
+        default: break
+        }
+      }
+    #endif
+    let key = currentPeriodKey(from: range.from, to: range.to, breakdown: true)
+    let lastGood = periodCache[key]
+    if !force {
+      switch periodRead {
+      case .loading:
+        if lastPeriodKey == key { return }
+      case .loaded, .refreshing:
+        if lastPeriodKey == key && !periodNeedsRevalidation { return }
+      case .idle, .failed:
+        break
+      }
+    }
+    periodGeneration += 1
+    let generation = periodGeneration
+    let epoch = sessionEpoch()
+    lastPeriodKey = key
+    if let lastGood {
+      periodRead = .refreshing(lastGood)
+    } else {
+      periodRead = .loading
+    }
+    let result = await activity.fetchUsagePeriod(
+      from: range.from,
+      to: range.to,
+      timezone: key.timezone,
+      breakdown: true
+    )
+    guard generation == periodGeneration, epoch == sessionEpoch(), isSignedIn(),
+      usagePeriodRange?.from == range.from, usagePeriodRange?.to == range.to
+    else { return }
+    applyPeriod(result, key: key, lastGood: lastGood)
+  }
+
+  /// The monthly budget measures this local month through the same period read.
+  func loadBudgetPeriod(force: Bool = false) async {
+    guard isSignedIn(), budget.isSet,
+      let range = UsagePeriodSelection.thisMonth.range(today: now())
+    else {
+      budgetPeriod = nil
+      lastBudgetPeriodKey = nil
+      return
+    }
+    if force, budgetPeriod == nil, lastBudgetPeriodKey == nil { return }
+    #if DEBUG
+      if skipsUnforcedLoad(), !force, budgetPeriod != nil { return }
+    #endif
+    let key = currentPeriodKey(from: range.from, to: range.to, breakdown: false)
+    if !force, lastBudgetPeriodKey == key, budgetPeriod != nil, !periodNeedsRevalidation {
+      return
+    }
+    budgetPeriodGeneration += 1
+    let generation = budgetPeriodGeneration
+    let epoch = sessionEpoch()
+    let result = await activity.fetchUsagePeriod(
+      from: range.from,
+      to: range.to,
+      timezone: key.timezone,
+      breakdown: false
+    )
+    guard generation == budgetPeriodGeneration, epoch == sessionEpoch(), isSignedIn() else {
+      return
+    }
+    switch result {
+    case .period(let response):
+      lastBudgetPeriodKey = key
+      lastPeriodSummaryETag = summaryETag
+      budgetPeriod = response
+      periodCache[key] = response
+      evaluateBudgetAlerts()
+    case .failure(.sessionExpired):
+      onSessionExpired()
+    case .failure(.notSignedIn):
+      onNotSignedIn()
+    case .failure:
+      if budgetPeriod == nil, let cached = periodCache[key] {
+        budgetPeriod = cached
+        lastBudgetPeriodKey = key
+        evaluateBudgetAlerts()
+      }
+    }
   }
 
   /// The selected period's rhythm, omitted for All, which has no first day.
@@ -333,6 +450,8 @@ final class UsageModel {
     guard changed else { return }
     Task { @MainActor in
       await loadActivity(force: true)
+      await loadPeriod(force: true)
+      await loadBudgetPeriod(force: true)
       await loadRhythm(force: true)
     }
   }
@@ -340,6 +459,44 @@ final class UsageModel {
   private var activityNeedsRevalidation: Bool {
     guard lastActivityToday != nil else { return false }
     return lastActivityToday != activityToday || lastActivitySummaryETag != summaryETag
+  }
+
+  private var periodNeedsRevalidation: Bool {
+    lastPeriodSummaryETag != summaryETag
+  }
+
+  private func currentPeriodKey(from: String, to: String, breakdown: Bool) -> PeriodLoadKey {
+    PeriodLoadKey(
+      from: from,
+      to: to,
+      timezone: TimeZone.current.identifier,
+      breakdown: breakdown
+    )
+  }
+
+  private func applyPeriod(
+    _ result: AccountPeriodResult,
+    key: PeriodLoadKey,
+    lastGood: AccountUsagePeriodResponse?
+  ) {
+    switch result {
+    case .period(let response):
+      periodCache[key] = response
+      lastPeriodKey = key
+      lastPeriodSummaryETag = summaryETag
+      periodRead = .loaded(response)
+    case .failure(.sessionExpired):
+      onSessionExpired()
+    case .failure(.notSignedIn):
+      onNotSignedIn()
+    case .failure:
+      if let lastGood {
+        lastPeriodKey = key
+        periodRead = .loaded(lastGood)
+      } else {
+        periodRead = .failed
+      }
+    }
   }
 
   private func applyActivity(_ result: AccountActivityResult, lastGood: [UsageActivityDay]?) {
@@ -419,13 +576,32 @@ final class UsageModel {
   #if DEBUG
     /// Fixture seam: pose chart/rhythm/day state without fetching.
     func pose(
-      chart: ActivityChartPhase = .idle,
-      rhythm: ActivityRhythmPhase = .idle,
-      daySheet: ActivityDaySheetState? = nil
+      chart: ActivityChartPhase? = nil,
+      rhythm: ActivityRhythmPhase? = nil,
+      daySheet: ActivityDaySheetState? = nil,
+      period: PeriodReadPhase? = nil,
+      budgetMonth: AccountUsagePeriodResponse? = nil
     ) {
-      activityChart = chart
-      activityRhythm = rhythm
-      activityDaySheet = daySheet
+      if let chart { activityChart = chart }
+      if let rhythm { activityRhythm = rhythm }
+      if let daySheet { activityDaySheet = daySheet }
+      if let period {
+        periodRead = period
+        if let response = period.response, let range = usagePeriodRange {
+          let key = currentPeriodKey(from: range.from, to: range.to, breakdown: true)
+          lastPeriodKey = key
+          lastPeriodSummaryETag = summaryETag
+          periodCache[key] = response
+        }
+      }
+      if let budgetMonth {
+        budgetPeriod = budgetMonth
+        if let range = UsagePeriodSelection.thisMonth.range(today: now()) {
+          let key = currentPeriodKey(from: range.from, to: range.to, breakdown: false)
+          lastBudgetPeriodKey = key
+          periodCache[key] = budgetMonth
+        }
+      }
     }
   #endif
 }
@@ -467,6 +643,28 @@ private struct RhythmLoadKey: Equatable {
   var to: String
   var today: String
   var etag: String?
+}
+
+struct PeriodLoadKey: Hashable, Sendable {
+  var from: String
+  var to: String
+  var timezone: String
+  var breakdown: Bool
+}
+
+enum PeriodReadPhase: Equatable, Sendable {
+  case idle
+  case loading
+  case loaded(AccountUsagePeriodResponse)
+  case refreshing(AccountUsagePeriodResponse)
+  case failed
+
+  var response: AccountUsagePeriodResponse? {
+    switch self {
+    case .loaded(let response), .refreshing(let response): return response
+    default: return nil
+    }
+  }
 }
 
 enum ActivityDayAgentsPhase: Equatable, Sendable {

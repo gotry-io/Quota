@@ -69,4 +69,61 @@ struct UsagePeriodSelectionTests {
     #expect(UsageDateText.days(from: "2026-09-01", to: "2026-09-01", calendar) == 1)
     #expect(UsageDateText.days(from: "2026-09-01", to: "2026-09-30", calendar) == 30)
   }
+
+  /// The app's preset ranges are the same local dates the period fixture names.
+  @Test func presetRangesEqualThePeriodFixture() throws {
+    let fixture = try PeriodFixture.load()
+    let testCase = try #require(fixture.cases.first { $0.name == "preset_equals_custom" })
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: testCase.timezone))
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let now = try #require(formatter.date(from: testCase.checkedAt))
+    let presets = try #require(testCase.summaryPresets)
+    #expect(presets.count == 3)
+    for preset in presets {
+      let selection: UsagePeriodSelection
+      switch preset.key {
+      case "today": selection = .today
+      case "last_7_days": selection = .last7Days
+      case "last_30_days": selection = .last30Days
+      default:
+        Issue.record("unexpected preset \(preset.key)")
+        continue
+      }
+      let range = try #require(selection.range(today: now, calendar: calendar))
+      #expect(range.from == preset.from, "\(preset.key)")
+      #expect(range.to == preset.to, "\(preset.key)")
+    }
+  }
+}
+
+private struct PeriodFixture: Decodable {
+  var cases: [Case]
+
+  struct Case: Decodable {
+    var name: String
+    var checkedAt: String
+    var timezone: String
+    var summaryPresets: [Preset]?
+  }
+
+  struct Preset: Decodable {
+    var key: String
+    var from: String
+    var to: String
+  }
+
+  static func load() throws -> PeriodFixture {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(PeriodFixture.self, from: Data(contentsOf: fixtureURL))
+  }
+
+  private static let fixtureURL = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("protocol/fixtures/usage-period-conformance.json")
 }

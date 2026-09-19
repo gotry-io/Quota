@@ -18,6 +18,7 @@ struct RelayClientTests {
         "/api/v2/account",
         "/api/v6/account/summary",
         "/api/v6/account/usage/activity",
+        "/api/v6/account/usage/period",
         "/api/v2/device/sync",
         "/api/v6/device/snapshots",
       ])
@@ -205,6 +206,103 @@ struct RelayClientTests {
         accessToken: Fixtures.accessToken,
         from: "2026-08-10",
         to: "not-a-date"
+      )
+    }
+    #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
+  func periodRequestEncodesLocalDatesTimezoneAndBreakdown() async throws {
+    let body = try Fixtures.accountUsagePeriodJSON(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      agents: []
+    )
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"period-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"period-one\""]),
+    ])
+    let client = RelayClient(transport: transport)
+
+    let first = try await client.fetchAccountUsagePeriod(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      breakdown: true,
+      accessToken: Fixtures.accessToken
+    )
+    guard case .modified(let period, let etag) = first else {
+      Issue.record("expected modified period, got \(first)")
+      return
+    }
+    #expect(period.request.from == "2026-08-26")
+    #expect(period.request.timezone == "Asia/Singapore")
+    #expect(period.days.map(\.date) == ["2026-08-26"])
+    #expect(etag == "\"period-one\"")
+
+    let second = try await client.fetchAccountUsagePeriod(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      breakdown: true,
+      accessToken: Fixtures.accessToken,
+      etag: "\"period-one\""
+    )
+    guard case .unchanged(let next) = second else {
+      Issue.record("expected unchanged, got \(second)")
+      return
+    }
+    #expect(next == "\"period-one\"")
+
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/api/v6/account/usage/period",
+        "/api/v6/account/usage/period",
+      ])
+    #expect(transport.recordedIfNoneMatch == [nil, "\"period-one\""])
+    let query = queryItems(transport.recordedURLs[0])
+    #expect(query.map(\.name) == ["from", "to", "timezone", "breakdown"])
+    #expect(Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") }) == [
+      "from": "2026-08-26",
+      "to": "2026-08-26",
+      "timezone": "Asia/Singapore",
+      "breakdown": "1",
+    ])
+  }
+
+  @Test
+  func periodOmitsBreakdownWhenFalse() async throws {
+    let body = try Fixtures.accountUsagePeriodJSON()
+    let transport = ScriptedTransport([.init(status: 200, body: body)])
+    let client = RelayClient(transport: transport)
+    _ = try await client.fetchAccountUsagePeriod(
+      from: "2026-08-02",
+      to: "2026-08-02",
+      timezone: "UTC",
+      accessToken: Fixtures.accessToken
+    )
+    #expect(queryItems(transport.recordedURLs[0]).map(\.name) == ["from", "to", "timezone"])
+  }
+
+  @Test
+  func periodRejectsInvalidQueryWithoutSending() async {
+    let transport = ScriptedTransport([])
+    let client = RelayClient(transport: transport)
+    await #expect(throws: RelayClientError.invalidQuery) {
+      _ = try await client.fetchAccountUsagePeriod(
+        from: "2026-8-10",
+        to: "2026-08-10",
+        timezone: "UTC",
+        accessToken: Fixtures.accessToken
+      )
+    }
+    await #expect(throws: RelayClientError.invalidQuery) {
+      _ = try await client.fetchAccountUsagePeriod(
+        from: "2026-08-10",
+        to: "2026-08-10",
+        timezone: "Not/AZone",
+        accessToken: Fixtures.accessToken
       )
     }
     #expect(transport.recordedURLs.isEmpty)

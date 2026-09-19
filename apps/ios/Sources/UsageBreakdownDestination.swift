@@ -11,17 +11,13 @@ struct UsageBreakdownDestination: View {
     List {
       if let period = model.usage.usagePeriodValue {
         secondaryCounts(period)
-        if model.usage.usagePeriodIsFolded {
-          foldedPeriod
-        } else {
-          let sections = UsageBreakdown.sections(in: period)
-          UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
-          UsageAgentListSections(
-            sections: sections,
-            periodTokens: period.totals.totalTokens,
-            expandedProviderIDs: $expandedProviderIDs
-          )
-        }
+        let sections = UsageBreakdown.sections(in: period)
+        UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
+        UsageAgentListSections(
+          sections: sections,
+          periodTokens: period.totals.totalTokens,
+          expandedProviderIDs: $expandedProviderIDs
+        )
       } else {
         Section {
           Text("No usage was reported for this period.")
@@ -127,15 +123,4 @@ struct UsageBreakdownDestination: View {
       .accessibilityIdentifier(identifier)
   }
 
-  private var foldedPeriod: some View {
-    Section {
-      Text(
-        "This range was added up on this iPhone, so it carries totals only. The model breakdown is on Today, Last 7 days, Last 30 days, and All."
-      )
-      .font(.body)
-      .foregroundStyle(Color.primary)
-      .fixedSize(horizontal: false, vertical: true)
-    }
-    .accessibilityIdentifier("usage.folded")
-  }
 }

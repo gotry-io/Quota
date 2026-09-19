@@ -379,48 +379,75 @@ struct UsageModelTests {
   struct UsageModelPeriodBudgetTests {
     private static let now = VisualFixture.referenceDate
 
-    private func loadedUsage(amountUSD: Decimal? = 50) -> UsageModel {
+    private func loadedUsage(
+      amountUSD: Decimal? = 50,
+      periodResults: [AccountPeriodResult] = []
+    ) -> (UsageModel, ScriptedActivityLoader, UsageHarness) {
       let defaults = UserDefaults(suiteName: "io.gotry.quota.usage-model-budget-test")!
       defaults.removePersistentDomain(forName: "io.gotry.quota.usage-model-budget-test")
       let store = UsageBudgetStore(defaults: defaults)
       store.save(UsageBudget(amountUSD: amountUSD, alerts: true))
       let harness = UsageHarness()
       let now = Self.now
-      let usage = harness.model(
-        loader: ScriptedActivityLoader(results: []),
-        budgetStore: store,
-        now: { now }
-      )
-      usage.accountSummaryAccepted(VisualFixtureContent.summary(at: now), etag: nil)
-      usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
-      return usage
+      let days = VisualFixtureContent.activityDays(ending: now)
+      let summary = VisualFixtureContent.summary(at: now)
+      let loader = ScriptedActivityLoader(results: [], periodResults: periodResults)
+      let usage = harness.model(loader: loader, budgetStore: store, now: { now })
+      usage.accountSummaryAccepted(summary, etag: "etag-1")
+      var period: PeriodReadPhase = .idle
+      var budget: AccountUsagePeriodResponse?
+      if let range = UsagePeriodSelection.last30Days.range(today: now) {
+        period = .loaded(
+          VisualFixtureContent.accountPeriodResponse(
+            from: range.from,
+            to: range.to,
+            usage: summary.usage.last30Days,
+            days: days
+          )
+        )
+      }
+      if let month = UsagePeriodSelection.thisMonth.range(today: now) {
+        budget = VisualFixtureContent.accountPeriodResponse(
+          from: month.from,
+          to: month.to,
+          usage: VisualFixtureContent.periodUsage(fromDays: days, from: month.from, to: month.to),
+          days: days
+        )
+      }
+      usage.pose(chart: .loaded(days), period: period, budgetMonth: budget)
+      return (usage, loader, harness)
     }
 
-    /// The four the summary folds are read; anything else is added up from the activity days.
     @Test
-    func readsTheSummaryForItsFourPeriodsAndFoldsTheRest() {
-      let usage = loadedUsage()
-      usage.usagePeriod = .today
-      #expect(!usage.usagePeriodIsFolded)
-      #expect(
-        usage.usagePeriodValue?.totals
-          == VisualFixtureContent.summary(at: Self.now).usage.today.totals)
+    func readsAllFromTheSummaryAndPresetsFromThePeriodRead() async {
+      let todayRange = UsagePeriodSelection.today.range(today: Self.now)!
+      let summary = VisualFixtureContent.summary(at: Self.now)
+      let todayBody = VisualFixtureContent.accountPeriodResponse(
+        from: todayRange.from,
+        to: todayRange.to,
+        usage: summary.usage.today,
+        days: VisualFixtureContent.activityDays(ending: Self.now)
+      )
+      let (usage, loader, harness) = loadedUsage(periodResults: [.period(todayBody)])
+      _ = harness
+      usage.selectUsagePeriod(.today)
+      await usage.loadPeriod()
+      #expect(usage.usagePeriodValue?.totals == summary.usage.today.totals)
+      #expect(usage.usagePeriodValue?.agents.isEmpty == false)
+      let calls = await loader.periodCalls
+      #expect(calls.count == 1)
+      #expect(calls[0].from == todayRange.from)
+      #expect(calls[0].to == todayRange.to)
+      #expect(calls[0].breakdown)
 
-      usage.usagePeriod = .thisMonth
-      #expect(usage.usagePeriodIsFolded)
-      guard let range = usage.usagePeriodRange else {
-        Issue.record("This month names a range")
-        return
-      }
-      let expected = UsageDayFold.period(usage.activityDays, from: range.from, to: range.to)
-      #expect(usage.usagePeriodValue?.totals == expected.totals)
-      // A folded period has no breakdown: a day carries agents only when asked for on its own.
-      #expect(usage.usagePeriodValue?.agents.isEmpty == true)
+      usage.selectUsagePeriod(.all)
+      #expect(usage.usagePeriodValue?.totals == summary.usage.all.totals)
     }
 
     @Test
     func stepsAWeekBackAndForwardAndStopsAtThisWeek() {
-      let usage = loadedUsage()
+      let (usage, _, harness) = loadedUsage()
+      _ = harness
       usage.usagePeriod = .thisWeek
       let thisWeek = usage.usagePeriodRange?.from
       usage.selectUsagePeriod(usage.usagePeriod.previous ?? .thisWeek)
@@ -432,18 +459,48 @@ struct UsageModelTests {
     }
 
     @Test
-    func aCustomRangeFoldsExactlyTheDaysItNames() {
-      let usage = loadedUsage()
-      let day = usage.activityToday
-      usage.selectUsagePeriod(.custom(from: day, to: day))
-      #expect(usage.usagePeriodIsFolded)
-      let expected = UsageDayFold.period(usage.activityDays, from: day, to: day)
-      #expect(usage.usagePeriodValue?.totals == expected.totals)
+    func aCustomRangeReadsThePeriodRoute() async {
+      let (usage, loader, harness) = loadedUsage(periodResults: [
+        .period(
+          VisualFixtureContent.accountPeriodResponse(
+            from: "2026-08-14",
+            to: "2026-08-14",
+            usage: VisualFixtureContent.summary(at: Self.now).usage.today,
+            days: VisualFixtureContent.activityDays(ending: Self.now)
+          )
+        )
+      ])
+      _ = harness
+      usage.selectUsagePeriod(.custom(from: "2026-08-14", to: "2026-08-14"))
+      await usage.loadPeriod()
+      #expect(usage.usagePeriodValue?.totals.totalTokens == 1_704_620)
+      let calls = await loader.periodCalls
+      #expect(calls.last?.from == "2026-08-14")
+      #expect(calls.last?.to == "2026-08-14")
     }
 
     @Test
-    func aBudgetMeasuresThisMonthAndNoBudgetMeasuresNothing() {
-      let usage = loadedUsage()
+    func truncatedCoverageFollowsThePeriodBody() async {
+      let todayRange = UsagePeriodSelection.today.range(today: Self.now)!
+      let summary = VisualFixtureContent.summary(at: Self.now)
+      let body = VisualFixtureContent.accountPeriodResponse(
+        from: todayRange.from,
+        to: todayRange.to,
+        usage: summary.usage.today,
+        days: VisualFixtureContent.activityDays(ending: Self.now),
+        truncatedByRetention: true
+      )
+      let (usage, _, harness) = loadedUsage(periodResults: [.period(body)])
+      _ = harness
+      usage.selectUsagePeriod(.today)
+      await usage.loadPeriod()
+      #expect(usage.usagePeriodTruncated)
+      #expect(usage.usagePeriodValue?.partial == summary.usage.today.partial)
+    }
+
+    @Test
+    func aBudgetMeasuresThisMonthFromThePeriodRead() {
+      let (usage, _, _) = loadedUsage()
       guard let progress = usage.budgetProgress else {
         Issue.record("A budget of $50 has progress")
         return
@@ -452,8 +509,74 @@ struct UsageModelTests {
       #expect(progress.percent >= 0)
       #expect(progress.text.contains("$50.00"))
 
-      let none = loadedUsage(amountUSD: nil)
+      let (none, _, _) = loadedUsage(amountUSD: nil)
       #expect(none.budgetProgress == nil)
+    }
+
+    @Test
+    func keepsTheLastPeriodOnError() async {
+      let todayRange = UsagePeriodSelection.today.range(today: Self.now)!
+      let summary = VisualFixtureContent.summary(at: Self.now)
+      let todayBody = VisualFixtureContent.accountPeriodResponse(
+        from: todayRange.from,
+        to: todayRange.to,
+        usage: summary.usage.today,
+        days: VisualFixtureContent.activityDays(ending: Self.now)
+      )
+      let (usage, _, harness) = loadedUsage(periodResults: [
+        .period(todayBody),
+        .failure(.relay(.unavailable)),
+      ])
+      _ = harness
+      usage.selectUsagePeriod(.today)
+      await usage.loadPeriod()
+      #expect(usage.usagePeriodValue?.totals == summary.usage.today.totals)
+      await usage.loadPeriod(force: true)
+      #expect(usage.usagePeriodValue?.totals == summary.usage.today.totals)
+    }
+
+    @Test
+    func anOlderPeriodRequestIsIgnoredAfterANewerOne() async {
+      let todayRange = UsagePeriodSelection.today.range(today: Self.now)!
+      let weekRange = UsagePeriodSelection.thisWeek.range(today: Self.now)!
+      let summary = VisualFixtureContent.summary(at: Self.now)
+      let days = VisualFixtureContent.activityDays(ending: Self.now)
+      let loader = GatedActivityLoader(
+        results: [],
+        periodResults: [
+          .period(
+            VisualFixtureContent.accountPeriodResponse(
+              from: todayRange.from,
+              to: todayRange.to,
+              usage: summary.usage.today,
+              days: days
+            )
+          ),
+          .period(
+            VisualFixtureContent.accountPeriodResponse(
+              from: weekRange.from,
+              to: weekRange.to,
+              usage: summary.usage.last7Days,
+              days: days
+            )
+          ),
+        ]
+      )
+      let harness = UsageHarness()
+      let now = Self.now
+      let usage = harness.model(loader: loader, now: { now })
+      usage.accountSummaryAccepted(summary, etag: nil)
+      usage.selectUsagePeriod(.today)
+      let first = Task { await usage.loadPeriod() }
+      await waitUntil { await loader.periodCalls.count == 1 }
+      usage.selectUsagePeriod(.thisWeek)
+      let second = Task { await usage.loadPeriod() }
+      await waitUntil { await loader.periodCalls.count == 2 }
+      await loader.release()
+      await first.value
+      await loader.release()
+      await second.value
+      #expect(usage.usagePeriodValue?.totals == summary.usage.last7Days.totals)
     }
   }
 #endif

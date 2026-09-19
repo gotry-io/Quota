@@ -105,13 +105,26 @@ actor GatedActivityLoader: ActivityLoading {
     var timeZone: String?
   }
 
+  struct PeriodCall: Equatable, Sendable {
+    var from: String
+    var to: String
+    var timezone: String
+    var breakdown: Bool
+  }
+
   private var results: [AccountActivityResult]
+  private var periodResults: [AccountPeriodResult]
   private(set) var calls: [Call] = []
+  private(set) var periodCalls: [PeriodCall] = []
   private var permits = 0
   private var waiting: [CheckedContinuation<Void, Never>] = []
 
-  init(results: [AccountActivityResult]) {
+  init(
+    results: [AccountActivityResult],
+    periodResults: [AccountPeriodResult] = []
+  ) {
     self.results = results
+    self.periodResults = periodResults
   }
 
   func release() {
@@ -138,6 +151,25 @@ actor GatedActivityLoader: ActivityLoading {
     }
     return results.isEmpty ? .failure(.relay(.unavailable)) : results.removeFirst()
   }
+
+  func fetchUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool
+  ) async -> AccountPeriodResult {
+    periodCalls.append(
+      PeriodCall(from: from, to: to, timezone: timezone, breakdown: breakdown))
+    if permits > 0 {
+      permits -= 1
+    } else {
+      await withCheckedContinuation { continuation in
+        waiting.append(continuation)
+      }
+    }
+    return periodResults.isEmpty
+      ? .failure(.relay(.unavailable)) : periodResults.removeFirst()
+  }
 }
 
 actor ScriptedActivityLoader: ActivityLoading {
@@ -148,11 +180,24 @@ actor ScriptedActivityLoader: ActivityLoading {
     var timeZone: String?
   }
 
-  private var results: [AccountActivityResult]
-  private(set) var calls: [Call] = []
+  struct PeriodCall: Equatable, Sendable {
+    var from: String
+    var to: String
+    var timezone: String
+    var breakdown: Bool
+  }
 
-  init(results: [AccountActivityResult]) {
+  private var results: [AccountActivityResult]
+  private var periodResults: [AccountPeriodResult]
+  private(set) var calls: [Call] = []
+  private(set) var periodCalls: [PeriodCall] = []
+
+  init(
+    results: [AccountActivityResult],
+    periodResults: [AccountPeriodResult] = []
+  ) {
     self.results = results
+    self.periodResults = periodResults
   }
 
   func fetchUsageActivity(
@@ -163,6 +208,18 @@ actor ScriptedActivityLoader: ActivityLoading {
   ) async -> AccountActivityResult {
     calls.append(Call(from: from, to: to, detail: detail, timeZone: timeZone))
     return results.isEmpty ? .failure(.relay(.unavailable)) : results.removeFirst()
+  }
+
+  func fetchUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool
+  ) async -> AccountPeriodResult {
+    periodCalls.append(
+      PeriodCall(from: from, to: to, timezone: timezone, breakdown: breakdown))
+    return periodResults.isEmpty
+      ? .failure(.relay(.unavailable)) : periodResults.removeFirst()
   }
 }
 

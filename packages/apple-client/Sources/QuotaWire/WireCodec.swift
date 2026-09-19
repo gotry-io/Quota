@@ -9,6 +9,11 @@ public enum WireCodec {
   /// One period's agent tree carries at most this many model leaves; a reader uses the same
   /// cap for an activity day's optional `agents` array.
   public static let maximumUsagePeriodLeaves = 200
+  /// Inclusive local days one Account period read may name. Mirrors the protocol bound.
+  public static let maximumUsagePeriodDays = 366
+  /// Hour-grid rule every local-date period names. See ADR 0055.
+  public static let usageHourGridRule =
+    "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
 
   public static func makeDecoder() -> JSONDecoder {
     let decoder = JSONDecoder()

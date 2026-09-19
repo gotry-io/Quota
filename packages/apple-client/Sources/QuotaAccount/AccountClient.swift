@@ -49,6 +49,18 @@ public enum AccountActivityResult: Equatable, Sendable {
   case failure(AccountClientError)
 }
 
+/// A period read's answer. Last-good on error is the caller's: this client keeps an ETag cache
+/// only so a matching 304 can return the body it already holds.
+public enum AccountPeriodResult: Equatable, Sendable {
+  case period(AccountUsagePeriodResponse)
+  case failure(AccountClientError)
+}
+
+private struct CachedAccountPeriod: Equatable, Sendable {
+  var etag: String
+  var period: AccountUsagePeriodResponse
+}
+
 public actor AccountClient {
   private let relay: RelayClient
   private let sessionStore: any AccountSessionStore
@@ -57,6 +69,8 @@ public actor AccountClient {
   private let now: @Sendable () -> Date
   private var refreshWaiters: [CheckedContinuation<AccountSession, Error>] = []
   private var isRefreshing = false
+  /// In-memory period bodies keyed by `from|to|timezone|breakdown`. A matching 304 answers from here.
+  private var periodCache: [String: CachedAccountPeriod] = [:]
 
   public init(
     relay: RelayClient = RelayClient(),
@@ -116,6 +130,7 @@ public actor AccountClient {
         device: device
       )
       let session = AccountSession(tokens)
+      periodCache.removeAll()
       try persist(session)
       return session
     } catch let error as RelayClientError {
@@ -139,6 +154,7 @@ public actor AccountClient {
         device: device
       )
       let session = AccountSession(tokens)
+      periodCache.removeAll()
       try persist(session)
       return session
     } catch let error as RelayClientError {
@@ -207,6 +223,49 @@ public actor AccountClient {
     }
   }
 
+  /// Reads one inclusive local-date range. Offers If-None-Match when this process already holds
+  /// that key. Does not write the summary cache.
+  public func fetchUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool = false
+  ) async -> AccountPeriodResult {
+    let key = Self.periodCacheKey(from: from, to: to, timezone: timezone, breakdown: breakdown)
+    let held = periodCache[key]
+    do {
+      let read = try await withAuthorizedSession { session in
+        try await relay.fetchAccountUsagePeriod(
+          from: from,
+          to: to,
+          timezone: timezone,
+          breakdown: breakdown,
+          accessToken: session.accessToken,
+          etag: held?.etag
+        )
+      }
+      switch read {
+      case .modified(let period, let etag):
+        if let etag {
+          periodCache[key] = CachedAccountPeriod(etag: etag, period: period)
+        }
+        return .period(period)
+      case .unchanged(let etag):
+        guard let held else { return .failure(.relay(.invalidResponse)) }
+        if let etag {
+          periodCache[key] = CachedAccountPeriod(etag: etag, period: held.period)
+        }
+        return .period(held.period)
+      }
+    } catch let error as AccountClientError {
+      return .failure(error)
+    } catch let error as RelayClientError {
+      return .failure(AccountClientError(error))
+    } catch {
+      return .failure(.relay(.unavailable))
+    }
+  }
+
   /// Reads UTC activity days. Does not write the summary cache.
   public func fetchUsageActivity(
     from: String,
@@ -266,10 +325,12 @@ public actor AccountClient {
     guard let cached else { return nil }
     guard let session = try sessionStore.load() else {
       try? summaryStore.clear()
+      periodCache.removeAll()
       return nil
     }
     guard cached.summary.account.accountID == session.accountID else {
       try? summaryStore.clear()
+      periodCache.removeAll()
       return nil
     }
     return cached
@@ -292,9 +353,15 @@ public actor AccountClient {
     let refreshToken = try? sessionStore.load()?.refreshToken
     try? sessionStore.clear()
     try? summaryStore.clear()
+    periodCache.removeAll()
     if let refreshToken {
       try? await relay.revokeSession(refreshToken: refreshToken)
     }
+  }
+
+  static func periodCacheKey(from: String, to: String, timezone: String, breakdown: Bool) -> String
+  {
+    "\(from)|\(to)|\(timezone)|\(breakdown ? "1" : "0")"
   }
 
   /// The summary this read leaves current, and the validator it is current at.
@@ -402,10 +469,12 @@ public actor AccountClient {
     } catch RelayClientError.invalidGrant {
       try? sessionStore.clear()
       try? summaryStore.clear()
+      periodCache.removeAll()
       throw AccountClientError.sessionExpired
     } catch RelayClientError.unauthorized {
       try? sessionStore.clear()
       try? summaryStore.clear()
+      periodCache.removeAll()
       throw AccountClientError.sessionExpired
     } catch let error as RelayClientError {
       throw AccountClientError(error)

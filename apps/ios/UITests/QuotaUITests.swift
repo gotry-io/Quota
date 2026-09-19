@@ -881,6 +881,48 @@ final class QuotaUITests: XCTestCase {
     try audit(app)
   }
 
+  func testUsagePeriodLocalDateScreenshots() throws {
+    let app = launch(fixture: "content")
+    app.tabBars.buttons["Usage"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
+      "usage.root"
+    )
+    selectLast30DaysIfNeeded(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline"
+    )
+    attachScreenshot(app, name: "usage-content")
+
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    period.tap()
+    let todayItem = app.buttons["Today"].firstMatch
+    XCTAssertTrue(todayItem.waitForExistence(timeout: 5), "Today in the period menu")
+    todayItem.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline on Today"
+    )
+    attachScreenshot(app, name: "usage-today")
+
+    let custom = app.descendants(matching: .any)["usage.period.custom"].firstMatch
+    XCTAssertTrue(custom.waitForExistence(timeout: 5), "Custom range")
+    custom.tap()
+    XCTAssertTrue(
+      app.navigationBars["Custom range"].waitForExistence(timeout: 5),
+      "Custom range sheet"
+    )
+    let apply = app.buttons["Apply"].firstMatch
+    XCTAssertTrue(apply.waitForExistence(timeout: 5), "Apply")
+    apply.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
+      "usage.root after custom apply"
+    )
+    attachScreenshot(app, name: "usage-custom")
+  }
+
   func testUsageOpensActivityPatternsAndReturns() throws {
     let app = launch(fixture: "content")
     app.tabBars.buttons["Usage"].tap()
@@ -1904,6 +1946,18 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
     label: "", rule: "dynamic-type-usage.day.retry"),
   // Inner StaticText of combined B4b rows. iOS 26.3 still reports partial
   // Dynamic Type after ViewThatFits, fixedSize, and accessibilityHidden.
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "overview.remaining",
+    label: "", rule: "dynamic-type-overview.remaining"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "",
+    label: "Claude Code", rule: "dynamic-type-overview-claude-code"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "",
+    label: "Team workspace", rule: "dynamic-type-overview-team-workspace"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "",
+    label: "Max", rule: "dynamic-type-overview-max"),
   .init(
     type: "dynamic-type", screen: "usage.root", identifier: "usage.budget",
     label: "", rule: "dynamic-type-usage.budget"),

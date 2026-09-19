@@ -707,4 +707,75 @@ struct AccountClientTests {
         "/oauth/v2/token",
       ])
   }
+
+  @Test
+  func offersTheLastPeriodETagBackAndReturnsTheCachedBodyOn304() async throws {
+    let body = try Fixtures.accountUsagePeriodJSON(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      totals: Fixtures.summaryTotals(input: 2_000, output: 400)
+    )
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"period-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"period-one\""]),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-26T02:00:00Z") }
+    )
+
+    let first = await client.fetchUsagePeriod(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      breakdown: true
+    )
+    guard case .period(let period) = first else {
+      Issue.record("expected period, got \(first)")
+      return
+    }
+    #expect(period.totals.totalTokens == 2_400)
+    #expect(period.coverage.truncatedByRetention == false)
+
+    let second = await client.fetchUsagePeriod(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      breakdown: true
+    )
+    guard case .period(let again) = second else {
+      Issue.record("expected cached period, got \(second)")
+      return
+    }
+    #expect(again.totals.totalTokens == 2_400)
+    #expect(transport.recordedIfNoneMatch == [nil, "\"period-one\""])
+    #expect(transport.recordedURLs.map(\.path) == [
+      "/api/v6/account/usage/period",
+      "/api/v6/account/usage/period",
+    ])
+  }
+
+  @Test
+  func aPeriodErrorDoesNotInventABody() async throws {
+    let transport = ScriptedTransport([
+      .init(status: 503, body: try Fixtures.errorBody(code: "unavailable"))
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let result = await client.fetchUsagePeriod(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "UTC"
+    )
+    guard case .failure(.relay(.unavailable)) = result else {
+      Issue.record("expected failure, got \(result)")
+      return
+    }
+  }
 }

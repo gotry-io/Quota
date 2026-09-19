@@ -8,6 +8,8 @@
   answers an additive local-date period read. The website reads that route for every Usage
   selection except `all`, and for the budget month. Quota iOS still folds UTC activity days until
   it switches.
+- Updated 2026-09-20 (Quota iOS Account): Quota iOS reads that route for every Usage selection
+  except `all`, and for the budget month. The UTC-day fold is gone.
 - Updated 2026-09-19 (QuotaBar Account): QuotaBar no longer refuses a non-summary period on
   Account. `usage_period` now names `source` (`local` | `account`) and, for Account, the caller's
   IANA timezone; Account answers from Relay's period read. The monthly budget stays this Mac's
@@ -33,9 +35,10 @@ not something another device of theirs needs to agree about.
 
 ## Decision
 
-**A period outside the four is folded by whoever already holds its days, and no new period is
-folded for anyone who did not ask.** The website and Quota iOS add the activity days up in the
-client. QuotaBar asks the service for one range at a time over the IPC operation
+**A period outside the four is answered by whoever already holds its days, and no new period is
+folded for anyone who did not ask.** The website and Quota iOS read Relay's local-date period
+route for every Usage selection except `all`, and for the budget month. QuotaBar asks the service
+for one range at a time over the IPC operation
 `usage_period { from, to, source, timezone }` — two inclusive local dates, at most 366 days.
 This Mac folds stored hours and the catalogs the device already holds, collecting nothing and
 reaching no network. Account is the Relay period read in
@@ -43,14 +46,11 @@ reaching no network. Account is the Relay period read in
 route is that later amendment; this decision's original "Relay gains no route" sentence does not
 describe today's Account path.
 
-The fold is one rule with one statement, `packages/protocol/fixtures/usage-day-fold-conformance.json`:
-totals add, cost outcomes add and then reach the verdict one row reaches, two days priced against
-different catalog revisions name no revision, and a period is partial exactly when one of its days
-is. A day carries no agent tree unless it was asked for on its own, so a folded period carries
-totals and cost and says so rather than showing an empty breakdown. On Account, a period the
-summary does not carry is the same Relay local-date read the website already uses; QuotaBar does
-not fold UTC activity days. The sentence that QuotaBar refuses the question on Account is
-superseded by [ADR 0055](0055-an-account-period-is-a-local-date-range.md) as of 2026-09-19.
+The UTC-day fold that used to add activity days in the client is gone. On Account, a period the
+summary does not carry is the same Relay local-date read the website and Quota iOS already use;
+QuotaBar does not fold UTC activity days. The sentence that QuotaBar refuses the question on
+Account is superseded by [ADR 0055](0055-an-account-period-is-a-local-date-range.md) as of
+2026-09-19. The sentence that Quota iOS folds UTC activity days is superseded as of 2026-09-20.
 
 **The monthly budget is a device preference and is never uploaded.** One amount in whole US dollars
 and one alert switch, in `UserDefaults` on Apple and `localStorage` on the website. Crossing 80%
@@ -60,15 +60,12 @@ stated in `budget_cases` of `packages/protocol/fixtures/alert-transition-conform
 
 ## Consequences
 
-A period the client folds costs one activity read that had already happened, and a period QuotaBar
+A period the website or Quota iOS asks is one Relay period read, and a period QuotaBar
 folds costs one SQL pass over hours that are already indexed; neither costs D1 a row. A state
 change invalidates the folds QuotaBar asked for, because the hours behind them moved.
 
-Client-side folding is a second implementation of an addition Relay also performs, which is why the
-conformance fixture exists: three runtimes answer it, so one of them drifting is a test failure
-rather than a discrepancy someone notices in a number. The 366-day bound on `usage_period` is the
-local mirror of the 400-day bound the activity read already carries; a range wider than a year and
-a leap day is refused rather than answered slowly.
+The 366-day bound on `usage_period` is the local mirror of the 400-day bound the activity read
+already carries; a range wider than a year and a leap day is refused rather than answered slowly.
 
 Because no managed store names a budget, a budget does not follow someone to a second device, and
 signing out does not clear it. That is the cost of not turning a preference into an account fact.

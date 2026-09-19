@@ -282,12 +282,9 @@ reaches no network. Account (`source: account`) is Relay's
 `GET /api/v6/account/usage/period` in the caller's IANA timezone, mapped to that same detail
 shape plus coverage
 ([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). A state change discards the
-folds QuotaBar asked for, because the hours behind them moved. The website reads that
+folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS read that
 route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
-for week / month / custom. Quota iOS still adds a
-custom period up from the UTC daily totals the activity read already gave it, and that fold is
-`packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
-period folded from days carries totals and cost with no model breakdown.
+for week / month / custom. The year Activity heatmap still reads UTC activity days.
 
 The monthly spend budget is a device preference and is never uploaded: it is one amount and one
 alert switch in `UserDefaults` on Apple and `localStorage` on the website, evaluated against the

@@ -665,6 +665,8 @@ final class AppModel {
     if isForeground {
       await startProviderStatusPolling()
       await usage.loadActivity(force: true)
+      await usage.loadPeriod(force: true)
+      await usage.loadBudgetPeriod(force: true)
       await usage.loadRhythm(force: true)
     } else {
       stopProviderStatusPolling()

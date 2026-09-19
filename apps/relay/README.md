@@ -61,11 +61,9 @@ The v6 data contract is five routes
 
 The four periods in a summary are the four every client opens on. Any other period a Usage page
 offers — a week, a month, a range someone picked — is the same local-date window the period read
-answers. Until clients switch onto that read, they still add UTC activity days up, which is why
-the activity read remains a range of UTC dates. A day on that activity read carries no agent tree
-unless it was asked for on its own, so a client-folded period carries totals and cost only. That
-fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
-website and both Apple apps answer that file. A synthetic rollup-plus-boundary period query
+answers. The website and Quota iOS read that route for every Usage selection except `all`, and for
+the budget month. QuotaBar Account reads it for week / month / custom. The activity read remains a
+range of UTC dates for the year heatmap. A synthetic rollup-plus-boundary period query
 benchmark lives at [`bench/period-query.bench.ts`](./bench/period-query.bench.ts) and is not part of
 `pnpm test`.
 
