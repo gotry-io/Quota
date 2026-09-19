@@ -532,13 +532,7 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["devices.row"].firstMatch.exists,
       "devices.row"
     )
-    let back = app.navigationBars.buttons["Settings"]
-    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
-    back.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 5),
-      "settings.root after back"
-    )
+    popBack(app, to: "settings.root", backTitle: "Settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.devices"].waitForExistence(timeout: 5),
       "settings.devices after back"
@@ -1122,10 +1116,22 @@ final class QuotaUITests: XCTestCase {
     )
   }
 
+  /// Pops one navigation level and waits for `root`. A back tap that lands mid-transition can be
+  /// dropped by the iOS 26 bar; tap once more while the back button is still there before calling
+  /// the destination missing.
+  private func popBack(_ app: XCUIApplication, to root: String, backTitle: String) {
+    let back = app.navigationBars.buttons[backTitle]
+    let target = app.descendants(matching: .any)[root]
+    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to \(backTitle)")
+    for _ in 0..<2 where !target.exists {
+      if back.exists { back.tap() }
+      _ = target.waitForExistence(timeout: 5)
+    }
+    XCTAssertTrue(target.exists, "\(root) after back")
+  }
+
   private func popSettingsDestination(_ app: XCUIApplication) {
-    let back = app.navigationBars.buttons["Settings"]
-    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
-    back.tap()
+    popBack(app, to: "settings.root", backTitle: "Settings")
     let logout = app.descendants(matching: .any)["settings.logout"]
     if !logout.waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "settings.logout", attempts: 12)

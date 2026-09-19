@@ -620,7 +620,10 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   await model.shutdown()
   let waited = ContinuousClock.now - started
 
-  #expect(waited < .seconds(2), "the quit waited on a helper that was never going to answer")
+  // The helper answers after 60 s; a quit that honours the 120 ms deadline returns long before
+  // that. The bound is loose on purpose: a loaded CI runner once took 2.4 s here, which is
+  // scheduling, not waiting on the helper.
+  #expect(waited < .seconds(10), "the quit waited on a helper that was never going to answer")
   let shutdowns = await record.count
   #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
 }
