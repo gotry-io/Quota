@@ -53,13 +53,16 @@ jobs:
           # The scripts that decide what CI runs and what a release tag may name.
           pnpm test:scripts
 
-      - name: Build the Relay Worker and website
+      - name: Build the Node Relay
         run: pnpm --filter @gotry-io/quota-relay build
 
-      - name: Run Relay tests on Node/SQLite
+      - name: Build the Relay Worker and website
+        run: pnpm --filter @gotry-io/quota-relay build:workers
+
+      - name: Run remaining Relay runtime suites
         run: |
           set -euo pipefail
-          pnpm --filter @gotry-io/quota-relay test:node
+          pnpm --filter @gotry-io/quota-relay test:workers
           pnpm --filter @gotry-io/quota-relay test:node:integration
 
   verify-web-e2e:

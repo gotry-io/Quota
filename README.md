@@ -120,6 +120,9 @@ pnpm build:menubar:app
 pnpm test:menubar:helper
 ```
 
+`pnpm dev:relay` runs the Node Relay against `apps/relay/data/relay.sqlite`. Workers remains
+`pnpm --filter @gotry-io/quota-relay dev:workers`.
+
 Pull requests reach main through a merge queue: `gh pr merge --auto` queues one when its checks
 pass, and the queue verifies it on top of main and whatever is ahead of it before merging, so a
 branch is never re-synced by hand (`AGENTS.md`, Development commands).
