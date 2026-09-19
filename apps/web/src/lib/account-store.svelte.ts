@@ -1,15 +1,22 @@
-import { getContext, setContext } from "svelte";
 import type {
   AccountSummaryRead,
+  AccountUsagePeriodResponseRead,
   UsageActivityDayRead,
   UsageHourOfDay,
 } from "@gotry-io/quota-protocol";
-import { type AccountError, fetchAccountActivity, fetchAccountSummary } from "./account-client.ts";
-import { accountActivityRange, browserTimezone } from "./account-reads.ts";
+import { getContext, setContext } from "svelte";
+import {
+  type AccountError,
+  fetchAccountActivity,
+  fetchAccountSummary,
+  fetchAccountUsagePeriod,
+} from "./account-client.ts";
+import { accountActivityRange, browserTimezone, usagePeriodResourceKey } from "./account-reads.ts";
 import { hashSelectorPreimage } from "./subscription-selector.ts";
 
 /**
- * One signed-in `/my` store: summary, activity by `from|to`, and per-day detail.
+ * One signed-in `/my` store: summary, activity by `from|to`, period by local range, and per-day
+ * detail.
  *
  * `ensure*` returns immediately when the read is younger than `maxAgeMs`, keeps the last
  * payload while a stale one revalidates, and joins an in-flight Promise for the same key.
@@ -30,6 +37,8 @@ const ACCOUNT_STORE = Symbol("account-store");
 export function activityRangeKey(range: { from: string; to: string }): string {
   return `${range.from}|${range.to}`;
 }
+
+export { usagePeriodResourceKey };
 
 export type UsageRhythmRead = {
   hours_of_day: UsageHourOfDay[];
@@ -54,12 +63,14 @@ export function createAccountStore() {
   let loadError = $state<AccountError | null>(null);
   let subscriptionSelectors = $state<Record<string, string>>({});
   let activity = $state<Record<string, AccountLoadResource<UsageActivityDayRead[]>>>({});
+  let period = $state<Record<string, AccountLoadResource<AccountUsagePeriodResponseRead>>>({});
   let dayDetail = $state<Record<string, AccountLoadResource<UsageActivityDayRead>>>({});
   let rhythm = $state<Record<string, AccountLoadResource<UsageRhythmRead>>>({});
   const selectorCache = new Map<string, string>();
 
   let summaryInflight: Promise<void> | null = null;
   const activityInflight = new Map<string, Promise<void>>();
+  const periodInflight = new Map<string, Promise<void>>();
   const dayInflight = new Map<string, Promise<void>>();
   const rhythmInflight = new Map<string, Promise<void>>();
 
@@ -157,6 +168,59 @@ export function createAccountStore() {
       return Promise.resolve();
     }
     const pull = pullActivity(range);
+    if (entry?.data !== null && entry?.data !== undefined) return Promise.resolve();
+    return pull;
+  }
+
+  function pullPeriod(range: { from: string; to: string }, breakdown: boolean): Promise<void> {
+    const timezone = browserTimezone();
+    const key = usagePeriodResourceKey({ ...range, timezone, breakdown });
+    const existing = periodInflight.get(key);
+    if (existing) return existing;
+    const current = period[key] ?? emptyResource<AccountUsagePeriodResponseRead>();
+    if (current.data === null) {
+      period = { ...period, [key]: { ...current, status: "loading" } };
+    }
+    const pull = (async () => {
+      const result = await fetchAccountUsagePeriod({ ...range, timezone, breakdown });
+      if (result.status === "ok") {
+        period = {
+          ...period,
+          [key]: {
+            data: result.period,
+            status: "ready",
+            fetchedAt: Date.now(),
+            error: null,
+          },
+        };
+        return;
+      }
+      const previous = period[key] ?? current;
+      period = {
+        ...period,
+        [key]: { ...previous, status: "error", error: result },
+      };
+    })().finally(() => {
+      periodInflight.delete(key);
+    });
+    periodInflight.set(key, pull);
+    return pull;
+  }
+
+  function ensurePeriod(
+    range: { from: string; to: string },
+    { breakdown = false, maxAgeMs = SUMMARY_MAX_AGE_MS } = {},
+  ): Promise<void> {
+    const key = usagePeriodResourceKey({
+      ...range,
+      timezone: browserTimezone(),
+      breakdown,
+    });
+    const entry = period[key];
+    if (entry !== undefined && entry.data !== null && isFresh(entry.fetchedAt, maxAgeMs)) {
+      return Promise.resolve();
+    }
+    const pull = pullPeriod(range, breakdown);
     if (entry?.data !== null && entry?.data !== undefined) return Promise.resolve();
     return pull;
   }
@@ -302,6 +366,9 @@ export function createAccountStore() {
     get activity() {
       return activity;
     },
+    get period() {
+      return period;
+    },
     get dayDetail() {
       return dayDetail;
     },
@@ -310,6 +377,7 @@ export function createAccountStore() {
     },
     ensureSummary,
     ensureActivity,
+    ensurePeriod,
     ensureDay,
     ensureRhythm,
     refresh,

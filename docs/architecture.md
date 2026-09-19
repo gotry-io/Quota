@@ -279,9 +279,9 @@ at most 366 days and answers with the same local report shape, folded against th
 device already holds; it collects nothing and reaches no network. A state change discards the
 folds QuotaBar asked for, because the hours behind them moved. Relay answers the same local-date
 window for Account as `GET /api/v6/account/usage/period`
-([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). Until clients switch onto
-that read, the website and Quota iOS still add a custom period up from the UTC daily totals the
-activity read already gave them, and that fold is
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). The website reads that
+route for every Usage selection except `all`, and for the budget month. Quota iOS still adds a
+custom period up from the UTC daily totals the activity read already gave it, and that fold is
 `packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
 period folded from days carries totals and cost with no model breakdown.
 
@@ -437,7 +437,8 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 - `packages/design-tokens/tokens.json` is the only hand-edited colour, remaining-quota band,
   spacing, and radius source. Generation writes web CSS custom properties, web TypeScript
   thresholds, and Foundation-only Swift in `QuotaPresentation`. Apple system-colour mappings and
-  the card-radius 20 override live in that file; they are not a second palette.
+  the card-radius 20 override live in that file; they are not a second palette. What those
+  colours mean, and the copy every client prints, live in [`design.md`](design.md).
 - `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
   OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` is its only
   entry point and adds only process startup and IPC lifetime around it.

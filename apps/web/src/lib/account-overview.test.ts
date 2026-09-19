@@ -7,6 +7,7 @@ import {
   meterTone,
   meterToneForUsedPercent,
   providerMarkHue,
+  quotaMeterName,
   subscriptionCardMeta,
   topUsageModel,
   usageStatusLine,
@@ -62,6 +63,11 @@ it("classifies remaining-quota meter thresholds", () => {
   expect(meterTone(0)).toBe("critical");
   expect(meterToneForUsedPercent(32)).toBe("good");
   expect(remainingPercent(32)).toBe(68);
+});
+
+it("names a remaining-quota meter from the window title and remaining figure", () => {
+  expect(quotaMeterName("Weekly", "84%")).toBe("Weekly 84%");
+  expect(quotaMeterName("Included", "$12.50 of $40.00")).toBe("Included $12.50 of $40.00");
 });
 
 it("hashes a provider id to a stable hue", () => {
@@ -148,6 +154,12 @@ it("names latest quota freshness from subscriptions, not device heartbeats", () 
   expect(subscriptionCardMeta("Studio Mac", "2026-08-12T09:39:00Z")).toBe("Studio Mac · 1m ago");
   expect(usageStatusLine("30 Days", false)).toBe("30 Days");
   expect(usageStatusLine("Today", true)).toBe("Today · some hours incomplete");
+  expect(usageStatusLine("Last 30 days", false, true)).toBe(
+    "Last 30 days · some of this range is no longer kept",
+  );
+  expect(usageStatusLine("Custom range", true, true)).toBe(
+    "Custom range · some hours incomplete · some of this range is no longer kept",
+  );
 });
 
 it("selects a never-reporting device as the worst in either input order", () => {

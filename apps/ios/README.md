@@ -30,7 +30,8 @@ attempt it is still holding before ending the sheet.
 device with `intent: link`. Every other bind, and every unbind, opens
 `https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings` in the browser: binding writes to an
 Account, and unbinding is a destructive change the website asks for a recent sign-in before
-allowing. UI behaviour is canonical in [`DESIGN.md`](DESIGN.md).
+allowing. Shared visual language is in [`docs/design.md`](../../docs/design.md); iOS platform
+deltas are in [`DESIGN.md`](DESIGN.md).
 
 ## Runtime boundary
 
@@ -86,7 +87,8 @@ leaves no mark. A successful read moves that session's `lastValidatedAt`, which 
 [ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
-requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
+requirements are in [`docs/security.md`](../../docs/security.md), shared visual language is in
+[`docs/design.md`](../../docs/design.md), and iOS platform deltas are in
 [`DESIGN.md`](DESIGN.md).
 
 ## App Group and signing
@@ -168,7 +170,13 @@ connect-error / expired / loading fixtures, the inline GitHub account confirmati
 hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
 Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
 Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
-unnamed clipping skip and no whole-type contrast skip. Log Out and Delete Account sit on the
+unnamed clipping skip and no whole-type contrast skip. Each screen audit attaches
+`audit-outcome.<screen>` JSON with one outcome per type — `passed`, `confirmed` (same finding on
+two passes), `unconfirmed` (first pass only), or `incomplete` (timed out) — plus exempted counts
+and the raw first- and second-pass findings, including nil-element and exempted issues. Confirmed
+non-contrast findings still fail the test; contrast never gates; incomplete does not fail.
+`scripts/ios-ui-audit-summary.mjs` prints those outcomes from an `.xcresult` (CI
+`verify-ios-ui` appends it to the job summary). Log Out and Delete Account sit on the
 Settings hub. Delete Account starts on the website. `testLargeTypeScreenshots` always runs at
 `accessibilityExtraLarge` (CI's `verify-ios-ui` included) and opens **View day**, Settings › About,
 hub Log Out after a pop, and a connected Providers session so a below-the-fold regression fails

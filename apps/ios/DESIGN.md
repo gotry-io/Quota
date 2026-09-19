@@ -1,42 +1,34 @@
 # Quota iOS Design
 
-This file is the canonical visual and interaction specification for the native iOS Quota app and its
-WidgetKit surfaces. Website marketing UI belongs in `apps/web/DESIGN.md`. QuotaBar's menu panel
-belongs in `apps/menubar/DESIGN.md`.
+This file lists only Quota iOS platform deltas and links [`docs/design.md`](../../docs/design.md).
+
+Quota on iPhone is a native iOS 26 quota instrument. Website marketing UI belongs in
+[`apps/web/DESIGN.md`](../web/DESIGN.md). QuotaBar belongs in
+[`apps/menubar/DESIGN.md`](../menubar/DESIGN.md).
 
 ## Product character
 
-Quota on iPhone is a native iOS 26 quota instrument: remaining quota first, Today Usage second,
-collection/setup and account-management support third. It reads the providers it is signed in to on
-this device and, when there is a Quota account, what QuotaBar reports from the Macs; Overview is
-those merged, not two lists. Liquid Glass belongs to the system navigation and control layer. Quota data, settings rows, status text, meters, charts, and
+It reads the providers it is signed in to on this device and, when there is a Quota account, what
+QuotaBar reports from the Macs; Overview is those merged, not two lists. Liquid Glass belongs to
+the system navigation and control layer. Quota data, settings rows, status text, meters, charts, and
 empty-state explanations are content and do not use glass. It is not a compressed website and not
 the QuotaBar menu panel.
 
-Core rules:
+Connect with GitHub, Continue with Apple, and Log Out are the only account actions this device
+performs. Delete Account starts on the website after a fresh sign-in. Signing in is an invitation
+inside the app, never a wall in front of it: without an account the tabs still open on whatever
+this phone read for itself. Views render typed `packages/apple-client` results. They never show
+tokens, opaque session material, raw JSON, or device identifiers. Every control is VoiceOver
+labelled and usable with Dynamic Type, Reduce Motion, Reduce Transparency, and light or dark
+appearance. System controls handle Reduce Transparency; the app does not simulate transparency.
+Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
+invent a second data path.
 
-1. Remaining quota is the primary value. Today tokens and API-equivalent cost support it.
-2. Connect with GitHub, Continue with Apple, and Log Out are the only account actions this device
-   performs. Delete Account starts on the website after a fresh sign-in. Signing in is an
-   invitation inside the app, never a wall in front of it: without an account the tabs still
-   open on whatever this phone read for itself.
-3. Last-good Account data stays visible across transient failures. A status line states that in
-   words, not color alone.
-8. Views render typed `packages/apple-client` results. They never show tokens, opaque session
-   material, raw JSON, or device identifiers.
-5. Every control is VoiceOver labelled and usable with Dynamic Type, Reduce Motion, Reduce
-   Transparency, and light or dark appearance. System controls handle Reduce Transparency; the app
-   does not simulate transparency.
-6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
-   invent a second data path.
-
-## Tokens
-
-Colour roles, remaining-quota bands, spacing, and radii come from
+Copy, remaining, reset, pace, freshness, periods, and Devices vocabulary:
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). Colour and Apple
+overrides: [`docs/design.md`](../../docs/design.md#colour) and
 [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
-`QuotaBrand`, `QuotaTone`, and `QuotaTheme` read the generated Swift. iOS maps
-`text.primary` / `text.meta` to system labels, overrides light `text.secondary` for
-contrast, and uses card radius 20.
+`QuotaBrand`, `QuotaTone`, and `QuotaTheme` read the generated Swift.
 
 ## Design system
 
@@ -49,19 +41,11 @@ Layout (`QuotaDesign.Layout`): card corner radius 20 continuous, card padding 16
 tile minimum width 140, identity avatar 44, Settings row icon 28, device symbol 28, About mark 64,
 Connect mark 72.
 
-Type (`QuotaDesign.Typography`) scales with Dynamic Type:
-
-| Role | Font |
-| --- | --- |
-| `statValue` | rounded `largeTitle` semibold, monospaced digits |
-| `remainingValue` | rounded `title` semibold, monospaced digits |
-| `cardTitle` | `headline` |
-| `support` | `subheadline` |
-| `meta` | `footnote` |
-| `sectionTitle` | `title3` semibold |
-
-Supporting copy may be `QuotaTheme.secondary` at `subheadline` and larger. `footnote` / `caption` metadata
-stays `.primary`.
+Type roles are in [`docs/design.md`](../../docs/design.md#type). `QuotaDesign.Typography` maps
+them: `statValue` is rounded `largeTitle` semibold (Usage tiles), `remainingValue` is rounded
+`title` semibold, `cardTitle` is `headline`, `support` is `subheadline`, `meta` is `footnote`,
+`sectionTitle` is `title3` semibold. Supporting copy may be `QuotaTheme.secondary` at
+`subheadline` and larger. `footnote` / `caption` metadata stays `.primary`.
 
 `QuotaCard` is the content card: `secondarySystemGroupedBackground`, 20-point continuous corners,
 16-point padding, optional `cardTitle` above the content, optional leading SF Symbol, optional
@@ -74,10 +58,10 @@ element. `QuotaStatGrid` lays tiles in two columns and falls back to one column 
 sizes.
 
 `QuotaMeter` is a capsule track (`QuotaTheme.meterTrack`) whose fill is
-`QuotaTheme.color(for: QuotaTone.remaining(percent:))` — healthy at or above 40 remaining, warning
-at or above 15, otherwise critical — or a caller-supplied `QuotaTone` when the bar is spend, not
-remaining. Height 8 by default, 4 on compact Overview windows. Hidden from VoiceOver; the window's
-remaining figure is the spoken value. `QuotaTheme.emerald` remains the accent and the healthy fill.
+`QuotaTheme.color(for: QuotaTone.remaining(percent:))`, or a caller-supplied `QuotaTone` when the
+bar is spend, not remaining. Height 8 by default, 4 on compact Overview windows. Hidden from
+VoiceOver; the window's remaining figure is the spoken value. `QuotaTheme.emerald` remains the
+accent and the healthy fill.
 
 `ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows and 40
 points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. `QuotaMark`
@@ -87,22 +71,10 @@ is the Quota `quota.svg` asset from the same catalog. Widget extensions do not l
 for Settings hub rows. `QuotaIdentityAvatar` is a 44-point circle with the first letter of an
 account label in white on brand emerald (`QuotaBrand.emerald`), shared by Settings and Confirm.
 
-## Shared product vocabulary
-
-Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
-**Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`, reset copy is
-`packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
-`packages/protocol/fixtures/remaining-copy-conformance.json`, which
-`packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
-`FreshnessCopy` and `RemainingQuotaFormat` and never assemble their own. A window's pace prints under its support line in
-`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise:
-glance surfaces print **Expected to last until reset** or **May run out about 2h before reset**, and
-subscription detail adds the even-pace explanation under that headline. There is no Rust on iOS, so
-the app derives it with `QuotaPace` from the reading it already holds, answering
-`packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
-belongs to the number. Local remaining-quota alerts answer
-`packages/protocol/fixtures/alert-transition-conformance.json`; both Apple apps evaluate that file
+The app and its widgets compose shared phrases through `FreshnessCopy` and `RemainingQuotaFormat`
+and never assemble their own. There is no Rust on iOS, so the app derives pace with `QuotaPace`
+from the reading it already holds. Widgets show no pace: the space belongs to the number. Local
+remaining-quota alerts answer `packages/protocol/fixtures/alert-transition-conformance.json`
 through `QuotaAlerts`, including the pace warning Settings can turn off.
 
 ## Surfaces
@@ -416,7 +388,7 @@ Body, in order:
 
 1. A `QuotaCard` at the top with the segmented period control and the stepper. Segments are
    **Day**, **Week**, **Month**, **7D**, **30D**, and **All**, whose VoiceOver names are the full
-   ones in Shared product vocabulary. Default is **Last 30 days**. A custom range selects none of
+   ones in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). Default is **Last 30 days**. A custom range selects none of
    the six, so the control shows nothing selected. The selection lives in memory for the signed-in
    session. It is a system content filter, not a floating navigation action, and it scrolls with
    the List. The stepper is a **Previous period** chevron, the range the period covers in
@@ -453,7 +425,7 @@ Body, in order:
    is one emerald fill. Tokens bars use the brand ramp: cached input
    `QuotaTheme.cachedFill`, fresh input `QuotaTheme.emerald`, output
    `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
-   bar** in Shared product vocabulary. A caption legend of three 8pt squares (Cached, Fresh, Output)
+   bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). A caption legend of three 8pt squares (Cached, Fresh, Output)
    sits above the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
    as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
    section footer names the calendar: **UTC days.** The All period has no Daily section.
@@ -786,8 +758,7 @@ Signed-in tabs use the system grouped background supplied by List/Form. Overview
 detail, and Devices are inset-grouped Lists. There is no root background modifier and no ambient
 wash. Settings is a compact hub Form; Notifications, Appearance, About, and the identity card's
 Sign-in methods page are pushed destination Forms with the same system background. Type roles are
-`QuotaDesign.Typography`: `remainingValue` for a window's remaining figure, `cardTitle` for
-provider names, `support` for window titles, `meta` for reset and pace. Connect content is a
+`QuotaDesign.Typography` as mapped above. Connect content is a
 320-point column. Each Overview subscription and each subscription-detail window, Today block, and
 Readings block sits in a `QuotaCard`. `ProviderQuotaRow` and `QuotaWindowBlock` are content only: no
 padding, corner, stroke, shadow, material, or glass of their own. The Overview provider mark is 22
@@ -803,12 +774,12 @@ and model rows; do not clip remaining values. Heatmap cells stay 14-point shapes
 month labels on that grid use `caption` / `caption2`, keep the full month abbreviation, and cap
 at `DynamicTypeSize.large` with the grid so they stay aligned at accessibility sizes.
 Accessibility text sizes and widget no-data
-layouts must keep the strongest remaining figure readable (`minimumScaleFactor` is preferred over
-truncation of the primary value).
+layouts must keep the strongest remaining figure readable; never shrink essential numbers as the
+primary escape ([Type](../../docs/design.md#type)).
 
-The accent is adaptive emerald (`#087456` light, `#82ddb8` dark, `QuotaBrand`). Ink, body, and mute
-follow `Color.primary` / `Color.secondary` / tertiary label. Critical red is only for Log Out, Delete Account, their
-confirmations, and unrecoverable failure copy.
+The accent is `QuotaBrand`. Ink, body, and mute follow `Color.primary` / `Color.secondary` /
+tertiary label. Critical red is only for Log Out, Delete Account, their confirmations, and
+unrecoverable failure copy.
 
 Widgets stay denser: `title2` / `title3` / `headline` for remaining, `subheadline` / `caption` for
 provider and support, and no custom card chrome beyond the system widget container.
@@ -843,14 +814,19 @@ provider and support, and no custom card chrome beyond the system widget contain
   still runs on every fixture screen and gates every type except contrast: the iOS 26
   pixel-sampling contrast pass persistently reports low contrast on system label colour, which
   is not low contrast.
-- Unnamed glass (`issue.element == nil`) is ignored. The iOS 26 auditor still reports Dynamic Type
-  "partially unsupported" twice on system list configuration and on inner text of scaling fonts
-  (`section.header.` / `section.footer.`, `overview.today` / `overview.subscription` tiles,
-  app-owned identifiers, Form labels, the sheet **Done** button); clipping on
-  `usage.activity.empty` also reproduces. Those stay. Unconfirmed (once-only) findings and
-  contrast findings attach as `audit-unconfirmed-<screen>.txt` (contrast tagged `[contrast]`).
-  A contrast pass that exceeds the auditor deadline on the 365-day heatmap may retry without
-  contrast; that is a deadline, not a type skip.
+- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26 auditor still
+  reports Dynamic Type "partially unsupported" twice on system list configuration and on inner
+  text of scaling fonts (`section.header.` / `section.footer.`, `overview.today` /
+  `overview.subscription` tiles, app-owned identifiers, Form labels, the sheet **Done** button);
+  clipping on `usage.activity.empty` also reproduces. Those stay, counted per exemption rule.
+  Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
+  (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
+  finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
+  non-contrast findings still fail the test; contrast never gates and is summarised as advisory;
+  incomplete does not fail. Read the outcomes in the xcresult or via
+  `scripts/ios-ui-audit-summary.mjs` (CI `verify-ios-ui` job summary). A contrast pass that
+  exceeds the auditor deadline on the 365-day heatmap may retry without contrast; that is a
+  deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a

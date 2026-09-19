@@ -1,10 +1,18 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
+import type { AccountSummaryRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
+import {
+  AccountUsagePeriodResponseReadSchema,
+  USAGE_HOUR_GRID_RULE,
+} from "@gotry-io/quota-protocol";
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { afterEach, expect, it, vi } from "vitest";
-import { accountActivityRange, clearStoredSummary } from "$lib/account-reads.ts";
+import {
+  accountActivityRange,
+  clearStoredPeriods,
+  clearStoredSummary,
+} from "$lib/account-reads.ts";
 import { activityRangeKey, createAccountStore } from "$lib/account-store.svelte.ts";
 import { formatUtcDateRange } from "$lib/format.ts";
 import UsagePageHarness from "./usage-page-harness.svelte";
@@ -15,6 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   clearStoredSummary();
+  clearStoredPeriods();
 });
 
 type WireCase = { accepted: boolean; payload: unknown };
@@ -48,16 +57,16 @@ function totals() {
 
 function cost() {
   return {
-    mode: "auto",
-    basis: "calculated",
-    status: "complete",
+    mode: "auto" as const,
+    basis: "calculated" as const,
+    status: "complete" as const,
     amount_microusd: "5000",
     catalog_revision: null,
     calculated_rows: 1,
     reported_rows: 0,
     unpriced_rows: 0,
-    assumptions: [],
-    unpriced: [],
+    assumptions: [] as string[],
+    unpriced: [] as UsagePeriodRead["cost"]["unpriced"],
   };
 }
 
@@ -73,6 +82,80 @@ function activityBody(date: string) {
       },
     ],
   };
+}
+
+function nextDate(date: string): string {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + 1);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function periodBody(input: {
+  from: string;
+  to: string;
+  timezone: string;
+  usage: UsagePeriodRead;
+  breakdown?: boolean;
+  truncated?: boolean;
+  days?: Array<{
+    date: string;
+    totals: UsagePeriodRead["totals"];
+    cost: UsagePeriodRead["cost"];
+    partial: boolean;
+  }>;
+}) {
+  return {
+    protocol_version: 6,
+    request: { from: input.from, to: input.to, timezone: input.timezone },
+    bounds: {
+      start: `${input.from}T00:00:00Z`,
+      end: `${nextDate(input.to)}T00:00:00Z`,
+      grid: USAGE_HOUR_GRID_RULE,
+    },
+    totals: input.usage.totals,
+    cost: input.usage.cost,
+    cache_saved: input.usage.cache_saved,
+    days: input.days ?? [
+      {
+        date: input.from,
+        totals: input.usage.totals,
+        cost: input.usage.cost,
+        partial: input.usage.partial,
+      },
+    ],
+    ...(input.breakdown === false ? {} : { agents: input.usage.agents }),
+    coverage: {
+      partial: input.usage.partial,
+      daily_retained_from: null,
+      hourly_retained_from: null,
+      truncated_by_retention: input.truncated === true,
+    },
+    revision: {
+      usage_revision: 1,
+      device_generation: 1,
+      account_updated_at: "2026-08-12T12:00:00Z",
+      pricing_revision: "pricing_1",
+      model_catalog_revision: "models_1",
+      fold_version: 1,
+    },
+  };
+}
+
+function periodFromSummary(url: string, summary: AccountSummaryRead) {
+  const asked = new URL(url, "https://quota.test");
+  const from = asked.searchParams.get("from") ?? "2026-08-12";
+  const to = asked.searchParams.get("to") ?? from;
+  const timezone = asked.searchParams.get("timezone") ?? "UTC";
+  const breakdown = asked.searchParams.get("breakdown") === "1";
+  const span =
+    Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+  const usage =
+    span === 1
+      ? summary.usage.today
+      : span === 7
+        ? summary.usage.last_7_days
+        : summary.usage.last_30_days;
+  return periodBody({ from, to, timezone, usage, breakdown });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -114,6 +197,7 @@ it("shows the cache hit rate, what it saved, and reasoning beside the totals", a
   period.cost = { ...cost(), amount_microusd: "5000", calculated_rows: 4, unpriced_rows: 0 };
   mockFetch((url) => {
     if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
     const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
     return jsonResponse(activityBody(to));
   });
@@ -138,6 +222,7 @@ it("rolls the Usage activity range once when the shell clock crosses UTC midnigh
   const payload = acceptedSummary();
   const { calls } = mockFetch((url) => {
     if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
     const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
     return jsonResponse(activityBody(to));
   });
@@ -198,6 +283,9 @@ it("draws Rhythm from the hours detail of the selected period", async () => {
   );
   mockFetch((url) => {
     if (url.includes("/account/summary")) return jsonResponse(acceptedSummary());
+    if (url.includes("/account/usage/period")) {
+      return jsonResponse(periodFromSummary(url, acceptedSummary()));
+    }
     if (url.includes("detail=hours")) {
       return jsonResponse({
         protocol_version: 6,
@@ -225,4 +313,93 @@ it("draws Rhythm from the hours detail of the selected period", async () => {
   });
   expect(view.container.querySelector(".usage-rhythm-heat")).not.toBeNull();
   expect(view.container.querySelectorAll(".usage-rhythm-cell")).toHaveLength(7 * 24);
+});
+
+it("shows the model tree for a period the summary does not fold", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  const payload = acceptedSummary();
+  mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
+    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+    return jsonResponse(activityBody(to));
+  });
+
+  const store = createAccountStore();
+  await store.ensureSummary();
+  const view = render(UsagePageHarness, { store });
+  await waitFor(() => {
+    expect(view.container.querySelector("#token-total")).not.toBeNull();
+  });
+  expect(view.container.querySelector("#usage-breakdown-note")).toBeNull();
+  expect(view.container.querySelector("#usage-tree-title")).not.toBeNull();
+});
+
+it("parses a period response and renders totals, cost, and coverage", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  const payload = acceptedSummary();
+  const usage = {
+    ...payload.usage.last_30_days,
+    totals: {
+      ...payload.usage.last_30_days.totals,
+      total_tokens: 2_400,
+      input_tokens: 2_000,
+      output_tokens: 400,
+      messages: 6,
+    },
+    cost: { ...cost(), amount_microusd: "1230000" },
+    partial: true,
+  };
+  mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) {
+      const asked = new URL(url, "https://quota.test");
+      const from = asked.searchParams.get("from") ?? "2026-07-14";
+      const to = asked.searchParams.get("to") ?? "2026-08-12";
+      const timezone = asked.searchParams.get("timezone") ?? "UTC";
+      const breakdown = asked.searchParams.get("breakdown") === "1";
+      const body = periodBody({
+        from,
+        to,
+        timezone,
+        usage,
+        breakdown,
+        truncated: true,
+        days: [
+          {
+            date: from,
+            totals: usage.totals,
+            cost: usage.cost,
+            partial: true,
+          },
+        ],
+      });
+      expect(AccountUsagePeriodResponseReadSchema.safeParse(body).success).toBe(true);
+      return jsonResponse(body);
+    }
+    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+    return jsonResponse(activityBody(to));
+  });
+
+  const store = createAccountStore();
+  await store.ensureSummary();
+  const view = render(UsagePageHarness, { store });
+  await waitFor(() => {
+    expect(view.container.querySelector("#token-total")?.textContent?.trim()).toBe("2.4K");
+  });
+  expect(view.container.querySelector("#cost-total")?.textContent).toContain("$1.23");
+  expect(view.container.querySelector("#usage-retention-note")?.textContent).toContain(
+    "This range goes past what Quota still keeps.",
+  );
+  expect(view.container.querySelector(".dashboard-status")?.textContent).toContain(
+    "some hours incomplete",
+  );
+  expect(view.container.querySelector(".dashboard-status")?.textContent).toContain(
+    "some of this range is no longer kept",
+  );
+  expect(view.container.textContent).toContain(
+    "Some hours in this period were scanned incompletely.",
+  );
 });
