@@ -170,6 +170,9 @@ final class DashboardModel {
 
   var usagePeriod: UsagePeriodSelection { usage.usagePeriod }
 
+  /// The per-window Today table belongs on Usage only while the selected period is Today.
+  var showsTodayWindows: Bool { usagePeriod == .today }
+
   /// Projects stay on This Mac (ADR 0039). Account Usage has no such table.
   var showsUsageProjects: Bool {
     presentedUsageSource == .local && model.groupUsageByProject

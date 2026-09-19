@@ -29,10 +29,11 @@ samples, the plan-B `quota_history` read, and the no-upload rule are not.
 regular only while the main window is open, accessory when it closes. Callers still register the
 main window and do not branch on the preference.
 
-**One main window** holds a Quota group (**Quota**, **Today**, **Usage**) and a Settings group
+**One main window** holds **Quota**, **Usage**, and a Settings group
 (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**). Title
 QuotaBar, 960×640 minimum, frame autosave `QuotaBarMainWindow`, `.fullScreenPrimary`. Esc and ⌘W
-close it. The selected page persists as `main.page`; the first open lands on Quota. Provider
+close it. The selected page persists as `main.page`; the first open lands on Quota. A shipped
+`main.page` of `today` is rewritten to `usage`. Provider
 selection for Quota is a toolbar menu, not sidebar rows.
 
 **The menu-bar item is the glance surface**, not a second product. Overview and one provider's
@@ -57,8 +58,9 @@ QuotaBar has two surfaces. The panel glances; the main window explains.
 **Panel — 320×480.** Overview and one provider's read-only quota detail. The overflow menu
 opens the main window; there is no Settings stack inside the extra.
 
-**Main window — 960×640 minimum.** Titled `NSWindow`, `windowBackgroundColor`, 200pt sidebar of
-two groups. Quota charts, Today table, Usage at width, and every preference. May go full screen.
+**Main window — 960×640 minimum.** Titled `NSWindow`, `windowBackgroundColor`, 220–280pt sidebar:
+Quota and Usage as top-level rows, then a Settings group. Quota charts, Usage at width (the Today
+windows table lives on the Today period), and every preference. May go full screen.
 
 **Activation.** QuotaBar is not `LSUIElement`. Show in Dock on (the default) keeps `.regular`.
 Show in Dock off is menu-bar-only except while the main window is open. Browser Access and
@@ -66,7 +68,7 @@ Sparkle windows are not registered.
 
 **Main menu.** A regular-app menu bar: QuotaBar (About, Check for Updates…, Settings… ⌘,,
 Services, Hide ⌘H, Hide Others ⌥⌘H, Show All, Quit ⌘Q), File (Close ⌘W), Edit, View (Quota ⌘1,
-Today ⌘2, Usage ⌘3, Refresh ⌘R, Enter Full Screen), Window (Minimize ⌘M, Zoom, QuotaBar, Bring
+Usage ⌘2, Settings ⌘3, Refresh ⌘R, Enter Full Screen), Window (Minimize ⌘M, Zoom, QuotaBar, Bring
 All to Front), Help (QuotaBar Help, Feedback).
 
 **Visual QA routes.**

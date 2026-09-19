@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const migrations = await readD1Migrations("./migrations");
 const testSecret = "test-secret-that-is-long-enough-for-hmac-and-aes";
@@ -34,5 +34,8 @@ export default defineConfig({
   test: {
     provide: { TEST_MIGRATIONS: migrations },
     include: ["test/**/*.integration.test.ts"],
+    // The restore drill runs shell scripts and boots Node Relay processes; workerd has neither.
+    // It belongs to test:node:integration only.
+    exclude: [...configDefaults.exclude, "test/restore-drill.integration.test.ts"],
   },
 });
