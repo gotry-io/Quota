@@ -157,8 +157,8 @@ struct SyncAccountStateTests {
     )
     await model.refreshIfNeeded()
 
-    #expect(model.accountState == .signedIn)
-    #expect(model.syncUsageDisabledReason == nil)
+    #expect(model.accountFlow.accountState == .signedIn)
+    #expect(model.accountFlow.syncUsageDisabledReason == nil)
   }
 
   @Test
@@ -168,9 +168,9 @@ struct SyncAccountStateTests {
     )
     await model.refreshIfNeeded()
 
-    #expect(model.accountState != .signedIn)
-    #expect(model.syncUsageDisabledReason == "Sign in to your Quota account")
-    #expect(AccountSettingsItem.items(for: model.accountState).isEmpty)
+    #expect(model.accountFlow.accountState != .signedIn)
+    #expect(model.accountFlow.syncUsageDisabledReason == "Sign in to your Quota account")
+    #expect(AccountSettingsItem.items(for: model.accountFlow.accountState).isEmpty)
   }
 
   @Test
@@ -179,6 +179,6 @@ struct SyncAccountStateTests {
       client: StubLocalService(state: justSignedInState(label: "octocat"))
     )
     await model.refreshIfNeeded()
-    #expect(model.accountDeviceID == "device_1")
+    #expect(model.accountFlow.accountDeviceID == "device_1")
   }
 }

@@ -14,9 +14,10 @@ protocol UsageTransport: Sendable {
   func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
 }
 
-/// Usage, history, and the monthly budget. Login and quota projection stay on
+/// Usage, history, and the monthly budget. Quota projection stays on
 /// ``MenuBarViewModel``, which hands each accepted service state through ``acceptState``.
-/// Browser consent lives on ``BrowserConnectionModel``.
+/// Account login lives on ``AccountFlowModel``. Browser consent lives on
+/// ``BrowserConnectionModel``. In-flight account-bound loads carry the session epoch.
 @Observable
 @MainActor
 final class UsageModel {
@@ -54,6 +55,10 @@ final class UsageModel {
 
   @ObservationIgnored
   var onRequestError: (@MainActor (String) -> Void)?
+
+  /// Session epoch owned by ``AccountFlowModel``; incremented when the account goes away.
+  @ObservationIgnored
+  var sessionEpoch: () -> Int = { 0 }
 
   @ObservationIgnored
   private var customUsageTask: Task<Void, Never>?
@@ -194,6 +199,14 @@ final class UsageModel {
     loadCustomUsagePeriod()
   }
 
+  /// Drops in-flight account-bound loads. Local history and the This Mac budget stay.
+  func accountDidGoAway() {
+    customUsageGeneration += 1
+    customUsageTask?.cancel()
+    customUsageTask = nil
+    customUsageLoading = false
+  }
+
   /// Asks the service for this Mac's stored samples since the retention horizon, then folds
   /// them per provider and window. State pushes keep the current-window slice; this is the
   /// 30-day journal Dashboard reads (ADR 0051).
@@ -256,6 +269,7 @@ final class UsageModel {
     customUsageTask?.cancel()
     customUsageGeneration += 1
     let generation = customUsageGeneration
+    let epoch = sessionEpoch()
     customUsageLoading = true
     let timezone = TimeZone.current.identifier
     customUsageTask = Task { @MainActor [weak self] in
@@ -278,6 +292,7 @@ final class UsageModel {
       }
       guard let self else { return }
       guard self.customUsageGeneration == generation,
+        epoch == sessionEpoch(),
         Self.periodKey(source: source, range) == key
       else { return }
       customUsageLoading = false
