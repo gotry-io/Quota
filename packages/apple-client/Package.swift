@@ -96,7 +96,12 @@ let package = Package(
     ),
     .testTarget(
       name: "QuotaWidgetViewsTests",
-      dependencies: ["QuotaWidgetViews", "QuotaWidgetProjection", "QuotaWire"]
+      dependencies: [
+        "QuotaWidgetViews",
+        "QuotaWidgetProjection",
+        "QuotaWire",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
     ),
     .testTarget(
       name: "QuotaProviderWebTests",

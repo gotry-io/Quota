@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quota.gotry.io/schema/design-tokens.json",
+  "title": "Quota design tokens",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "color", "threshold", "spacing", "radius", "overrides"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "color": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["brand", "quota", "meter", "text", "surface", "border", "activity", "chart"],
+      "properties": {
+        "brand": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accent"],
+          "properties": { "accent": { "$ref": "#/$defs/adaptiveColor" } }
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["healthy", "warning", "critical"],
+          "properties": {
+            "healthy": { "$ref": "#/$defs/adaptiveColor" },
+            "warning": { "$ref": "#/$defs/adaptiveColor" },
+            "critical": { "$ref": "#/$defs/adaptiveColor" }
+          }
+        },
+        "meter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["track"],
+          "properties": { "track": { "$ref": "#/$defs/adaptiveColor" } }
+        },
+        "text": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["primary", "secondary", "meta"],
+          "properties": {
+            "primary": { "$ref": "#/$defs/adaptiveColor" },
+            "secondary": { "$ref": "#/$defs/adaptiveColor" },
+            "meta": { "$ref": "#/$defs/adaptiveColor" }
+          }
+        },
+        "surface": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canvas", "content"],
+          "properties": {
+            "canvas": { "$ref": "#/$defs/adaptiveColor" },
+            "content": { "$ref": "#/$defs/adaptiveColor" }
+          }
+        },
+        "border": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subtle"],
+          "properties": { "subtle": { "$ref": "#/$defs/adaptiveColor" } }
+        },
+        "activity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["0", "1", "2", "3", "4"],
+          "properties": {
+            "0": { "$ref": "#/$defs/activityStep" },
+            "1": { "$ref": "#/$defs/activityStep" },
+            "2": { "$ref": "#/$defs/activityStep" },
+            "3": { "$ref": "#/$defs/activityStep" },
+            "4": { "$ref": "#/$defs/activityStep" }
+          }
+        },
+        "chart": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "cache", "output"],
+          "properties": {
+            "input": { "$ref": "#/$defs/adaptiveColor" },
+            "cache": { "$ref": "#/$defs/adaptiveColor" },
+            "output": { "$ref": "#/$defs/adaptiveColor" }
+          }
+        }
+      }
+    },
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quota_healthy_percent", "quota_warning_percent"],
+      "properties": {
+        "quota_healthy_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "quota_warning_percent": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "spacing": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        { "const": 4 },
+        { "const": 8 },
+        { "const": 12 },
+        { "const": 16 },
+        { "const": 24 },
+        { "const": 32 },
+        { "const": 48 }
+      ],
+      "items": false
+    },
+    "radius": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control", "group", "card"],
+      "properties": {
+        "control": { "type": "number", "minimum": 0 },
+        "group": { "type": "number", "minimum": 0 },
+        "card": { "type": "number", "minimum": 0 }
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apple"],
+      "properties": {
+        "apple": { "$ref": "#/$defs/platformOverride" }
+      }
+    }
+  },
+  "$defs": {
+    "hex": {
+      "type": "string",
+      "pattern": "^#[0-9a-f]{6}$"
+    },
+    "cssNames": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^--[a-z][a-z0-9-]*$" }
+    },
+    "adaptiveColor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["light", "dark"],
+      "properties": {
+        "light": { "$ref": "#/$defs/hex" },
+        "dark": { "$ref": "#/$defs/hex" },
+        "css": { "$ref": "#/$defs/cssNames" },
+        "css_dark": { "$ref": "#/$defs/cssNames" }
+      }
+    },
+    "activityStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fill", "border"],
+      "properties": {
+        "fill": { "$ref": "#/$defs/adaptiveColor" },
+        "border": { "$ref": "#/$defs/adaptiveColor" }
+      }
+    },
+    "systemColor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system"],
+      "properties": {
+        "system": { "type": "string", "minLength": 1 },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "appearanceOverride": {
+      "oneOf": [{ "$ref": "#/$defs/hex" }, { "$ref": "#/$defs/systemColor" }]
+    },
+    "colorOverride": {
+      "oneOf": [
+        { "$ref": "#/$defs/systemColor" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "light": { "$ref": "#/$defs/appearanceOverride" },
+            "dark": { "$ref": "#/$defs/appearanceOverride" }
+          }
+        }
+      ]
+    },
+    "platformOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["radius", "color"],
+      "properties": {
+        "radius": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "control": { "type": "number", "minimum": 0 },
+            "group": { "type": "number", "minimum": 0 },
+            "card": { "type": "number", "minimum": 0 }
+          }
+        },
+        "color": { "type": "object" }
+      }
+    }
+  }
+}

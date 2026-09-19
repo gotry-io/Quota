@@ -191,6 +191,8 @@ struct QuotaWindowRow: View {
   let provider: ProviderID
   let isStale: Bool
   let now: Date
+  /// Provider detail prints the even-pace explanation under the headline; the panel does not.
+  var showsPaceDetail: Bool = false
   @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
     ResetCopyStylePreference.fallback
   @AppStorage(PaceLinePreference.storageKey) private var showsPaceLines =
@@ -211,15 +213,20 @@ struct QuotaWindowRow: View {
 
   /// The pace this window's reading was published with, and whether it warns.
   ///
-  /// The service derived it; the panel prints it. A window with no pace takes no line.
-  private var paceLine: (text: String, warns: Bool)? {
+  /// The service derived it; the panel prints the headline. A window with no pace takes no line.
+  private var paceHeadline: (text: String, warns: Bool)? {
     guard let pace = window.pace,
-      let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt)
+      let text = QuotaPaceCopy.headline(pace, resetsAt: window.resetsAt)
     else {
       return nil
     }
     if case .runsOut = pace { return (text, true) }
     return (text, false)
+  }
+
+  private var paceDetail: String? {
+    guard showsPaceDetail, paceHeadline != nil, let pace = window.pace else { return nil }
+    return QuotaPaceCopy.detail(pace)
   }
 
   var body: some View {
@@ -255,10 +262,17 @@ struct QuotaWindowRow: View {
           .quotaMetaStyle()
       }
 
-      if let paceLine {
-        Text(paceLine.text)
+      if let paceHeadline {
+        Text(paceHeadline.text)
           .quotaFont(.meta)
-          .foregroundStyle(paceLine.warns ? QuotaPalette.warning : QuotaPalette.mute)
+          .foregroundStyle(paceHeadline.warns ? QuotaPalette.warning : QuotaPalette.mute)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let paceDetail {
+        Text(paceDetail)
+          .quotaFont(.meta)
+          .foregroundStyle(QuotaPalette.mute)
           .fixedSize(horizontal: false, vertical: true)
       }
     }

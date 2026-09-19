@@ -18,7 +18,8 @@ type PaceCase = {
     value_unit?: string;
   };
   expected: QuotaPace;
-  expected_copy: string | null;
+  expected_headline: string | null;
+  expected_detail: string | null;
 };
 
 const fixture = conformanceJson as unknown as { cases: PaceCase[] };

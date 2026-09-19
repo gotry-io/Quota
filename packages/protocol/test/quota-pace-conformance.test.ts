@@ -7,7 +7,8 @@ type PaceCase = {
   now: string;
   window: unknown;
   expected: Record<string, unknown>;
-  expected_copy: string | null;
+  expected_headline: string | null;
+  expected_detail: string | null;
 };
 
 const conformance = conformanceJson as unknown as { cases: PaceCase[] };
@@ -43,14 +44,16 @@ describe("quota pace conformance", () => {
       expect(["none", "lasts", "runs_out"], testCase.name).toContain(kind);
       if (kind === "none") {
         expect(Object.keys(testCase.expected), testCase.name).toEqual(["kind"]);
-        expect(testCase.expected_copy, testCase.name).toBeNull();
+        expect(testCase.expected_headline, testCase.name).toBeNull();
+        expect(testCase.expected_detail, testCase.name).toBeNull();
         continue;
       }
       expect(["ahead", "on_track", "behind"], testCase.name).toContain(tempo);
       expect(Number.isInteger(delta_percent), testCase.name).toBe(true);
       expect(typeof projected_at_reset === "number", testCase.name).toBe(true);
       expect(projected_at_reset as number, testCase.name).toBeLessThanOrEqual(999);
-      expect(typeof testCase.expected_copy === "string", testCase.name).toBe(true);
+      expect(typeof testCase.expected_headline === "string", testCase.name).toBe(true);
+      expect(typeof testCase.expected_detail === "string", testCase.name).toBe(true);
       if (kind === "runs_out") {
         expect(Rfc3339InstantSchema.safeParse(exhausts_at).success, testCase.name).toBe(true);
       } else {

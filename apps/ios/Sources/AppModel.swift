@@ -91,7 +91,7 @@ final class AppModel {
   var isRefreshing = false
   var banner: Banner?
   var expiredMessage: String?
-  var selectedTab: AppTab = .overview
+  var selectedTab: AppTab = .quota
   /// Selection id from a subscription deep link, held until a summary can name it.
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
@@ -827,7 +827,7 @@ final class AppModel {
       Task { await completeEmailedSignIn(url) }
       return
     }
-    selectedTab = .overview
+    selectedTab = .quota
     if case .subscription(let id) = link {
       pendingSubscriptionSelection = id
       resolvePendingSubscriptionSelection()
@@ -1022,7 +1022,7 @@ final class AppModel {
     identities = .idle
     linkingProvider = nil
     linkFailure = nil
-    selectedTab = .overview
+    selectedTab = .quota
     pendingSubscriptionSelection = nil
     overviewPath = []
     accountSessionEpoch += 1

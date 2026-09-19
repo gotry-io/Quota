@@ -77,6 +77,12 @@ struct DeepLinkTests {
   func schemeIsCaseInsensitive() {
     #expect(parse("IO.GOTRY.QUOTA:/overview") == .overview)
   }
+
+  @Test
+  func appTabsAreQuotaUsageSettings() {
+    #expect(AppTab.allCases.map(\.title) == ["Quota", "Usage", "Settings"])
+    #expect(AppTab.quota.systemImage == "gauge.with.dots.needle.33percent")
+  }
 }
 
 #if DEBUG
@@ -85,11 +91,11 @@ struct DeepLinkTests {
     @Test
     func overviewLinkClearsPendingSelectionAndShowsOverview() {
       let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
-      model.selectedTab = .devices
+      model.selectedTab = .settings
       model.pendingSubscriptionSelection = "0123456789ab"
       model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/overview")!)
-      #expect(model.selectedTab == .overview)
+      #expect(model.selectedTab == .quota)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)
     }
@@ -109,7 +115,7 @@ struct DeepLinkTests {
       let id = WidgetSnapshotProjection.selectionID(for: subscription, salt: salt)
       model.selectedTab = .usage
       model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/\(id)")!)
-      #expect(model.selectedTab == .overview)
+      #expect(model.selectedTab == .quota)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath == [subscription.key])
     }
@@ -120,7 +126,7 @@ struct DeepLinkTests {
       model.selectedTab = .usage
       model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/0123456789ab")!)
-      #expect(model.selectedTab == .overview)
+      #expect(model.selectedTab == .quota)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)
     }
@@ -153,7 +159,7 @@ struct DeepLinkTests {
       model.pendingSubscriptionSelection = "0123456789ab"
       model.overviewPath = ["codex|visual_codex|global|"]
       model.openDeepLink(URL(string: "io.gotry.quota:/devices")!)
-      #expect(model.selectedTab == .overview)
+      #expect(model.selectedTab == .quota)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)
     }
@@ -167,7 +173,7 @@ struct DeepLinkTests {
       model.overviewPath = ["codex|visual_codex|global|"]
       await model.logout()
       #expect(model.phase == .signedOut)
-      #expect(model.selectedTab == .overview)
+      #expect(model.selectedTab == .quota)
       #expect(model.usage.usagePeriod == .last30Days)
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath.isEmpty)

@@ -150,6 +150,15 @@ struct SettingsView: View {
         } label: {
           identityCard
         }
+        NavigationLink {
+          DevicesView(model: model)
+        } label: {
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "laptopcomputer", tint: .gray)
+            Text(SettingsCopy.devices)
+          }
+        }
+        .accessibilityIdentifier("settings.devices")
       } else {
         Button(SettingsCopy.signIn) {
           model.showSignIn()
@@ -268,22 +277,22 @@ struct SettingsView: View {
     }
   }
 
+  /// Name, account and Remove share one line while they fit whole; otherwise (large type, a long
+  /// provider name) they stack, so no word is broken or truncated to keep the line.
   private func connectedRow(_ session: StoredProviderSession) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      HStack(alignment: .center, spacing: 12) {
-        ProviderMark(provider: session.provider, size: QuotaDesign.Layout.markSize)
-          .foregroundStyle(.primary)
-        Text(session.provider.displayName)
-          .font(.body)
-          .accessibilityLabel(connectedAccessibilityLabel(session))
-          .accessibilityIdentifier("providers.session.\(session.key)")
-        Spacer(minLength: 8)
-        connectedStatus(session)
-        Button(ProvidersCopy.remove) {
-          removing = session
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .center, spacing: 12) {
+          connectedIdentity(session)
+          Spacer(minLength: 8)
+          connectedStatus(session)
+          removeButton(session)
         }
-        .buttonStyle(.borderless)
-        .accessibilityIdentifier("providers.remove.\(session.key)")
+        VStack(alignment: .leading, spacing: 6) {
+          connectedIdentity(session)
+          connectedStatus(session)
+          removeButton(session)
+        }
       }
       if model.providers.needsSignIn(session) {
         HStack {
@@ -300,6 +309,26 @@ struct SettingsView: View {
         }
       }
     }
+  }
+
+  private func connectedIdentity(_ session: StoredProviderSession) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      ProviderMark(provider: session.provider, size: QuotaDesign.Layout.markSize)
+        .foregroundStyle(.primary)
+      Text(session.provider.displayName)
+        .font(.body)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityLabel(connectedAccessibilityLabel(session))
+        .accessibilityIdentifier("providers.session.\(session.key)")
+    }
+  }
+
+  private func removeButton(_ session: StoredProviderSession) -> some View {
+    Button(ProvidersCopy.remove) {
+      removing = session
+    }
+    .buttonStyle(.borderless)
+    .accessibilityIdentifier("providers.remove.\(session.key)")
   }
 
   private func connectedAccessibilityLabel(_ session: StoredProviderSession) -> String {
@@ -336,13 +365,22 @@ struct SettingsView: View {
         loginProvider = provider
       }
     } label: {
+      let action = isFirst ? ProvidersCopy.connect : ProvidersCopy.addAccount
       HStack(spacing: 12) {
         ProviderMark(provider: provider, size: QuotaDesign.Layout.markSize)
           .foregroundStyle(.primary)
-        LabeledContent(
-          provider.displayName,
-          value: isFirst ? ProvidersCopy.connect : ProvidersCopy.addAccount
-        )
+        // The name and the action share a line only while both fit whole; a long name at a
+        // large type size stacks the action under it instead of truncating the name.
+        ViewThatFits(in: .horizontal) {
+          LabeledContent(provider.displayName, value: action)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(provider.displayName)
+              .fixedSize(horizontal: false, vertical: true)
+            Text(action)
+              .foregroundStyle(QuotaTheme.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
       }
     }
     .accessibilityIdentifier("providers.connect.\(provider.rawValue)")

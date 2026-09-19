@@ -21,6 +21,7 @@ struct SettingsModelTests {
     #expect(SettingsCopy.permissionDenied == "Allow notifications for Quota in Settings.")
     #expect(SettingsCopy.openSettings == "Open Settings")
     #expect(SettingsCopy.emptyAlerts == "No quota alerts are available yet.")
+    #expect(SettingsCopy.devices == "Devices")
     #expect(SettingsCopy.manageDevices == "Manage Devices on Web")
     #expect(SettingsCopy.thresholdLabel(20) == "20%")
     #expect(SettingsModel.isValidThreshold(20))
