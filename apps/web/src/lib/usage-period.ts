@@ -6,9 +6,9 @@
  * already folds, `all` is everything retained, and `custom` is a range someone picked. The
  * phrases are in `apps/menubar/DESIGN.md` Shared product vocabulary.
  *
- * A period the summary does not carry is folded out of the activity days the page already holds
- * (`foldUsageActivityDays`). Those days are UTC days, so an anchored range is chosen in the
- * browser's calendar and then folded from the UTC days that carry those dates.
+ * Every selection except `all` is `GET /api/v6/account/usage/period` with these inclusive local
+ * dates and the browser's IANA timezone. Presets are the same read. `all` stays the summary's
+ * 730 UTC-day window. The year activity heatmap still reads the activity route.
  */
 export type UsagePeriodSegment = "day" | "week" | "month" | "7d" | "30d" | "all" | "custom";
 
@@ -128,7 +128,7 @@ export function nextUsagePeriod(selection: UsagePeriodSelection): UsagePeriodSel
   return { ...selection, offset: selection.offset - 1 };
 }
 
-/** The four periods the Account summary carries, which are read rather than folded again. */
+/** The four periods the Account summary still carries. Usage reads only `all` from there. */
 export function usagePeriodSummaryKey(
   selection: UsagePeriodSelection,
 ): UsageSummaryPeriodKey | null {
@@ -144,6 +144,11 @@ export function usagePeriodSummaryKey(
     default:
       return null;
   }
+}
+
+/** Whether the Usage page takes this selection from the summary instead of the period read. */
+export function usagePeriodReadsFromSummary(selection: UsagePeriodSelection): boolean {
+  return selection.segment === "all";
 }
 
 /** The dates this period covers in `today`'s own calendar, or null for `all`. */

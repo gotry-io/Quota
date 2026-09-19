@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import {
   accountReadFromSummary,
+  accountUsagePeriod,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
   screenshotAccountRhythm,
@@ -64,6 +65,23 @@ async function mockV6(page: Page): Promise<void> {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(accountSummary),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/period")) {
+      const asked = new URL(url);
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
+      const timezone = asked.searchParams.get("timezone") ?? "UTC";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          accountUsagePeriod(from, to, timezone, {
+            breakdown: asked.searchParams.get("breakdown") === "1",
+            summary: accountSummary,
+          }),
+        ),
       });
       return;
     }

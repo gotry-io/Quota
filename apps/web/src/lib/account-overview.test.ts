@@ -148,6 +148,12 @@ it("names latest quota freshness from subscriptions, not device heartbeats", () 
   expect(subscriptionCardMeta("Studio Mac", "2026-08-12T09:39:00Z")).toBe("Studio Mac · 1m ago");
   expect(usageStatusLine("30 Days", false)).toBe("30 Days");
   expect(usageStatusLine("Today", true)).toBe("Today · some hours incomplete");
+  expect(usageStatusLine("Last 30 days", false, true)).toBe(
+    "Last 30 days · some of this range is no longer kept",
+  );
+  expect(usageStatusLine("Custom range", true, true)).toBe(
+    "Custom range · some hours incomplete · some of this range is no longer kept",
+  );
 });
 
 it("selects a never-reporting device as the worst in either input order", () => {

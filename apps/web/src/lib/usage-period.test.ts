@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import {
   DEFAULT_USAGE_PERIOD,
@@ -8,6 +11,7 @@ import {
   usagePeriodFromUrl,
   usagePeriodHref,
   usagePeriodRange,
+  usagePeriodReadsFromSummary,
   usagePeriodSummaryKey,
   usagePeriodTitle,
   usageRangeDays,
@@ -116,6 +120,55 @@ it("names only the four periods the summary already folds", () => {
   expect(usagePeriodSummaryKey({ segment: "all" })).toBe("all");
   expect(usagePeriodSummaryKey({ segment: "week", offset: 0 })).toBeNull();
   expect(usagePeriodSummaryKey({ segment: "month", offset: 0 })).toBeNull();
+});
+
+it("reads only All from the summary; presets are the same period read as custom", () => {
+  expect(usagePeriodReadsFromSummary({ segment: "all" })).toBe(true);
+  expect(usagePeriodReadsFromSummary({ segment: "day", offset: 0 })).toBe(false);
+  expect(usagePeriodReadsFromSummary({ segment: "7d" })).toBe(false);
+  expect(usagePeriodReadsFromSummary({ segment: "30d" })).toBe(false);
+  expect(usagePeriodReadsFromSummary({ segment: "week", offset: 0 })).toBe(false);
+  expect(usagePeriodReadsFromSummary({ segment: "month", offset: 0 })).toBe(false);
+  expect(
+    usagePeriodReadsFromSummary({ segment: "custom", from: "2026-08-26", to: "2026-08-26" }),
+  ).toBe(false);
+});
+
+it("computes the same from/to the period fixture names for presets", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../../packages/protocol/fixtures/usage-period-conformance.json",
+      ),
+      "utf8",
+    ),
+  ) as {
+    cases: Array<{
+      name: string;
+      summary_presets?: Array<{ key: string; from: string; to: string }>;
+    }>;
+  };
+  const preset = fixture.cases.find((testCase) => testCase.name === "preset_equals_custom");
+  const presets = preset?.summary_presets;
+  if (!presets) throw new Error("usage-period-conformance.json is missing preset_equals_custom");
+  const todayPreset = presets.find((item) => item.key === "today");
+  if (!todayPreset) throw new Error("preset_equals_custom is missing today");
+  const [year, month, day] = todayPreset.from.split("-").map(Number);
+  const today = new Date(year as number, (month as number) - 1, day as number, 10, 0, 0);
+  const selection = {
+    today: { segment: "day" as const, offset: 0 },
+    last_7_days: { segment: "7d" as const },
+    last_30_days: { segment: "30d" as const },
+  };
+  for (const item of presets) {
+    const chosen = selection[item.key as keyof typeof selection];
+    expect(usagePeriodRange(chosen, today)).toEqual({ from: item.from, to: item.to });
+    expect(usagePeriodRange({ segment: "custom", from: item.from, to: item.to }, today)).toEqual({
+      from: item.from,
+      to: item.to,
+    });
+  }
 });
 
 it("titles a period with the range it covers", () => {
