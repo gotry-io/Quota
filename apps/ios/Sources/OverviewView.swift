@@ -288,7 +288,7 @@ struct TodayUsageSection: View {
 
   /// `UsagePeriodSelection.today` is `.day(offset: 0)`, which the Usage picker already has.
   private func openUsageToday() {
-    model.selectUsagePeriod(.today)
+    model.usage.selectUsagePeriod(.today)
     model.selectedTab = .usage
   }
 }
