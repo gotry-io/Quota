@@ -210,7 +210,7 @@ jobs:
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: QUOTA_IOS_ONLY_TESTING=QuotaTests ./scripts/test-ios.sh
 
-  # The 29 UI tests launch the app, load a fixture, and run the accessibility audit one screen
+  # The UI tests launch the app, load a fixture, and run the accessibility audit one screen
   # at a time, which is most of an iOS run; they get their own runner so a unit failure is
   # known in minutes and the two halves finish side by side. Same path gate as verify-ios.
   verify-ios-ui:
@@ -231,6 +231,12 @@ jobs:
           ./scripts/ci-changed-paths.sh any
           '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
+      - uses: actions/setup-node@v6
+        if: ${{ steps.ios.outputs.run == 'true' }}
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
       - name: Install XcodeGen
         if: ${{ steps.ios.outputs.run == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
@@ -241,4 +247,27 @@ jobs:
 
       - name: Test Quota iOS UI
         if: ${{ steps.ios.outputs.run == 'true' }}
-        run: QUOTA_IOS_ONLY_TESTING=QuotaUITests ./scripts/test-ios.sh
+        run: >
+          QUOTA_IOS_ONLY_TESTING=QuotaUITests
+          QUOTA_IOS_RESULT_BUNDLE=dist/ios-ui.xcresult
+          ./scripts/test-ios.sh
+
+      - name: Summarize accessibility audit outcomes
+        if: ${{ always() && steps.ios.outputs.run == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/ios-ui.xcresult ]; then
+            echo "No dist/ios-ui.xcresult; accessibility audit summary skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          mkdir -p dist/ios-ui-audit-outcomes
+          node scripts/ios-ui-audit-summary.mjs dist/ios-ui.xcresult --out-dir dist/ios-ui-audit-outcomes | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload accessibility audit outcomes
+        if: ${{ always() && steps.ios.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-audit-outcomes
+          path: dist/ios-ui-audit-outcomes/
+          if-no-files-found: warn
+          retention-days: 7
