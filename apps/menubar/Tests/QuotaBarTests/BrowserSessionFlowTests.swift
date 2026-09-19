@@ -783,7 +783,10 @@ private actor FlowService: LocalServiceServing {
     enabledScans = state.browserScanEnabled
   }
 
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail {
+    let _ = (from, to, source, timezone)
     throw LocalServiceClientError.invalidMessage
   }
 

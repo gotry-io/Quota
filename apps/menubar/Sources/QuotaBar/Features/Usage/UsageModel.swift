@@ -6,8 +6,10 @@ import QuotaPresentation
 
 /// The IPC calls Usage makes. The rest of the local service stays on the app coordinator.
 protocol UsageTransport: Sendable {
-  /// One custom local period, folded from the hours this Mac has stored.
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail
+  /// One custom period: This Mac's hours, or Relay's Account period read.
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail
   /// This Mac's stored quota samples since `since`. Reads cache.sqlite only.
   func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
 }
@@ -21,8 +23,8 @@ final class UsageModel {
   private(set) var usagePeriods: LocalServiceUsagePeriodCache?
   /// Which period Dashboard Usage is showing.
   private(set) var usagePeriod: UsagePeriodSelection = .today
-  /// Custom periods this Mac has folded, keyed `from|to`. Memory only: a fold is cheap and the
-  /// four `get_state` carries are the ones worth keeping.
+  /// Custom periods already answered, keyed `source|from|to`. Memory only: a fold is cheap and
+  /// the four `get_state` carries are the ones worth keeping.
   private(set) var customUsagePeriods: [String: LocalServiceUsageDetail] = [:]
   private(set) var customUsageLoading = false
   /// Folded 30-day quota history, keyed subscription selector then window id. Empty until
@@ -57,6 +59,10 @@ final class UsageModel {
 
   @ObservationIgnored
   private var customUsageGeneration: UInt64 = 0
+
+  /// Last source Dashboard asked a custom period for. Summary periods ignore it.
+  @ObservationIgnored
+  private var customPeriodSource: UsageSource = .account
 
   @ObservationIgnored
   private var budgetMonthTask: Task<Void, Never>?
@@ -142,23 +148,22 @@ final class UsageModel {
     usagePeriods?.detail(source: source, period: period)
   }
 
-  /// The selected period, read from the four a refresh folds or from the fold this Mac asked for.
+  /// The selected period, read from the four a refresh folds or from a custom `usage_period`.
   ///
-  /// The four periods `get_state` carries are the same on both sources. Anything else is folded
-  /// out of the hours this Mac stored, so it is answered for `local` only: the Account read hands
-  /// this device four folds, not the days behind them.
+  /// The four periods `get_state` carries are the same on both sources. Anything else is one
+  /// range at a time: This Mac folds stored hours, Account reads Relay's local-date period.
   func usageDetail(source: UsageSource, selection: UsagePeriodSelection) -> LocalServiceUsageDetail?
   {
     if let key = selection.summaryKey {
       return usageDetail(source: source, period: UsagePeriod(summaryKey: key))
     }
-    guard source == .local, let range = selection.range(today: now()) else { return nil }
-    return customUsagePeriods[Self.periodKey(range)]
+    guard let range = selection.range(today: now()) else { return nil }
+    return customUsagePeriods[Self.periodKey(source: source, range)]
   }
 
-  /// Whether a custom period is available on this source at all. The Account read folds four.
+  /// Whether the selected period can be answered on this source. Account custom ranges now can.
   func usagePeriodIsAvailable(source: UsageSource, selection: UsagePeriodSelection) -> Bool {
-    selection.summaryKey != nil || source == .local
+    selection.summaryKey != nil || selection.range(today: now()) != nil
   }
 
   /// The title above the totals: the range the selected period covers.
@@ -166,9 +171,22 @@ final class UsageModel {
     UsagePeriodTitle.text(for: usagePeriod, today: now)
   }
 
-  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
-    guard selection != usagePeriod else { return }
+  func selectUsagePeriod(_ selection: UsagePeriodSelection, source: UsageSource? = nil) {
+    var sourceChanged = false
+    if let source, source != customPeriodSource {
+      customPeriodSource = source
+      sourceChanged = true
+    }
+    guard selection != usagePeriod || sourceChanged else { return }
     usagePeriod = selection
+    loadCustomUsagePeriod()
+  }
+
+  /// Dashboard's Account / This Mac picker. Reloads a custom range for the source that is on
+  /// screen; the monthly budget stays This Mac's hours.
+  func setUsageSource(_ source: UsageSource) {
+    guard source != customPeriodSource else { return }
+    customPeriodSource = source
     loadCustomUsagePeriod()
   }
 
@@ -223,21 +241,24 @@ final class UsageModel {
     return result
   }
 
-  /// Asks the service to fold the selected period when it is not one of the four already folded.
+  /// Asks the service for the selected period when it is not one of the four already folded.
   func loadCustomUsagePeriod() {
     guard usagePeriod.summaryKey == nil, let transport,
       let range = usagePeriod.range(today: now())
     else { return }
-    let key = Self.periodKey(range)
+    let source = effectiveUsageSource(customPeriodSource)
+    let key = Self.periodKey(source: source, range)
     guard customUsagePeriods[key] == nil else { return }
     customUsageTask?.cancel()
     customUsageGeneration += 1
     let generation = customUsageGeneration
     customUsageLoading = true
+    let timezone = TimeZone.current.identifier
     customUsageTask = Task { @MainActor [weak self] in
       let detail: LocalServiceUsageDetail
       do {
-        detail = try await transport.usagePeriod(from: range.from, to: range.to)
+        detail = try await transport.usagePeriod(
+          from: range.from, to: range.to, source: source, timezone: timezone)
       } catch is CancellationError {
         if let self, self.customUsageGeneration == generation {
           self.customUsageLoading = false
@@ -252,7 +273,9 @@ final class UsageModel {
         return
       }
       guard let self else { return }
-      guard self.customUsageGeneration == generation, Self.periodKey(range) == key else { return }
+      guard self.customUsageGeneration == generation,
+        Self.periodKey(source: source, range) == key
+      else { return }
       customUsageLoading = false
       customUsagePeriods[key] = detail
     }
@@ -289,7 +312,8 @@ final class UsageModel {
     budgetMonthTask = Task { @MainActor [weak self] in
       let detail: LocalServiceUsageDetail
       do {
-        detail = try await transport.usagePeriod(from: range.from, to: range.to)
+        detail = try await transport.usagePeriod(
+          from: range.from, to: range.to, source: .local, timezone: TimeZone.current.identifier)
       } catch {
         return
       }
@@ -360,9 +384,25 @@ final class UsageModel {
     source == .local ? usageRefreshing : accountRefreshing
   }
 
-  static func periodKey(_ range: (from: String, to: String)) -> String {
-    "\(range.from)|\(range.to)"
+  static func periodKey(
+    source: UsageSource = .local, _ range: (from: String, to: String)
+  ) -> String {
+    "\(source.rawValue)|\(range.from)|\(range.to)"
   }
+
+  #if DEBUG
+    func seedCustomUsagePeriodForVisuals(
+      _ detail: LocalServiceUsageDetail,
+      selection: UsagePeriodSelection,
+      source: UsageSource
+    ) {
+      usagePeriod = selection
+      customPeriodSource = source
+      if let range = selection.range(today: now()) {
+        customUsagePeriods[Self.periodKey(source: source, range)] = detail
+      }
+    }
+  #endif
 
   private static func message(for error: Error) -> String {
     if let localized = error as? LocalizedError,

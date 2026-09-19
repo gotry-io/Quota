@@ -2,14 +2,17 @@ import {
   type AccountResponse,
   AccountResponseSchema,
   type AccountSummaryRead,
+  AccountSummaryReadSchema,
   type AccountUsageActivityResponseRead,
   AccountUsageActivityResponseReadSchema,
-  AccountSummaryReadSchema,
+  type AccountUsagePeriodResponseRead,
+  AccountUsagePeriodResponseReadSchema,
+  type UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 
 /**
- * The Account reads: paths, ranges, and the in-memory summary cache a 304 answers from.
+ * The Account reads: paths, ranges, and the in-memory summary / period caches a 304 answers from.
  *
  * They live apart from the mutation client so node tests can exercise a request without
  * going through SvelteKit.
@@ -26,13 +29,26 @@ export type AccountActivityResult =
   | { status: "ok"; activity: AccountUsageActivityResponseRead }
   | AccountError;
 
+export type AccountUsagePeriodQuery = {
+  from: string;
+  to: string;
+  timezone: string;
+  breakdown?: boolean;
+};
+
+export type AccountUsagePeriodResult =
+  | { status: "ok"; period: AccountUsagePeriodResponseRead }
+  | AccountError;
+
 const AccountResponseReadSchema = AccountResponseSchema.extend({
   account: AccountResponseSchema.shape.account.loose(),
 }).loose();
 
 type CachedSummary = { etag: string; summary: AccountSummaryRead };
+type CachedPeriod = { etag: string; period: AccountUsagePeriodResponseRead };
 
 let cachedSummary: CachedSummary | null = null;
+const cachedPeriods = new Map<string, CachedPeriod>();
 
 /** The ETag the next summary GET should offer back, if a previous read stored one. */
 export function storedSummaryETag(): string | null {
@@ -50,6 +66,35 @@ export function storeSummary(etag: string, summary: AccountSummaryRead): void {
 
 export function clearStoredSummary(): void {
   cachedSummary = null;
+}
+
+/**
+ * The period cache key: inclusive local dates, the IANA zone, and whether the agent tree was asked.
+ *
+ * Breakdown is part of the key because a body without `agents` must not answer the tree.
+ */
+export function usagePeriodResourceKey(query: AccountUsagePeriodQuery): string {
+  return `${query.from}|${query.to}|${query.timezone}|${query.breakdown === true ? "1" : "0"}`;
+}
+
+export function storedPeriodETag(key: string): string | null {
+  return cachedPeriods.get(key)?.etag ?? null;
+}
+
+export function storedPeriod(key: string): AccountUsagePeriodResponseRead | null {
+  return cachedPeriods.get(key)?.period ?? null;
+}
+
+export function storePeriod(
+  key: string,
+  etag: string,
+  period: AccountUsagePeriodResponseRead,
+): void {
+  cachedPeriods.set(key, { etag, period });
+}
+
+export function clearStoredPeriods(): void {
+  cachedPeriods.clear();
 }
 
 /** The chart's range, in UTC dates, ending on the UTC day of `today`. */
@@ -73,6 +118,17 @@ export function accountActivityPath(
 /** The summary path, carrying the calendar this browser keeps. */
 export function accountSummaryPath(timezone: string): string {
   return `/api/v6/account/summary?${new URLSearchParams({ tz: timezone }).toString()}`;
+}
+
+/** One inclusive local-date range in a required IANA zone. */
+export function accountUsagePeriodPath(query: AccountUsagePeriodQuery): string {
+  const params = new URLSearchParams({
+    from: query.from,
+    to: query.to,
+    timezone: query.timezone,
+  });
+  if (query.breakdown === true) params.set("breakdown", "1");
+  return `/api/v6/account/usage/period?${params.toString()}`;
 }
 
 /** Account metadata and the identities this browser signed in with. */
@@ -103,4 +159,36 @@ export function parseAccountActivityResponse(status: number, body: unknown): Acc
   }
   const parsed = AccountUsageActivityResponseReadSchema.safeParse(body);
   return parsed.success ? { status: "ok", activity: parsed.data } : classifyAccountError(null);
+}
+
+export function parseAccountUsagePeriodResponse(
+  status: number,
+  body: unknown,
+): AccountUsagePeriodResult {
+  if (status < 200 || status >= 300) {
+    return classifyAccountError(new Response(null, { status }));
+  }
+  const parsed = AccountUsagePeriodResponseReadSchema.safeParse(body);
+  return parsed.success ? { status: "ok", period: parsed.data } : classifyAccountError(null);
+}
+
+/**
+ * The totals, cost, and tree the Usage page already draws, taken from a period read.
+ *
+ * `partial` is `coverage.partial`. A body that omitted `agents` is an empty tree, not a missing
+ * period.
+ */
+export function accountUsagePeriodView(period: AccountUsagePeriodResponseRead): UsagePeriodRead {
+  return {
+    totals: period.totals,
+    cost: period.cost,
+    cache_saved: period.cache_saved,
+    partial: period.coverage.partial,
+    agents: period.agents ?? [],
+  };
+}
+
+/** Whether retention cut the asked local range, which the Usage page names in one line. */
+export function accountUsagePeriodTruncated(period: AccountUsagePeriodResponseRead): boolean {
+  return period.coverage.truncated_by_retention;
 }

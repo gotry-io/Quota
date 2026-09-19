@@ -22,14 +22,20 @@ struct AccountSettingsTests {
   }
 
   @Test
-  func mainWindowSidebarListsQuotaAndSettingsGroups() {
+  func mainWindowSidebarListsQuotaUsageAndSettings() {
     #expect(
       MainPage.allCases.map(\.title) == [
-        "Quota", "Today", "Usage",
+        "Quota", "Usage",
         "Account", "Agents", "Notifications", "Menu Bar", "General", "Support",
       ]
     )
-    #expect(MainPage.quotaGroup.map(\.title) == ["Quota", "Today", "Usage"])
+    #expect(MainPage.quotaGroup.map(\.title) == ["Quota"])
+    #expect(MainPage.usageGroup.map(\.title) == ["Usage"])
+    #expect(
+      (MainPage.quotaGroup + MainPage.usageGroup).map(\.title) == ["Quota", "Usage"]
+    )
+    #expect(MainPage.quota.systemImage == "gauge.with.dots.needle.33percent")
+    #expect(MainPage.usage.systemImage == "chart.bar")
     #expect(
       MainPage.settingsGroup.map(\.title) == [
         "Account", "Agents", "Notifications", "Menu Bar", "General", "Support",
@@ -53,9 +59,10 @@ struct AccountSettingsTests {
     #expect(MainPage.resolved == .quota)
     #expect(MainPage.stored == nil)
 
-    UserDefaults.standard.set(MainPage.today.rawValue, forKey: key)
-    #expect(MainPage.resolved == .today)
-    #expect(MainPage.stored == .today)
+    UserDefaults.standard.set(MainPage.legacyTodayRawValue, forKey: key)
+    #expect(MainPage.resolved == .usage)
+    #expect(MainPage.stored == .usage)
+    #expect(UserDefaults.standard.string(forKey: key) == MainPage.usage.rawValue)
 
     UserDefaults.standard.set(MainPage.support.rawValue, forKey: key)
     #expect(MainPage.resolved == .support)

@@ -15,7 +15,7 @@ the material fallback. The panel is an app-owned SwiftUI surface, not a website 
 popover. The main window is a titled window; it is not the panel stretched.
 
 The panel shares one header, one footer, and one typed navigation stack across Overview and
-provider detail. Quota, Today, Usage, and Settings are pages of the main window, not of that
+provider detail. Quota, Usage, and Settings are pages of the main window, not of that
 stack. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage,
 log out. QuotaBar displays typed local-service results. Provider configuration exposes only
 intentional API-key entry and masked saved state, never stored secrets, opaque account identifiers,
@@ -52,7 +52,7 @@ time** is the only surface that switches reset copy between relative and absolut
 | `windowSidebarMaxWidth` | 280pt | Main window sidebar maximum |
 | `agentsListWidth` | 220pt | Provider list inside the Agents page |
 | `mainWindowMinSize` | 960×640 | Main window minimum content size |
-| `cardCornerRadius` | 20pt | Quota / Today / Usage cards |
+| `cardCornerRadius` | 20pt | Quota / Usage cards |
 | `cardPadding` | 16pt | Inner padding of those cards |
 | `contentMaxWidth` | 1040pt | Main-window reading column |
 | `contentGutter` | 24pt | Horizontal gutter around that column |
@@ -91,15 +91,17 @@ The process has a regular-app menu bar:
   Hide Others ⌥⌘H, Show All, Quit QuotaBar ⌘Q, Quit QuotaBar Completely ⌥⌘Q.
 - **File:** Close ⌘W.
 - **Edit:** Undo, Redo, Cut, Copy, Paste, Select All.
-- **View:** Quota ⌘1, Today ⌘2, Usage ⌘3, Refresh ⌘R, Enter Full Screen (⌃⌘F).
+- **View:** Quota ⌘1, Usage ⌘2, Settings ⌘3, Refresh ⌘R, Enter Full Screen (⌃⌘F).
 - **Window:** Minimize ⌘M, Zoom, QuotaBar (brings the main window front), Bring All to Front.
 - **Help:** QuotaBar Help (opens the website), Feedback.
 
-The sidebar is a `List` with `.listStyle(.sidebar)` and two `Section`s: **Quota**
-(**Quota**, **Today**, **Usage**) and
-**Settings** (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
-Rows are `Label`s. On macOS 26 the system draws the floating glass sidebar; on 14/15 it is the
-standard sidebar. The selected page persists in `main.page`; the first open lands on Quota. Provider
+The sidebar is a `List` with `.listStyle(.sidebar)`. **Quota** and **Usage** are two plain
+top-level rows in a header-less first section; **Settings** is the one named section
+(**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**).
+Quota uses `gauge.with.dots.needle.33percent` and Usage uses `chart.bar`, the same SF Symbols as
+the iOS tabs. Rows are `Label`s. On macOS 26 the system draws the floating glass sidebar; on 14/15 it is the
+standard sidebar. The selected page persists in `main.page`; the first open lands on Quota. A
+shipped `main.page` of `today` is rewritten to `usage`. Provider
 selection for Quota is a toolbar menu (**All providers** and each shown provider with its brand
 icon), not sidebar rows. The closed menu shows the selected provider's brand icon, or Quota's mark
 when **All providers** is selected. The selection is not persisted. Account, Notifications,
@@ -113,14 +115,14 @@ The Quota-group toolbar groups **Provider**, **Range**, and **Usage source**, th
 spacer, then **Refresh**. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
 on 14/15 the same items appear without spacers. Refresh is on every page.
 
-Quota, Today, and Usage scroll under the toolbar and sidebar (`quotaScrollEdge()`, a soft
+Quota and Usage scroll under the toolbar and sidebar (`quotaScrollEdge()`, a soft
 scroll-edge effect on macOS 26). Their content is one column, max width 1040pt, centred, with 24pt
 gutters and 16pt between cards.
 
 ## Main window
 
 The main window is where this Mac's quota history is read at width, and where every preference
-lives. It does not collect, and every number the Quota, Today, and Usage pages show is already on
+lives. It does not collect, and every number the Quota and Usage pages show is already on
 this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
 The Quota-group toolbar holds a provider menu — **All providers**, then each provider shown in
@@ -160,24 +162,13 @@ Empty states: while the cache is rebuilding and this Mac has no samples yet, the
 signed in reuses `SignInRungPresentation.statusLine`. A signed-in provider with no samples yet
 reads **No history yet**.
 
-### Today
-
-A table on the Today page, inside one `quotaCardSurface()` card. One row per provider × window that had samples
-today, 36pt tall. The header row is tertiary caps. Columns: window (catalog provider name · window
-title), used percent at the start of the local day → now (`12% → 47%`, the same whole percents
-`QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
-attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
-the local clock time when that reset has already passed. The panel's
-`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; the main window lays those facts in
-columns. A provider or window with no sample today is omitted. Toolbar provider selection narrows
-the rows the same way it narrows Quota cards.
-
 ### Usage
 
 Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
-it uses This Mac. The source menu is the main-window toolbar on Quota, Today, and Usage; omit it
+it uses This Mac. The source menu is the main-window toolbar on Quota and Usage; omit it
 when Account data is unavailable or Usage sync is disabled. Changing source preserves the selected
-period.
+period. The panel footer **Today · $x** line, and a stored `main.page` of `today`, open Usage with
+the Today period selected.
 
 A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
 labels use the regular 10.5pt list-secondary type size. The control owns one overall neutral
@@ -195,17 +186,29 @@ budget copy are in
 
 Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
 changing either selector starts no collection or network work and shows no loading state when a
-snapshot already exists. Every other period is one `usage_period` request, which folds the hours
-this Mac already stored rather than collecting again; while it is in flight the page says
-**Preparing Usage…**, and a state change discards those folds and asks again because the hours
-behind them moved. The Account read hands this device four folds, not the days behind them, so on
-Account a period outside those four says **This period is folded from this Mac's own hours. Switch
-the source to this Mac to see it.** If the selected source has no snapshot yet and that
+snapshot already exists. Every other period is one `usage_period` request. On This Mac it folds
+the hours already stored; on Account it reads Relay's local-date period in this Mac's IANA zone
+([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)). While it is in
+flight the page says **Preparing Usage…**, and a state change discards those folds and asks again
+because the hours behind them moved. If the selected source has no snapshot yet and that
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
+A range retention has cut prints **This range goes past what Quota still keeps.**
 Preparing and empty Usage remain section states below the period tabs because those controls are
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
+
+When the selected period is **Today**, Usage also includes the per-window table that used to be its
+own page. One `quotaCardSurface()` card, one row per provider × window that had samples today, 36pt
+tall. The header row is tertiary caps. Columns: window (catalog provider name · window title), used
+percent at the start of the local day → now (`12% → 47%`, the same whole percents
+`QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
+attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
+the local clock time when that reset has already passed. The panel's
+`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Usage lays those facts in columns
+for the Today period. A provider or window with no sample today is omitted. Toolbar provider
+selection narrows the rows the same way it narrows Quota cards. The Rhythm card is the hourly strip
+for the same period.
 
 When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
 progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
@@ -301,7 +304,7 @@ card radius is 20. Native system red remains the destructive color. `critical` o
 failure-only.
 
 Do not add decorative gradients, a second card language, colored page backgrounds, or custom window
-chrome. Main-window Quota / Today / Usage cards are the 20pt `quotaCardSurface()`.
+chrome. Main-window Quota / Usage cards are the 20pt `quotaCardSurface()`.
 
 ## Liquid Glass (macOS 26)
 
@@ -314,7 +317,7 @@ group-fill / material fallbacks below it. `QuotaPalette` stays the one palette.
 | --- | --- | --- |
 | Main-window sidebar | System floating glass (`List` `.sidebar`) | Standard sidebar |
 | Toolbar groups | Glass capsules (`ToolbarSpacer`) | Same items, no spacers |
-| Quota / Today / Usage cards, Usage stat tiles, Agents list groups | `quotaCardSurface()` glass, 20pt continuous | `settingsGroupFill`, same 20pt |
+| Quota / Usage cards, Usage stat tiles, Agents list groups | `quotaCardSurface()` glass, 20pt continuous | `settingsGroupFill`, same 20pt |
 | Transient menus (Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, `QuotaConfirmationPopup`) | `quotaFloatingSurface()` glass, 14pt continuous | `quotaFloatingMenuSurface()` |
 | Panel background | Menu extra's system material | Same |
 | Settings Form pages | Grouped Form; no opaque page wash | Same |
@@ -331,7 +334,7 @@ State colours — remaining-quota healthy / warning / critical, `accent`, `warni
 keep at least 4.5:1 on both appearances against the card and floating surfaces. If a tone fails,
 darken or lighten that tone. Do not add a second palette.
 
-Quota, Today, and Usage are one column, max width 1040pt, centred, with 24pt gutters and 16pt
+Quota and Usage are one column, max width 1040pt, centred, with 24pt gutters and 16pt
 between cards. Usage totals are three stat tiles (Tokens, Cost, Cache hit): a 28pt semibold
 rounded numeral and a small label. Dense tables stay dense and sit inside the card.
 
@@ -467,7 +470,8 @@ The header shows:
 - Overview: Quota mark, **QuotaBar**, and an overflow menu containing **Open QuotaBar**,
   **Settings…** ⌘,, **Check for Updates…**, and **Quit QuotaBar** ⌘Q. Opening the menu focuses
   Quit. VoiceOver names the trigger **Settings menu**. **Open QuotaBar** opens the main window
-  on the last page (Quota the first time) and does not show a shortcut; View › **Quota** is ⌘1.
+  on the last page (Quota the first time) and does not show a shortcut; View › **Quota** is ⌘1,
+  **Usage** ⌘2, **Settings** ⌘3.
   **Settings…** opens the main window on Account or the last Settings page; there is no gear.
   **Quit QuotaBar** quits the process, not only the window.
 - Child page: Back and page title. Provider detail has no trailing action.
@@ -481,7 +485,7 @@ menu extra's material.
 The bottom bar is fixed at `footerHeight` on every page and carries two things: today's spend on
 the left, and one icon-only refresh action on the right. The left reads `Today · $12.34 · 1.2M
 tokens` from the Usage source the main window would show and is a button that opens the main
-window on Usage (VoiceOver **Open Usage**); cost drops out when the day is unpriced, and the whole line is
+window on Usage with the Today period selected (VoiceOver **Open Usage**); cost drops out when the day is unpriced, and the whole line is
 absent when there are no tokens. Today's number belongs beside quota everywhere, so it lives in
 the bar every page already has rather than in an Overview line of its own.
 
@@ -503,10 +507,8 @@ Overview
 └── Provider (read-only quota)
 
 Main window
-├── Quota
-│   ├── Quota      (30-day window curves, pace phrase, reset, peak)
-│   ├── Today      (per-window used % today, cost when attributable, reset)
-│   └── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Projects)
+├── Quota      (30-day window curves, pace phrase, reset, peak)
+├── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Today period includes the per-window table)
 └── Settings
     ├── Account (Devices on the same page)
     ├── Agents
@@ -620,7 +622,8 @@ The Account page is one Form in every state:
 The Account page is the only place for account authentication actions. Buttons invoke typed private
 service operations; there are no embedded web views.
 
-Usage lives on the main window Usage page, reached from the footer **Today · $x** button. The Usage
+Usage lives on the main window Usage page, reached from the footer **Today · $x** button, which
+selects the Today period. The Usage
 root summary uses account-wide totals while signed in with Usage sync enabled, and local totals
 otherwise.
 
@@ -915,7 +918,7 @@ whose sentence says whether a snapshot was published, cleared, refused, or is si
 | `QuotaCommandRow` | Selectable official-provider sign-in command and Copy/Copied feedback |
 | `QuotaConfirmationPopup` | App-owned confirmation with cancel and destructive actions. Overlay (scrimmed) in the menu panel; sheet on the main window for Browser Sign-in consent |
 | Browser Access window | Floating window independent of the menu extra and above the main window; one row per installed browser with its icon, gatekeeper, and single action; Relaunch row after the Full Disk Access pane was opened; closes itself when nothing is outstanding |
-| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Settings groups; Quota / Today / Usage cards, and Settings pages |
+| Main window | Titled window, 960×640 minimum, 220–280pt sidebar of Quota and Usage rows then a Settings group; Quota / Usage cards, and Settings pages |
 | Full Disk Access drag icon | App icon inside the Browser Access window; a plain file drag of QuotaBar.app for the Full Disk Access list, activating System Settings first and reporting an accepted drop |
 | `QuotaPrimaryButtonStyle` | Accent capsule for the one primary task on a surface |
 | `QuotaSecondaryButtonStyle` | Compact field-height control for secondary or destructive in-section actions |
@@ -976,7 +979,7 @@ on 14 or 15 produces the same routes with the material fallback.
 | `provider-codex` | Panel | 320×480 | light, dark | standard, accessibility |
 | `main-quota` | Main window | 960×640 and 1280×800 | light, dark | standard, accessibility |
 | `main-quota-codex` | Main window | 960×640 | light, dark | standard, accessibility |
-| `main-today` | Main window | 960×640 | light, dark | standard, accessibility |
+| `main-today` | Main window (Usage, Today period) | 960×2200 | light, dark | standard, accessibility |
 | `main-usage` | Main window | 960×2200 | light, dark | standard, accessibility |
 | `main-usage-local` | Main window | 960×2200 | light, dark | standard, accessibility |
 | `main-account` | Main window | 960×640 | light, dark | standard, accessibility |

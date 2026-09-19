@@ -1,11 +1,16 @@
 <script lang="ts">
-import { foldUsageActivityDays } from "@gotry-io/quota-model";
 import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import { usageStatusLine } from "$lib/account-overview";
-import { accountActivityRange } from "$lib/account-reads.ts";
+import {
+  accountActivityRange,
+  accountUsagePeriodTruncated,
+  accountUsagePeriodView,
+  browserTimezone,
+  usagePeriodResourceKey,
+} from "$lib/account-reads.ts";
 import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
@@ -13,16 +18,10 @@ import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsageBudgetBar from "$lib/components/UsageBudgetBar.svelte";
 import UsageDaily from "$lib/components/UsageDaily.svelte";
-import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import UsagePeriodBar from "$lib/components/UsagePeriodBar.svelte";
+import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
-import {
-  cacheHitLabel,
-  cacheSavedLabel,
-  costPricedLabel,
-  usageDailyRows,
-} from "$lib/usage-metrics";
 import {
   budgetMonth,
   budgetProgress,
@@ -35,12 +34,18 @@ import {
   writeFiredBudgetAlerts,
 } from "$lib/usage-budget";
 import {
+  cacheHitLabel,
+  cacheSavedLabel,
+  costPricedLabel,
+  usageDailyRows,
+} from "$lib/usage-metrics";
+import {
   type UsagePeriodSelection,
   usagePeriodFromUrl,
   usagePeriodHref,
   usagePeriodName,
   usagePeriodRange,
-  usagePeriodSummaryKey,
+  usagePeriodReadsFromSummary,
   usagePeriodTitle,
 } from "$lib/usage-period";
 
@@ -57,50 +62,68 @@ const selectedDay = $derived(
 const activityEntry = $derived(store.activity[rangeKey]);
 const activityDays = $derived(activityEntry?.data ?? null);
 const activityError = $derived(activityEntry?.status === "error" ? activityEntry.error : null);
-const summaryKey = $derived(usagePeriodSummaryKey(selection));
+const fromSummary = $derived(usagePeriodReadsFromSummary(selection));
 const selectedRange = $derived(usagePeriodRange(selection, store.now));
+const timezone = $derived(browserTimezone());
+const selectedPeriodKey = $derived(
+  selectedRange ? usagePeriodResourceKey({ ...selectedRange, timezone, breakdown: true }) : null,
+);
+const selectedPeriodEntry = $derived(
+  selectedPeriodKey ? store.period[selectedPeriodKey] : undefined,
+);
+const selectedPeriodRead = $derived(selectedPeriodEntry?.data ?? null);
 /**
- * The summary answers the four periods it folds; every other one is folded here from the
- * activity days this page already holds, which is why it has no model breakdown.
+ * `all` is the summary's 730 UTC-day window. Every other selection is the period read for those
+ * local dates, including the presets the summary also folds.
  */
 const period = $derived<UsagePeriodRead | null>(
-  summaryKey && store.summary
-    ? store.summary.usage[summaryKey]
-    : activityDays && selectedRange
-      ? foldUsageActivityDays(activityDays, selectedRange)
+  fromSummary && store.summary
+    ? store.summary.usage.all
+    : selectedPeriodRead
+      ? accountUsagePeriodView(selectedPeriodRead)
       : null,
 );
-const folded = $derived(summaryKey === null);
+const truncated = $derived(
+  selectedPeriodRead ? accountUsagePeriodTruncated(selectedPeriodRead) : false,
+);
+const periodError = $derived(
+  !fromSummary && selectedPeriodEntry?.status === "error" ? selectedPeriodEntry.error : null,
+);
 const status = $derived(
-  period ? usageStatusLine(usagePeriodName(selection), period.partial) : null,
+  period ? usageStatusLine(usagePeriodName(selection), period.partial, truncated) : null,
 );
 const month = $derived(budgetMonth(store.now));
 const monthRange = $derived(usagePeriodRange({ segment: "month", offset: 0 }, store.now));
-const monthPeriod = $derived(
-  activityDays && monthRange ? foldUsageActivityDays(activityDays, monthRange) : null,
-);
+const monthPeriodRead = $derived.by(() => {
+  if (!monthRange) return null;
+  const withoutBreakdown =
+    store.period[usagePeriodResourceKey({ ...monthRange, timezone, breakdown: false })]?.data ??
+    null;
+  const withBreakdown =
+    store.period[usagePeriodResourceKey({ ...monthRange, timezone, breakdown: true })]?.data ??
+    null;
+  return withoutBreakdown ?? withBreakdown;
+});
 const budgetView = $derived(
-  budget.amountUSD !== null && monthPeriod
+  budget.amountUSD !== null && monthPeriodRead
     ? budgetProgress(
-        costDollars(monthPeriod.cost),
+        costDollars(monthPeriodRead.cost),
         budget.amountUSD,
-        monthPeriod.cost.status !== "complete",
+        monthPeriodRead.cost.status !== "complete",
       )
     : null,
 );
 const detailEntry = $derived(selectedDay ? store.dayDetail[selectedDay] : undefined);
 const dayDetail = $derived(detailEntry?.data ?? null);
 const dayError = $derived(detailEntry?.error ?? null);
-/** The table covers the period's own days, bounded by the activity days the page holds. */
-const dailyRange = $derived(
-  selectedRange
-    ? {
-        from: selectedRange.from < activityRange.from ? activityRange.from : selectedRange.from,
-        to: selectedRange.to > activityRange.to ? activityRange.to : selectedRange.to,
-      }
-    : null,
+const dailyRows = $derived(
+  fromSummary || !selectedPeriodRead
+    ? []
+    : usageDailyRows(selectedPeriodRead.days, {
+        from: selectedPeriodRead.request.from,
+        to: selectedPeriodRead.request.to,
+      }),
 );
-const dailyRows = $derived(activityDays ? usageDailyRows(activityDays, dailyRange) : []);
 const rhythmKey = $derived(selectedRange ? activityRangeKey(selectedRange) : null);
 const rhythmEntry = $derived(rhythmKey ? store.rhythm[rhythmKey] : undefined);
 const rhythm = $derived(rhythmEntry?.data ?? null);
@@ -116,6 +139,22 @@ const detailLoading = $derived(
 
 $effect(() => {
   void store.ensureActivity(activityRange);
+});
+
+$effect(() => {
+  if (fromSummary || !selectedRange) return;
+  void store.ensurePeriod(selectedRange, { breakdown: true });
+});
+
+$effect(() => {
+  if (!monthRange) return;
+  const sameAsSelected =
+    selectedRange !== null &&
+    !fromSummary &&
+    selectedRange.from === monthRange.from &&
+    selectedRange.to === monthRange.to;
+  if (sameAsSelected) return;
+  void store.ensurePeriod(monthRange, { breakdown: false });
 });
 
 $effect(() => {
@@ -192,14 +231,35 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
   />
 {/if}
 
+{#if periodError && !period}
+  <RetryNotice
+    message={periodError.message}
+    actionLabel={accountNoticeActionLabel(periodError)}
+    onRetry={accountNoticeRetry(periodError, () =>
+      selectedRange
+        ? void store.ensurePeriod(selectedRange, { breakdown: true, maxAgeMs: 0 })
+        : undefined,
+    )}
+  />
+{/if}
+
 {#if !store.summary}
   {#if !store.loadError}
     <LoadingBlock lines={4} label="Loading Usage totals" />
   {/if}
-{:else if period}
+{:else if !period}
+  {#if !periodError}
+    <LoadingBlock lines={4} label="Loading Usage totals" />
+  {/if}
+{:else}
   <p class="usage-period-range" id="usage-period-range">
     {usagePeriodTitle(selection, store.now)}
   </p>
+  {#if truncated}
+    <p class="usage-day-note" id="usage-retention-note">
+      This range goes past what Quota still keeps.
+    </p>
+  {/if}
   <div class="usage-totals">
     <article>
       <span>Tokens</span>
@@ -253,14 +313,7 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
   <div class="usage-columns">
     <section class="usage-tree-panel" aria-labelledby="usage-tree-title">
       <h2 id="usage-tree-title" class="visually-hidden">By model</h2>
-      {#if folded}
-        <p class="usage-day-note" id="usage-breakdown-note">
-          A range this page folded itself carries totals only. The model breakdown is on Today,
-          Last 7 days, Last 30 days, and All.
-        </p>
-      {:else}
-        <UsageBreakdown {period} />
-      {/if}
+      <UsageBreakdown {period} />
     </section>
     <section class="usage-activity-panel" aria-labelledby="usage-activity-title">
       <div class="usage-panel-heading">

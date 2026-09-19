@@ -66,6 +66,7 @@
     case mainToday = "main-today"
     case mainUsage = "main-usage"
     case mainUsageLocal = "main-usage-local"
+    case mainUsageCustom = "main-usage-custom"
     case mainAccount = "main-account"
     case mainAgents = "main-agents"
     case mainAgentsCodex = "main-agents-codex"
@@ -79,7 +80,8 @@
       switch self {
       case .overview: []
       case .providerCodex: [.provider(.codex)]
-      case .mainQuota, .mainQuotaCodex, .mainToday, .mainUsage, .mainUsageLocal, .mainAccount,
+      case .mainQuota, .mainQuotaCodex, .mainToday, .mainUsage, .mainUsageLocal, .mainUsageCustom,
+        .mainAccount,
         .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey, .mainNotifications, .mainMenuBar,
         .mainGeneral, .mainSupport:
         []
@@ -89,14 +91,22 @@
     var mainPage: MainPage? {
       switch self {
       case .mainQuota, .mainQuotaCodex: .quota
-      case .mainToday: .today
-      case .mainUsage, .mainUsageLocal: .usage
+      case .mainToday, .mainUsage, .mainUsageLocal, .mainUsageCustom: .usage
       case .mainAccount: .account
       case .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey: .agents
       case .mainNotifications: .notifications
       case .mainMenuBar: .menuBar
       case .mainGeneral: .general
       case .mainSupport: .support
+      default: nil
+      }
+    }
+
+    /// `main-today` is Usage with the Today period so the folded windows table is in frame.
+    var usagePeriod: UsagePeriodSelection? {
+      switch self {
+      case .mainToday: .today
+      case .mainUsage, .mainUsageLocal: .last7Days
       default: nil
       }
     }
@@ -209,14 +219,48 @@
     var agentsProvider: ProviderID? { route.agentsProvider }
     var quotaSelection: ProviderID? { route.quotaSelection }
     var usageSource: UsageSource { route.usageSource }
+    var usagePeriod: UsagePeriodSelection? { route.usagePeriod }
     var hostsTitledWindow: Bool { hostsMainWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
-      switch dataSource {
-      case .fixture: fixture.makeModel(referenceDate: referenceDate)
-      case .live: MenuBarViewModel()
+      let model: MenuBarViewModel =
+        switch dataSource {
+        case .fixture: fixture.makeModel(referenceDate: referenceDate)
+        case .live: MenuBarViewModel()
+        }
+      if let usagePeriod {
+        model.usage.selectUsagePeriod(usagePeriod)
       }
+      if route == .mainUsageCustom {
+        seedAccountCustomPeriod(on: model)
+      }
+      return model
+    }
+
+    @MainActor
+    private func seedAccountCustomPeriod(on model: MenuBarViewModel) {
+      guard let today = model.usage.usageDetail(source: .account, period: .today) else { return }
+      let days = today.usage.days?.filter { $0.date >= "2026-08-01" && $0.date <= "2026-08-03" }
+      let detail = LocalServiceUsageDetail(
+        range: UsageDateRange(from: "2026-08-01", to: "2026-08-03"),
+        usage: LocalUsagePeriodSummary(
+          totals: today.usage.totals,
+          cost: today.usage.cost,
+          cacheSaved: today.usage.cacheSaved,
+          agents: today.usage.agents,
+          days: days,
+          modelsTruncated: today.usage.modelsTruncated
+        ),
+        incomplete: false,
+        detailsTruncated: false,
+        coverage: UsagePeriodCoverage(partial: false, truncatedByRetention: false)
+      )
+      model.usage.seedCustomUsagePeriodForVisuals(
+        detail,
+        selection: .custom(from: "2026-08-01", to: "2026-08-03"),
+        source: .account
+      )
     }
 
     @MainActor

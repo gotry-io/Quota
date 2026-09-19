@@ -183,14 +183,16 @@ struct SubscriptionDetailContentTests {
       subscription: local,
       deviceNames: [:],
       samples: samples,
-      now: now,
-      utcOffsetSeconds: 0
+      now: now
     )
-    let history = try! #require(mine.histories["five_hour"])
-    #expect(history.points.count == 3)
-    #expect(history.projection != nil)
-    #expect(mine.todayLine != nil)
-    #expect(mine.displayedStrings.contains(mine.todayLine ?? ""))
+    let history = try! #require(mine.remainingHistories["five_hour"])
+    #expect(history.observedPoints.count == 3)
+    #expect(history.estimate != nil)
+    #expect(mine.isLocalReading)
+    #expect(!mine.showsHistoryWindowPicker)
+    #expect(mine.displayedStrings.contains("Remaining history"))
+    #expect(mine.displayedStrings.contains("This iPhone"))
+    #expect(mine.displayedStrings.contains("Estimate"))
 
     let fromAMac = QuotaSubscription(
       key: key,
@@ -204,11 +206,103 @@ struct SubscriptionDetailContentTests {
       subscription: fromAMac,
       deviceNames: deviceNames(),
       samples: samples,
-      now: now,
-      utcOffsetSeconds: 0
+      now: now
     )
-    #expect(theirs.histories.isEmpty)
-    #expect(theirs.todayLine == nil)
+    #expect(theirs.remainingHistories.isEmpty)
+    #expect(!theirs.isLocalReading)
+    #expect(!theirs.showsHistoryWindowPicker)
+    #expect(
+      theirs.displayedStrings.contains(
+        "This iPhone has no readings of its own for this subscription."
+      )
+    )
+  }
+
+  @Test
+  func historyWindowPickerRequiresLocalReadingsOnSomeWindow() {
+    let observed = now.addingTimeInterval(-60)
+    let twoWindows = QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(
+        fingerprint: fingerprint,
+        label: "pe***@example.com",
+        plan: "Plus",
+        fingerprintScope: .global
+      ),
+      windows: [
+        QuotaWindow(
+          id: "five_hour",
+          title: "5 Hours",
+          usedPercent: 58,
+          resetsAt: now.addingTimeInterval(2_700),
+          durationSeconds: 18_000
+        ),
+        QuotaWindow(
+          id: "weekly",
+          title: "Weekly",
+          usedPercent: 24,
+          resetsAt: now.addingTimeInterval(3 * 86_400),
+          durationSeconds: 604_800
+        ),
+      ],
+      status: .available,
+      observedAt: observed
+    )
+    let local = QuotaSubscription(
+      key: key,
+      provider: .codex,
+      snapshot: twoWindows,
+      sources: [
+        QuotaSubscriptionSource(
+          deviceID: ThisDevice.sourceID, observedAt: observed, snapshot: twoWindows)
+      ]
+    )
+    var samples = LocalQuotaSamples()
+    let start = now.addingTimeInterval(2_700 - 18_000)
+    samples.windows = [
+      LocalQuotaSamples.Entry(
+        subscriptionKey: LocalQuotaSamples.key(for: local),
+        provider: .codex,
+        windowID: "five_hour",
+        samples: [
+          QuotaSample(
+            resetsAt: now.addingTimeInterval(2_700),
+            observedAt: start.addingTimeInterval(3_600),
+            usedPercent: 20
+          ),
+          QuotaSample(
+            resetsAt: now.addingTimeInterval(2_700),
+            observedAt: start.addingTimeInterval(12_540),
+            usedPercent: 58
+          ),
+        ]
+      )
+    ]
+    let mine = SubscriptionDetailContent.make(
+      subscription: local,
+      deviceNames: [:],
+      samples: samples,
+      now: now
+    )
+    #expect(mine.windows.count == 2)
+    #expect(mine.showsHistoryWindowPicker)
+
+    let remote = SubscriptionDetailContent.make(
+      subscription: QuotaSubscription(
+        key: key,
+        provider: .codex,
+        snapshot: twoWindows,
+        sources: [
+          QuotaSubscriptionSource(deviceID: studioID, observedAt: observed, snapshot: twoWindows)
+        ]
+      ),
+      deviceNames: deviceNames(),
+      samples: samples,
+      now: now
+    )
+    #expect(remote.windows.count == 2)
+    #expect(!remote.isLocalReading)
+    #expect(!remote.showsHistoryWindowPicker)
   }
 
   private func kitchenThenStudio() -> [QuotaSubscriptionSource] {

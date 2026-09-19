@@ -111,8 +111,8 @@ enum QuotaBarMainMenu {
   private static func viewMenu() -> NSMenu {
     let menu = NSMenu(title: "View")
     menu.addItem(targetedItem("Quota", #selector(Actions.showQuota(_:)), "1"))
-    menu.addItem(targetedItem("Today", #selector(Actions.showToday(_:)), "2"))
-    menu.addItem(targetedItem("Usage", #selector(Actions.showUsage(_:)), "3"))
+    menu.addItem(targetedItem("Usage", #selector(Actions.showUsage(_:)), "2"))
+    menu.addItem(targetedItem("Settings", #selector(Actions.openSettings(_:)), "3"))
     menu.addItem(.separator())
     menu.addItem(targetedItem("Refresh", #selector(Actions.refresh(_:)), "r"))
     menu.addItem(.separator())
@@ -199,10 +199,6 @@ enum QuotaBarMainMenu {
 
     @objc func showQuota(_ sender: Any?) {
       MainWindowController.shared.show(page: .quota)
-    }
-
-    @objc func showToday(_ sender: Any?) {
-      MainWindowController.shared.show(page: .today)
     }
 
     @objc func showUsage(_ sender: Any?) {

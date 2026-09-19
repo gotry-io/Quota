@@ -50,7 +50,10 @@ when it cuts the range. Explicit `{from,to}` does not roll over with the wall cl
 
 The contract is `packages/protocol` (`AccountUsagePeriodResponseSchema`) and
 `packages/protocol/fixtures/usage-period-conformance.json`. v6 summary and activity JSON do not
-change. Clients switch onto this read in a later change.
+change. The website reads this route for every Usage selection except `all`, and for the budget
+month. QuotaBar Account reads it for week / month / custom (any selection that is not one of
+the four summary periods). The monthly budget on QuotaBar stays this Mac's hours. Quota iOS
+still switches in a later change.
 
 ## Consequences
 

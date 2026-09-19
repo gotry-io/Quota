@@ -85,9 +85,9 @@ struct MenuBarShell<Content: View>: View {
 ///
 /// Today's spend is the one supporting number that belongs beside quota everywhere, so it sits
 /// in the bar every page already has rather than spending an Overview line on itself. Selecting
-/// it opens the main window on Usage. How long ago the last sync finished is a fact about the
-/// refresh button, not a number worth a permanent line, so it rides in that button's tooltip
-/// and its VoiceOver label.
+/// it opens the main window on Usage with the Today period. How long ago the last sync finished
+/// is a fact about the refresh button, not a number worth a permanent line, so it rides in that
+/// button's tooltip and its VoiceOver label.
 struct MenuBarFooterView: View {
   @Bindable var model: MenuBarViewModel
   let usageSource: UsageSource

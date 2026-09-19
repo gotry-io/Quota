@@ -1,13 +1,15 @@
 import AppKit
+import QuotaPresentation
 import SwiftUI
 
-/// Sidebar pages of the main window: a Quota group and a Settings group.
+/// Sidebar pages of the main window: Quota, Usage, and a Settings group.
 enum MainPage: String, CaseIterable, Identifiable, Hashable {
   static let storageKey = "main.page"
   static let agentsProviderStorageKey = "settings.agents.provider"
+  /// Shipped `main.page` value for the Today page, rewritten to `usage`.
+  static let legacyTodayRawValue = "today"
 
   case quota
-  case today
   case usage
   case account
   case agents
@@ -18,14 +20,15 @@ enum MainPage: String, CaseIterable, Identifiable, Hashable {
 
   var id: MainPage { self }
 
-  static var quotaGroup: [MainPage] { [.quota, .today, .usage] }
+  static var quotaGroup: [MainPage] { [.quota] }
+  static var usageGroup: [MainPage] { [.usage] }
   static var settingsGroup: [MainPage] {
     [.account, .agents, .notifications, .menuBar, .general, .support]
   }
 
   var isQuotaGroup: Bool {
     switch self {
-    case .quota, .today, .usage: true
+    case .quota, .usage: true
     default: false
     }
   }
@@ -35,7 +38,6 @@ enum MainPage: String, CaseIterable, Identifiable, Hashable {
   var title: String {
     switch self {
     case .quota: "Quota"
-    case .today: "Today"
     case .usage: "Usage"
     case .account: "Account"
     case .agents: "Agents"
@@ -46,12 +48,11 @@ enum MainPage: String, CaseIterable, Identifiable, Hashable {
     }
   }
 
-  /// SF Symbols for the main window sidebar.
+  /// SF Symbols for the main window sidebar. Quota and Usage match the iOS tabs.
   var systemImage: String {
     switch self {
-    case .quota: "chart.xyaxis.line"
-    case .today: "sun.max"
-    case .usage: "chart.bar.xaxis"
+    case .quota: "gauge.with.dots.needle.33percent"
+    case .usage: "chart.bar"
     case .account: "person.crop.circle"
     case .agents: "cpu"
     case .notifications: "bell"
@@ -65,7 +66,14 @@ enum MainPage: String, CaseIterable, Identifiable, Hashable {
   static var resolved: MainPage { stored ?? .quota }
 
   static var stored: MainPage? {
-    UserDefaults.standard.string(forKey: storageKey).flatMap(MainPage.init(rawValue:))
+    migrateLegacyStoredPage()
+    return UserDefaults.standard.string(forKey: storageKey).flatMap(MainPage.init(rawValue:))
+  }
+
+  /// Rewrites a shipped `today` value to `usage` so the last page is not dropped.
+  static func migrateLegacyStoredPage(in defaults: UserDefaults = .standard) {
+    guard defaults.string(forKey: storageKey) == legacyTodayRawValue else { return }
+    defaults.set(MainPage.usage.rawValue, forKey: storageKey)
   }
 
   /// Settings… opens the last Settings page when that is what is stored; otherwise Account.
@@ -106,12 +114,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     hosting?.rootView = MainWindowView(model: model)
   }
 
-  func show(page: MainPage? = nil) {
+  func show(page: MainPage? = nil, usagePeriod: UsagePeriodSelection? = nil) {
+    MainPage.migrateLegacyStoredPage()
     closePanel()
     if let page {
       UserDefaults.standard.set(page.rawValue, forKey: MainPage.storageKey)
     }
     guard let model else { return }
+    if let usagePeriod {
+      model.usage.selectUsagePeriod(usagePeriod)
+    }
     model.usage.loadQuotaHistory()
     let window = self.window ?? makeWindow()
     self.window = window
@@ -121,6 +133,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
   func showSettings() {
     show(page: MainPage.settingsLandingPage(MainPage.stored))
+  }
+
+  /// Panel footer Today line and the old Today entry points: Usage with the Today period.
+  func showUsageToday() {
+    show(page: .usage, usagePeriod: .today)
   }
 
   /// Same path as File › Close / ⌘W, so `WindowActivation` drops to accessory.

@@ -58,21 +58,50 @@ final class QuotaUITests: XCTestCase {
         || app.descendants(matching: .any)["overview.today.tokens"].exists,
       "Today section"
     )
+    XCTAssertTrue(app.navigationBars["Quota"].exists, "Quota page title")
+    XCTAssertFalse(
+      app.navigationBars["octocat"].exists,
+      "account identity is not the Overview title"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.today.input"].exists,
+      "Input tile is gone"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.today.output"].exists,
+      "Output tile is gone"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.today.tokens"].exists,
+      "overview.today.tokens"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.today.cost"].exists,
+      "overview.today.cost"
+    )
     settle(app)
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
     try restoreTabBar(app)
-
-    app.tabBars.buttons["Usage"].tap()
+    revealIdentifier(app, "overview.today")
+    app.descendants(matching: .any)["overview.today"].firstMatch.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
     )
+    // Overview's Today row opens Usage on the Today period (B3b); the period chooser is a menu
+    // (B4b), so read its value, then move to Last 30 days for the captures below.
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.period"].waitForExistence(timeout: 5),
-      "usage period menu"
+      period.label.contains("Today") || ((period.value as? String) ?? "").contains("Today"),
+      "Overview Today opens the Today period, got \(period.label) / \(String(describing: period.value))"
     )
+    period.tap()
+    let last30 = app.buttons["Last 30 days"].firstMatch
+    XCTAssertTrue(last30.waitForExistence(timeout: 5), "Last 30 days in the period menu")
+    last30.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
       "usage.headline"
@@ -184,14 +213,26 @@ final class QuotaUITests: XCTestCase {
     )
     let reporting = app.descendants(matching: .any)["subscription.reporting"]
     if !reporting.waitForExistence(timeout: 2) {
+      revealSources(app)
       scrollToIdentifier(app, "subscription.reporting", attempts: 12)
     }
     XCTAssertTrue(reporting.waitForExistence(timeout: 5), "Reporting")
     XCTAssertTrue(
       app.staticTexts["Readings"].exists
         || app.descendants(matching: .any)["section.header.readings"].exists
+        || app.descendants(matching: .any)["subscription.sources"].exists
         || reporting.exists,
       "Readings"
+    )
+    scrollToIdentifier(app, "subscription.history")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.history"].waitForExistence(timeout: 5),
+      "subscription.history"
+    )
+    XCTAssertTrue(
+      app.staticTexts["This iPhone has no readings of its own for this subscription."].exists
+        || app.descendants(matching: .any)["subscription.history"].exists,
+      "remote-only remaining history"
     )
     attachScreenshot(app, name: "subscription-detail")
     try audit(app)
@@ -402,7 +443,11 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     XCTAssertTrue(
       app.staticTexts[
         "Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this "
@@ -548,7 +593,21 @@ final class QuotaUITests: XCTestCase {
       "overview.root"
     )
     XCTAssertFalse(app.descendants(matching: .any)["connect.root"].exists, "no Connect wall")
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(app.navigationBars["Quota"].waitForExistence(timeout: 5), "Quota page title")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Credentials stay on this phone."].exists,
+      "Connect outcome"
+    )
+    XCTAssertTrue(app.staticTexts["Already use QuotaBar?"].exists, "Already use QuotaBar?")
+    XCTAssertTrue(
+      app.staticTexts["See readings from your other devices."].exists,
+      "Sign-in outcome"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     XCTAssertTrue(app.buttons["Connect a provider"].exists, "Connect a provider")
     XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
     assertTab(app, "Quota")
@@ -570,6 +629,10 @@ final class QuotaUITests: XCTestCase {
         timeout: 5),
       "a locally collected subscription"
     )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.empty"].exists,
+      "not the empty state"
+    )
     XCTAssertFalse(app.staticTexts["No quota yet"].exists, "not the empty state")
     // Today Usage is the Account's fold; without an account there is no such number.
     XCTAssertFalse(app.staticTexts["Today"].exists, "no Today section without an account")
@@ -581,25 +644,24 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
-    // What this phone read for itself has samples behind it, so the window draws its own curve
-    // and the day it belongs to is listed.
+    // What this phone read for itself has samples behind it, so remaining history plots them.
+    let localHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !localHistory.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
     XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.paceline"].firstMatch.waitForExistence(
-        timeout: 5),
-      "subscription.paceline"
+      localHistory.waitForExistence(timeout: 5),
+      "subscription.history"
     )
+    XCTAssertTrue(app.staticTexts["Remaining history"].waitForExistence(timeout: 5), "history title")
+    XCTAssertTrue(app.staticTexts["This iPhone"].exists, "This iPhone beside remaining history")
     attachScreenshot(app, name: "subscription-detail-local")
     try audit(app)
 
-    // The day and the readings sit below the pace lines, so the page is several screens long.
-    scrollToIdentifier(app, "subscription.today.current")
+    revealSources(app)
     XCTAssertTrue(
-      app.descendants(matching: .any)["section.header.today"].exists,
-      "section.header.today"
-    )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.today.current"].firstMatch.exists,
-      "the window that is still running"
+      app.descendants(matching: .any)["subscription.sources"].exists,
+      "subscription.sources"
     )
     scrollToIdentifier(app, "subscription.reporting")
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
@@ -620,13 +682,40 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
       "subscription.detail"
     )
+    let mergedHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !mergedHistory.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
+    XCTAssertTrue(
+      mergedHistory.waitForExistence(timeout: 5),
+      "subscription.history"
+    )
     attachScreenshot(app, name: "subscription-detail-merged")
     try audit(app)
 
+    revealSources(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.sources"].exists,
+      "subscription.sources"
+    )
     scrollToIdentifier(app, "subscription.reporting")
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
-    XCTAssertTrue(app.staticTexts["Studio Mac"].exists, "Studio Mac")
-    XCTAssertTrue(app.staticTexts["Kitchen Mac"].exists, "Kitchen Mac")
+    let studio = app.staticTexts["Studio Mac"]
+    if !studio.waitForExistence(timeout: 2) {
+      for _ in 0..<8 where !studio.exists {
+        scrollContent(app, up: true)
+        _ = studio.waitForExistence(timeout: 1)
+      }
+    }
+    XCTAssertTrue(studio.waitForExistence(timeout: 5), "Studio Mac")
+    let kitchen = app.staticTexts["Kitchen Mac"]
+    if !kitchen.waitForExistence(timeout: 2) {
+      for _ in 0..<8 where !kitchen.exists {
+        scrollContent(app, up: true)
+        _ = kitchen.waitForExistence(timeout: 1)
+      }
+    }
+    XCTAssertTrue(kitchen.waitForExistence(timeout: 5), "Kitchen Mac")
   }
 
   /// The one page that offers every way in, over the tabs it was asked from.
@@ -821,7 +910,11 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     if !app.staticTexts["No usage today."].exists {
       scrollToIdentifier(app, "overview.today.empty")
     }
@@ -1261,6 +1354,22 @@ final class QuotaUITests: XCTestCase {
   /// A SwiftUI `List` builds its rows lazily, so a row several screens down does not exist yet;
   /// one drag is not always enough to reach it. Accessibility Extra Large needs more than a
   /// couple of screens on Settings and Usage.
+  /// Expand **Readings from N devices** when the source rows are still collapsed.
+  private func revealSources(_ app: XCUIApplication) {
+    let sources = app.descendants(matching: .any)["subscription.sources"].firstMatch
+    if !sources.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.sources", attempts: 12)
+    }
+    guard sources.exists else { return }
+    if app.descendants(matching: .any)["subscription.reporting"].exists
+      || app.descendants(matching: .any)["subscription.source"].exists
+    {
+      return
+    }
+    sources.tap()
+    _ = app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 2)
+  }
+
   private func scrollToIdentifier(
     _ app: XCUIApplication,
     _ identifier: String,
@@ -1347,6 +1456,18 @@ final class QuotaUITests: XCTestCase {
   }
 
   private func scrollableList(in app: XCUIApplication) -> XCUIElement {
+    let named = [
+      "subscription.detail",
+      "usage.day",
+      "usage.root",
+      "overview.root",
+      "settings.root",
+      "devices.root",
+    ]
+    for identifier in named {
+      let element = app.descendants(matching: .any)[identifier].firstMatch
+      if element.exists { return element }
+    }
     if app.collectionViews.firstMatch.exists { return app.collectionViews.firstMatch }
     if app.tables.firstMatch.exists { return app.tables.firstMatch }
     return app

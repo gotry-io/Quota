@@ -349,7 +349,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
       && agents.allSatisfy(\.isValid)
       && (projects?.count ?? 0) <= 50
       && (projects?.allSatisfy(\.isValid) ?? true)
-      && (days?.count ?? 0) <= 31
+      && (days?.count ?? 0) <= 366
       && (days?.allSatisfy(\.isValid) ?? true)
       && zip(days ?? [], (days ?? []).dropFirst()).allSatisfy { $0.date < $1.date }
       && (hoursOfDay.map { $0.count == 24 && $0.enumerated().allSatisfy { $1.hour == $0 } } ?? true)
