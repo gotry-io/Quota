@@ -1,6 +1,7 @@
 # ADR 0001: Persistent managed Relay storage
 
-- Status: Accepted (revised 2026-08-10)
+- Status: Accepted
+- Amended: 2026-08-10
 - Related: [ADR 0006](./0006-managed-account-device-usage.md)
 
 ## Context

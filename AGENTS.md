@@ -5,91 +5,30 @@ architecture facts live in the referenced source documents rather than being rep
 
 ## Sources of truth
 
-Read the relevant source before changing that area:
+Read the relevant source before changing that area. Historical decision discovery is the
+[ADR index](docs/decisions/README.md).
 
 | Concern | Canonical source |
 | --- | --- |
-| Product overview, repository layout, commands, current status | `README.md` |
-| System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
-| Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
-| Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
-| Colour, remaining-quota bands, spacing, radii | `packages/design-tokens/tokens.json` |
-| Shared visual language, copy, colour and type roles | `docs/design.md` |
-| Collection strategy for all twelve providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
-| CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
-| Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
-| One Relay source tree on both Cloudflare Workers and Node/Docker | `docs/decisions/0049-one-relay-two-runtimes.md` |
-| Self-hosted Relay (Docker, Tunnel, backup, cutover) | `docs/relay-self-host.md` |
-| Observation merge that preserves what each device saw | `docs/decisions/0003-observation-preserving-subscription-merge.md` |
-| One private Rust service behind one entry point | `docs/decisions/0007-rust-native-local-service.md` |
-| Report-time model catalog, and why the raw model text is kept | `docs/decisions/0009-versioned-model-catalog.md` |
-| Browser-session acquisition, its consent gate, and its bounds | `docs/decisions/0010-provider-browser-session-auth.md` |
-| SvelteKit documents served through the Relay Worker | `docs/decisions/0011-sveltekit-document-worker.md` |
-| Freshness derived from the observation, not stamped on it | `docs/decisions/0017-derived-observation-freshness.md` |
-| Quota pace derived from the reading, and the one phrase every surface prints | `docs/decisions/0035-quota-pace-is-derived-from-the-reading.md` |
-| Quota history kept as local samples, folded once, and never uploaded | `docs/decisions/0042-quota-history-is-local-samples.md` |
-| The panel glances; quota history stays local samples | `docs/decisions/0051-the-panel-glances-and-the-windows-explain.md` |
-| QuotaBar is the app, and the menu bar is part of it | `docs/decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md` |
-| QuotaBar is resident in the menu bar | `docs/decisions/0054-quotabar-is-resident-in-the-menu-bar.md` |
-| A period export is the period on screen | `docs/decisions/0056-a-period-export-is-the-period-on-screen.md` |
-| One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
-| Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
-| Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
-| Browser sign-in and the one session table behind every client | `docs/decisions/0025-one-session-system.md` |
-| One token per client, and why there is no CLI or device grant | `docs/decisions/0027-one-token-per-client.md` |
-| Managed-data v6: hour-versioned Usage, daily rollups, resolved subscriptions | `docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md` |
-| Strict writes, tolerant reads, and unknown enum members | `docs/decisions/0023-strict-writes-tolerant-reads.md` |
-| Writes refused only at their boundary, and the evidence a refusal leaves | `docs/decisions/0028-the-boundary-answers-the-write.md` |
-| Official price for an unnamed billing channel | `docs/decisions/0029-official-price-for-an-unnamed-channel.md` |
-| A rotation whose successor was never presented did not happen | `docs/decisions/0030-a-rotation-never-received-did-not-happen.md` |
-| The Usage fold of an Account summary is stored, keyed by what it depends on | `docs/decisions/0031-the-usage-fold-is-stored.md` |
-| An Account owns its identities, and every sign-in confirms which Account it is | `docs/decisions/0032-an-account-owns-its-identities.md` |
-| Sync is free for every Account, and Relay has no billing system | `docs/decisions/0048-sync-is-free-and-billing-is-gone.md` |
-| Derived Usage metrics: the cache hit rate, what a cache saved, and the local day and clock folds | `docs/decisions/0036-usage-derived-metrics.md` |
-| What a public profile page publishes, and why that answer is the cacheable one | `docs/decisions/0037-a-public-profile-shows-usage-not-quota.md` |
-| The opt-in leaderboard, and what a place on it carries | `docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md` |
-| The public `quota` command, and why a reader is not a second service | `docs/decisions/0046-a-read-only-quota-command.md` |
-| Sessions are a local view of Usage source files | `docs/decisions/0038-sessions-are-a-local-view-of-files.md` |
-| Project attribution stays on This Mac | `docs/decisions/0039-project-attribution-stays-local.md` |
-| Client-folded Usage periods, the `usage_period` IPC operation, and the device-only budget | `docs/decisions/0040-a-period-is-folded-where-its-days-already-are.md` |
-| Account period read, hour-grid rule, presets as the same read | `docs/decisions/0055-an-account-period-is-a-local-date-range.md` |
-| Local identity store, disposable cache, and what a damaged image costs | `docs/decisions/0021-identity-store-and-disposable-cache.md` |
-| Diagnostic report v3, the attempt journal, and Account device status | `docs/decisions/0022-minimal-diagnostics.md` |
-| Read-only iOS account client | `docs/decisions/0013-readonly-ios-account-client.md` |
-| In-app provider sign-in on iOS, and where those cookies live | `docs/decisions/0034-ios-collects-for-itself.md` |
-| The phone as a Device | `docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md` |
-| Relay's public provider status-page read | `docs/decisions/0044-relay-publishes-provider-status.md` |
-| Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
-| One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |
-| One alert delivery package for both Apple apps | `docs/decisions/0053-one-alert-delivery-package-for-both-apps.md` |
-| Freshness, provider-name, and Devices copy shared by every client | `docs/design.md` (Shared product vocabulary) |
-| Website platform deltas and marketing UI | `apps/web/DESIGN.md` |
-| QuotaBar platform deltas and UI behavior | `apps/menubar/DESIGN.md` |
-| Quota iOS platform deltas and UI behavior | `apps/ios/DESIGN.md` |
-| App-specific usage | The corresponding `apps/*/README.md` |
+| Architecture | `docs/architecture.md` |
+| Security | `docs/security.md` |
+| Protocol | `packages/protocol`; [ADR 0023](docs/decisions/0023-strict-writes-tolerant-reads.md) |
+| Provider catalog and strategy | `packages/provider/catalog.json`, `docs/provider-collection.md` |
+| Design | `docs/design.md`, `packages/design-tokens/tokens.json` |
+| Local state | [ADR 0021](docs/decisions/0021-identity-store-and-disposable-cache.md) |
+| Account and sync | [ADR index](docs/decisions/README.md) (0006, 0025, 0027, 0048, 0055) |
+| App work | `apps/*/README.md`; platform UI deltas in `apps/*/DESIGN.md` |
+| Deployment and release | `docs/relay-self-host.md`, [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| CI | `.github/workflows/ci.yml`, [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 Do not create a second description of a canonical rule. Update its source and link to it.
-
-A canonical document states decisions, not evidence. Where one gives an empirical reason and that
-reason is what would refuse a change, measure it before citing it; if the measurement contradicts
-the document, correct the document in the same change and say what was measured. Where the
-corrected reason is itself empirical, pin it with a test rather than a sentence.
 
 ## Repository boundaries
 
 - Put runnable and deployable products under `apps/` and shared code under `packages/`.
-- The Apple packages own what more than one Apple product speaks: `packages/apple-client` owns the
-  managed wire types — quota, account, and Usage — plus `ProviderID`, Relay access, and
-  `QuotaBrandIcons` (the template catalog of provider marks both apps draw; widget extensions do
-  not link it);
-  `packages/apple-shared` owns Foundation-only presentation semantics, `QuotaAlerts`, the
-  Foundation-only remaining-quota rule evaluator both Apple apps share, and `QuotaAlertDelivery`,
-  the UserNotifications delivery layer both Apple apps share (each app passes its own key prefix
-  and state file). QuotaBar owns its private IPC models, its Usage upload and local-report types,
-  and app-only provider behavior, and extends the shared types rather than declaring a second copy.
-  Wire validation lives with the type it protects,
-  so both products answer the same input the same way. Do not restate a type one of those packages
-  already owns; do not move a QuotaBar-only type into them to make it look shared.
+- Apple shared types live in `packages/apple-client` and `packages/apple-shared` as
+  `docs/architecture.md` states. Do not restate a type one of those packages already owns; do not
+  move a QuotaBar-only type into them to make it look shared.
 - Do not recreate legacy top-level `internal/`, `protocol/`, or `cmd/` trees.
 - Follow the dependency graph and runtime restrictions in `docs/architecture.md`.
 - Preserve documented protocol and platform interfaces that intentionally reserve future behavior.
@@ -140,23 +79,18 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 ## Code conventions
 
 - TypeScript is strict ESM. Keep explicit `.ts` extensions for local imports and use `import type`
-  for type-only imports.
-- Do not weaken the shared TypeScript checks to bypass errors.
+  for type-only imports. Do not weaken the shared TypeScript checks to bypass errors.
 - Format TypeScript/JSON/Markdown with Biome and Rust with rustfmt using the repository configuration.
 - Use `@gotry-io/*` for TypeScript workspace packages and `workspace:*` for internal dependencies.
-- Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
+  Keep dependencies pinned consistently. Commit `pnpm-lock.yaml` and the root workspace
   `Cargo.lock`; do not add npm, Yarn, or Bun lockfiles.
-- Rust code targets the stable toolchain. `apps/menubar/helper` is the only entry point that may
-  *write* over `packages/service`; keep it private: no command parser, socket listener,
-  daemonization, or public installation surface. The `quota` binary in the same crate is a reader —
-  it opens the disposable cache read-only, collects nothing, and touches no credential
-  (`docs/decisions/0046-a-read-only-quota-command.md`). Do not give it a second one. The shared
-  crate stays platform-neutral in style, but only macOS is built, tested, and released.
-- Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
-- Web UI follows `docs/design.md` and `apps/web/DESIGN.md` and must remain keyboard-accessible and
-  responsive.
-- QuotaBar UI follows `docs/design.md` and `apps/menubar/DESIGN.md` (system material panel), not the
-  website design file.
+- Rust targets the stable toolchain. `apps/menubar/helper` is the only entry that may *write* over
+  `packages/service`; keep it private. The `quota` binary is a reader
+  (`docs/decisions/0046-a-read-only-quota-command.md`). Only macOS is built, tested, and released.
+- Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate
+  from views.
+- Web UI follows `docs/design.md` and `apps/web/DESIGN.md`. QuotaBar UI follows `docs/design.md` and
+  `apps/menubar/DESIGN.md`, not the website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, and QuotaRelay. The iOS app's product name is Quota. The
   bundled Rust *service* executable is a private QuotaBar implementation detail, never a public
@@ -164,47 +98,9 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
-## Development commands
-
-Run commands from the repository root. The required toolchain is listed in `README.md`.
-
-```bash
-pnpm install
-pnpm format:check
-pnpm check
-pnpm test
-pnpm build
-pnpm version:bump:menubar patch   # QuotaBar CFBundleShortVersionString only
-pnpm version:bump:ios patch       # Quota iOS MARKETING_VERSION, then generate-ios
-# Publish: git tag menubar-vX.Y.Z
-# Publish iOS: git tag ios-vX.Y.Z
-```
-
-main carries the version being developed, not the one last released: after a stable
-`menubar-v*` release publishes, `release-menubar` opens the patch bump for the next one and lets
-it auto-merge, and `release-ios` does the same after an `ios-v*` upload, so a tag never waits on a
-version commit. Publishing is therefore the tag alone.
-A minor or major is the exception — close the bot's pull request and bump by hand. The bump opens
-its pull request as the repository's automation GitHub App (`APP_CLIENT_ID` variable,
-`APP_PRIVATE_KEY` secret) rather than with `GITHUB_TOKEN`, whose pull request would start no
-workflow run and so never satisfy the required checks; without those the release still publishes
-and warns that main was left on the released version. A job asking for that app narrows the token
-to the permissions it needs, so granting the app a new one for some other job never widens an
-existing one.
-
-main takes pull requests through a merge queue: `ci` also runs on `merge_group`, the queue builds
-each entry on top of main and the entries ahead of it, and only what passed there merges, so a pull
-request is not re-synced and re-run because something else landed first. A change that moves nothing
-but a product's version string answers every required check without running it
-(`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author), and
-`update-bump-prs` re-syncs an open bump pull request when main moves, so a bump never waits for a
-person.
-
-Targeted development entry points are defined by the root `package.json` scripts and each app's
-README. Do not duplicate their command lists in new documents.
-
-Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.build/`, `.swiftpm/`,
-`.wrangler/`, SQLite files, logs, or local credentials.
+Development commands, hooks, the merge queue, and review expectations live in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Do not commit generated state such as `node_modules/`,
+`dist/`, `target/`, `.build/`, `.swiftpm/`, `.wrangler/`, SQLite files, logs, or local credentials.
 
 ## Verification
 
