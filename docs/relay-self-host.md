@@ -30,7 +30,17 @@ client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-r
   [`scripts/relay-sqlite-backup.sh`](../scripts/relay-sqlite-backup.sh)).
 - **Edge** Caddy (Portainer stack `caddy`, `/opt/caddy/Caddyfile`) terminates TLS
   with a Let's Encrypt certificate obtained through Cloudflare DNS-01 and proxies
-  to `quota-relay:8787` on the shared `web` network:
+  to `quota-relay:8787` on the shared `web` network. Relay honours `CF-Connecting-IP`
+  and `X-Forwarded-For` only from peers in `RELAY_TRUSTED_PROXIES` (unset: loopback,
+  RFC1918, unique-local IPv6 — Caddy on the Docker `web` network is inside that
+  default). Caddy is the first trusted boundary, so it must not forward a
+  client-supplied chain:
+
+  **Cloudflare-proxied zone** (production: proxied A record). Set
+  `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`. Cloudflare sets
+  `CF-Connecting-IP` and clients cannot forge it there. Pass that header through
+  and *overwrite* `X-Forwarded-For` with it, rather than appending whatever the
+  client sent:
 
   ```caddyfile
   quota.gotry.io {
@@ -39,9 +49,32 @@ client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-r
   		output stdout
   		format json
   	}
-  	reverse_proxy http://quota-relay:8787
+  	reverse_proxy http://quota-relay:8787 {
+  		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+  	}
   }
   ```
+
+  **Not Cloudflare-proxied** (direct origin, or a leaked origin IP). Leave
+  `RELAY_CLIENT_ADDRESS_HEADER` unset (`x-forwarded-for`). Clients can send
+  `CF-Connecting-IP` themselves. Strip it and overwrite `X-Forwarded-For` with
+  the socket client Caddy actually accepted:
+
+  ```caddyfile
+  quota.gotry.io {
+  	import edge
+  	reverse_proxy http://quota-relay:8787 {
+  		header_up -CF-Connecting-IP
+  		header_up X-Forwarded-For {remote_host}
+  	}
+  }
+  ```
+
+  The `deploy/relay/docker-compose.yml` Tunnel layout has no Caddy: `cloudflared`
+  is a Docker-network peer (trusted by the default) and sets `CF-Connecting-IP`.
+  Set `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`. An untrusted peer that can
+  reach `:8787` has its forwarding headers discarded; the rate-limit identity is
+  the socket address.
 
 - **DNS** `quota.gotry.io` is a proxied A record to the dmit address. `wrangler.jsonc`
   declares no route, so nothing can re-bind the name to a Worker by accident.
@@ -52,10 +85,26 @@ It is not what production runs.
 
 ## Secrets
 
+**Upgrade note (owner actions).** A Cloudflare-fronted deployment MUST set
+`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip` when it takes this version, or
+every client collapses into the Cloudflare edge addresses Caddy reports as
+`X-Forwarded-For`. The origin must only accept Cloudflare's ranges (Caddy
+`remote_ip` matcher or a host firewall): a request that reaches Caddy without
+going through Cloudflare can send `CF-Connecting-IP` itself. Both are owner
+actions; the process will not infer either from DNS. Unset
+`RELAY_CLIENT_ADDRESS_HEADER` is `x-forwarded-for` (Caddy overwrites that
+header; inbound `CF-Connecting-IP` is ignored).
+
 The Node process reads the same names as the Worker, plus `RELAY_SQLITE_PATH`,
-`RELAY_STATIC_DIR`, and `PORT` (the stack file sets those three).
-`IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`, and `QUOTA_SESSION_HASH_KEY`
-must each be at least 32 characters; a shorter value refuses to start.
+`RELAY_STATIC_DIR`, `PORT` (the stack file sets those three),
+`RELAY_TRUSTED_PROXIES`, and `RELAY_CLIENT_ADDRESS_HEADER`. Unset or empty
+`RELAY_TRUSTED_PROXIES` is loopback, RFC1918, and unique-local IPv6
+(`127.0.0.0/8, ::1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7`); a
+token that is not a CIDR or address refuses to start.
+`RELAY_CLIENT_ADDRESS_HEADER` is `x-forwarded-for` or `cf-connecting-ip`; any
+other value refuses to start. `IDENTITY_SUBJECT_KEY`, `QUOTA_INSTALLATION_KEY`,
+and `QUOTA_SESSION_HASH_KEY` must each be at least 32 characters; a shorter
+value refuses to start.
 
 - The canonical copy is `deploy/relay/relay.env` on the operator's machine
   (mode 600, gitignored; `relay.env.example` lists the names).
