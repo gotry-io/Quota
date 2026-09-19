@@ -1,7 +1,8 @@
 # Design tokens
 
 `tokens.json` is the only hand-edited colour, tone-threshold, spacing, and radius source for
-Quota Web, Quota iOS, and QuotaBar.
+Quota Web, Quota iOS, and QuotaBar. What those colours mean, and the copy every client prints,
+live in [`docs/design.md`](../../docs/design.md).
 
 Run `pnpm generate:design-tokens` after editing it. That writes:
 

@@ -109,12 +109,13 @@ struct DashboardQuotaPoint: Equatable, Identifiable, Sendable {
   var resetsAt: Date? = nil
 }
 
-/// Read-only Dashboard projection over `MenuBarViewModel`. Refresh is the only action it
-/// forwards; it never writes preferences, credentials, or Usage.
+/// Read-only Dashboard projection over `MenuBarViewModel` and its ``UsageModel``. Refresh is
+/// the only action it forwards; it never writes preferences, credentials, or Usage.
 @Observable
 @MainActor
 final class DashboardModel {
   let model: MenuBarViewModel
+  private var usage: UsageModel { model.usage }
   var range: DashboardRange = .fallback {
     didSet { persistRange() }
   }
@@ -151,14 +152,16 @@ final class DashboardModel {
   /// The source Usage actually answers from. Account is only honest while a summary exists
   /// and sync is on.
   var presentedUsageSource: UsageSource {
-    model.effectiveUsageSource(usageSource)
+    usage.effectiveUsageSource(usageSource)
   }
 
   /// The six-item period control's selection. A custom range selects none of them.
   var selectedUsagePeriodSegment: UsagePeriodSegment? {
-    let segment = model.usagePeriod.segment
+    let segment = usage.usagePeriod.segment
     return segment == .custom ? nil : segment
   }
+
+  var usagePeriod: UsagePeriodSelection { usage.usagePeriod }
 
   /// Projects stay on This Mac (ADR 0039). Account Usage has no such table.
   var showsUsageProjects: Bool {
@@ -166,11 +169,11 @@ final class DashboardModel {
   }
 
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
-    model.selectUsagePeriod(selection)
+    usage.selectUsagePeriod(selection)
   }
 
   func usagePeriodTitle(now: Date) -> String {
-    model.usagePeriodTitle(now: now)
+    usage.usagePeriodTitle(now: now)
   }
 
   func providers(now: Date) -> [DashboardProvider] {
@@ -193,7 +196,7 @@ final class DashboardModel {
 
   /// One row per provider × window that had samples on the reader's local day.
   func todayRows(now: Date, resetStyle: ResetCopyStyle = .relative) -> [DashboardTodayRow] {
-    let utcOffset = model.quotaHistorySamples?.utcOffsetSeconds ?? 0
+    let utcOffset = usage.quotaHistorySamples?.utcOffsetSeconds ?? 0
     let startOfDay = Self.localDayStart(now, utcOffsetSeconds: utcOffset)
     return displayedProviders(now: now).flatMap { provider in
       todayRows(
@@ -208,20 +211,20 @@ final class DashboardModel {
 
   func presentedUsage(now: Date) -> DashboardUsagePresentation {
     let source = presentedUsageSource
-    let selection = model.usagePeriod
-    let detail = model.usageDetail(source: source, selection: selection)
-    let usage = detail.map { presentedUsage(from: $0, source: source) }
+    let selection = usage.usagePeriod
+    let detail = usage.usageDetail(source: source, selection: selection)
+    let presented = detail.map { presentedUsage(from: $0, source: source) }
     return DashboardUsagePresentation(
       source: source,
       refreshWarning: model.errorMessage,
       accountWarning: source == .account ? model.accountErrorMessage : nil,
       statusWarning: usageStatusWarning(detail: detail, source: source),
-      usage: usage,
-      sessions: model.localUsage?.sessions,
-      isPreparing: model.isPreparingUsage(source: source) || model.customUsageLoading,
-      title: model.usagePeriodTitle(now: now),
-      available: model.usagePeriodIsAvailable(source: source, selection: selection),
-      budget: model.budgetProgress,
+      usage: presented,
+      sessions: usage.localUsage?.sessions,
+      isPreparing: usage.isPreparingUsage(source: source) || usage.customUsageLoading,
+      title: usage.usagePeriodTitle(now: now),
+      available: usage.usagePeriodIsAvailable(source: source, selection: selection),
+      budget: usage.budgetProgress,
       showsProjects: showsUsageProjects
     )
   }
@@ -229,12 +232,12 @@ final class DashboardModel {
   func refresh() {
     Task { @MainActor in
       await model.refresh()
-      model.loadQuotaHistory()
+      usage.loadQuotaHistory()
     }
   }
 
   func loadHistory() {
-    model.loadQuotaHistory()
+    usage.loadQuotaHistory()
   }
 
   private func persistRange() {
@@ -275,7 +278,7 @@ final class DashboardModel {
     accounts: [AccountQuotaPresentation],
     now: Date
   ) -> DashboardProvider {
-    let histories = subscriptionKey.flatMap { model.quotaHistory[$0] } ?? [:]
+    let histories = subscriptionKey.flatMap { usage.quotaHistory[$0] } ?? [:]
     let windows = histories.values.flatMap(\.windowsToday).sorted { $0.startedAt < $1.startedAt }
     let paceWindow = snapshot.flatMap { $0.primaryCadenceWindows.first ?? $0.windows.first }
     let paceHeadline: String?
@@ -318,7 +321,7 @@ final class DashboardModel {
   ) -> [DashboardQuotaSeries] {
     guard let snapshot, let subscriptionKey else { return [] }
     let start = range.start(now: now)
-    let byWindow = model.quotaHistorySamples?.samplesBySubscription[subscriptionKey] ?? [:]
+    let byWindow = usage.quotaHistorySamples?.samplesBySubscription[subscriptionKey] ?? [:]
     var rank = 0
     var result: [DashboardQuotaSeries] = []
     for window in snapshot.windows {
@@ -332,7 +335,7 @@ final class DashboardModel {
         }
       guard !points.isEmpty else { continue }
       let projection: DashboardQuotaPoint?
-      if let projected = model.quotaHistory[subscriptionKey]?[window.id]?.projection,
+      if let projected = usage.quotaHistory[subscriptionKey]?[window.id]?.projection,
         let resetsAt = window.resetsAt, let last = points.last
       {
         projection = Self.projectionPoint(
@@ -426,8 +429,8 @@ final class DashboardModel {
     utcOffsetSeconds: Int,
     resetStyle: ResetCopyStyle
   ) -> [DashboardTodayRow] {
-    let byWindow = model.quotaHistorySamples?.samplesBySubscription[provider.id] ?? [:]
-    let histories = model.quotaHistory[provider.id] ?? [:]
+    let byWindow = usage.quotaHistorySamples?.samplesBySubscription[provider.id] ?? [:]
+    let histories = usage.quotaHistory[provider.id] ?? [:]
     let cost = todayCost(for: provider.provider)
     let snapshotWindows = Dictionary(
       uniqueKeysWithValues: (provider.currentReading?.windows ?? []).map { ($0.id, $0) }
@@ -470,7 +473,7 @@ final class DashboardModel {
   }
 
   private func todayCost(for provider: ProviderID) -> String? {
-    guard let detail = model.usageDetail(source: presentedUsageSource, period: .today) else {
+    guard let detail = usage.usageDetail(source: presentedUsageSource, period: .today) else {
       return nil
     }
     guard

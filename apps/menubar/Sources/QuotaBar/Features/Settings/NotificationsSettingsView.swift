@@ -67,7 +67,7 @@ struct NotificationsSettingsView: View {
     .formStyle(.grouped)
     .quotaSettingsColumn()
     .task { await model.refreshNotificationAuthorization() }
-    .onAppear { budgetDraft = model.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
+    .onAppear { budgetDraft = model.usage.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
   }
 
   /// The monthly spend budget this Mac keeps for itself. It is never uploaded.
@@ -80,8 +80,10 @@ struct NotificationsSettingsView: View {
       Toggle(
         "Budget alerts",
         isOn: Binding(
-          get: { model.budget.alerts },
-          set: { model.setBudget(UsageBudget(amountUSD: model.budget.amountUSD, alerts: $0)) }
+          get: { model.usage.budget.alerts },
+          set: {
+            model.usage.setBudget(UsageBudget(amountUSD: model.usage.budget.amountUSD, alerts: $0))
+          }
         )
       )
       .accessibilityLabel("Budget alerts")
@@ -99,7 +101,7 @@ struct NotificationsSettingsView: View {
     let amount = UsageBudget.normalized(
       Decimal(string: budgetDraft.trimmingCharacters(in: .whitespaces), locale: .current)
     )
-    model.setBudget(UsageBudget(amountUSD: amount, alerts: model.budget.alerts))
+    model.usage.setBudget(UsageBudget(amountUSD: amount, alerts: model.usage.budget.alerts))
     budgetDraft = amount.map(UsageBudgetProgress.plain) ?? ""
   }
 

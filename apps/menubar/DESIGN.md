@@ -1,7 +1,10 @@
 # QuotaBar Design
 
-This file is the canonical visual and interaction specification for native macOS QuotaBar: the
-menu-bar panel and one main window. Website marketing UI belongs in `apps/web/DESIGN.md`.
+This file lists only QuotaBar platform deltas and links [`docs/design.md`](../../docs/design.md).
+
+QuotaBar is a native macOS instrument: a 320×480 menu-bar panel and one titled main window. Website
+marketing UI belongs in [`apps/web/DESIGN.md`](../web/DESIGN.md). Quota iOS belongs in
+[`apps/ios/DESIGN.md`](../ios/DESIGN.md).
 
 ## Product character
 
@@ -11,141 +14,19 @@ macOS 26 the main-window chrome, cards, and floating menus use Liquid Glass; mac
 the material fallback. The panel is an app-owned SwiftUI surface, not a website compressed into a
 popover. The main window is a titled window; it is not the panel stretched.
 
-Core rules:
+The panel shares one header, one footer, and one typed navigation stack across Overview and
+provider detail. Quota, Today, Usage, and Settings are pages of the main window, not of that
+stack. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage,
+log out. QuotaBar displays typed local-service results. Provider configuration exposes only
+intentional API-key entry and masked saved state, never stored secrets, opaque account identifiers,
+or raw diagnostics. Every action remains keyboard reachable, VoiceOver labelled, and usable with
+Reduce Motion and large text.
 
-1. Remaining quota is the primary value. Usage and account state support it without competing.
-2. The panel shares one header, one footer, and one typed navigation stack across Overview and
-   provider detail. Quota, Today, Usage, and Settings are pages of the main window, not of that
-   stack.
-3. Account actions are plain user tasks: continue with GitHub, inspect devices, inspect Usage, log
-   out.
-4. QuotaBar displays typed local-service results. Provider configuration exposes only intentional
-   API-key entry and masked saved state, never stored secrets, opaque account identifiers, or raw
-   diagnostics.
-5. Every action remains keyboard reachable, VoiceOver labelled, and usable with Reduce Motion and
-   large text.
-
-## Shared product vocabulary
-
-These rules apply to every Quota client, not only the menu panel. `apps/web/DESIGN.md` and
-`apps/ios/DESIGN.md` cite this section rather than restating it.
-
-- **Freshness is relative age, everywhere.** A current reading reads **Updated 3m ago**. A reading
-  that no longer describes current quota names why and when it was last taken:
-  **Not current — last reading 2d ago**, or **Sign-in needed**, **Unavailable**, **Unsupported**,
-  **Can’t refresh** in place of *Not current* when the source itself reported that. Anything under a
-  minute is **just now**, because a number that changes while it is being read is noise. Nothing
-  shows a clock time or a calendar date for a past reading, and nothing shows a bare age with no
-  words around it.
-- The exact phrases and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`.
-  `packages/apple-shared` (`FreshnessCopy`) and `apps/web/src/lib/format.ts` both answer that file,
-  so a phrase one of them changes cannot drift from the other. Change the fixture, not a surface.
-- **A future reset is a countdown or a local date, never an age.** All of it is relative to the
-  reader’s time zone, and the English is fixed: it does not follow the device locale. Relative
-  (the default): under an hour **Resets in 42m** (minutes round up; anything under a minute is
-  still **Resets in 1m**); from one hour to a day **Resets in 3h 12m**, or **Resets in 3h** when
-  the minutes are zero; from a day to a week **Resets Tue 14:00** (weekday abbreviation and
-  24-hour `HH:mm`); a week or more **Resets Sep 12** (month abbreviation and day). Absolute always
-  uses that local date, even under a day. A reset that has already passed prints no Resets line;
-  the reading is **Not current**, or the status word the source reported.
-  `packages/protocol/fixtures/reset-copy-conformance.json` is the shared statement; QuotaBar
-  Settings → Menu Bar → **Reset time** switches relative and absolute. iOS and the website stay
-  on relative.
-- **usd and credits remaining of a cap print `$12.50 of $40.00` (or `80.00 of 100.00 credits`)
-  and drop the percent bar**, when remaining/limit describes the same quantity as `used_percent`.
-  Included dollars that are a different quantity keep `36.9% · $14.55` and the meter.
-  `packages/protocol/fixtures/remaining-copy-conformance.json` is the shared statement.
-- **A pace line says whether the current rate lasts to the reset.** Glance surfaces print the
-  outcome only — **Expected to last until reset**, or **May run out about 2h before reset**. The
-  duration in *May run out* is the shared compact format (`2h`, `27m`, `1d`) and always reads
-  *about*, because it is a projection. Detail surfaces add an explanation under that headline:
-  **Using quota faster than an even pace (+70 points)**, **Using quota slower than an even pace
-  (−30 points)**, or **Using quota at an even pace**. The signed figure is percentage points off
-  an even burn rate, not percent of the window. A window the rule cannot answer for — no cadence,
-  a balance with no limit, or too little of the window elapsed or used — shows no line and takes
-  no space. *May run out* is the warning color; everything else is secondary text. The rule and
-  these phrases are `packages/protocol/fixtures/quota-pace-conformance.json`, answered by
-  `packages/quota-model`, `packages/service`, `packages/apple-shared` (`QuotaPace`,
-  `QuotaPaceCopy`), and `apps/web/src/lib/format.ts`; see
-  [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
-- **A pace line has a picture: the window's own samples, drawn under its meter.** A 22pt sparkline,
-  solid over the readings this Mac took inside the running window, dashed from the last of them to
-  where ADR 0035's projection lands at the reset. The vertical axis is the whole window, 0 to 100
-  percent used, so two windows of different cadences are read the same way; the horizontal axis is
-  the window's start to its reset. It takes the meter's own color. A window with no samples yet —
-  a new install, a rebuilt cache, a reading that came from another device — shows no line and takes
-  no space.
-- **A provider group ends with the day it has had.** One secondary line,
-  **Today: 3 windows · 82% / 40% / 12%**, oldest first, that opens into a row per window naming the
-  local clock times it ran between and its peak. Singular is **1 window**. The day is the
-  primary-cadence window's — the same window Quota iOS names its Today section after, so both
-  surfaces answer for one window rather than for whichever happened to have samples. A provider whose day
-  holds no window shows nothing. Both the line and the sparkline are turned off together by
-  Settings → Menu Bar → **Show pace lines**, on by default. The fold is
-  `packages/protocol/fixtures/quota-history-conformance.json`, answered by `packages/service` and
-  `packages/apple-shared` (`QuotaHistory`, `QuotaHistoryCopy`); see
-  [ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md).
-- **A window with no reported refill instant reads “No reset time reported.”** One phrase. A percent
-  window that is still full omits the line: there is no refill to wait for.
-- **Provider names come from the catalog.** `display_name` in `packages/provider/catalog.json` is
-  the only place a provider is named for a person. No surface keeps a second table and none derives
-  a name from an identifier.
-- **Billing agent names come from `BillingAgent.displayName`.** QuotaWire owns that table beside
-  `ProviderID.displayName`. No surface keeps a second table.
-- **Quota window titles are Title Case.** Cadence names are **5 Hours**, **Weekly**, and
-  **Monthly**. Acronyms keep their standard forms: **GPT**, **API**, **OAuth**, **USD**. Extra Codex
-  limit names follow that rule (`gpt-reserve` reads **GPT Reserve**). Collectors write these titles;
-  surfaces print them as received.
-- **A device row states one verdict and the one age it came from**: **Active** under thirty minutes,
-  **Idle** up to a day, **Not reporting** beyond that, and `last reading 5m ago` from the instant
-  that decided it. Never a list of report, refresh, and sync timestamps.
-- **User-facing copy uses product words.** Nothing on screen names coverage, UTC hours, generations,
-  revisions, fingerprints, sequences, protocol versions, or the private service's implementation.
-  Counting how many readings came from this Mac and how many from the account is implementation
-  detail; whether the numbers are still current is not. **This Mac** and **Account** remain valid as
-  the two Usage sources a person picks between.
-- **Notification copy.** Title is **`<Provider display_name> · <Window title>`**. Body is
-  **`12% left · resets in 42m`**, using the shared reset countdown in lowercase; if that countdown
-  is nil, the body is only **`12% left`**. A window refill reads **`<Window title> quota reset`**.
-  Product copy says Quota reminds when a refresh brings new data; it does not promise real-time.
-  When a remaining-quota reading should fire a local threshold or reset notification is
-  `packages/protocol/fixtures/alert-transition-conformance.json`; QuotaBar and Quota iOS both
-  answer that file through `QuotaAlerts`. A pace warning reuses the pace line as its body, and fires
-  at most once per window per reset cycle.
-- **A Usage page shows one period, and there are seven of them.** Three are anchored to the
-  reader's own calendar and step a unit at a time — **Today**, **This week**, **This month** — and
-  three are fixed windows — **Last 7 days**, **Last 30 days**, **All**. The seventh is **Custom
-  range**, two inclusive dates someone picked. Relay's `all` is the last 730 UTC days, not every
-  day ever stored. A control too narrow for the full name abbreviates it **Day**, **Week**,
-  **Month**, **7D**, **30D**, **All**, **Custom**; the accessibility name is always the full one.
-  `UsagePeriodSegment` in `packages/apple-shared` and `USAGE_PERIOD_SEGMENTS` in
-  `apps/web/src/lib/usage-period.ts` are where those pairs are written.
-- **A period says the range it covers, not the name of its button.** One day is that date
-  (**Sep 6, 2026**); a range inside one year drops the repeated year from its first half
-  (**Aug 31 – Sep 6, 2026**); `all` has no first day, so it reads **Everything kept**. The
-  step controls are **Previous period** and **Next period**, and there is nothing ahead of the
-  current day, week, or month, so **Next period** is disabled there.
-- **Four periods are folded for the reader, and the rest are folded by the client.** Today, Last 7
-  days, Last 30 days, and All arrive folded — from the service on This Mac, from the Account read
-  on Account. Every other period is added up by the client from days it already holds, and days
-  carry no agent tree, so a folded period shows totals and cost with no model breakdown and says
-  so in one line rather than looking empty. On Account, a period the summary does not carry is
-  answered on This Mac only.
-- **The monthly budget is a device preference and never leaves the device.** It is one amount in
-  whole US dollars plus whether it may notify, kept in `UserDefaults` on Apple and `localStorage`
-  on the website — never in the Account, because a budget says what someone wants to be warned
-  about, which is not a fact about their usage. The Usage page shows it as a progress bar above
-  the totals, reading **`$5.39 / $50.00 · 11%`**, with **`≥ `** in front of a spend only partly
-  priced. Crossing 80% and then 100% of the amount notifies once each per calendar month: the
-  title is **`Monthly budget`** and the body is **`80% of $50.00 spent`**, or **`$50.00 budget
-  spent`** once the whole amount is gone. A new month starts a new cycle. When those
-  crossings fire is `packages/protocol/fixtures/alert-transition-conformance.json`
-  (`budget_cases`), which both Apple apps answer through `QuotaAlerts`.
-- **An empty day is a tick, not a bar.** A day the period covers that reported no usage is drawn
-  as a 2-point baseline tick in the tertiary fill, so the day is present and has no height. It is
-  never a short bar of usage. In Cost mode, a day the catalog could not price is a distinct
-  **unpriced** mark at that same tick height — hatched or outlined — and is named unpriced, never
-  **$0**. Spoken chart summaries follow the Tokens / Cost mode the bars are measuring.
+Copy, remaining, reset, pace, freshness, periods, and Devices vocabulary:
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). The panel's pace
+picture is a 22pt sparkline under the meter. Settings → Menu Bar → **Show pace lines** turns that
+sparkline and the Today windows line off together, on by default. Settings → Menu Bar → **Reset
+time** is the only surface that switches reset copy between relative and absolute.
 
 ## Window and layout tokens
 
@@ -309,7 +190,8 @@ Under the tabs is one 28pt row: **Previous period**, the range title, **Next per
 calendar button that opens two inline date fields and an **Apply**. Stepping applies only to Day,
 Week, and Month, and the current one is the last, so both arrows are disabled on a fixed window
 and **Next period** is disabled on the current unit. The period names, the range title, and the
-budget copy are in Shared product vocabulary.
+budget copy are in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary).
 
 Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
 changing either selector starts no collection or network work and shows no loading state when a
@@ -341,7 +223,8 @@ The default page contains:
   `UsageValueFormatter`.
 - Daily, for This Mac and for any period but All, in its own card: one Swift Charts `BarMark` per
   local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again.
-  Empty and unpriced days follow **An empty day is a tick, not a bar** in Shared product vocabulary.
+  Empty and unpriced days follow **An empty day is a tick, not a bar** in
+  [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary).
   The last seven of those days follow as `date` / `tokens · cost` rows. Omit the section when the
   period reported nothing. All has no Daily section: its per-day shape is the Account's activity
   chart.
@@ -410,16 +293,12 @@ The panel inherits the menu extra's system material. The main window uses
   `floatingMenuFill`, a 0.5pt adaptive edge, and restrained shadow.
 - Hover/press: `rowHoverFill` and `rowPressedFill` nested inside the group or card.
 
-Colour roles, remaining-quota bands, spacing, and radii come from
+Colour roles, remaining-quota bands, and Apple overrides:
+[`docs/design.md`](../../docs/design.md#colour) and
 [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
-`QuotaBrand`, `QuotaTone`, and `QuotaPalette` brand/tone colours read the generated
-Swift. System label colours stay; card radius is 20.
-
-Use `QuotaPalette` roles instead of fixed RGB values. `ink` is for primary text and marks, `body` for
-supporting copy, `mute` for tertiary metadata, `accent` for primary action/focus/progress, and
-`critical` only for failure or destructive meaning. Native system red remains the destructive color.
-Remaining-quota meters use the shared healthy/warning/critical bands ≥40 / ≥15 (`QuotaTone`);
-`critical` on text stays failure-only.
+`QuotaBrand`, `QuotaTone`, and `QuotaPalette` read the generated Swift. System label colours stay;
+card radius is 20. Native system red remains the destructive color. `critical` on text stays
+failure-only.
 
 Do not add decorative gradients, a second card language, colored page backgrounds, or custom window
 chrome. Main-window Quota / Today / Usage cards are the 20pt `quotaCardSurface()`.
@@ -458,7 +337,8 @@ rounded numeral and a small label. Dense tables stay dense and sit inside the ca
 
 ## Typography
 
-Use semantic roles from `QuotaDesign.Typography`:
+Type roles are in [`docs/design.md`](../../docs/design.md#type). QuotaBar's `QuotaDesign.Typography`
+names map onto them:
 
 | Role | Size/weight | Use |
 | --- | --- | --- |

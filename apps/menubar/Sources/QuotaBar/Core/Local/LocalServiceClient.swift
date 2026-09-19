@@ -55,14 +55,10 @@ struct LocalServiceClientTimings: Sendable {
   var termination: Duration = .seconds(2)
 }
 
-protocol LocalServiceServing: Sendable {
+protocol LocalServiceServing: UsageTransport {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
-  /// One custom local period, folded from the hours this Mac has stored.
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail
-  /// This Mac's stored quota samples since `since`. Reads cache.sqlite only.
-  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
   func diagnose() async throws -> LocalServiceDiagnosticReport
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func resetCache() async throws

@@ -98,7 +98,8 @@ Notifications are local: remaining-quota rules are evaluated on this Mac and del
 system notification center; nothing is uploaded.
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
-requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
+requirements are in [`docs/security.md`](../../docs/security.md), shared visual language is in
+[`docs/design.md`](../../docs/design.md), and QuotaBar platform deltas are in
 [`DESIGN.md`](DESIGN.md).
 
 ## The `quota` command

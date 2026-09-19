@@ -74,7 +74,7 @@
         configuration.prepareEnvironment()
         let model = configuration.makeModel()
         if configuration.mainPage?.isQuotaGroup == true {
-          model.selectUsagePeriod(.last7Days)
+          model.usage.selectUsagePeriod(.last7Days)
         }
         for (size, suffix) in captureSizes(for: configuration, route: route) {
           for (scheme, appearance) in appearances {

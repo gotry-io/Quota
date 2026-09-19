@@ -4,7 +4,7 @@
  * Three periods are anchored to this browser's own calendar and step: a day, a week, and a month,
  * each an offset back from the current one. Two are the trailing windows the Account summary
  * already folds, `all` is everything retained, and `custom` is a range someone picked. The
- * phrases are in `apps/menubar/DESIGN.md` Shared product vocabulary.
+ * phrases are in `docs/design.md` Shared product vocabulary.
  *
  * A period the summary does not carry is folded out of the activity days the page already holds
  * (`foldUsageActivityDays`). Those days are UTC days, so an anchored range is chosen in the

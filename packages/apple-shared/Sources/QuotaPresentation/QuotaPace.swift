@@ -170,7 +170,7 @@ extension QuotaPace: Codable {
 /// The words every Quota surface prints for a pace.
 ///
 /// Glance surfaces print ``headline``; detail surfaces add ``detail`` under it.
-/// The phrases live in `apps/menubar/DESIGN.md` Shared product vocabulary, and
+/// The phrases live in `docs/design.md` Shared product vocabulary, and
 /// `packages/protocol/fixtures/quota-pace-conformance.json` is the shared statement of them;
 /// `apps/web/src/lib/format.ts` answers the same file.
 public enum QuotaPaceCopy: Sendable {

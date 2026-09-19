@@ -52,8 +52,9 @@ access in each app or `packages/apple-client`. Rust owns provider and Usage sema
 OAuth, Relay traffic, persistence, and scheduling. QuotaRelay and Quota Web are TypeScript.
 
 The canonical documents are [architecture](docs/architecture.md),
-[security baseline](docs/security.md), [provider strategies](docs/provider-collection.md), and
-[CodexBar platform capabilities](docs/codexbar-platform-capabilities.md);
+[security baseline](docs/security.md), [provider strategies](docs/provider-collection.md),
+[CodexBar platform capabilities](docs/codexbar-platform-capabilities.md), and
+[design language](docs/design.md);
 [`AGENTS.md`](AGENTS.md) indexes the decision records behind each area.
 
 ## Repository layout
@@ -71,7 +72,7 @@ packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
 packages/quota-model/     Relay/Web runtime-neutral quota and pricing models
 packages/relay-core/      Runtime-neutral account and Usage state contracts
-docs/                     Architecture, security, provider, and decision records
+docs/                     Architecture, security, provider, design language, and decision records
 ```
 
 Provider registration starts in `packages/provider/catalog.json`; run

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_PERIOD_KEYS, type LocalPeriodKey, planLocalPeriods } from "../src/local-periods.ts";
+import {
+  LOCAL_PERIOD_KEYS,
+  type LocalPeriodKey,
+  planLocalDateRange,
+  planLocalDayWindows,
+  planLocalPeriods,
+} from "../src/local-periods.ts";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -182,6 +188,60 @@ describe("local periods", () => {
     }
   });
 
+  it("derives each summary preset from the same explicit local-date range", () => {
+    for (const zone of zones) {
+      for (const text of instants) {
+        const plan = planLocalPeriods(zone, new Date(text));
+        const today = planLocalDateRange(zone, plan.localDate, plan.localDate);
+        const seven = planLocalDateRange(zone, shiftLocal(plan.localDate, -6), plan.localDate);
+        const thirty = planLocalDateRange(zone, shiftLocal(plan.localDate, -29), plan.localDate);
+        expect(hoursInRange(today), `${zone} ${text} today`).toEqual(folded(plan, "today"));
+        expect(hoursInRange(seven), `${zone} ${text} last_7_days`).toEqual(
+          folded(plan, "last_7_days"),
+        );
+        expect(hoursInRange(thirty), `${zone} ${text} last_30_days`).toEqual(
+          folded(plan, "last_30_days"),
+        );
+      }
+    }
+  });
+
+  it("tiles an inclusive local-date range into adjacent hour-grid windows", () => {
+    const plan = planLocalDateRange("Asia/Kolkata", "2026-08-25", "2026-08-26");
+    const windows = planLocalDayWindows("Asia/Kolkata", "2026-08-25", "2026-08-26");
+    expect(windows).toEqual([
+      { date: "2026-08-25", start: "2026-08-24T19:00:00Z", end: "2026-08-25T19:00:00Z" },
+      { date: "2026-08-26", start: "2026-08-25T19:00:00Z", end: "2026-08-26T19:00:00Z" },
+    ]);
+    expect(windows[0]?.start).toBe(plan.start);
+    expect(windows[1]?.end).toBe(plan.end);
+    expect(windows[0]?.end).toBe(windows[1]?.start);
+    const hours = windows.flatMap((window) => {
+      const span: string[] = [];
+      for (let hour = Date.parse(window.start); hour < Date.parse(window.end); hour += HOUR) {
+        span.push(instant(hour));
+      }
+      return span;
+    });
+    expect(new Set(hours).size).toBe(hours.length);
+    expect(hours[0]).toBe(plan.start);
+    expect(hours.at(-1)).toBe("2026-08-26T18:00:00Z");
+    expect(hours).toContain("2026-08-25T18:00:00Z");
+    expect(hours.filter((hour) => hour === "2026-08-25T18:00:00Z")).toHaveLength(1);
+  });
+
+  it("assigns a fractional-offset midnight hour to the previous local day", () => {
+    const kolkata = planLocalDateRange("Asia/Kolkata", "2026-08-26", "2026-08-26");
+    expect(kolkata.start).toBe("2026-08-25T19:00:00Z");
+    expect(kolkata.end).toBe("2026-08-26T19:00:00Z");
+    const kathmandu = planLocalDateRange("Asia/Kathmandu", "2026-08-26", "2026-08-26");
+    expect(kathmandu.start).toBe("2026-08-25T19:00:00Z");
+    const stJohns = planLocalDateRange("America/St_Johns", "2026-01-15", "2026-01-15");
+    expect(stJohns.start).toBe("2026-01-15T04:00:00Z");
+    const next = planLocalDateRange("Asia/Kolkata", "2026-08-27", "2026-08-27");
+    expect(kolkata.end).toBe(next.start);
+  });
+
   it("rounds a sub-hour offset up, so no hour lands in two periods", () => {
     // Kolkata reads 05:30 ahead, so its midnight falls inside the hour beginning 18:00 UTC. That
     // hour is reported with the day before it rather than split, at either edge of the day.
@@ -234,6 +294,30 @@ function expected(
     if (date >= first && date <= last) hours.push(instant(hour));
   }
   return hours.sort();
+}
+
+function hoursInRange(plan: ReturnType<typeof planLocalDateRange>): string[] {
+  const hours: string[] = [];
+  if (plan.days) {
+    for (
+      let day = Date.parse(`${plan.days.from}T00:00:00Z`);
+      day <= Date.parse(`${plan.days.to}T00:00:00Z`);
+      day += DAY
+    ) {
+      for (let hour = day; hour < day + DAY; hour += HOUR) hours.push(instant(hour));
+    }
+  }
+  for (const edge of plan.boundaries) {
+    for (let hour = Date.parse(edge.from); hour < Date.parse(edge.to); hour += HOUR) {
+      hours.push(instant(hour));
+    }
+  }
+  expect(new Set(hours).size, "range counts an hour twice").toBe(hours.length);
+  return hours.sort();
+}
+
+function shiftLocal(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
 }
 
 function reach(key: LocalPeriodKey): number {

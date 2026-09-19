@@ -7,6 +7,7 @@ import {
   meterTone,
   meterToneForUsedPercent,
   providerMarkHue,
+  quotaMeterName,
   subscriptionCardMeta,
   topUsageModel,
   usageStatusLine,
@@ -62,6 +63,11 @@ it("classifies remaining-quota meter thresholds", () => {
   expect(meterTone(0)).toBe("critical");
   expect(meterToneForUsedPercent(32)).toBe("good");
   expect(remainingPercent(32)).toBe(68);
+});
+
+it("names a remaining-quota meter from the window title and remaining figure", () => {
+  expect(quotaMeterName("Weekly", "84%")).toBe("Weekly 84%");
+  expect(quotaMeterName("Included", "$12.50 of $40.00")).toBe("Included $12.50 of $40.00");
 });
 
 it("hashes a provider id to a stable hue", () => {

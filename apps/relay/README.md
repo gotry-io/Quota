@@ -17,8 +17,9 @@ fields and enum members its build cannot name, at any depth. Adding either to a 
 therefore not a breaking change. See
 [ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md).
 
-The v6 data contract is four routes
-([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)):
+The v6 data contract is five routes
+([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md),
+[ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)):
 
 - `PUT /api/v6/device/snapshots` stores this device's readings by `(provider, fingerprint)`, keeps
   the newer of the stored and uploaded `observed_at` (a same-instant restatement is taken only when
@@ -45,11 +46,24 @@ The v6 data contract is four routes
   places each `bucket_start_utc` on that clock. An hour nothing reached states no amount. The
   ETag rule is the same as the days-only read: the query string, including `detail` and `tz`, is
   part of the validator.
+- `GET /api/v6/account/usage/period?from&to&timezone=` answers one inclusive local-date range in a
+  required IANA zone, at most 366 local days. Totals, cost, and `cache_saved` come from interior
+  `usage_daily` plus edge `usage_hourly`. `days[]` is one bucket per **local** date, gaps omitted
+  (missing ≠ zero). Optional `breakdown=1` carries the agent tree, bounded like the summary. A
+  local day begins at the first whole UTC hour of that civil date; the hour that contains a
+  fractional-offset midnight belongs to the previous local day; counts are never prorated. The
+  three summary presets are this same read (`today` is `from=to=localDate`). `coverage` names
+  retention cutoffs when they cut the range. The ETag is usage-only, keyed on the query string
+  (including `timezone` and `breakdown`) and a retention cutoff only when it cuts; explicit
+  `{from,to}` does not roll over with the wall clock. A matching `If-None-Match` returns 304
+  before any Usage SQL. The contract is
+  `packages/protocol/fixtures/usage-period-conformance.json`.
 
 The four periods in a summary are the four every client opens on. Any other period a Usage page
-offers — a week, a month, a range someone picked — is these same days added up by the client, which
-is why this read answers a range rather than one more named period. A day carries no agent tree
-unless it was asked for on its own, so a client-folded period carries totals and cost only. The
+offers — a week, a month, a range someone picked — is the same local-date window the period read
+answers. Until clients switch onto that read, they still add UTC activity days up, which is why
+the activity read remains a range of UTC dates. A day on that activity read carries no agent tree
+unless it was asked for on its own, so a client-folded period carries totals and cost only. That
 fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
 website and both Apple apps answer that file. A synthetic rollup-plus-boundary period query
 benchmark lives at [`bench/period-query.bench.ts`](./bench/period-query.bench.ts) and is not part of
@@ -181,7 +195,8 @@ enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly
-cacheable. `GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are
+cacheable. `GET /api/v6/account/summary`, `GET /api/v6/account/usage/activity`, and
+`GET /api/v6/account/usage/period` are
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
 

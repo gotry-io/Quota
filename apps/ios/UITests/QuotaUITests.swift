@@ -558,13 +558,7 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["devices.row"].firstMatch.exists,
       "devices.row"
     )
-    let back = app.navigationBars.buttons["Settings"]
-    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
-    back.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 5),
-      "settings.root after back"
-    )
+    popBack(app, to: "settings.root", backTitle: "Settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.devices"].waitForExistence(timeout: 5),
       "settings.devices after back"
@@ -1170,10 +1164,22 @@ final class QuotaUITests: XCTestCase {
     )
   }
 
+  /// Pops one navigation level and waits for `root`. A back tap that lands mid-transition can be
+  /// dropped by the iOS 26 bar; tap once more while the back button is still there before calling
+  /// the destination missing.
+  private func popBack(_ app: XCUIApplication, to root: String, backTitle: String) {
+    let back = app.navigationBars.buttons[backTitle]
+    let target = app.descendants(matching: .any)[root]
+    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to \(backTitle)")
+    for _ in 0..<2 where !target.exists {
+      if back.exists { back.tap() }
+      _ = target.waitForExistence(timeout: 5)
+    }
+    XCTAssertTrue(target.exists, "\(root) after back")
+  }
+
   private func popSettingsDestination(_ app: XCUIApplication) {
-    let back = app.navigationBars.buttons["Settings"]
-    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
-    back.tap()
+    popBack(app, to: "settings.root", backTitle: "Settings")
     let logout = app.descendants(matching: .any)["settings.logout"]
     if !logout.waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "settings.logout", attempts: 12)
@@ -1321,61 +1327,69 @@ final class QuotaUITests: XCTestCase {
   /// Every confirmed issue is reported with the element it names, so a failure says what to fix.
   ///
   /// A finding gates the test only when the same type + element key + screen appears on two
-  /// consecutive passes one second apart. Contrast findings are attached as unconfirmed
-  /// (`[contrast]`) and never gate: the pixel-sampling contrast pass is not a reliable measure
-  /// of the colours this app chose. Timeout handling is unchanged.
+  /// consecutive passes one second apart. Contrast never gates. Incomplete (timed out) does not
+  /// fail. Each call attaches `audit-outcome.<screen>` JSON with one outcome per type, exemption
+  /// counts, and the raw first- and second-pass findings, including nil-element and exempted.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = []
   ) throws {
     var types = XCUIAccessibilityAuditType.all
     types.remove(skipping)
-    do {
-      try performAudit(app, types: types)
-    } catch {
+    let screen = currentScreenName(app)
+    let testName = currentTestName()
+    var session = try runAuditSession(app, types: types, screen: screen, test: testName)
+    var contrastIncomplete = false
+    if session.timedOut, !skipping.contains(.contrast), types.contains(.contrast) {
       // The 365-day heatmap can make the iOS 26 contrast pass exceed the auditor's
       // deadline, and XCTest's own future times out the same way on a slow CI simulator
       // ("Timed out while running accessibility audit"). Retry without contrast; other
-      // checks still run.
-      let description = "\(error)"
-      if isAuditTimeout(description), !skipping.contains(.contrast) {
-        let screen = currentScreenName(app)
-        XCTContext.runActivity(named: "Contrast audit did not complete on \(screen)") { activity in
-          let attachment = XCTAttachment(
-            string:
-              "\(screen) did not finish the contrast pass; retrying without contrast. \(description)"
-          )
-          attachment.name = "contrast-audit-timeout-\(screen)"
-          attachment.lifetime = .keepAlways
-          activity.add(attachment)
-        }
-        var retry = types
-        retry.remove(.contrast)
-        do {
-          try performAudit(app, types: retry)
-        } catch where isAuditTimeout("\(error)") {
-          // The auditor gave up twice on a screen whose pixels did not change between the two
-          // asks. On the CI simulator that is the auditor's clock, not a finding: say so where
-          // a reader of the run will see it, and let the assertions the test came for stand.
-          XCTContext.runActivity(named: "Accessibility audit did not complete on \(screen)") {
-            activity in
-            let attachment = XCTAttachment(
-              string: "\(screen): the audit timed out twice; this run carries no audit for it."
-            )
-            attachment.name = "audit-timeout-\(screen)"
-            attachment.lifetime = .keepAlways
-            activity.add(attachment)
-          }
-        }
-        return
+      // checks still run. Contrast is incomplete; gating still uses the retry.
+      contrastIncomplete = true
+      var retry = types
+      retry.remove(.contrast)
+      let retried = try runAuditSession(app, types: retry, screen: screen, test: testName)
+      if retried.timedOut {
+        session.firstCompleted = false
+        session.secondPass = nil
+        session.secondCompleted = nil
+        session.confirmed = []
+        session.firstPass.append(contentsOf: retried.firstPass)
+      } else {
+        session = retried
       }
-      throw error
+    }
+    attachAuditOutcome(
+      makeAuditOutcomeRecord(
+        screen: screen,
+        test: testName,
+        firstPass: session.firstPass,
+        secondPass: session.secondPass,
+        firstCompleted: session.firstCompleted,
+        secondCompleted: session.secondCompleted,
+        contrastIncomplete: contrastIncomplete,
+        allIncomplete: session.timedOut && !session.firstCompleted
+      )
+    )
+    if !session.confirmed.isEmpty {
+      let body = session.confirmed.map {
+        "\($0.description) — \($0.element) on \(screen) [parent \($0.parent); \($0.frame)]"
+      }.joined(separator: "\n")
+      XCTFail("confirmed audit findings:\n\(body)")
     }
   }
 
   private func isAuditTimeout(_ description: String) -> Bool {
     description.contains("Audit failed to complete in time")
       || description.contains("Timed out while running accessibility audit")
+  }
+
+  private func currentTestName() -> String {
+    let raw = name
+    guard let marker = raw.range(of: "test") else { return raw }
+    let fromTest = raw[marker.lowerBound...]
+    let end = fromTest.firstIndex(where: { !$0.isLetter && !$0.isNumber }) ?? fromTest.endIndex
+    return String(fromTest[..<end])
   }
 
   private func currentScreenName(_ app: XCUIApplication) -> String {
@@ -1399,132 +1413,201 @@ final class QuotaUITests: XCTestCase {
     return "unknown"
   }
 
-  private func performAudit(
+  private func runAuditSession(
     _ app: XCUIApplication,
-    types: XCUIAccessibilityAuditType
-  ) throws {
+    types: XCUIAccessibilityAuditType,
+    screen: String,
+    test: String
+  ) throws -> AuditSession {
     // The contrast pass samples pixels, so a list still gliding after a swipe reads as low
     // contrast. Let the scroll settle before asking.
     RunLoop.current.run(until: Date().addingTimeInterval(0.6))
 
-    let screen = currentScreenName(app)
-    let first = try collectAuditIssues(app, types: types, screen: screen)
-    let contrast = first.filter { $0.type == "contrast" }
-    let candidates = first.filter { $0.type != "contrast" }
+    let first = try collectAuditPass(app, types: types, screen: screen)
+    if !first.completed {
+      return AuditSession(
+        screen: screen,
+        test: test,
+        firstPass: first.findings,
+        secondPass: nil,
+        firstCompleted: false,
+        secondCompleted: nil,
+        timedOut: true,
+        confirmed: []
+      )
+    }
 
+    let candidates = first.findings.filter {
+      $0.disposition == "recorded" && $0.type != "contrast"
+    }
     if candidates.isEmpty {
-      attachUnconfirmed(screen: screen, issues: contrast)
-      return
+      return AuditSession(
+        screen: screen,
+        test: test,
+        firstPass: first.findings,
+        secondPass: nil,
+        firstCompleted: true,
+        secondCompleted: nil,
+        timedOut: false,
+        confirmed: []
+      )
     }
 
     RunLoop.current.run(until: Date().addingTimeInterval(1.0))
-    let second = try collectAuditIssues(app, types: types, screen: screen)
-    let secondNonContrast = second.filter { $0.type != "contrast" }
+    let second = try collectAuditPass(app, types: types, screen: screen)
+    if !second.completed {
+      return AuditSession(
+        screen: screen,
+        test: test,
+        firstPass: first.findings,
+        secondPass: second.findings,
+        firstCompleted: true,
+        secondCompleted: false,
+        timedOut: true,
+        confirmed: []
+      )
+    }
+
+    let secondNonContrast = second.findings.filter {
+      $0.disposition == "recorded" && $0.type != "contrast"
+    }
     let secondKeys = Set(secondNonContrast.map(\.key))
     let confirmed = candidates.filter { secondKeys.contains($0.key) }
-    let firstOnly = candidates.filter { !secondKeys.contains($0.key) }
-    let candidateKeys = Set(candidates.map(\.key))
-    let secondOnly = secondNonContrast.filter { !candidateKeys.contains($0.key) }
-    attachUnconfirmed(
+    return AuditSession(
       screen: screen,
-      issues: contrast + firstOnly + secondOnly + second.filter { $0.type == "contrast" }
+      test: test,
+      firstPass: first.findings,
+      secondPass: second.findings,
+      firstCompleted: true,
+      secondCompleted: true,
+      timedOut: false,
+      confirmed: confirmed
     )
-
-    if !confirmed.isEmpty {
-      let body = confirmed.map {
-        "\($0.description) — \($0.element) on \(screen) [parent \($0.parent); \($0.frames)]"
-      }.joined(separator: "\n")
-      XCTFail("confirmed audit findings:\n\(body)")
-    }
   }
 
   /// One audit pass. The handler always returns true (ignore) so XCTest does not fail on the
-  /// first issue; this method records every named finding instead.
-  private func collectAuditIssues(
+  /// first issue; this method records every finding, including nil-element and exempted.
+  private func collectAuditPass(
     _ app: XCUIApplication,
     types: XCUIAccessibilityAuditType,
     screen: String
-  ) throws -> [AuditIssue] {
+  ) throws -> AuditPassResult {
     let box = AuditCollector()
     let subscriptionCards: [CGRect] = app.descendants(matching: .any)
       .matching(identifier: "overview.subscription")
       .allElementsBoundByAccessibilityElement
       .map { $0.frame }
-    try app.performAccessibilityAudit(for: types) { issue in
-      if issue.element == nil {
+    do {
+      try app.performAccessibilityAudit(for: types) { issue in
+        box.findings.append(
+          makeAuditFinding(issue, screen: screen, subscriptionCards: subscriptionCards)
+        )
         return true
       }
-      let description = issue.compactDescription
-      let element = issue.element.map { "\($0)" } ?? "no element"
-      let identifier = issue.element?.identifier ?? ""
-      let label = issue.element?.label ?? ""
-      let elementKey = identifier.isEmpty ? (label.isEmpty ? element : label) : identifier
-      let type = auditTypeName(description)
-      let tabFrame = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame : .zero
-      let navFrame =
-        app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame : .zero
-      let frames =
-        "frame \(issue.element?.frame ?? .zero); tab bar \(tabFrame); nav bar \(navFrame)"
-      let parent = issue.element.map(parentIdentifier(of:)) ?? ""
-      if type != "contrast" {
-        if isKeptAuditorException(
-          type: type,
-          identifier: identifier,
-          label: label,
-          element: element,
-          parent: parent
-        ) {
-          return true
-        }
-        if type == "dynamic-type", let control = issue.element,
-          subscriptionCards.contains(where: {
-            $0.contains(control.frame) || $0.intersects(control.frame)
-          })
-        {
-          return true
-        }
+      return AuditPassResult(findings: box.findings, completed: true)
+    } catch {
+      if isAuditTimeout("\(error)") {
+        return AuditPassResult(findings: box.findings, completed: false)
       }
-      box.issues.append(
-        AuditIssue(
-          key: "\(type)|\(elementKey)|\(screen)",
-          type: type,
-          description: description,
-          element: element,
-          parent: parent,
-          frames: frames
-        )
-      )
-      return true
+      throw error
     }
-    return box.issues
   }
 
-  private func attachUnconfirmed(screen: String, issues: [AuditIssue]) {
-    guard !issues.isEmpty else { return }
-    let body = issues.map {
-      let tag = $0.type == "contrast" ? "contrast" : "once"
-      return "[\(tag)] \($0.type) \($0.key)\n  \($0.description) — \($0.element) [\($0.frames)]"
-    }.joined(separator: "\n")
-    XCTContext.runActivity(named: "Unconfirmed audit findings on \(screen)") { activity in
-      let attachment = XCTAttachment(string: body)
-      attachment.name = "audit-unconfirmed-\(screen).txt"
+  private func attachAuditOutcome(_ record: AuditOutcomeRecord) {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    do {
+      let data = try encoder.encode(record)
+      let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+      attachment.name = "audit-outcome.\(record.screen)"
       attachment.lifetime = .keepAlways
-      activity.add(attachment)
+      add(attachment)
+    } catch {
+      XCTFail("failed to encode audit-outcome.\(record.screen): \(error)")
     }
   }
 }
 
-private struct AuditIssue {
+private let classifiedAuditTypes = [
+  "clipped", "contrast", "dynamic-type", "hit-region", "other",
+]
+
+private let auditExemptionRules = [
+  "nil-element",
+  "section-header-footer",
+  "overview-today",
+  "clipped-usage-activity-empty",
+  "dynamic-type-done",
+  "dynamic-type-identifier-prefix",
+  "dynamic-type-parent",
+  "dynamic-type-couldnt-load",
+  "dynamic-type-form-label",
+  "dynamic-type-subscription-card",
+]
+
+private struct AuditFinding: Encodable {
   let key: String
   let type: String
   let description: String
   let element: String
+  let label: String
+  let identifier: String
+  let frame: String
   let parent: String
-  let frames: String
+  let disposition: String
+  let exemptionRule: String?
+}
+
+private struct AuditOutcomeRecord: Encodable {
+  let screen: String
+  let test: String
+  let auditTypes: [String]
+  let outcomes: [String: String]
+  let exempted: [String: Int]
+  let firstPass: [AuditFinding]
+  let secondPass: [AuditFinding]?
+
+  enum CodingKeys: String, CodingKey {
+    case screen
+    case test
+    case auditTypes
+    case outcomes
+    case exempted
+    case firstPass
+    case secondPass
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(screen, forKey: .screen)
+    try container.encode(test, forKey: .test)
+    try container.encode(auditTypes, forKey: .auditTypes)
+    try container.encode(outcomes, forKey: .outcomes)
+    try container.encode(exempted, forKey: .exempted)
+    try container.encode(firstPass, forKey: .firstPass)
+    try container.encode(secondPass, forKey: .secondPass)
+  }
+}
+
+private struct AuditPassResult {
+  var findings: [AuditFinding]
+  var completed: Bool
+}
+
+private struct AuditSession {
+  var screen: String
+  var test: String
+  var firstPass: [AuditFinding]
+  var secondPass: [AuditFinding]?
+  var firstCompleted: Bool
+  var secondCompleted: Bool?
+  var timedOut: Bool
+  var confirmed: [AuditFinding]
 }
 
 private final class AuditCollector: @unchecked Sendable {
-  var issues: [AuditIssue] = []
+  var findings: [AuditFinding] = []
 }
 
 private func auditTypeName(_ description: String) -> String {
@@ -1539,44 +1622,158 @@ private func auditTypeName(_ description: String) -> String {
   return "other"
 }
 
+private func makeAuditFinding(
+  _ issue: XCUIAccessibilityAuditIssue,
+  screen: String,
+  subscriptionCards: [CGRect]
+) -> AuditFinding {
+  let description = issue.compactDescription
+  let type = auditTypeName(description)
+  let element = issue.element.map { "\($0)" } ?? "no element"
+  let identifier = issue.element?.identifier ?? ""
+  let label = issue.element?.label ?? ""
+  let frame = issue.element.map { "\($0.frame)" } ?? ""
+  let parent = issue.element.map(parentIdentifier(of:)) ?? ""
+  let elementKey = identifier.isEmpty ? (label.isEmpty ? element : label) : identifier
+  let key = "\(type)|\(elementKey)|\(screen)"
+
+  func finding(disposition: String, rule: String?) -> AuditFinding {
+    AuditFinding(
+      key: key,
+      type: type,
+      description: description,
+      element: element,
+      label: label,
+      identifier: identifier,
+      frame: frame,
+      parent: parent,
+      disposition: disposition,
+      exemptionRule: rule
+    )
+  }
+
+  if issue.element == nil {
+    return finding(disposition: "nil-element", rule: "nil-element")
+  }
+  if type != "contrast" {
+    if let rule = keptAuditorExceptionRule(
+      type: type,
+      identifier: identifier,
+      label: label,
+      element: element,
+      parent: parent
+    ) {
+      return finding(disposition: "exempted", rule: rule)
+    }
+    if type == "dynamic-type", let control = issue.element,
+      subscriptionCards.contains(where: {
+        $0.contains(control.frame) || $0.intersects(control.frame)
+      })
+    {
+      return finding(disposition: "exempted", rule: "dynamic-type-subscription-card")
+    }
+  }
+  return finding(disposition: "recorded", rule: nil)
+}
+
+private func makeAuditOutcomeRecord(
+  screen: String,
+  test: String,
+  firstPass: [AuditFinding],
+  secondPass: [AuditFinding]?,
+  firstCompleted: Bool,
+  secondCompleted: Bool?,
+  contrastIncomplete: Bool,
+  allIncomplete: Bool
+) -> AuditOutcomeRecord {
+  var outcomes: [String: String] = [:]
+  for typeName in classifiedAuditTypes {
+    if allIncomplete || !firstCompleted {
+      outcomes[typeName] = "incomplete"
+      continue
+    }
+    if typeName == "contrast", contrastIncomplete {
+      outcomes[typeName] = "incomplete"
+      continue
+    }
+    let firstRecorded = firstPass.filter { $0.disposition == "recorded" && $0.type == typeName }
+    if secondPass == nil || secondCompleted == false {
+      outcomes[typeName] = firstRecorded.isEmpty ? "passed" : "unconfirmed"
+      continue
+    }
+    let secondRecorded = (secondPass ?? []).filter {
+      $0.disposition == "recorded" && $0.type == typeName
+    }
+    let firstKeys = Set(firstRecorded.map(\.key))
+    let secondKeys = Set(secondRecorded.map(\.key))
+    if !firstKeys.isDisjoint(with: secondKeys) {
+      outcomes[typeName] = "confirmed"
+    } else if !firstKeys.isEmpty || !secondKeys.subtracting(firstKeys).isEmpty {
+      outcomes[typeName] = "unconfirmed"
+    } else {
+      outcomes[typeName] = "passed"
+    }
+  }
+
+  var exempted: [String: Int] = [:]
+  for rule in auditExemptionRules {
+    exempted[rule] = 0
+  }
+  for finding in firstPass {
+    if let rule = finding.exemptionRule {
+      exempted[rule, default: 0] += 1
+    }
+  }
+
+  return AuditOutcomeRecord(
+    screen: screen,
+    test: test,
+    auditTypes: classifiedAuditTypes,
+    outcomes: outcomes,
+    exempted: exempted,
+    firstPass: firstPass,
+    secondPass: secondPass
+  )
+}
+
 /// Exceptions that still failed on two consecutive passes after name-based skips were removed.
 /// Each is the iOS 26 auditor on system list configuration or inner text of a scaling font,
-/// not a colour or layout this app chose.
-private func isKeptAuditorException(
+/// not a colour or layout this app chose. A2b narrows these; this WP only names them for counts.
+private func keptAuditorExceptionRule(
   type: String,
   identifier: String,
   label: String,
   element: String,
   parent: String
-) -> Bool {
+) -> String? {
   if identifier.hasPrefix("section.header.") || identifier.hasPrefix("section.footer.") {
-    return true
+    return "section-header-footer"
   }
   if identifier == "overview.today" || identifier.hasPrefix("overview.today.") {
-    return true
+    return "overview-today"
   }
   if type == "clipped", identifier == "usage.activity.empty" {
-    return true
+    return "clipped-usage-activity-empty"
   }
   if type == "dynamic-type" {
     if label == "Done" || element.contains("\"Done\" Button") {
-      return true
+      return "dynamic-type-done"
     }
     let prefixes = [
       "usage.", "settings.", "subscription.", "devices.", "overview.", "providers.", "connect.",
       "confirm.",
     ]
     if prefixes.contains(where: { identifier.hasPrefix($0) }) {
-      return true
+      return "dynamic-type-identifier-prefix"
     }
     if parent.contains("overview.today") || parent.contains("overview.subscription")
       || parent.contains("usage.headline") || parent.contains("usage.day.headline")
       || parent.contains("devices.")
     {
-      return true
+      return "dynamic-type-parent"
     }
     if label.contains("Couldn't load") {
-      return true
+      return "dynamic-type-couldnt-load"
     }
     let formLabels = [
       "About", "Support", "Privacy", "GitHub", "Website", "Manage Devices on Web",
@@ -1584,10 +1781,10 @@ private func isKeptAuditorException(
       "Reasoning", "Input", "Output", "License", "Version",
     ]
     if formLabels.contains(label) {
-      return true
+      return "dynamic-type-form-label"
     }
   }
-  return false
+  return nil
 }
 
 /// The identifier of the row an audit issue actually belongs to. An audit names the text inside a

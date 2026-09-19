@@ -147,7 +147,7 @@
       )
     )
     let model = configuration.makeModel()
-    let samples = try #require(model.quotaHistorySamples)
+    let samples = try #require(model.usage.quotaHistorySamples)
     #expect(samples.samplesBySubscription.count >= 3)
     for windows in samples.samplesBySubscription.values {
       #expect(windows.keys.count >= 2)
@@ -158,7 +158,7 @@
         #expect(latest.timeIntervalSince(earliest) >= 6 * 86_400)
       }
     }
-    #expect(!model.quotaHistory.isEmpty)
+    #expect(!model.usage.quotaHistory.isEmpty)
   }
 
   @Test
@@ -215,9 +215,11 @@
     #expect(configuration.textSize == .accessibility)
     #expect(model.groupUsageByProject)
     #expect(
-      model.usagePeriods?.local.today?.usage.projects?.map(\.projectKey) == ["Quota", "other"])
+      model.usage.usagePeriods?.local.today?.usage.projects?.map(\.projectKey)
+        == ["Quota", "other"])
     #expect(
-      model.usagePeriods?.local.today?.usage.projects?.map(\.displayName) == ["Quota", "Other"])
+      model.usage.usagePeriods?.local.today?.usage.projects?.map(\.displayName)
+        == ["Quota", "Other"])
     #expect(model.accountState == .signedIn)
     #expect(model.accountDisplayLabel == "octocat")
     #expect(model.syncUsageDisabledReason == nil)
@@ -225,11 +227,12 @@
     #expect(model.accountDeviceID == "device_visual_studio_mac_01")
     #expect(model.accountSummary?.usage.today.cost.status == .partial)
     #expect(model.accountSummary?.usage.today.partial == true)
-    #expect(model.localUsage?.sessions.active == 2)
-    #expect(model.localUsage?.sessions.today == 14)
-    #expect(model.localUsage?.sessions.recent.count == 3)
-    #expect(model.localUsage?.sessions.recent.map(\.isActive) == [true, true, false])
-    #expect(model.localUsage?.sessions.recent.map(\.projectKey) == ["Quota", "Quota", "menubar"])
+    #expect(model.usage.localUsage?.sessions.active == 2)
+    #expect(model.usage.localUsage?.sessions.today == 14)
+    #expect(model.usage.localUsage?.sessions.recent.count == 3)
+    #expect(model.usage.localUsage?.sessions.recent.map(\.isActive) == [true, true, false])
+    #expect(
+      model.usage.localUsage?.sessions.recent.map(\.projectKey) == ["Quota", "Quota", "menubar"])
     #expect(
       model.accountSummary?.usage.today.agents.flatMap { agent in
         agent.providers.flatMap { $0.models.map(\.model) }
@@ -346,7 +349,7 @@
     let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
 
     let content = try configuration(fixture: .content, referenceDate: referenceDate).makeModel()
-    let today = try #require(content.todayUsageSummary(source: .account))
+    let today = try #require(content.usage.todayUsageSummary(source: .account))
     #expect(today.text.hasPrefix("Today · "))
     #expect(today.text.hasSuffix("1.7M tokens"))
 
@@ -368,7 +371,7 @@
     // Nothing has been read yet, and a signed-out Mac has no Usage to report.
     for fixture in [VisualTestFixture.loading, .empty] {
       let model = try configuration(fixture: fixture, referenceDate: referenceDate).makeModel()
-      #expect(model.todayUsageSummary(source: .account) == nil)
+      #expect(model.usage.todayUsageSummary(source: .account) == nil)
       #expect(model.menuBarLabel(style: .iconAndPercent, now: referenceDate).text == nil)
     }
   }

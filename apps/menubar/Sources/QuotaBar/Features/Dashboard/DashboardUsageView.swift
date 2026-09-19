@@ -148,7 +148,7 @@ struct DashboardUsageView: View {
       stepButton(
         symbol: "chevron.left",
         label: "Previous period",
-        target: dashboard.model.usagePeriod.previous
+        target: dashboard.usagePeriod.previous
       )
       Text(state.title)
         .quotaFont(.listSecondary)
@@ -158,10 +158,10 @@ struct DashboardUsageView: View {
       stepButton(
         symbol: "chevron.right",
         label: "Next period",
-        target: dashboard.model.usagePeriod.next
+        target: dashboard.usagePeriod.next
       )
       Button {
-        let range = dashboard.model.usagePeriod.range(today: now)
+        let range = dashboard.usagePeriod.range(today: now)
         draftFrom = range.flatMap { UsageDateText.date(from: $0.from) } ?? now
         draftTo = range.flatMap { UsageDateText.date(from: $0.to) } ?? now
         rangeEditor.toggle()
