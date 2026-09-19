@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
 import {
   fetchAccount,
   fetchAccountActivity,
   fetchAccountSummary,
+  fetchAccountUsagePeriod,
   requestEmailSignInLink,
   unlinkIdentity,
 } from "../src/lib/account-client.ts";
@@ -17,6 +19,8 @@ import {
   accountActivityRange,
   accountPath,
   accountSummaryPath,
+  accountUsagePeriodPath,
+  clearStoredPeriods,
   clearStoredSummary,
 } from "../src/lib/account-reads.ts";
 import { SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
@@ -103,6 +107,135 @@ test("asks a single UTC day for its agent tree", async () => {
     assert.equal(asked.searchParams.get("detail"), "agents");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("asks a local-date range for the Account period read", () => {
+  const url = new URL(
+    accountUsagePeriodPath({
+      from: "2026-08-20",
+      to: "2026-08-26",
+      timezone: "Asia/Singapore",
+      breakdown: true,
+    }),
+    "https://quota.gotry.io",
+  );
+  assert.equal(url.pathname, "/api/v6/account/usage/period");
+  assert.equal(url.searchParams.get("from"), "2026-08-20");
+  assert.equal(url.searchParams.get("to"), "2026-08-26");
+  assert.equal(url.searchParams.get("timezone"), "Asia/Singapore");
+  assert.equal(url.searchParams.get("breakdown"), "1");
+  assert.equal([...url.searchParams.keys()].join(","), "from,to,timezone,breakdown");
+});
+
+test("offers the last period ETag back and returns the cached body on 304", async () => {
+  clearStoredPeriods();
+  const query = {
+    from: "2026-08-26",
+    to: "2026-08-26",
+    timezone: "Asia/Singapore",
+    breakdown: true,
+  };
+  const body = {
+    protocol_version: 6,
+    request: { from: query.from, to: query.to, timezone: query.timezone },
+    bounds: {
+      start: "2026-08-25T16:00:00Z",
+      end: "2026-08-26T16:00:00Z",
+      grid: USAGE_HOUR_GRID_RULE,
+    },
+    totals: {
+      total_tokens: 100,
+      input_tokens: 80,
+      output_tokens: 20,
+      cache_read_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      reasoning_tokens: 0,
+      messages: 2,
+    },
+    cost: {
+      mode: "auto",
+      basis: "calculated",
+      status: "complete",
+      amount_microusd: "5000",
+      catalog_revision: null,
+      calculated_rows: 1,
+      reported_rows: 0,
+      unpriced_rows: 0,
+      assumptions: [],
+      unpriced: [],
+    },
+    cache_saved: { amount_microusd: "0", status: "complete", unpriced_rows: 0 },
+    days: [
+      {
+        date: "2026-08-26",
+        totals: {
+          total_tokens: 100,
+          input_tokens: 80,
+          output_tokens: 20,
+          cache_read_input_tokens: 0,
+          cache_write_input_tokens: 0,
+          reasoning_tokens: 0,
+          messages: 2,
+        },
+        cost: {
+          mode: "auto",
+          basis: "calculated",
+          status: "complete",
+          amount_microusd: "5000",
+          catalog_revision: null,
+          calculated_rows: 1,
+          reported_rows: 0,
+          unpriced_rows: 0,
+          assumptions: [],
+          unpriced: [],
+        },
+        partial: false,
+      },
+    ],
+    coverage: {
+      partial: false,
+      daily_retained_from: null,
+      hourly_retained_from: null,
+      truncated_by_retention: false,
+    },
+    revision: {
+      usage_revision: 1,
+      device_generation: 1,
+      account_updated_at: "2026-08-26T02:00:00Z",
+      pricing_revision: "pricing_1",
+      model_catalog_revision: "models_1",
+      fold_version: 1,
+    },
+  };
+  const requests: Array<Headers> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input, init) => {
+    const headers = new Headers(init?.headers);
+    requests.push(headers);
+    if (headers.get("If-None-Match") === '"period-1"') {
+      return new Response(null, { status: 304, headers: { ETag: '"period-1"' } });
+    }
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ETag: '"period-1"' },
+    });
+  }) as typeof fetch;
+  try {
+    const first = await fetchAccountUsagePeriod(query);
+    const second = await fetchAccountUsagePeriod(query);
+    assert.equal(first.status, "ok");
+    assert.equal(second.status, "ok");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.get("If-None-Match"), null);
+    assert.equal(requests[1]?.get("If-None-Match"), '"period-1"');
+    if (first.status === "ok" && second.status === "ok") {
+      assert.equal(second.period, first.period);
+      assert.equal(second.period.totals.messages, 2);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearStoredPeriods();
   }
 });
 

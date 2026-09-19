@@ -1,5 +1,4 @@
 import { remainingPercent } from "@gotry-io/quota-model";
-import { QUOTA_HEALTHY_PERCENT, QUOTA_WARNING_PERCENT } from "./tokens.generated.ts";
 import type {
   AccountDeviceRead,
   AccountSummaryRead,
@@ -7,6 +6,7 @@ import type {
 } from "@gotry-io/quota-protocol";
 import { deviceActivity } from "./device-activity.ts";
 import { relativeAge, usageModelDisplayName } from "./format.ts";
+import { QUOTA_HEALTHY_PERCENT, QUOTA_WARNING_PERCENT } from "./tokens.generated.ts";
 
 export type MeterTone = "good" | "warn" | "critical";
 
@@ -92,8 +92,15 @@ export function accountStatusLine(summary: AccountSummaryRead, now?: Date): stri
   return `${quota} · ${reporting} ${noun} reporting`;
 }
 
-export function usageStatusLine(periodLabel: string, partial: boolean): string {
-  return partial ? `${periodLabel} · some hours incomplete` : periodLabel;
+export function usageStatusLine(
+  periodLabel: string,
+  partial: boolean,
+  truncatedByRetention = false,
+): string {
+  const parts = [periodLabel];
+  if (partial) parts.push("some hours incomplete");
+  if (truncatedByRetention) parts.push("some of this range is no longer kept");
+  return parts.join(" · ");
 }
 
 function activitySeverity(tone: "available" | "offline" | "unavailable", label: string): number {

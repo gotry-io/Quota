@@ -6,8 +6,9 @@ import {
   accountActivityDay,
   accountReadFromSummary,
   accountSummary,
-  screenshotAccountSummary,
+  accountUsagePeriod,
   screenshotAccountRhythm,
+  screenshotAccountSummary,
 } from "./account-fixture.ts";
 
 async function mockProviderStatus(
@@ -71,6 +72,23 @@ async function mockV6(page: Page, summary: unknown = accountSummary): Promise<vo
       });
       return;
     }
+    if (url.includes("/api/v6/account/usage/period")) {
+      const asked = new URL(url);
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
+      const timezone = asked.searchParams.get("timezone") ?? "UTC";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          accountUsagePeriod(from, to, timezone, {
+            breakdown: asked.searchParams.get("breakdown") === "1",
+            summary: summary as typeof accountSummary,
+          }),
+        ),
+      });
+      return;
+    }
     if (url.includes("/api/v6/account/usage/activity")) {
       const asked = new URL(url);
       const from = asked.searchParams.get("from") ?? "2026-08-12";
@@ -114,6 +132,7 @@ function seriousOrCritical(
 
 test("Overview does not prefetch activity", async ({ page }) => {
   let activityListRequests = 0;
+  let periodRequests = 0;
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {
@@ -122,6 +141,11 @@ test("Overview does not prefetch activity", async ({ page }) => {
         contentType: "application/json",
         body: JSON.stringify(accountSummary),
       });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/period")) {
+      periodRequests += 1;
+      await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
       return;
     }
     if (url.includes("/api/v6/account/usage/activity")) {
@@ -140,6 +164,7 @@ test("Overview does not prefetch activity", async ({ page }) => {
   await page.goto("/my");
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   expect(activityListRequests).toBe(0);
+  expect(periodRequests).toBe(0);
 });
 
 test("switching account tabs does not refetch summary or activity", async ({ page }) => {
@@ -154,6 +179,23 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(accountSummary),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/usage/period")) {
+      const asked = new URL(url);
+      const from = asked.searchParams.get("from") ?? "2026-08-12";
+      const to = asked.searchParams.get("to") ?? from;
+      const timezone = asked.searchParams.get("timezone") ?? "UTC";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          accountUsagePeriod(from, to, timezone, {
+            breakdown: asked.searchParams.get("breakdown") === "1",
+            summary: accountSummary,
+          }),
+        ),
       });
       return;
     }
