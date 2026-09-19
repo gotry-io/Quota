@@ -420,7 +420,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   default, or `cf-connecting-ip`) and only when the socket peer is listed in
   `RELAY_TRUSTED_PROXIES` (loopback, RFC1918, and unique-local IPv6 when unset), taking
   `CF-Connecting-IP` or the right-most `X-Forwarded-For` hop that is not itself a trusted
-  proxy, and the socket peer otherwise. IPv4-mapped IPv6 peers match IPv4 CIDRs. Readiness probes
+  proxy, and the socket peer otherwise. IPv4-mapped IPv6 peers match IPv4 CIDRs. Production reads
+  `CF-Connecting-IP` from its Caddy edge. The origin also answers requests that bypass
+  Cloudflare, which can forge that header; because it keys only these per-address limits, the
+  owner accepted that rather than closing the origin (runbook, Topology). Readiness probes
   and the hourly schedule delete at most 100 expired rows per credential and observation table per
   run, and consuming a limit collects at most 100 expired counters inline; each delete addresses
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
