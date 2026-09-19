@@ -81,10 +81,10 @@ through `QuotaAlerts`, including the pace warning Settings can turn off.
 
 ```text
 TabView (always; a sign-in in flight takes the screen)
-  Overview
+  Quota
   Usage
-  Devices
   Settings
+    Devices
 Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
@@ -483,6 +483,9 @@ no custom material.
 
 ### Devices
 
+Opened from Settings › Account while signed in (`settings.devices`), not a tab. Signed out, that
+row is absent; the sign-in card already covers it. The page itself is unchanged.
+
 The Account's list, so without an account it is one `ContentUnavailableView`: title **Sign in to
 see your Macs**, image `desktopcomputer`, description **Quota lists the Macs reporting to your
 account. This iPhone reads the providers you connect here whether or not you sign in.**
@@ -519,16 +522,19 @@ account content.
 ### Settings
 
 A native `Form` hub with the system content background. Notification thresholds, appearance, and
-About are pushed destinations that share `SettingsModel`. Account actions sit on this hub so they
-are reachable without scrolling through alert groups. Every control is a standard Form toggle,
-picker, link, or button. Settings has no custom loading state.
+About are pushed destinations that share `SettingsModel`. Devices is a pushed Account destination.
+Account actions sit on this hub so they are reachable without scrolling through alert groups.
+Every control is a standard Form toggle, picker, link, or button. Settings has no custom loading
+state.
 
 **Account first.** When signed in, the top section is an identity card: a 44-point circle with the
 first letter of the account label on brand emerald, the label (`headline`), the bound sign-in
 methods as a `support` secondary line (Apple · GitHub · Email, or **Signed in** until identities
-load), and a chevron into the Sign-in methods page. Signed out: the same slot shows **Sign in to
-Quota** as a `.borderedProminent` row button (`settings.signin`), with footer **Sign in to see
-what QuotaBar reports from your Macs, and your usage across them.** Manage Devices on Web,
+load), and a chevron into the Sign-in methods page. A **Devices** row follows (`settings.devices`):
+`SettingsRowIcon` `laptopcomputer` on a neutral gray tint, pushing the existing Devices list.
+Signed out: the same slot shows **Sign in to Quota** as a `.borderedProminent` row button
+(`settings.signin`), with footer **Sign in to see what QuotaBar reports from your Macs, and your
+usage across them.** The Devices row is absent. Manage Devices on Web,
 **Delete Account…**, and **Log Out** stay on the hub after About so their identifiers remain on
 `settings.root`; the delete-account explanation is that group's footer.
 
