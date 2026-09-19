@@ -62,8 +62,12 @@ func applicationMenuHasAboutUpdatesSettingsServicesHideAndQuit() throws {
 }
 
 @Test @MainActor
-func fileMenuClosesWithCommandW() throws {
+func fileMenuExportsUsageAndClosesWithCommandW() throws {
   let file = try submenu(QuotaBarMainMenu.make(), titled: "File")
+  let export = try item(file, titled: "Export Usage…")
+  #expect(export.action == #selector(QuotaBarMainMenu.Actions.exportUsage(_:)))
+  #expect(export.target === QuotaBarMainMenu.Actions.shared)
+  #expect(export.keyEquivalent.isEmpty)
   let close = try item(file, titled: "Close")
   #expect(close.action == #selector(NSWindow.performClose(_:)))
   #expect(close.keyEquivalent == "w")

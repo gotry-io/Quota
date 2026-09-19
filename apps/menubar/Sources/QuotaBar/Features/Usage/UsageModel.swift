@@ -65,6 +65,9 @@ final class UsageModel {
   @ObservationIgnored
   private var customPeriodSource: UsageSource = .account
 
+  /// The Account / This Mac picker Dashboard last set.
+  var selectedUsageSource: UsageSource { customPeriodSource }
+
   @ObservationIgnored
   private var budgetMonthTask: Task<Void, Never>?
 
@@ -383,6 +386,28 @@ final class UsageModel {
 
   func isPreparingUsage(source: UsageSource) -> Bool {
     source == .local ? usageRefreshing : accountRefreshing
+  }
+
+  /// The period on screen as an export, or nil when All has no days or days were omitted.
+  func usageExportInput(now: Date, appVersion: String) -> UsageExport.Input? {
+    let source = effectiveUsageSource(customPeriodSource)
+    guard let detail = usageDetail(source: source, selection: usagePeriod),
+      let days = detail.usage.days
+    else { return nil }
+    if usagePeriod == .all && days.isEmpty { return nil }
+    let range = usagePeriod.range(today: now) ?? (from: detail.range.from, to: detail.range.to)
+    return UsageExport.input(
+      detail: detail,
+      scope: source == .account ? "Account" : "This Mac",
+      range: range,
+      timezone: detail.timezone ?? TimeZone.current.identifier,
+      exportedAt: UsageExport.iso8601(now),
+      appVersion: appVersion
+    )
+  }
+
+  var canExportUsage: Bool {
+    usageExportInput(now: now(), appVersion: AppMetadata.version) != nil
   }
 
   static func periodKey(

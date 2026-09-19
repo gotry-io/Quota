@@ -261,7 +261,9 @@ fixtures named below; change the fixture, not a surface.
   (**Sep 6, 2026**); a range inside one year drops the repeated year from its first half
   (**Aug 31 – Sep 6, 2026**); `all` has no first day, so it reads **Everything kept**. The step
   controls are **Previous period** and **Next period**, and there is nothing ahead of the
-  current day, week, or month, so **Next period** is disabled there.
+  current day, week, or month, so **Next period** is disabled there. Exporting the period writes
+  those same local dates, the same zone, and the same API-equivalent cost
+  ([ADR 0056](decisions/0056-a-period-export-is-the-period-on-screen.md)).
 - **Four periods are folded for the reader, and the rest are folded by the client.** Today, Last
   7 days, Last 30 days, and All arrive folded — from the service on This Mac, from the Account
   read on Account. Every other period is added up by the client from days it already holds, and

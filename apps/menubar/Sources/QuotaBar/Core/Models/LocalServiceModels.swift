@@ -759,6 +759,86 @@ struct LocalServiceOverviewSourcePinSetting: Decodable, Sendable {
   }
 }
 
+/// Hour-grid bounds of a period, as `usage_period` passes them through from Relay or this Mac.
+struct UsagePeriodBounds: Decodable, Equatable, Sendable {
+  let start: String
+  let end: String
+  let grid: String
+
+  init(start: String, end: String, grid: String) {
+    self.start = start
+    self.end = end
+    self.grid = grid
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case start
+    case end
+    case grid
+  }
+}
+
+extension UsagePeriodBounds {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["start", "end", "grid"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    start = try container.decode(String.self, forKey: .start)
+    end = try container.decode(String.self, forKey: .end)
+    grid = try container.decode(String.self, forKey: .grid)
+  }
+}
+
+/// Account period revision, as `usage_period` passes it through from Relay.
+struct UsagePeriodRevision: Decodable, Equatable, Sendable {
+  let usageRevision: Int
+  let deviceGeneration: Int
+  let accountUpdatedAt: String?
+  let pricingRevision: String
+  let modelCatalogRevision: String
+  let foldVersion: Int
+
+  init(
+    usageRevision: Int,
+    deviceGeneration: Int,
+    accountUpdatedAt: String?,
+    pricingRevision: String,
+    modelCatalogRevision: String,
+    foldVersion: Int
+  ) {
+    self.usageRevision = usageRevision
+    self.deviceGeneration = deviceGeneration
+    self.accountUpdatedAt = accountUpdatedAt
+    self.pricingRevision = pricingRevision
+    self.modelCatalogRevision = modelCatalogRevision
+    self.foldVersion = foldVersion
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case usageRevision
+    case deviceGeneration
+    case accountUpdatedAt
+    case pricingRevision
+    case modelCatalogRevision
+    case foldVersion
+  }
+}
+
+extension UsagePeriodRevision {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "usageRevision", "deviceGeneration", "accountUpdatedAt", "pricingRevision",
+      "modelCatalogRevision", "foldVersion",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    usageRevision = try container.decode(Int.self, forKey: .usageRevision)
+    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
+    accountUpdatedAt = try container.decode(String?.self, forKey: .accountUpdatedAt)
+    pricingRevision = try container.decode(String.self, forKey: .pricingRevision)
+    modelCatalogRevision = try container.decode(String.self, forKey: .modelCatalogRevision)
+    foldVersion = try container.decode(Int.self, forKey: .foldVersion)
+  }
+}
+
 /// How much of an Account period Relay still holds, as `usage_period` answers it.
 struct UsagePeriodCoverage: Decodable, Equatable, Sendable {
   let partial: Bool
@@ -805,19 +885,28 @@ struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
   let incomplete: Bool
   let detailsTruncated: Bool
   let coverage: UsagePeriodCoverage?
+  let timezone: String?
+  let bounds: UsagePeriodBounds?
+  let revision: UsagePeriodRevision?
 
   init(
     range: UsageDateRange,
     usage: LocalUsagePeriodSummary,
     incomplete: Bool,
     detailsTruncated: Bool,
-    coverage: UsagePeriodCoverage? = nil
+    coverage: UsagePeriodCoverage? = nil,
+    timezone: String? = nil,
+    bounds: UsagePeriodBounds? = nil,
+    revision: UsagePeriodRevision? = nil
   ) {
     self.range = range
     self.usage = usage
     self.incomplete = incomplete
     self.detailsTruncated = detailsTruncated
     self.coverage = coverage
+    self.timezone = timezone
+    self.bounds = bounds
+    self.revision = revision
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -826,6 +915,9 @@ struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
     case incomplete
     case detailsTruncated
     case coverage
+    case timezone
+    case bounds
+    case revision
   }
 
   var isValid: Bool {
@@ -923,7 +1015,8 @@ extension LocalServiceQuotaHistory {
 extension LocalServiceUsageDetail {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "range", "usage", "incomplete", "detailsTruncated", "coverage",
+      "range", "usage", "incomplete", "detailsTruncated", "coverage", "timezone", "bounds",
+      "revision",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
@@ -931,6 +1024,9 @@ extension LocalServiceUsageDetail {
     incomplete = try container.decode(Bool.self, forKey: .incomplete)
     detailsTruncated = try container.decode(Bool.self, forKey: .detailsTruncated)
     coverage = try container.decodeIfPresent(UsagePeriodCoverage.self, forKey: .coverage)
+    timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
+    bounds = try container.decodeIfPresent(UsagePeriodBounds.self, forKey: .bounds)
+    revision = try container.decodeIfPresent(UsagePeriodRevision.self, forKey: .revision)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .usage,

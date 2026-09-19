@@ -275,7 +275,7 @@ each sized to its windows rather than stretched to the tallest neighbour, then a
 Today strip (tokens, API-equivalent cost, today's top model), then a Devices summary line
 (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's verdict). It does
 not repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as
-the page name. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
+the page name, with an **Export** menu (CSV / JSON) for the selected period. Totals are three cells: tokens, API-equivalent cost — the same headline QuotaBar and iOS
 show — and Messages from `totals.messages`. The input/output split stays under the token figure.
 Cost always says how it was arrived at; unavailable cost renders as an em dash plus “Unpriced”, and
 partial cost uses a lower bound marker. Under the totals headline, one line `Priced N of M rows`
@@ -291,7 +291,10 @@ inputs bounded by the activity range and an **Apply**. The selection is
 a custom one, so a refresh keeps it. Every selection except All reads
 `GET /api/v6/account/usage/period` with those inclusive local dates and this browser's IANA
 timezone, `breakdown=1` for the agent/model tree — presets included, so one path answers them.
-`all` stays the summary's 730 UTC-day window. Overview Today still reads the summary. A matching
+`all` stays the summary's 730 UTC-day window. Overview Today still reads the summary.
+**Export** writes that loaded period body as CSV or JSON in the browser (`quota-usage-<from>-<to>`),
+matching the local dates, zone, and API-equivalent cost on screen, and is off for All
+([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)). A matching
 `If-None-Match` reuses the last-good period the way the summary already does. Incomplete hours
 print **some hours incomplete**; a range that retention cuts prints **some of this range is no
 longer kept** and **This range goes past what Quota still keeps.**

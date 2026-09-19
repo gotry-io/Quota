@@ -66,7 +66,8 @@ has been rejected. Browser cookies stay local.
 
 Each background refresh precomputes Today, 7 Days, 30 Days, and All for This Mac and, when enabled,
 the signed-in Account. The four values are persisted and returned by `get_state`; Swift only selects
-among them and never slices totals or infers client/provider/model ownership.
+among them and never slices totals or infers client/provider/model ownership. File › Export Usage…
+and the Usage toolbar Export button write the selected period as CSV or JSON from that detail.
 
 Packaged builds embed Sparkle 2. Support's **Updates** action, and Sparkle's daily
 schedule, read the GitHub Releases appcast. Local `swift run` binaries are not packaged and do not
