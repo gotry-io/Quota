@@ -7,7 +7,7 @@ struct UsageActivitySection: View {
 
   var body: some View {
     Section {
-      switch model.activityChart {
+      switch model.usage.activityChart {
       case .idle, .loading:
         ProgressView("Loading activity")
           .foregroundStyle(Color.primary)
@@ -21,7 +21,7 @@ struct UsageActivitySection: View {
           .foregroundStyle(Color.primary)
           .accessibilityIdentifier("usage.activity.failed")
         Button("Retry") {
-          Task { await model.retryActivity() }
+          Task { await model.usage.retryActivity() }
         }
         .tint(.primary)
         .accessibilityLabel("Retry")
@@ -31,8 +31,8 @@ struct UsageActivitySection: View {
           loaded(
             UsageActivityChart.build(
               reported: days,
-              range: model.activityDateRange,
-              today: model.activityToday
+              range: model.usage.activityDateRange,
+              today: model.usage.activityToday
             )
           )
         } else {
@@ -63,7 +63,7 @@ struct UsageActivitySection: View {
     if let day = chart.selectableDay(on: selectedDate) {
       selectedDaySummary(day)
       Button("View day") {
-        Task { await model.openActivityDay(date: day.date) }
+        Task { await model.usage.openActivityDay(date: day.date) }
       }
       .buttonStyle(.borderedProminent)
       .frame(maxWidth: .infinity, minHeight: QuotaTheme.minimumTouchTarget)
@@ -329,7 +329,7 @@ struct UsageDayDetailSheet: View {
   var body: some View {
     NavigationStack {
       Group {
-        if let sheet = model.activityDaySheet {
+        if let sheet = model.usage.activityDaySheet {
           List {
             Section {
               UsageTotalsSection(
@@ -376,7 +376,7 @@ struct UsageDayDetailSheet: View {
         Text("Couldn't load this day's usage.")
           .foregroundStyle(.primary)
         Button("Retry") {
-          Task { await model.retryActivityDay() }
+          Task { await model.usage.retryActivityDay() }
         }
         .tint(.primary)
         .accessibilityIdentifier("usage.day.retry")
