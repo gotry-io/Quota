@@ -178,7 +178,8 @@ non-contrast findings still fail the test; contrast never gates; incomplete does
 Unnamed glass (`issue.element == nil`) stays recorded and non-gating: the auditor names no
 element to fix. Kept exemptions are one audit type, one identifier or exact label, and one
 screen, each with a reason (iOS 26.3 auditor limitations on system list chrome, Form inner
-labels, combined-row inner text, and the sheet Done control).
+labels, combined-row inner text, wrapping subscription-detail history and readings titles,
+and the sheet Done control).
 `scripts/ios-ui-audit-summary.mjs` prints those outcomes from an `.xcresult` (CI
 `verify-ios-ui` appends it to the job summary). Log Out and Delete Account sit on the
 Settings hub. Delete Account starts on the website. `testLargeTypeScreenshots` always runs at

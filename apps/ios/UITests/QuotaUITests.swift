@@ -1022,6 +1022,11 @@ final class QuotaUITests: XCTestCase {
       identifier: "overview.today.cost",
       expectedLabel: ContentFixtureLargeType.todayCost
     )
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "overview.today",
+      expectedLabel: ContentFixtureLargeType.todayCombined
+    )
 
     try restoreTabBar(app)
     app.tabBars.buttons["Usage"].tap()
@@ -1089,7 +1094,7 @@ final class QuotaUITests: XCTestCase {
       expectedLabel: ContentFixtureLargeType.remainingPercent,
       combinedLabelContainsValue: true
     )
-    popBack(app, to: "overview.root", backTitle: "octocat")
+    popBack(app, to: "overview.root", backTitle: "Quota")
 
     try restoreTabBar(app)
     app.tabBars.buttons["Settings"].tap()
@@ -1741,10 +1746,12 @@ private let classifiedAuditTypes = [
 ]
 
 /// Content-fixture strings `testLargeTypeScreenshots` requires in full at Extra Large.
+/// Today values are B3b's compact row: compact child text plus the combined VoiceOver label.
 private enum ContentFixtureLargeType {
   static let remainingPercent = "68%"
-  static let todayTokens = "1,704,620 tokens"
-  static let todayCost = "API-equivalent cost, $1.49, complete"
+  static let todayTokens = "1.7M tokens"
+  static let todayCost = "$1.49 API-equivalent"
+  static let todayCombined = "Today, 1,704,620 tokens, $1.49 API-equivalent cost"
   static let usageTokens = "11,400,000 tokens, 9,500,000 in, 1,900,000 out"
   static let usageCost = "Cost, $8.50, complete"
 }
@@ -1779,10 +1786,6 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "usage.root", identifier: "section.header.activity",
     label: "", rule: "dynamic-type-section.header.activity"),
-  // Combined Today card title, not the inner tiles (those are exact labels below).
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "overview.today",
-    label: "", rule: "dynamic-type-overview.today"),
   // Identified empty/error copy the iOS 26.3 auditor still flags as partial Dynamic Type.
   .init(
     type: "dynamic-type", screen: "settings.root",
@@ -1848,31 +1851,6 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "devices.root", identifier: "", label: "This iPhone",
     rule: "dynamic-type-label-This-iPhone"),
-  // Inner Text of combined Today tiles (labels and compact values).
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "",
-    label: "API-equivalent cost", rule: "dynamic-type-label-API-equivalent-cost"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Input",
-    rule: "dynamic-type-label-Input"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Output",
-    rule: "dynamic-type-label-Output"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Tokens",
-    rule: "dynamic-type-label-Tokens"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "1.42M",
-    rule: "dynamic-type-label-1.42M"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "1.7M",
-    rule: "dynamic-type-label-1.7M"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "284k",
-    rule: "dynamic-type-label-284k"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "$1.49",
-    rule: "dynamic-type-label-$1.49"),
   // Inner Text of combined subscription cards (iOS 26.3 auditor; was a parent skip).
   .init(
     type: "dynamic-type", screen: "overview.root", identifier: "overview.remaining",
@@ -1886,6 +1864,20 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "overview.root", identifier: "",
     label: "Team workspace", rule: "dynamic-type-label-Team-workspace"),
+  // Wrapping subscription-detail copy. iOS 26.3 still reports partial Dynamic Type
+  // after ViewThatFits, .body, and fixedSize; the strings are fully on-screen.
+  .init(
+    type: "dynamic-type", screen: "subscription.detail",
+    identifier: "section.header.history", label: "",
+    rule: "dynamic-type-section.header.history"),
+  .init(
+    type: "dynamic-type", screen: "subscription.detail",
+    identifier: "subscription.history", label: "",
+    rule: "dynamic-type-subscription.history"),
+  .init(
+    type: "dynamic-type", screen: "subscription.detail",
+    identifier: "subscription.sources", label: "",
+    rule: "dynamic-type-subscription.sources"),
 ]
 
 private let auditExemptionRules: [String] = {

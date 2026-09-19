@@ -829,10 +829,11 @@ provider and support, and no custom card chrome beyond the system widget contain
   is not low contrast.
 - Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26.3 auditor
   still reports Dynamic Type "partially unsupported" on specific system list headers/footers,
-  the combined `overview.today` row, Form/Link inner labels, combined-row inner text, identified
-  empty/error copy, and the sheet **Done** button. Clipping on `usage.activity.empty` still
-  reproduces after `fixedSize`. Each kept exemption is one audit type, one identifier or exact
-  label, and one screen, counted per rule. A prefix or parent skip is not an exemption.
+  Form/Link inner labels, combined-row inner text, identified empty/error copy, wrapping
+  subscription-detail history and readings titles, and the sheet **Done** button. Clipping on
+  `usage.activity.empty` still reproduces after `fixedSize`. Each kept exemption is one audit
+  type, one identifier or exact label, and one screen, counted per rule. A prefix or parent
+  skip is not an exemption.
   Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
   (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
   finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
