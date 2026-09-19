@@ -33,7 +33,12 @@ export default defineConfig({
         test: {
           name: "workers",
           provide: { TEST_MIGRATIONS: migrations },
-          exclude: [...configDefaults.exclude, "test/**/*.integration.test.ts", "test/platform/**"],
+          exclude: [
+            ...configDefaults.exclude,
+            "test/**/*.integration.test.ts",
+            "test/platform/**",
+            "bench/**",
+          ],
         },
       },
       {

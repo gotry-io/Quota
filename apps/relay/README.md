@@ -52,7 +52,9 @@ offers — a week, a month, a range someone picked — is these same days added 
 is why this read answers a range rather than one more named period. A day carries no agent tree
 unless it was asked for on its own, so a client-folded period carries totals and cost only. The
 fold is stated once, in `packages/protocol/fixtures/usage-day-fold-conformance.json`, and the
-website and both Apple apps answer that file.
+website and both Apple apps answer that file. A synthetic rollup-plus-boundary period query
+benchmark lives at [`bench/period-query.bench.ts`](./bench/period-query.bench.ts) and is not part of
+`pnpm test`.
 
 Each period of `usage` also carries `cache_saved`: what its cache reads saved against paying the
 uncached input price for the same tokens, folded from the rows it already priced and therefore
