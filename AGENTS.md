@@ -13,6 +13,7 @@ Read the relevant source before changing that area:
 | System boundaries, data paths, package dependencies, runtime split | `docs/architecture.md` |
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
+| Colour, remaining-quota bands, spacing, radii | `packages/design-tokens/tokens.json` |
 | Collection strategy for all twelve providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |

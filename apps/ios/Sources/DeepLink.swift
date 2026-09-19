@@ -56,25 +56,22 @@ enum DeepLink: Equatable, Sendable {
 }
 
 enum AppTab: Hashable, Sendable, CaseIterable {
-  case overview
+  case quota
   case usage
-  case devices
   case settings
 
   var title: String {
     switch self {
-    case .overview: "Overview"
+    case .quota: "Quota"
     case .usage: "Usage"
-    case .devices: "Devices"
     case .settings: "Settings"
     }
   }
 
   var systemImage: String {
     switch self {
-    case .overview: "gauge.with.dots.needle.33percent"
+    case .quota: "gauge.with.dots.needle.33percent"
     case .usage: "chart.bar"
-    case .devices: "laptopcomputer"
     case .settings: "gearshape"
     }
   }

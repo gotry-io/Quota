@@ -434,6 +434,10 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   `packages/apple-client`, QuotaBar's app-behavior extension on that enum,
   `ProviderID.brandIconAssetName` in `QuotaBrandIcons`, and the protocol TypeScript IDs. One catalog
   produces one Swift type, and one decoder validates for both products.
+- `packages/design-tokens/tokens.json` is the only hand-edited colour, remaining-quota band,
+  spacing, and radius source. Generation writes web CSS custom properties, web TypeScript
+  thresholds, and Foundation-only Swift in `QuotaPresentation`. Apple system-colour mappings and
+  the card-radius 20 override live in that file; they are not a second palette.
 - `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
   OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` is its only
   entry point and adds only process startup and IPC lifetime around it.

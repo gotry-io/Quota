@@ -45,9 +45,10 @@ shape of a released contract still moves its version.
   local threshold or reset notification, and the dedup state afterwards. QuotaBar and Quota iOS
   both answer it.
 - `fixtures/quota-pace-conformance.json` states whether a window's current burn rate lasts to its
-  reset, and the one line every surface prints for it. `packages/quota-model`, `packages/service`,
-  and `packages/apple-shared` each answer the rule; `apps/web/src/lib/format.ts` and `QuotaPaceCopy`
-  answer the copy ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
+  reset, and the glance headline and detail explanation every surface prints for it.
+  `packages/quota-model`, `packages/service`, and `packages/apple-shared` each answer the rule;
+  `apps/web/src/lib/format.ts` and `QuotaPaceCopy` answer the copy
+  ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
 - `fixtures/quota-history-conformance.json` states how a window's own local samples fold into the
   curve behind the reader, the dashed projection to its reset, and the windows the reader's day
   holds. Samples are keyed by the local subscription selector, not by provider.

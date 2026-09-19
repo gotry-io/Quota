@@ -1,3 +1,4 @@
+import QuotaPresentation
 import SwiftUI
 
 enum QuotaDesign {
@@ -20,7 +21,7 @@ enum QuotaDesign {
     /// Wide Visual QA capture for the Quota page.
     static let mainWindowWideSize = CGSize(width: 1280, height: 800)
     /// Quota / Today / Usage cards.
-    static let cardCornerRadius: CGFloat = 20
+    static let cardCornerRadius: CGFloat = DesignTokens.Radius.card
     /// Inner padding of Quota / Today / Usage cards.
     static let cardPadding: CGFloat = 16
     /// Centred reading column on Quota, Today, and Usage.

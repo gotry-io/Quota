@@ -30,6 +30,14 @@ Core rules:
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
+## Tokens
+
+Colour roles, remaining-quota bands, spacing, and radii come from
+[`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
+`QuotaBrand`, `QuotaTone`, and `QuotaTheme` read the generated Swift. iOS maps
+`text.primary` / `text.meta` to system labels, overrides light `text.secondary` for
+contrast, and uses card radius 20.
+
 ## Design system
 
 Layout tokens, type roles, and content components live in `apps/ios/Sources/Design/`. Colors stay
@@ -88,9 +96,11 @@ and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`,
 `packages/protocol/fixtures/remaining-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
 `FreshnessCopy` and `RemainingQuotaFormat` and never assemble their own. A window's pace prints under its support line in
-`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise;
-there is no Rust on iOS, so the app derives it with `QuotaPace` from the reading it already holds,
-answering `packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
+`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise:
+glance surfaces print **Expected to last until reset** or **May run out about 2h before reset**, and
+subscription detail adds the even-pace explanation under that headline. There is no Rust on iOS, so
+the app derives it with `QuotaPace` from the reading it already holds, answering
+`packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
 belongs to the number. Local remaining-quota alerts answer
 `packages/protocol/fixtures/alert-transition-conformance.json`; both Apple apps evaluate that file
 through `QuotaAlerts`, including the pace warning Settings can turn off.
@@ -99,10 +109,10 @@ through `QuotaAlerts`, including the pace warning Settings can turn off.
 
 ```text
 TabView (always; a sign-in in flight takes the screen)
-  Overview
+  Quota
   Usage
-  Devices
   Settings
+    Devices
 Widget overview (small, medium, large, circular, rectangular, inline)
 ```
 
@@ -501,6 +511,9 @@ no custom material.
 
 ### Devices
 
+Opened from Settings › Account while signed in (`settings.devices`), not a tab. Signed out, that
+row is absent; the sign-in card already covers it. The page itself is unchanged.
+
 The Account's list, so without an account it is one `ContentUnavailableView`: title **Sign in to
 see your Macs**, image `desktopcomputer`, description **Quota lists the Macs reporting to your
 account. This iPhone reads the providers you connect here whether or not you sign in.**
@@ -537,16 +550,19 @@ account content.
 ### Settings
 
 A native `Form` hub with the system content background. Notification thresholds, appearance, and
-About are pushed destinations that share `SettingsModel`. Account actions sit on this hub so they
-are reachable without scrolling through alert groups. Every control is a standard Form toggle,
-picker, link, or button. Settings has no custom loading state.
+About are pushed destinations that share `SettingsModel`. Devices is a pushed Account destination.
+Account actions sit on this hub so they are reachable without scrolling through alert groups.
+Every control is a standard Form toggle, picker, link, or button. Settings has no custom loading
+state.
 
 **Account first.** When signed in, the top section is an identity card: a 44-point circle with the
 first letter of the account label on brand emerald, the label (`headline`), the bound sign-in
 methods as a `support` secondary line (Apple · GitHub · Email, or **Signed in** until identities
-load), and a chevron into the Sign-in methods page. Signed out: the same slot shows **Sign in to
-Quota** as a `.borderedProminent` row button (`settings.signin`), with footer **Sign in to see
-what QuotaBar reports from your Macs, and your usage across them.** Manage Devices on Web,
+load), and a chevron into the Sign-in methods page. A **Devices** row follows (`settings.devices`):
+`SettingsRowIcon` `laptopcomputer` on a neutral gray tint, pushing the existing Devices list.
+Signed out: the same slot shows **Sign in to Quota** as a `.borderedProminent` row button
+(`settings.signin`), with footer **Sign in to see what QuotaBar reports from your Macs, and your
+usage across them.** The Devices row is absent. Manage Devices on Web,
 **Delete Account…**, and **Log Out** stay on the hub after About so their identifiers remain on
 `settings.root`; the delete-account explanation is that group's footer.
 

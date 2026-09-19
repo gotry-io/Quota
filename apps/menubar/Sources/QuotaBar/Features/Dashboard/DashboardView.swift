@@ -82,6 +82,11 @@ struct DashboardView: View {
           .quotaSecondaryStyle()
           .fixedSize(horizontal: false, vertical: true)
       }
+      if let detail = provider.paceDetail {
+        Text(detail)
+          .quotaSecondaryStyle()
+          .fixedSize(horizontal: false, vertical: true)
+      }
     }
   }
 
@@ -102,7 +107,7 @@ struct DashboardView: View {
 
   private func subtitleLine(_ provider: DashboardProvider, now: Date) -> String? {
     var parts: [String] = []
-    if let pace = provider.pacePhrase {
+    if let pace = provider.paceHeadline {
       parts.append(pace)
     }
     if let resetsAt = provider.resetsAt,
@@ -127,6 +132,9 @@ struct DashboardView: View {
     }
     if let subtitle = subtitleLine(provider, now: now) {
       parts.append(subtitle)
+    }
+    if let detail = provider.paceDetail {
+      parts.append(detail)
     }
     return parts.joined(separator: " · ")
   }

@@ -17,6 +17,26 @@ it("keys windows by id when titles repeat", () => {
   expect(screen.getByText("10%")).toBeTruthy();
 });
 
+it("prints the pace headline on overview and the detail explanation only when asked", () => {
+  const windows = [
+    {
+      id: "five_hour",
+      title: "5 Hours",
+      used_percent: 85,
+      resets_at: "2026-09-05T12:00:00Z",
+      duration_seconds: 18_000,
+    },
+  ];
+  const now = new Date("2026-09-05T09:30:00Z");
+  const { rerender } = render(QuotaWindows, { windows, now });
+  expect(screen.getByText("May run out about 2h before reset")).toBeTruthy();
+  expect(screen.queryByText(/even pace/)).toBeNull();
+
+  rerender({ windows, now, showPaceDetail: true });
+  expect(screen.getByText("May run out about 2h before reset")).toBeTruthy();
+  expect(screen.getByText("Using quota faster than an even pace (+70 points)")).toBeTruthy();
+});
+
 it("drops the reset line once the refill instant has passed", () => {
   const windows = [
     {
