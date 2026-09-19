@@ -390,7 +390,7 @@ struct UsageTopModelsSection: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
               Text("\(index + 1)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(QuotaTheme.secondary)
               Text(row.displayName)
                 .font(.subheadline)
                 .foregroundStyle(Color.primary)

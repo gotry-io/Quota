@@ -58,7 +58,7 @@ struct UsageDailySection: View {
 
   private var legend: some View {
     HStack(spacing: 12) {
-      legendItem(QuotaTheme.emerald.opacity(0.35), "Cached")
+      legendItem(QuotaTheme.cachedFill, "Cached")
       legendItem(QuotaTheme.emerald, "Fresh")
       legendItem(Color.primary.opacity(0.85), "Output")
     }
@@ -117,7 +117,7 @@ struct UsageDailySection: View {
           row.cachedInputTokens,
           of: row.totals.totalTokens,
           height: barHeight,
-          fill: QuotaTheme.emerald.opacity(0.35)
+          fill: QuotaTheme.cachedFill
         )
       }
       .frame(height: barHeight)

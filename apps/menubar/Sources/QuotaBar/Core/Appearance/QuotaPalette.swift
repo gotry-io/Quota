@@ -69,11 +69,23 @@ enum QuotaPalette {
   }
 
   static func contrastRatio(foreground: NSColor, background: NSColor) -> Double {
-    let foregroundLuminance = relativeLuminance(foreground)
-    let backgroundLuminance = relativeLuminance(background)
-    let lighter = max(foregroundLuminance, backgroundLuminance)
-    let darker = min(foregroundLuminance, backgroundLuminance)
-    return (lighter + 0.05) / (darker + 0.05)
+    ContrastRatio.ratio(
+      foreground: sRGBComponents(foreground),
+      background: sRGBComponents(background)
+    )
+  }
+
+  private static func sRGBComponents(_ color: NSColor) -> (
+    red: Double, green: Double, blue: Double
+  ) {
+    guard let rgb = color.usingColorSpace(NSColorSpace.sRGB) else {
+      return (0, 0, 0)
+    }
+    return (
+      Double(rgb.redComponent),
+      Double(rgb.greenComponent),
+      Double(rgb.blueComponent)
+    )
   }
 
   static func resolvedColor(_ color: NSColor, for appearance: NSAppearance) -> NSColor {
@@ -187,12 +199,4 @@ enum QuotaPalette {
     alpha: 1
   )
 
-  private static func relativeLuminance(_ color: NSColor) -> Double {
-    guard let rgb = color.usingColorSpace(NSColorSpace.sRGB) else { return 0 }
-    let channels = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { component in
-      let value = Double(component)
-      return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
-    }
-    return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
-  }
 }

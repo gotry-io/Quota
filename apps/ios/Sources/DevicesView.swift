@@ -187,7 +187,7 @@ struct DeviceRowBody: View {
           .fixedSize(horizontal: false, vertical: true)
         Text(content.details)
           .font(QuotaDesign.Typography.support)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(QuotaTheme.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
 
@@ -195,7 +195,7 @@ struct DeviceRowBody: View {
 
       Text(content.verdict)
         .font(QuotaDesign.Typography.support.weight(.semibold))
-        .foregroundStyle(content.isActive ? QuotaTheme.emerald : Color.secondary)
+        .foregroundStyle(content.isActive ? QuotaTheme.emerald : QuotaTheme.secondary)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(capsuleFill, in: Capsule())
@@ -206,6 +206,6 @@ struct DeviceRowBody: View {
   }
 
   private var capsuleFill: Color {
-    (content.isActive ? QuotaTheme.emerald : Color.secondary).opacity(0.18)
+    (content.isActive ? QuotaTheme.emerald : QuotaTheme.secondary).opacity(QuotaTheme.capsuleFillOpacity)
   }
 }

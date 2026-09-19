@@ -11,7 +11,7 @@ struct QuotaStatTile: View {
     VStack(alignment: .leading, spacing: 4) {
       Text(label)
         .font(QuotaDesign.Typography.support)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(QuotaTheme.secondary)
       Text(value)
         .font(valueFont)
         .foregroundStyle(.primary)

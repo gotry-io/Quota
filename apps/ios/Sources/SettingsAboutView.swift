@@ -8,7 +8,7 @@ struct SettingsAboutView: View {
           QuotaAppMark(size: QuotaDesign.Layout.quotaMarkAbout)
           Text(SettingsCopy.bundleVersionLabel())
             .font(QuotaDesign.Typography.support)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(QuotaTheme.secondary)
             .monospacedDigit()
 
           Text(SettingsCopy.productSentence)

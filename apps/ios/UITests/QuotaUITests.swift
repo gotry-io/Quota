@@ -1225,9 +1225,9 @@ final class QuotaUITests: XCTestCase {
   /// Every confirmed issue is reported with the element it names, so a failure says what to fix.
   ///
   /// A finding gates the test only when the same type + element key + screen appears on two
-  /// consecutive passes one second apart. Contrast whose element frame intersects the tab bar
-  /// or a navigation bar is chrome overlap: attached as unconfirmed, never a failure.
-  /// Timeout handling is unchanged. Connect (primary label, no tab bar) still runs contrast.
+  /// consecutive passes one second apart. Contrast findings are attached as unconfirmed
+  /// (`[contrast]`) and never gate: the pixel-sampling contrast pass is not a reliable measure
+  /// of the colours this app chose. Timeout handling is unchanged.
   private func audit(
     _ app: XCUIApplication,
     skipping: XCUIAccessibilityAuditType = []
@@ -1313,24 +1313,25 @@ final class QuotaUITests: XCTestCase {
 
     let screen = currentScreenName(app)
     let first = try collectAuditIssues(app, types: types, screen: screen)
-    let chrome = first.filter(\.chromeOverlap)
-    let candidates = first.filter { !$0.chromeOverlap }
+    let contrast = first.filter { $0.type == "contrast" }
+    let candidates = first.filter { $0.type != "contrast" }
 
     if candidates.isEmpty {
-      attachUnconfirmed(screen: screen, issues: chrome)
+      attachUnconfirmed(screen: screen, issues: contrast)
       return
     }
 
     RunLoop.current.run(until: Date().addingTimeInterval(1.0))
     let second = try collectAuditIssues(app, types: types, screen: screen)
-    let secondKeys = Set(second.filter { !$0.chromeOverlap }.map(\.key))
+    let secondNonContrast = second.filter { $0.type != "contrast" }
+    let secondKeys = Set(secondNonContrast.map(\.key))
     let confirmed = candidates.filter { secondKeys.contains($0.key) }
     let firstOnly = candidates.filter { !secondKeys.contains($0.key) }
     let candidateKeys = Set(candidates.map(\.key))
-    let secondOnly = second.filter { !$0.chromeOverlap && !candidateKeys.contains($0.key) }
+    let secondOnly = secondNonContrast.filter { !candidateKeys.contains($0.key) }
     attachUnconfirmed(
       screen: screen,
-      issues: chrome + firstOnly + secondOnly + second.filter(\.chromeOverlap)
+      issues: contrast + firstOnly + secondOnly + second.filter { $0.type == "contrast" }
     )
 
     if !confirmed.isEmpty {
@@ -1369,26 +1370,24 @@ final class QuotaUITests: XCTestCase {
       let frames =
         "frame \(issue.element?.frame ?? .zero); tab bar \(tabFrame); nav bar \(navFrame)"
       let parent = issue.element.map(parentIdentifier(of:)) ?? ""
-      if isKeptAuditorException(
-        type: type,
-        identifier: identifier,
-        label: label,
-        element: element,
-        parent: parent
-      ) {
-        return true
+      if type != "contrast" {
+        if isKeptAuditorException(
+          type: type,
+          identifier: identifier,
+          label: label,
+          element: element,
+          parent: parent
+        ) {
+          return true
+        }
+        if type == "dynamic-type", let control = issue.element,
+          subscriptionCards.contains(where: {
+            $0.contains(control.frame) || $0.intersects(control.frame)
+          })
+        {
+          return true
+        }
       }
-      if type == "dynamic-type", let control = issue.element,
-        subscriptionCards.contains(where: {
-          $0.contains(control.frame) || $0.intersects(control.frame)
-        })
-      {
-        return true
-      }
-      let nearly =
-        type == "contrast" && description.localizedCaseInsensitiveContains("nearly")
-      let chrome =
-        type == "contrast" && contrastIntersectsChrome(issue.element, app: app)
       box.issues.append(
         AuditIssue(
           key: "\(type)|\(elementKey)|\(screen)",
@@ -1396,8 +1395,7 @@ final class QuotaUITests: XCTestCase {
           description: description,
           element: element,
           parent: parent,
-          frames: frames,
-          chromeOverlap: chrome || nearly
+          frames: frames
         )
       )
       return true
@@ -1408,7 +1406,7 @@ final class QuotaUITests: XCTestCase {
   private func attachUnconfirmed(screen: String, issues: [AuditIssue]) {
     guard !issues.isEmpty else { return }
     let body = issues.map {
-      let tag = $0.chromeOverlap ? "chrome-overlap" : "once"
+      let tag = $0.type == "contrast" ? "contrast" : "once"
       return "[\(tag)] \($0.type) \($0.key)\n  \($0.description) — \($0.element) [\($0.frames)]"
     }.joined(separator: "\n")
     XCTContext.runActivity(named: "Unconfirmed audit findings on \(screen)") { activity in
@@ -1427,7 +1425,6 @@ private struct AuditIssue {
   let element: String
   let parent: String
   let frames: String
-  let chromeOverlap: Bool
 }
 
 private final class AuditCollector: @unchecked Sendable {
@@ -1444,27 +1441,6 @@ private func auditTypeName(_ description: String) -> String {
     return "hit-region"
   }
   return "other"
-}
-
-/// Contrast sampled against the tab bar or a navigation bar is the iOS 26 glass, not a
-/// colour this app chose. Uses the frames already printed on a failure.
-private func contrastIntersectsChrome(_ element: XCUIElement?, app: XCUIApplication) -> Bool {
-  guard let control = element else { return false }
-  // Liquid Glass blooms past the capsule. Exact bar frames miss rows the auditor samples
-  // against that bloom (Support sat 9 pt below nav.maxY and still failed twice).
-  if app.tabBars.firstMatch.exists {
-    let overlay = app.tabBars.firstMatch.frame.insetBy(dx: -40, dy: -96)
-    if control.frame.intersects(overlay) { return true }
-  }
-  if app.navigationBars.firstMatch.exists {
-    let bar = app.navigationBars.firstMatch.frame
-    let overlay = CGRect(x: 0, y: 0, width: app.frame.width, height: bar.maxY + 96)
-    if control.frame.intersects(overlay) { return true }
-  }
-  for bar in app.navigationBars.allElementsBoundByIndex {
-    if control.frame.intersects(bar.frame) { return true }
-  }
-  return false
 }
 
 /// Exceptions that still failed on two consecutive passes after name-based skips were removed.
