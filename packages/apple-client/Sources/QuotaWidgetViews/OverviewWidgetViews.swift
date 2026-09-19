@@ -472,7 +472,7 @@ public struct OverviewCircularView: View {
     ), !entry.isPlaceholder {
       Group {
         if OverviewWidgetContent.showsPercentMeter(item) {
-          usedGauge(item)
+          remainingGauge(item)
         } else {
           balanceContent(item)
         }
@@ -493,11 +493,11 @@ public struct OverviewCircularView: View {
 
   /// `accessoryCircularCapacity` keeps the ring and the centered percent; the window title
   /// does not fit this family and is left to the accessibility label.
-  private func usedGauge(_ item: WidgetQuotaItem) -> some View {
-    Gauge(value: item.usedPercent, in: 0...100) {
+  private func remainingGauge(_ item: WidgetQuotaItem) -> some View {
+    Gauge(value: item.remainingPercent, in: 0...100) {
       Text(item.windowTitle)
     } currentValueLabel: {
-      Text(OverviewWidgetContent.usedPercentLabel(for: item))
+      Text(OverviewWidgetContent.percentLabel(for: item))
         .font(.system(.body, design: .rounded).monospacedDigit().weight(.semibold))
         .foregroundStyle(overviewEmphasisColor(for: item))
         .minimumScaleFactor(0.45)
@@ -565,7 +565,7 @@ public struct OverviewRectangularView: View {
   /// hold both side by side without truncating the reset.
   @ViewBuilder
   private func weeklyRow(_ item: WidgetQuotaItem) -> some View {
-    Text("\(item.windowTitle) \(OverviewWidgetContent.usedPercentLabel(for: item))")
+    Text("\(item.windowTitle) \(OverviewWidgetContent.percentLabel(for: item))")
       .font(.headline.monospacedDigit())
       .foregroundStyle(overviewEmphasisColor(for: item))
       .widgetAccentable()
@@ -583,7 +583,7 @@ public struct OverviewRectangularView: View {
   }
 
   private func secondWindowRow(_ item: WidgetQuotaItem) -> some View {
-    var line = Text("\(item.windowTitle) \(OverviewWidgetContent.usedPercentLabel(for: item))")
+    var line = Text("\(item.windowTitle) \(OverviewWidgetContent.percentLabel(for: item))")
     if let resetsAt = item.resetsAt,
       let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
     {
@@ -631,8 +631,8 @@ public struct OverviewInlineView: View {
   }
 
   private func inlineText(_ item: WidgetQuotaItem) -> Text {
-    let used = OverviewWidgetContent.usedPercentLabel(for: item)
-    var result = Text("\(item.windowTitle) \(used)")
+    let remaining = OverviewWidgetContent.percentLabel(for: item)
+    var result = Text("\(item.windowTitle) \(remaining)")
     if let resetsAt = item.resetsAt,
       let reset = overviewResetText(resetsAt: resetsAt, now: entry.date)
     {
@@ -730,7 +730,7 @@ public enum OverviewWidgetPreviewFixtures {
 }
 
 public func lockScreenAccessibility(item: WidgetQuotaItem, now: Date = Date()) -> String {
-  var parts = [OverviewWidgetContent.usedAccessibility(for: item)]
+  var parts = [OverviewWidgetContent.remainingAccessibility(for: item)]
   if OverviewWidgetContent.paceRunsOut(item) {
     parts.append("runs out")
   }

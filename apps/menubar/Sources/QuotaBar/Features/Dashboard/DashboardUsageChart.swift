@@ -3,6 +3,20 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
+/// How one local day is drawn on the Usage cost chart.
+enum DashboardUsageDayKind: Equatable {
+  case cost(Double)
+  case empty
+  case unpriced
+}
+
+func dashboardUsageDayKind(_ day: LocalUsageDay) -> DashboardUsageDayKind {
+  if day.totals.totalTokens == 0 { return .empty }
+  if day.cost.status == .unavailable { return .unpriced }
+  let usd = dashboardUsageCostUSD(day.cost)
+  return usd > 0 ? .cost(usd) : .empty
+}
+
 /// Cost per local day from ADR 0036's already-folded `days[]`. The view does not fold again.
 struct DashboardUsageChart: View {
   let days: [LocalUsageDay]
@@ -10,13 +24,45 @@ struct DashboardUsageChart: View {
   var body: some View {
     Chart {
       ForEach(days, id: \.date) { day in
-        BarMark(
-          x: .value("Day", day.date),
-          y: .value("Cost", costUSD(day))
-        )
-        .foregroundStyle(QuotaPalette.ink.opacity(hasCost(day) ? 0.55 : 0.12))
-        .accessibilityLabel(day.date)
-        .accessibilityValue(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))
+        switch dashboardUsageDayKind(day) {
+        case .cost(let usd):
+          BarMark(
+            x: .value("Day", day.date),
+            y: .value("Cost", usd)
+          )
+          .foregroundStyle(QuotaPalette.ink.opacity(0.55))
+          .accessibilityLabel(day.date)
+          .accessibilityValue(UsageBudgetProgress.usd(Decimal(usd)))
+        case .empty:
+          BarMark(
+            x: .value("Day", day.date),
+            y: .value("Cost", 0)
+          )
+          .foregroundStyle(.clear)
+          .annotation(position: .overlay, alignment: .bottom) {
+            Capsule()
+              .fill(Color(nsColor: .tertiarySystemFill))
+              .frame(height: 2)
+          }
+          .accessibilityLabel(day.date)
+          .accessibilityValue("no usage")
+        case .unpriced:
+          BarMark(
+            x: .value("Day", day.date),
+            y: .value("Cost", 0)
+          )
+          .foregroundStyle(.clear)
+          .annotation(position: .overlay, alignment: .bottom) {
+            Capsule()
+              .strokeBorder(
+                Color(nsColor: .tertiaryLabelColor),
+                style: StrokeStyle(lineWidth: 1, dash: [1.5, 1])
+              )
+              .frame(height: 2)
+          }
+          .accessibilityLabel(day.date)
+          .accessibilityValue("unpriced")
+        }
       }
     }
     .chartYAxis {
@@ -42,14 +88,6 @@ struct DashboardUsageChart: View {
     .accessibilityChartDescriptor(DashboardUsageChartDescriptor(days: days))
   }
 
-  private func hasCost(_ day: LocalUsageDay) -> Bool {
-    costUSD(day) > 0
-  }
-
-  private func costUSD(_ day: LocalUsageDay) -> Double {
-    dashboardUsageCostUSD(day.cost)
-  }
-
   private func shortDate(_ date: String) -> String {
     String(date.suffix(5))
   }
@@ -63,7 +101,10 @@ private struct DashboardUsageChartDescriptor: AXChartDescriptorRepresentable {
   let days: [LocalUsageDay]
 
   func makeChartDescriptor() -> AXChartDescriptor {
-    let amounts = days.map { dashboardUsageCostUSD($0.cost) }
+    let amounts = days.map { day -> Double in
+      if case .cost(let usd) = dashboardUsageDayKind(day) { return usd }
+      return 0
+    }
     let maxAmount = max(amounts.max() ?? 0, 1)
     let lastIndex = Double(max(days.count - 1, 0))
     let yAxis = AXNumericDataAxisDescriptor(
@@ -85,8 +126,19 @@ private struct DashboardUsageChartDescriptor: AXChartDescriptorRepresentable {
     let series = AXDataSeriesDescriptor(
       name: "Cost by day",
       isContinuous: false,
-      dataPoints: amounts.enumerated().map { index, amount in
-        AXDataPoint(x: Double(index), y: amount)
+      dataPoints: days.enumerated().map { index, day in
+        switch dashboardUsageDayKind(day) {
+        case .cost(let usd):
+          return AXDataPoint(x: Double(index), y: usd)
+        case .empty:
+          var point = AXDataPoint(x: Double(index), y: 0)
+          point.label = "no usage"
+          return point
+        case .unpriced:
+          var point = AXDataPoint(x: Double(index), y: 0)
+          point.label = "unpriced"
+          return point
+        }
       }
     )
     return AXChartDescriptor(
@@ -100,8 +152,15 @@ private struct DashboardUsageChartDescriptor: AXChartDescriptorRepresentable {
   }
 
   private var summary: String {
-    let priced = days.filter { dashboardUsageCostUSD($0.cost) > 0 }.count
-    return "\(days.count) days, \(priced) with cost"
+    let priced = days.filter {
+      if case .cost = dashboardUsageDayKind($0) { return true }
+      return false
+    }.count
+    let unpriced = days.filter { dashboardUsageDayKind($0) == .unpriced }.count
+    if unpriced == 0 {
+      return "\(days.count) days, \(priced) with cost"
+    }
+    return "\(days.count) days, \(priced) with cost, \(unpriced) unpriced"
   }
 }
 

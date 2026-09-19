@@ -25,17 +25,21 @@ public struct AccountRefreshResult: Equatable, Sendable {
   public var fetchedAt: Date?
   public var fromCache: Bool
   public var error: AccountClientError?
+  /// The validator this body is current at, when the read that produced it carried one.
+  public var etag: String?
 
   public init(
     summary: AccountSummary?,
     fetchedAt: Date?,
     fromCache: Bool,
-    error: AccountClientError? = nil
+    error: AccountClientError? = nil,
+    etag: String? = nil
   ) {
     self.summary = summary
     self.fetchedAt = fetchedAt
     self.fromCache = fromCache
     self.error = error
+    self.etag = etag
   }
 }
 
@@ -191,7 +195,8 @@ public actor AccountClient {
       return AccountRefreshResult(
         summary: read.summary,
         fetchedAt: fetchedAt,
-        fromCache: false
+        fromCache: false,
+        etag: read.etag
       )
     } catch let error as AccountClientError {
       return failureResult(cached: cached, error: error)
@@ -278,7 +283,8 @@ public actor AccountClient {
       summary: cached?.summary,
       fetchedAt: cached?.fetchedAt,
       fromCache: cached != nil,
-      error: error
+      error: error,
+      etag: cached?.etag
     )
   }
 

@@ -1,4 +1,22 @@
+import Foundation
+import QuotaPresentation
 import QuotaWire
+
+/// What the daily bars measure.
+enum UsageDailyMetric: Equatable, Sendable {
+  case tokens
+  case cost
+}
+
+/// How one UTC day is drawn: a quantitative bar, a baseline tick, or an unpriced mark.
+enum UsageDailyBarKind: Equatable, Sendable {
+  /// Height is `amount` against the chart maximum.
+  case amount(Int)
+  /// The day exists and has no height.
+  case empty
+  /// Cost mode, and the catalog could not price this day.
+  case unpriced
+}
 
 /// The UTC days a period's table shows, oldest first, including the ones that reported nothing.
 ///
@@ -41,6 +59,60 @@ enum UsageDailyFold {
 
   static func hasUsage(_ rows: [Row]) -> Bool {
     rows.contains { $0.totals.totalTokens > 0 }
+  }
+
+  static func barKind(_ row: Row, metric: UsageDailyMetric) -> UsageDailyBarKind {
+    switch metric {
+    case .tokens:
+      return row.totals.totalTokens > 0 ? .amount(row.totals.totalTokens) : .empty
+    case .cost:
+      if row.totals.totalTokens == 0 { return .empty }
+      if row.cost.status == .unavailable { return .unpriced }
+      let amount = Int(row.cost.amountMicrousd ?? "0") ?? 0
+      return amount > 0 ? .amount(amount) : .empty
+    }
+  }
+
+  static func quantitativeMaximum(_ rows: [Row], metric: UsageDailyMetric) -> Int {
+    rows.reduce(0) { maximum, row in
+      if case .amount(let value) = barKind(row, metric: metric) {
+        return max(maximum, value)
+      }
+      return maximum
+    }
+  }
+
+  static func chartAccessibilityValue(_ rows: [Row], metric: UsageDailyMetric) -> String {
+    switch metric {
+    case .tokens:
+      let total = rows.reduce(0) { $0 + $1.totals.totalTokens }
+      return "\(rows.count) days, \(CompactCountFormat.accessible(total)) tokens in total"
+    case .cost:
+      let unpriced = rows.filter { barKind($0, metric: .cost) == .unpriced }.count
+      var microusd = 0 as Decimal
+      var priced = false
+      for row in rows {
+        guard case .amount = barKind(row, metric: .cost),
+          let text = row.cost.amountMicrousd,
+          let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
+        else { continue }
+        microusd += amount
+        priced = true
+      }
+      if !priced {
+        return unpriced > 0
+          ? "\(rows.count) days, \(unpriced) unpriced"
+          : "\(rows.count) days, no cost"
+      }
+      let costText = UsageCostFormat.accessible(
+        status: .complete,
+        amountMicrousd: NSDecimalNumber(decimal: microusd).stringValue
+      )
+      if unpriced == 0 {
+        return "\(rows.count) days, \(costText) in total"
+      }
+      return "\(rows.count) days, \(costText) in total, \(unpriced) unpriced"
+    }
   }
 
   private static let emptyTotals = UsageSummaryTotals(

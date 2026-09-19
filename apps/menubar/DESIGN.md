@@ -140,6 +140,11 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   spent`** once the whole amount is gone. A new month starts a new cycle. When those
   crossings fire is `packages/protocol/fixtures/alert-transition-conformance.json`
   (`budget_cases`), which both Apple apps answer through `QuotaAlerts`.
+- **An empty day is a tick, not a bar.** A day the period covers that reported no usage is drawn
+  as a 2-point baseline tick in the tertiary fill, so the day is present and has no height. It is
+  never a short bar of usage. In Cost mode, a day the catalog could not price is a distinct
+  **unpriced** mark at that same tick height — hatched or outlined — and is named unpriced, never
+  **$0**. Spoken chart summaries follow the Tokens / Cost mode the bars are measuring.
 
 ## Window and layout tokens
 
@@ -333,11 +338,11 @@ The default page contains:
   primary text tone; grid labels stay muted while their values use the secondary tone. Values use
   `UsageValueFormatter`.
 - Daily, for This Mac and for any period but All, in its own card: one Swift Charts `BarMark` per
-  local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again. A
-  day with nothing in it is drawn at a quieter fill rather than left out, so the shape of a week is
-  the shape of the week. The last seven of those days follow as `date` / `tokens · cost` rows. Omit
-  the section when the period reported nothing. All has no Daily section: its per-day shape is the
-  Account's activity chart.
+  local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again.
+  Empty and unpriced days follow **An empty day is a tick, not a bar** in Shared product vocabulary.
+  The last seven of those days follow as `date` / `tokens · cost` rows. Omit the section when the
+  period reported nothing. All has no Daily section: its per-day shape is the Account's activity
+  chart.
 - Models, in its own card: grouped by the vendor whose model it is — the service resolves that from
   the model's name — independent of the collecting client and of who billed the request. A **Top
   models** list of the three largest leads the section when there is more than one, each as

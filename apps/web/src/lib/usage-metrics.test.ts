@@ -3,7 +3,10 @@ import {
   cacheHitLabel,
   cacheSavedLabel,
   costPricedLabel,
+  dailyBarKind,
+  dailyChartSummary,
   dailyMaximum,
+  dailyTooltip,
   shareLabel,
   usageDailyRows,
   usageModelShares,
@@ -100,6 +103,36 @@ it("fills in the days a period covers that reported nothing", () => {
 
 it("has no daily table for the period the activity graph already answers", () => {
   expect(usageDailyRows([], null)).toStrictEqual([]);
+});
+
+it("draws an empty day as a tick and an unpriced day as unpriced, not $0", () => {
+  const rows = usageDailyRows(
+    [
+      {
+        date: "2026-09-04",
+        totals: totals(100, 50, 20),
+        cost: cost("2500000"),
+        partial: false,
+      },
+      {
+        date: "2026-09-05",
+        totals: totals(40, 0, 10),
+        cost: cost(null, "unavailable"),
+        partial: false,
+      },
+    ],
+    { from: "2026-09-04", to: "2026-09-06" },
+  );
+  expect(dailyBarKind(rows[0]!, "tokens")).toBe("amount");
+  expect(dailyBarKind(rows[1]!, "cost")).toBe("unpriced");
+  expect(dailyBarKind(rows[2]!, "tokens")).toBe("empty");
+  expect(dailyBarKind(rows[2]!, "cost")).toBe("empty");
+  expect(dailyMaximum(rows, "cost")).toBe(2_500_000);
+  expect(dailyTooltip(rows[1]!, "cost")).toBe("2026-09-05 · unpriced");
+  expect(dailyTooltip(rows[2]!, "tokens")).toBe("2026-09-06 · 0 tokens");
+  expect(dailyChartSummary(rows, "cost")).toContain("unpriced");
+  expect(dailyChartSummary(rows, "cost")).not.toContain("$0");
+  expect(dailyChartSummary(rows, "tokens")).toContain("tokens");
 });
 
 it("ranks model and provider shares by tokens, largest first", () => {

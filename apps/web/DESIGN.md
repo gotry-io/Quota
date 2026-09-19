@@ -378,10 +378,10 @@ Under it, for every period but **Up to 2 years**, a **Daily** panel: one bar per
 period, a **Tokens** / **Cost** pair of `aria-pressed` text buttons deciding what they measure, and
 a **Show daily breakdown** disclosure over a semantic table with Date / Total / In / Out / Cached /
 Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input, and output, which
-add up to the day's total, using the three darkest activity steps; a day with nothing in it is drawn
-in `--activity-0` rather than left out. The panel is labelled **UTC**, the calendar the activity
-read answers. **Up to 2 years** has no Daily panel: its per-day shape is the Activity graph beside
-it.
+add up to the day's total, using the three darkest activity steps. Empty and unpriced days follow
+**An empty day is a tick, not a bar** in Shared product vocabulary. The panel is labelled **UTC**,
+the calendar the activity read answers. **Up to 2 years** has no Daily panel: its per-day shape is
+the Activity graph beside it.
 
 Under Daily, for every period but **Up to 2 years**, a **Rhythm** panel: a Sunday-first weekday ×
 hour heatmap using the same `--activity-0`…`--activity-4` steps as the Activity graph, then 24 bars
