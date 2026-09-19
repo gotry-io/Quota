@@ -8,7 +8,7 @@ enum UsageDailyMetric: Equatable, Sendable {
   case cost
 }
 
-/// How one UTC day is drawn: a quantitative bar, a baseline tick, or an unpriced mark.
+/// How one local day is drawn: a quantitative bar, a baseline tick, or an unpriced mark.
 enum UsageDailyBarKind: Equatable, Sendable {
   /// Height is `amount` against the chart maximum.
   case amount(Int)
@@ -18,12 +18,11 @@ enum UsageDailyBarKind: Equatable, Sendable {
   case unpriced
 }
 
-/// The UTC days a period's table shows, oldest first, including the ones that reported nothing.
+/// The local days a period's table shows, oldest first, including the ones that reported nothing.
 ///
-/// The activity read answers UTC dates — 400 local days would cut 400 UTC days, which is the
-/// history the rollup exists to keep closed (ADR 0024) — so this table is UTC too, and says so.
-/// `all` has no first day, so it has no table: two years of rows is what the Activity chart
-/// beside it already answers.
+/// The Account period read answers local dates in the caller's zone. Gaps stay gaps: a date
+/// missing from `days[]` keeps its slot and is not a $0 / 0-token day. `all` has no first day,
+/// so it has no table.
 enum UsageDailyFold {
   struct Row: Identifiable, Equatable, Sendable {
     let date: String
@@ -39,8 +38,18 @@ enum UsageDailyFold {
   }
 
   static func rows(reported: [UsageActivityDay], from: String, to: String) -> [Row] {
+    rows(
+      days: reported.map {
+        UsagePeriodDayBucket(date: $0.date, totals: $0.totals, cost: $0.cost, partial: $0.partial)
+      },
+      from: from,
+      to: to
+    )
+  }
+
+  static func rows(days: [UsagePeriodDayBucket], from: String, to: String) -> [Row] {
     guard from <= to else { return [] }
-    let byDate = Dictionary(reported.map { ($0.date, $0) }, uniquingKeysWith: { first, _ in first })
+    let byDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { first, _ in first })
     var rows: [Row] = []
     var date = from
     while date <= to {

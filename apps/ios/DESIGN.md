@@ -390,13 +390,16 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Four periods —
-`today`, `last_7_days`, `last_30_days`, `all` — come precomputed from the same Account summary as
-Overview. Every other period is added up on this iPhone from the activity days it already holds,
-which is why it has totals and cost but no model breakdown. Opening Usage requests the last 365 UTC
-days of activity once (`from = today-364`, `to = today`) and keeps that answer in memory; it does
-not write it to disk. A failure stays in **Activity patterns** and does not block the period totals
-or the breakdown, but it does leave a folded period with nothing to add up.
+Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Every Usage
+selection except **All** reads `GET /api/v6/account/usage/period?from&to&timezone=` with the
+selection's inclusive local dates and this iPhone's IANA zone. Presets are the same path: Today is
+`from=to=localDate`, Last 7 days is `localDate−6`, Last 30 days is `localDate−29`. `breakdown=1`
+carries the agent/model tree. **All** stays the Account summary's 730 UTC-day window. Overview's
+Today row still reads `summary.usage.today`. The monthly budget measures this iPhone's local month
+through the same period read. Opening Usage also requests the last 365 UTC days of activity once
+(`from = today-364`, `to = today`) for the year heatmap in **Activity patterns**; that answer stays
+in memory and does not write to disk. A period failure keeps last-good. A failure of the activity
+read stays in **Activity patterns** and does not block the period totals or the breakdown.
 
 Header:
 
@@ -419,12 +422,15 @@ Body, in order:
 2. Two headline values only (`usage.headline`): **Tokens** and **API-equivalent** (`statValue`).
    Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**. Coverage
    (`{cost-basis} · Priced N of M rows`) sits under the pair as `meta` (`usage.headline.priced`).
-   **Some hours in this period were scanned incompletely.** when `partial` is true, as a `Label`
-   with `exclamationmark.triangle` in `QuotaTheme.warning`. Input, output, cache hit, reasoning,
-   and messages live on the breakdown destination, not here. Cache hit and its saving follow
+   **Some hours in this period were scanned incompletely.** when `coverage.partial` is true, as a
+   `Label` with `exclamationmark.triangle` in `QuotaTheme.warning`. **This range goes past what
+   Quota still keeps.** when `coverage.truncated_by_retention` is true (`usage.headline.retention`).
+   Input, output, cache hit, reasoning, and messages live on the breakdown destination, not here.
+   Cache hit and its saving follow
    [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md).
 3. One daily chart, for any period but All and only when those days reported something. It covers
-   the days the period covers, bounded by the activity days this phone holds. A segmented
+   every asked local date in the period's `[from, to]`, using the period body's local `days[]`. A
+   date missing from `days[]` keeps its slot as a gap, never a $0 / 0-token day. A segmented
    **Tokens** / **Cost** control decides what the bars measure; in Tokens the bar stacks cached
    input, fresh input, and output, which add up to the day's total, and in Cost it is one emerald
    fill. Y-axis: two or three value ticks including zero. X-axis: date ticks at the ends and
@@ -438,9 +444,7 @@ Body, in order:
 4. Three destination rows:
    - **By provider / By model** (`usage.open-breakdown` → `usage.breakdown`): secondary token
      counts (input, output, cache hit with saving, reasoning, messages), then the existing top
-     models and agent/provider/model tree. When the period was added up here rather than read
-     from the summary, one line saying so in place of the model sections: the breakdown is on
-     Today, Last 7 days, Last 30 days, and All (`usage.folded`).
+     models and agent/provider/model tree from the period body.
    - **Activity patterns** (`usage.open-patterns` → `usage.patterns`): the rhythm heatmap and
      year activity, with their Less/More legends and this iPhone's timezone in the section
      footers. They are not on the Usage root.

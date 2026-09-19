@@ -923,3 +923,339 @@ public struct AccountUsageActivityResponse: Codable, Equatable, Sendable {
     case weekdayHours
   }
 }
+
+/// One local calendar date inside an Account period read. Gaps are omitted: missing ≠ zero.
+public struct UsagePeriodDayBucket: Codable, Equatable, Sendable {
+  public let date: String
+  public let totals: UsageSummaryTotals
+  public let cost: UsageCostOutcome
+  public let partial: Bool
+
+  public init(date: String, totals: UsageSummaryTotals, cost: UsageCostOutcome, partial: Bool) {
+    self.date = date
+    self.totals = totals
+    self.cost = cost
+    self.partial = partial
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(String.self, forKey: .date)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .date,
+        in: container,
+        debugDescription: "Invalid Usage period day."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    WireValidation.isCalendarDate(date) && totals.isValid && cost.isValid
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case totals
+    case cost
+    case partial
+  }
+}
+
+/// How much of the asked local range is still inside retention, and whether any stored hour was
+/// scanned incompletely.
+public struct UsagePeriodCoverage: Codable, Equatable, Sendable {
+  public let partial: Bool
+  public let dailyRetainedFrom: String?
+  public let hourlyRetainedFrom: String?
+  public let truncatedByRetention: Bool
+
+  public init(
+    partial: Bool,
+    dailyRetainedFrom: String? = nil,
+    hourlyRetainedFrom: String? = nil,
+    truncatedByRetention: Bool
+  ) {
+    self.partial = partial
+    self.dailyRetainedFrom = dailyRetainedFrom
+    self.hourlyRetainedFrom = hourlyRetainedFrom
+    self.truncatedByRetention = truncatedByRetention
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    dailyRetainedFrom = try container.decode(String?.self, forKey: .dailyRetainedFrom)
+    hourlyRetainedFrom = try container.decode(String?.self, forKey: .hourlyRetainedFrom)
+    truncatedByRetention = try container.decode(Bool.self, forKey: .truncatedByRetention)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .partial,
+        in: container,
+        debugDescription: "Invalid Usage period coverage."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    (dailyRetainedFrom.map(WireValidation.isCalendarDate) ?? true)
+      && (hourlyRetainedFrom.map(WireValidation.isUtcHour) ?? true)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case partial
+    case dailyRetainedFrom
+    case hourlyRetainedFrom
+    case truncatedByRetention
+  }
+}
+
+/// Validator inputs for the period body; also the fields an ETag is keyed on besides path.
+public struct UsagePeriodRevision: Codable, Equatable, Sendable {
+  public let usageRevision: Int
+  public let deviceGeneration: Int
+  public let accountUpdatedAt: Date?
+  public let pricingRevision: String
+  public let modelCatalogRevision: String
+  public let foldVersion: Int
+
+  public init(
+    usageRevision: Int,
+    deviceGeneration: Int,
+    accountUpdatedAt: Date?,
+    pricingRevision: String,
+    modelCatalogRevision: String,
+    foldVersion: Int
+  ) {
+    self.usageRevision = usageRevision
+    self.deviceGeneration = deviceGeneration
+    self.accountUpdatedAt = accountUpdatedAt
+    self.pricingRevision = pricingRevision
+    self.modelCatalogRevision = modelCatalogRevision
+    self.foldVersion = foldVersion
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    usageRevision = try container.decode(Int.self, forKey: .usageRevision)
+    deviceGeneration = try container.decode(Int.self, forKey: .deviceGeneration)
+    accountUpdatedAt = try container.decode(Date?.self, forKey: .accountUpdatedAt)
+    pricingRevision = try container.decode(String.self, forKey: .pricingRevision)
+    modelCatalogRevision = try container.decode(String.self, forKey: .modelCatalogRevision)
+    foldVersion = try container.decode(Int.self, forKey: .foldVersion)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .usageRevision,
+        in: container,
+        debugDescription: "Invalid Usage period revision."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    WireValidation.isSafeNonnegative(usageRevision)
+      && WireValidation.isSafeNonnegative(deviceGeneration)
+      && WireValidation.isOpaqueID(pricingRevision)
+      && WireValidation.isOpaqueID(modelCatalogRevision)
+      && WireValidation.isSafeNonnegative(foldVersion)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case usageRevision
+    case deviceGeneration
+    case accountUpdatedAt
+    case pricingRevision
+    case modelCatalogRevision
+    case foldVersion
+  }
+}
+
+/// Inclusive local dates and IANA zone the period read was asked with.
+public struct UsagePeriodRequest: Codable, Equatable, Sendable {
+  public let from: String
+  public let to: String
+  public let timezone: String
+
+  public init(from: String, to: String, timezone: String) {
+    self.from = from
+    self.to = to
+    self.timezone = timezone
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    from = try container.decode(String.self, forKey: .from)
+    to = try container.decode(String.self, forKey: .to)
+    timezone = try container.decode(String.self, forKey: .timezone)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .timezone,
+        in: container,
+        debugDescription: "Invalid Usage period request."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    WireValidation.isCalendarDate(from) && WireValidation.isCalendarDate(to) && from <= to
+      && WireValidation.isTimezone(timezone) && TimeZone(identifier: timezone) != nil
+      && (WireValidation.inclusiveDayCount(from: from, to: to) ?? .max)
+        <= WireCodec.maximumUsagePeriodDays
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case from
+    case to
+    case timezone
+  }
+}
+
+/// Effective half-open UTC hour span after the hour-grid rule.
+public struct UsagePeriodBounds: Codable, Equatable, Sendable {
+  public let start: String
+  public let end: String
+  public let grid: String
+
+  public init(start: String, end: String, grid: String = WireCodec.usageHourGridRule) {
+    self.start = start
+    self.end = end
+    self.grid = grid
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    start = try container.decode(String.self, forKey: .start)
+    end = try container.decode(String.self, forKey: .end)
+    grid = try container.decode(String.self, forKey: .grid)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .end,
+        in: container,
+        debugDescription: "Invalid Usage period bounds."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    WireValidation.isUtcHour(start) && WireValidation.isUtcHour(end) && start < end
+      && grid == WireCodec.usageHourGridRule
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case start
+    case end
+    case grid
+  }
+}
+
+/// `GET /api/v6/account/usage/period` body: local `days[]`, coverage, bounds, and revision.
+public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
+  public let protocolVersion: Int
+  public let request: UsagePeriodRequest
+  public let bounds: UsagePeriodBounds
+  public let totals: UsageSummaryTotals
+  public let cost: UsageCostOutcome
+  public let cacheSaved: UsageCacheSaved
+  public let days: [UsagePeriodDayBucket]
+  public let agents: [UsageAgentUsage]?
+  public let coverage: UsagePeriodCoverage
+  public let revision: UsagePeriodRevision
+
+  public init(
+    request: UsagePeriodRequest,
+    bounds: UsagePeriodBounds,
+    totals: UsageSummaryTotals,
+    cost: UsageCostOutcome,
+    cacheSaved: UsageCacheSaved,
+    days: [UsagePeriodDayBucket],
+    agents: [UsageAgentUsage]? = nil,
+    coverage: UsagePeriodCoverage,
+    revision: UsagePeriodRevision
+  ) {
+    protocolVersion = WireCodec.managedDataProtocolVersion
+    self.request = request
+    self.bounds = bounds
+    self.totals = totals
+    self.cost = cost
+    self.cacheSaved = cacheSaved
+    self.days = days
+    self.agents = agents
+    self.coverage = coverage
+    self.revision = revision
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
+    request = try container.decode(UsagePeriodRequest.self, forKey: .request)
+    bounds = try container.decode(UsagePeriodBounds.self, forKey: .bounds)
+    totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
+    cost = try container.decode(UsageCostOutcome.self, forKey: .cost)
+    cacheSaved = try container.decode(UsageCacheSaved.self, forKey: .cacheSaved)
+    days = try container.decode([UsagePeriodDayBucket].self, forKey: .days)
+    if container.contains(.agents) {
+      agents = try container.decode([UsageAgentUsage].self, forKey: .agents)
+    } else {
+      agents = nil
+    }
+    coverage = try container.decode(UsagePeriodCoverage.self, forKey: .coverage)
+    revision = try container.decode(UsagePeriodRevision.self, forKey: .revision)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .protocolVersion,
+        in: container,
+        debugDescription: "Invalid Account usage period response."
+      )
+    }
+  }
+
+  public var isValid: Bool {
+    guard protocolVersion == WireCodec.managedDataProtocolVersion,
+      request.isValid,
+      bounds.isValid,
+      totals.isValid,
+      cost.isValid,
+      cacheSaved.isValid,
+      coverage.isValid,
+      revision.isValid,
+      days.count <= WireCodec.maximumUsagePeriodDays,
+      days.allSatisfy(\.isValid)
+    else { return false }
+    var previous: String?
+    for day in days {
+      if day.date < request.from || day.date > request.to { return false }
+      if let previous, day.date <= previous { return false }
+      previous = day.date
+    }
+    return agents.map {
+      $0.count <= BillingAgent.allCases.count && $0.allSatisfy(\.isValid)
+    } ?? true
+  }
+
+  /// Totals, cost, tree, and incomplete-hours flag the Usage page already draws.
+  public var usagePeriod: UsagePeriod {
+    UsagePeriod(
+      totals: totals,
+      cost: cost,
+      cacheSaved: cacheSaved,
+      partial: coverage.partial,
+      agents: agents ?? []
+    )
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case protocolVersion
+    case request
+    case bounds
+    case totals
+    case cost
+    case cacheSaved
+    case days
+    case agents
+    case coverage
+    case revision
+  }
+}

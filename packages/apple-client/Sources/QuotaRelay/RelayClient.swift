@@ -28,6 +28,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   case accountIdentities
   case accountSummary
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?, timeZone: String?)
+  case accountUsagePeriod(from: String, to: String, timezone: String, breakdown: Bool)
   case deviceSync
   case deviceSnapshots
 
@@ -39,6 +40,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       .accountIdentities,
       .accountSummary,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil, timeZone: nil),
+      .accountUsagePeriod(from: "1970-01-01", to: "1970-01-01", timezone: "UTC", breakdown: false),
       .deviceSync,
       .deviceSnapshots,
     ]
@@ -47,7 +49,9 @@ public enum RelayRoute: CaseIterable, Sendable {
   public var method: String {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
-    case .accountIdentities, .accountSummary, .accountUsageActivity, .deviceSync: "GET"
+    case .accountIdentities, .accountSummary, .accountUsageActivity, .accountUsagePeriod,
+      .deviceSync:
+      "GET"
     case .deviceSnapshots: "PUT"
     }
   }
@@ -60,6 +64,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .accountIdentities: "/api/v2/account"
     case .accountSummary: "/api/v6/account/summary"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
+    case .accountUsagePeriod: "/api/v6/account/usage/period"
     case .deviceSync: "/api/v2/device/sync"
     case .deviceSnapshots: "/api/v6/device/snapshots"
     }
@@ -67,6 +72,7 @@ public enum RelayRoute: CaseIterable, Sendable {
 
   /// Query keys the route itself names. Extra items such as summary `tz` are still passed to
   /// `perform`. Activity lists `from`, `to`, optionally `detail`, and `tz` when asking for hours.
+  /// Period lists inclusive local `from`/`to`, required IANA `timezone`, and `breakdown=1`.
   public var query: [(String, String)] {
     switch self {
     case .accountUsageActivity(let from, let to, let detail, let timeZone):
@@ -76,6 +82,12 @@ public enum RelayRoute: CaseIterable, Sendable {
       }
       if let timeZone {
         items.append(("tz", timeZone))
+      }
+      return items
+    case .accountUsagePeriod(let from, let to, let timezone, let breakdown):
+      var items = [("from", from), ("to", to), ("timezone", timezone)]
+      if breakdown {
+        items.append(("breakdown", "1"))
       }
       return items
     case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .deviceSync,
@@ -91,6 +103,12 @@ public enum RelayRoute: CaseIterable, Sendable {
 /// summary is still current, and the caller keeps showing it.
 public enum AccountSummaryRead: Sendable {
   case modified(AccountSummary, etag: String?)
+  case unchanged(etag: String?)
+}
+
+/// The outcome of a conditional Account period read. `unchanged` is an answer, not a failure.
+public enum AccountUsagePeriodRead: Sendable {
+  case modified(AccountUsagePeriodResponse, etag: String?)
   case unchanged(etag: String?)
 }
 
@@ -287,6 +305,53 @@ public struct RelayClient: Sendable {
       expectedStatus: 200,
       decode: AccountUsageActivityResponse.self
     )
+  }
+
+  /// Reads one inclusive local-date range in a required IANA timezone.
+  ///
+  /// Passing `etag` turns the read conditional: an unchanged period answers 304 and sends no body.
+  public func fetchAccountUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool = false,
+    accessToken: String,
+    etag: String? = nil
+  ) async throws -> AccountUsagePeriodRead {
+    guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to), from <= to,
+      let days = WireValidation.inclusiveDayCount(from: from, to: to),
+      days <= WireCodec.maximumUsagePeriodDays
+    else {
+      throw RelayClientError.invalidQuery
+    }
+    guard WireValidation.isTimezone(timezone), TimeZone(identifier: timezone) != nil else {
+      throw RelayClientError.invalidQuery
+    }
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    let (data, response) = try await perform(
+      route: .accountUsagePeriod(from: from, to: to, timezone: timezone, breakdown: breakdown),
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      ifNoneMatch: etag
+    )
+    let nextETag = Self.entityTag(response)
+    if response.statusCode == 304 {
+      return .unchanged(etag: nextETag ?? etag)
+    }
+    do {
+      return .modified(
+        try WireCodec.decode(AccountUsagePeriodResponse.self, from: data),
+        etag: nextETag
+      )
+    } catch is WireLimitError {
+      throw RelayClientError.responseTooLarge
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
   }
 
   /// The Device's control document, and the first half of an upload.

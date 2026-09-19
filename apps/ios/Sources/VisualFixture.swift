@@ -158,7 +158,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.usage.accountSummaryAccepted(model.summary, etag: nil)
-        model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
+        Self.poseSignedInUsage(
+          on: model, now: now, days: VisualFixtureContent.activityDays(ending: now))
         model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .cachedError:
         model.phase = .signedIn
@@ -173,7 +174,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
         )
         model.expiredMessage = nil
         model.usage.accountSummaryAccepted(model.summary, etag: nil)
-        model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
+        Self.poseSignedInUsage(
+          on: model, now: now, days: VisualFixtureContent.activityDays(ending: now))
         model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .empty:
         model.phase = .signedIn
@@ -187,7 +189,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.usage.accountSummaryAccepted(model.summary, etag: nil)
-        model.usage.pose(chart: .loaded([]))
+        Self.poseSignedInUsage(on: model, now: now, days: [])
       case .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
@@ -197,7 +199,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.banner = nil
         model.expiredMessage = nil
         model.usage.accountSummaryAccepted(model.summary, etag: nil)
-        model.usage.pose(chart: .loaded([]))
+        Self.poseSignedInUsage(on: model, now: now, days: [])
       case .providers:
         applySignedInContent(to: model, now: now)
         Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
@@ -294,7 +296,37 @@ enum VisualFixture: String, CaseIterable, Sendable {
       model.banner = nil
       model.expiredMessage = nil
       model.usage.accountSummaryAccepted(model.summary, etag: nil)
-      model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
+      Self.poseSignedInUsage(on: model, now: now, days: VisualFixtureContent.activityDays(ending: now))
+    }
+
+    @MainActor
+    private static func poseSignedInUsage(
+      on model: AppModel,
+      now: Date,
+      days: [UsageActivityDay]
+    ) {
+      let usage = model.summary?.usage ?? VisualFixtureContent.emptySummary(at: now).usage
+      var period: PeriodReadPhase = .idle
+      var budget: AccountUsagePeriodResponse?
+      if let range = UsagePeriodSelection.last30Days.range(today: now) {
+        period = .loaded(
+          VisualFixtureContent.accountPeriodResponse(
+            from: range.from,
+            to: range.to,
+            usage: usage.last30Days,
+            days: days
+          )
+        )
+      }
+      if let month = UsagePeriodSelection.thisMonth.range(today: now) {
+        budget = VisualFixtureContent.accountPeriodResponse(
+          from: month.from,
+          to: month.to,
+          usage: VisualFixtureContent.periodUsage(fromDays: days, from: month.from, to: month.to),
+          days: days
+        )
+      }
+      model.usage.pose(chart: .loaded(days), period: period, budgetMonth: budget)
     }
   }
 
@@ -668,6 +700,87 @@ enum VisualFixture: String, CaseIterable, Sendable {
         day(-90, input: 150_000, output: 30_000, microusd: "280000"),
         day(-180, input: 20_000, output: 4_000, microusd: "15000"),
       ]
+    }
+
+    static func accountPeriodResponse(
+      from: String,
+      to: String,
+      timezone: String = TimeZone.current.identifier,
+      usage: UsagePeriod,
+      days: [UsageActivityDay],
+      truncatedByRetention: Bool = false
+    ) -> AccountUsagePeriodResponse {
+      let buckets = days.filter { $0.date >= from && $0.date <= to }.map {
+        UsagePeriodDayBucket(date: $0.date, totals: $0.totals, cost: $0.cost, partial: $0.partial)
+      }
+      return AccountUsagePeriodResponse(
+        request: UsagePeriodRequest(from: from, to: to, timezone: timezone),
+        bounds: UsagePeriodBounds(start: "\(from)T00:00:00Z", end: "\(from)T01:00:00Z"),
+        totals: usage.totals,
+        cost: usage.cost,
+        cacheSaved: usage.cacheSaved,
+        days: buckets,
+        agents: usage.agents,
+        coverage: UsagePeriodCoverage(
+          partial: usage.partial,
+          truncatedByRetention: truncatedByRetention
+        ),
+        revision: UsagePeriodRevision(
+          usageRevision: 1,
+          deviceGeneration: 1,
+          accountUpdatedAt: nil,
+          pricingRevision: "pricing_visual_fixture",
+          modelCatalogRevision: "models_visual_fixture",
+          foldVersion: 1
+        )
+      )
+    }
+
+    /// Totals for a fixture range that is not one of the four summary periods.
+    static func periodUsage(fromDays days: [UsageActivityDay], from: String, to: String)
+      -> UsagePeriod
+    {
+      let selected = days.filter { $0.date >= from && $0.date <= to }
+      if selected.isEmpty { return emptyUsage().all }
+      var input = 0
+      var output = 0
+      var cacheRead = 0
+      var cacheWrite = 0
+      var reasoning = 0
+      var messages = 0
+      var microusd = 0 as Decimal
+      var partial = false
+      for day in selected {
+        input += day.totals.inputTokens
+        output += day.totals.outputTokens
+        cacheRead += day.totals.cacheReadInputTokens
+        cacheWrite += day.totals.cacheWriteInputTokens
+        reasoning += day.totals.reasoningTokens
+        messages += day.totals.messages
+        partial = partial || day.partial
+        if let text = day.cost.amountMicrousd,
+          let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
+        {
+          microusd += amount
+        }
+      }
+      let amount = NSDecimalNumber(decimal: microusd).description(
+        withLocale: Locale(identifier: "en_US_POSIX")
+      )
+      return UsagePeriod(
+        totals: totals(
+          input: input,
+          output: output,
+          cacheRead: cacheRead,
+          cacheWrite: cacheWrite,
+          reasoning: reasoning,
+          messages: messages
+        ),
+        cost: completeCost(microusd: amount, rows: messages),
+        cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
+        partial: partial,
+        agents: []
+      )
     }
 
     private static func emptyUsage() -> AccountUsage {
@@ -1049,7 +1162,16 @@ enum VisualFixture: String, CaseIterable, Sendable {
         selectionSaltStore: selectionSaltStore,
         activity: FixtureActivityLoader(
           days: days,
-          populatedAgents: VisualFixtureContent.dayAgents()
+          populatedAgents: VisualFixtureContent.dayAgents(),
+          usage: {
+            switch fixture {
+            case .empty, .noDevices:
+              VisualFixtureContent.emptySummary(at: now).usage
+            default:
+              VisualFixtureContent.summary(at: now).usage
+            }
+          }(),
+          now: now
         ),
         providerSessions: MemoryProviderSessionStore(
           sessions: VisualFixtureContent.providerSessions(for: fixture, at: now)),
@@ -1068,14 +1190,24 @@ enum VisualFixture: String, CaseIterable, Sendable {
     }
   }
 
-  /// Answers the heatmap and a single-day `detail=agents` read without touching Relay.
+  /// Answers the heatmap, a single-day `detail=agents` read, and the Account period read
+  /// without touching Relay.
   private final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
     let days: [UsageActivityDay]
     let populatedAgents: [UsageAgentUsage]
+    let usage: AccountUsage
+    let now: Date
 
-    init(days: [UsageActivityDay], populatedAgents: [UsageAgentUsage]) {
+    init(
+      days: [UsageActivityDay],
+      populatedAgents: [UsageAgentUsage],
+      usage: AccountUsage,
+      now: Date
+    ) {
       self.days = days
       self.populatedAgents = populatedAgents
+      self.usage = usage
+      self.now = now
     }
 
     func fetchUsageActivity(
@@ -1112,6 +1244,55 @@ enum VisualFixture: String, CaseIterable, Sendable {
           weekdayHours: detail == .hours ? weekdayHours : nil
         )
       )
+    }
+
+    func fetchUsagePeriod(
+      from: String,
+      to: String,
+      timezone: String,
+      breakdown: Bool
+    ) async -> AccountPeriodResult {
+      await MainActor.run {
+        let calendar = Calendar.current
+        let period: UsagePeriod
+        if let range = UsagePeriodSelection.today.range(today: now, calendar: calendar),
+          range.from == from, range.to == to
+        {
+          period = usage.today
+        } else if let range = UsagePeriodSelection.last7Days.range(today: now, calendar: calendar),
+          range.from == from, range.to == to
+        {
+          period = usage.last7Days
+        } else if let range = UsagePeriodSelection.last30Days.range(
+          today: now, calendar: calendar),
+          range.from == from, range.to == to
+        {
+          period = usage.last30Days
+        } else {
+          period = VisualFixtureContent.periodUsage(fromDays: days, from: from, to: to)
+        }
+        let response = VisualFixtureContent.accountPeriodResponse(
+          from: from,
+          to: to,
+          timezone: timezone,
+          usage: period,
+          days: days
+        )
+        if breakdown { return .period(response) }
+        return .period(
+          AccountUsagePeriodResponse(
+            request: response.request,
+            bounds: response.bounds,
+            totals: response.totals,
+            cost: response.cost,
+            cacheSaved: response.cacheSaved,
+            days: response.days,
+            agents: nil,
+            coverage: response.coverage,
+            revision: response.revision
+          )
+        )
+      }
     }
 
     private var hours: [QuotaWire.UsageHourOfDay] {

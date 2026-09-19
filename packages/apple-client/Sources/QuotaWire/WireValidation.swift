@@ -83,6 +83,46 @@ public enum WireValidation {
     }
   }
 
+  /// A UTC hour boundary `YYYY-MM-DDTHH:00:00Z` that names a real instant.
+  public static func isUtcHour(_ value: String) -> Bool {
+    guard value.range(
+      of: #"^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$"#,
+      options: .regularExpression
+    ) != nil else { return false }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    guard let date = formatter.date(from: value) else { return false }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+    let reconstructed = String(
+      format: "%04d-%02d-%02dT%02d:00:00Z",
+      parts.year ?? 0,
+      parts.month ?? 0,
+      parts.day ?? 0,
+      parts.hour ?? 0
+    )
+    return reconstructed == value && (parts.minute ?? 0) == 0 && (parts.second ?? 0) == 0
+  }
+
+  /// Inclusive calendar-date span, or nil when either end is not a date or `from` follows `to`.
+  public static func inclusiveDayCount(from: String, to: String) -> Int? {
+    guard isCalendarDate(from), isCalendarDate(to), from <= to else { return nil }
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .iso8601)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.isLenient = false
+    guard let start = formatter.date(from: from), let end = formatter.date(from: to) else {
+      return nil
+    }
+    guard let days = Calendar(identifier: .gregorian).dateComponents([.day], from: start, to: end)
+      .day
+    else { return nil }
+    return days + 1
+  }
+
   public static func safeSum(_ values: [Int]) -> Int? {
     var total = 0
     for value in values {

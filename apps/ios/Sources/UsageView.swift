@@ -17,8 +17,11 @@ struct UsageView: View {
 
         if let period = usage.usagePeriodValue, period.totals.totalTokens > 0 {
           Section {
-            UsageHeadlineSection(period: period)
-              .quotaCardRow()
+            UsageHeadlineSection(
+              period: period,
+              truncatedByRetention: usage.usagePeriodTruncated
+            )
+            .quotaCardRow()
           }
         }
 
@@ -29,10 +32,13 @@ struct UsageView: View {
     .listStyle(.insetGrouped)
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
+      await usage.loadPeriod()
+      await usage.loadBudgetPeriod()
       await usage.loadActivity()
     }
     .task(id: "\(model.selectedTab)-\(usage.usagePeriodTitle)") {
       guard model.selectedTab == .usage else { return }
+      await usage.loadPeriod()
       await usage.loadRhythm()
     }
     .sheet(item: $usage.activityDaySheet) { _ in
@@ -49,18 +55,16 @@ struct UsageView: View {
     .navigationBarTitleDisplayMode(.large)
   }
 
-  /// The days the Daily chart draws, which the Activity read has already fetched.
+  /// The days the Daily chart draws: the period's local `days[]` on every asked date.
   ///
-  /// The table covers the period's own days, bounded by the activity days this phone holds.
+  /// A date absent from `days[]` keeps its slot; it is not a $0 / 0-token day. All has no
+  /// first day, so it has no table.
   private var dailyRows: [UsageDailyFold.Row] {
-    guard let days = model.usage.activityChart.days, let range = model.usage.usagePeriodRange else {
-      return []
-    }
-    let available = UsageActivityCalendar.range(endingOn: model.usage.activityToday)
+    guard let range = model.usage.usagePeriodRange else { return [] }
     return UsageDailyFold.rows(
-      reported: days,
-      from: max(range.from, available.from),
-      to: min(range.to, available.to)
+      days: model.usage.usagePeriodDays,
+      from: range.from,
+      to: range.to
     )
   }
 
@@ -261,13 +265,20 @@ struct UsageHeadlineSection: View {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
   let partial: Bool
+  var truncatedByRetention: Bool = false
   var partialCopy: String = "Some hours in this period were scanned incompletely."
+  var truncatedCopy: String = "This range goes past what Quota still keeps."
   var identifier: String = "usage.headline"
 
-  init(period: UsagePeriod, identifier: String = "usage.headline") {
+  init(
+    period: UsagePeriod,
+    truncatedByRetention: Bool = false,
+    identifier: String = "usage.headline"
+  ) {
     totals = period.totals
     cost = period.cost
     partial = period.partial
+    self.truncatedByRetention = truncatedByRetention
     self.identifier = identifier
   }
 
@@ -290,6 +301,14 @@ struct UsageHeadlineSection: View {
           .font(QuotaDesign.Typography.meta)
           .foregroundStyle(QuotaTheme.warning)
           .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if truncatedByRetention {
+        Label(truncatedCopy, systemImage: "exclamationmark.triangle")
+          .font(QuotaDesign.Typography.meta)
+          .foregroundStyle(QuotaTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("\(identifier).retention")
       }
     }
     .accessibilityElement(children: .contain)

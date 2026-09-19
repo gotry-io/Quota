@@ -50,7 +50,7 @@ instructions. Stable ADR URLs stay.
 | [0037](./0037-a-public-profile-shows-usage-not-quota.md) | A public profile shows Usage, not quota | Accepted |  | 2026-09-07 |
 | [0038](./0038-sessions-are-a-local-view-of-files.md) | Sessions are a local view of files | Accepted |  |  |
 | [0039](./0039-project-attribution-stays-local.md) | Project attribution stays local | Accepted |  |  |
-| [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md) | 2026-09-19 |
+| [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md) | 2026-09-19, 2026-09-20 |
 | [0041](./0041-ios-is-a-device-when-sync-is-paid.md) | The phone is a Device, and paid sync is what its readings are worth | Partially superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) |  |
 | [0042](./0042-quota-history-is-local-samples.md) | Quota history is local samples | Accepted |  | 2026-09-19 |
 | [0043](./0043-one-widget-view-package-for-both-platforms.md) | One widget view package for both platforms | Accepted |  |  |

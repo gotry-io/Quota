@@ -84,6 +84,81 @@ enum Fixtures {
     return object
   }
 
+  static func usagePeriodDayBucket(
+    date: String,
+    totals: [String: Any]? = nil,
+    cost: [String: Any]? = nil,
+    partial: Bool = false
+  ) -> [String: Any] {
+    [
+      "date": date,
+      "totals": totals ?? summaryTotals(),
+      "cost": cost ?? completeCost(),
+      "partial": partial,
+    ]
+  }
+
+  static func usagePeriodCoverage(
+    partial: Bool = false,
+    dailyRetainedFrom: String? = nil,
+    hourlyRetainedFrom: String? = nil,
+    truncatedByRetention: Bool = false
+  ) -> [String: Any] {
+    [
+      "partial": partial,
+      "daily_retained_from": dailyRetainedFrom as Any,
+      "hourly_retained_from": hourlyRetainedFrom as Any,
+      "truncated_by_retention": truncatedByRetention,
+    ]
+  }
+
+  static func usagePeriodRevision() -> [String: Any] {
+    [
+      "usage_revision": 1,
+      "device_generation": 1,
+      "account_updated_at": "2026-08-02T12:00:00Z",
+      "pricing_revision": "pricing_1",
+      "model_catalog_revision": "models_1",
+      "fold_version": 1,
+    ]
+  }
+
+  static func accountUsagePeriodJSON(
+    from: String = "2026-08-02",
+    to: String = "2026-08-02",
+    timezone: String = "UTC",
+    totals: [String: Any]? = nil,
+    cost: [String: Any]? = nil,
+    cacheSaved saved: [String: Any]? = nil,
+    days: [[String: Any]]? = nil,
+    agents: [[String: Any]]? = nil,
+    coverage: [String: Any]? = nil,
+    extra: [String: Any] = [:]
+  ) throws -> Data {
+    var object: [String: Any] = [
+      "protocol_version": 6,
+      "request": ["from": from, "to": to, "timezone": timezone],
+      "bounds": [
+        "start": "\(from)T00:00:00Z",
+        "end": "\(from)T01:00:00Z",
+        "grid": WireCodec.usageHourGridRule,
+      ],
+      "totals": totals ?? summaryTotals(),
+      "cost": cost ?? completeCost(),
+      "cache_saved": saved ?? cacheSaved(),
+      "days": days ?? [usagePeriodDayBucket(date: from, totals: totals, cost: cost)],
+      "coverage": coverage ?? usagePeriodCoverage(),
+      "revision": usagePeriodRevision(),
+    ]
+    if let agents {
+      object["agents"] = agents
+    }
+    for (key, value) in extra {
+      object[key] = value
+    }
+    return try JSONSerialization.data(withJSONObject: object)
+  }
+
   static func usageActivityJSON(
     days: [[String: Any]],
     extra: [String: Any] = [:]

@@ -53,12 +53,12 @@ The contract is `packages/protocol` (`AccountUsagePeriodResponseSchema`) and
 change. The website reads this route for every Usage selection except `all`, and for the budget
 month. QuotaBar Account reads it for week / month / custom (any selection that is not one of
 the four summary periods). The monthly budget on QuotaBar stays this Mac's hours. Quota iOS
-still switches in a later change.
+reads this route for every Usage selection except `all`, and for the budget month.
 
 ## Consequences
 
-QuotaBar can offer Account week / month / custom without folding UTC days. iOS and web can delete
-the UTC-day fold that disagreed with summary Today. The four summary periods stay on
+QuotaBar can offer Account week / month / custom without folding UTC days. The website and Quota
+iOS deleted the UTC-day fold that disagreed with summary Today. The four summary periods stay on
 `GET /api/v6/account/summary?tz=` so a poll that only needs those four still pays one stored fold.
 The period read is compute-on-demand. Local `days[]` are grouped in SQL: the handler builds one
 hour-grid `[start, end)` per local date, joins `usage_hourly` onto that table, and groups by the

@@ -10,15 +10,13 @@ import Testing
   @MainActor
   struct UsagePeriodBudgetTests {
     @Test
-    func fixtureUsageOwnerFoldsThisMonthFromPosedActivity() async {
+    func fixtureUsageOwnerMeasuresThisMonthFromThePeriodRead() async {
       let model = AppModel.visualFixture(
         .content,
         now: VisualFixture.referenceDate,
         budgetStore: VisualFixtureContent.budgetStore(amountUSD: 50)
       )
-      await model.usage.loadActivity()
-      model.usage.usagePeriod = .thisMonth
-      #expect(model.usage.usagePeriodIsFolded)
+      await model.usage.loadBudgetPeriod(force: true)
       guard let progress = model.usage.budgetProgress else {
         Issue.record("A budget of $50 has progress")
         return

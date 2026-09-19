@@ -1,8 +1,8 @@
 import QuotaAccount
 import QuotaRelay
 
-/// The one activity read Usage asks for. Implementations keep the answer in memory; nothing here
-/// writes a disk cache.
+/// The activity and period reads Usage asks for. Implementations keep the answer in memory;
+/// nothing here writes a disk cache. Period 304/ETag lives on `AccountClient`.
 protocol ActivityLoading: Sendable {
   func fetchUsageActivity(
     from: String,
@@ -10,6 +10,13 @@ protocol ActivityLoading: Sendable {
     detail: ActivityDetail?,
     timeZone: String?
   ) async -> AccountActivityResult
+
+  func fetchUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool
+  ) async -> AccountPeriodResult
 }
 
 struct AccountClientActivityLoading: ActivityLoading {
@@ -22,5 +29,19 @@ struct AccountClientActivityLoading: ActivityLoading {
     timeZone: String?
   ) async -> AccountActivityResult {
     await client.fetchUsageActivity(from: from, to: to, detail: detail, timeZone: timeZone)
+  }
+
+  func fetchUsagePeriod(
+    from: String,
+    to: String,
+    timezone: String,
+    breakdown: Bool
+  ) async -> AccountPeriodResult {
+    await client.fetchUsagePeriod(
+      from: from,
+      to: to,
+      timezone: timezone,
+      breakdown: breakdown
+    )
   }
 }
