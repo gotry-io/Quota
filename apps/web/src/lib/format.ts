@@ -154,27 +154,28 @@ export function resetCopy(
 }
 
 /**
- * The one line every Quota surface prints for a window's pace, or `null` when there is none.
+ * Glance-surface pace copy, or `null` when there is none.
  *
  * `packages/protocol/fixtures/quota-pace-conformance.json` is the shared statement of these
  * phrases; `QuotaPaceCopy` in `packages/apple-shared` answers the same file. See ADR 0035.
  */
-export function paceCopy(pace: QuotaPace, resetsAt: string | undefined): string | null {
+export function paceHeadline(pace: QuotaPace, resetsAt: string | undefined): string | null {
   if (pace.kind === "none") return null;
-  let outcome: string;
-  if (pace.kind === "lasts") {
-    outcome = "lasts to reset";
-  } else {
-    if (pace.exhausts_at === undefined || resetsAt === undefined) return null;
-    outcome = `runs out ~${compactAge(pace.exhausts_at, new Date(resetsAt))} before reset`;
+  if (pace.kind === "lasts") return "Expected to last until reset";
+  if (pace.exhausts_at === undefined || resetsAt === undefined) return null;
+  return `May run out about ${compactAge(pace.exhausts_at, new Date(resetsAt))} before reset`;
+}
+
+/**
+ * Detail-surface explanation of the tempo, or `null` when there is no pace.
+ */
+export function paceDetail(pace: QuotaPace): string | null {
+  if (pace.kind === "none") return null;
+  if (pace.tempo === "on_track") return "Using quota at an even pace";
+  if (pace.tempo === "ahead") {
+    return `Using quota faster than an even pace (+${pace.delta_percent} points)`;
   }
-  const tempo =
-    pace.tempo === "on_track"
-      ? "On track"
-      : pace.tempo === "ahead"
-        ? `Ahead +${pace.delta_percent}%`
-        : `Behind −${Math.abs(pace.delta_percent)}%`;
-  return `${tempo} · ${outcome}`;
+  return `Using quota slower than an even pace (−${Math.abs(pace.delta_percent)} points)`;
 }
 
 export function formatQuotaRemaining(

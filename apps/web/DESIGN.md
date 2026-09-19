@@ -26,8 +26,10 @@ and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json` 
 `packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
 `packages/protocol/fixtures/remaining-copy-conformance.json`, which `src/lib/format.ts`
 answers in its tests. A window's pace prints under its reset line, in `--meter-warn` when the rate
-runs the window out before it resets and in the meta color otherwise. The site does not restate
-those rules and does not keep a provider or agent name table of its own.
+runs the window out before it resets and in the meta color otherwise: **Expected to last until
+reset** or **May run out about 2h before reset**, with the even-pace explanation only on
+subscription detail. The site does not restate those rules and does not keep a provider or agent
+name table of its own.
 
 ## Information architecture
 

@@ -55,17 +55,18 @@ These rules apply to every Quota client, not only the menu panel. `apps/web/DESI
   and drop the percent bar**, when remaining/limit describes the same quantity as `used_percent`.
   Included dollars that are a different quantity keep `36.9% · $14.55` and the meter.
   `packages/protocol/fixtures/remaining-copy-conformance.json` is the shared statement.
-- **A pace line says whether the current rate lasts to the reset.** One line under the window, in
-  two halves: the tempo, then the outcome — **On track · lasts to reset**, **Ahead +42% · runs out
-  ~2h before reset**, **Behind −30% · lasts to reset**. *On track* carries no number; *Ahead* and
-  *Behind* carry the signed difference from an even burn rate. The duration in *runs out* is the
-  shared compact format (`2h`, `27m`, `1d`) and always reads `~`, because it is a projection. A
-  window the rule cannot answer for — no cadence, a balance with no limit, or too little of the
-  window elapsed or used — shows no line and takes no space. *runs out* is the warning color;
-  everything else is secondary text. The rule and these phrases are
-  `packages/protocol/fixtures/quota-pace-conformance.json`, answered by `packages/quota-model`,
-  `packages/service`, `packages/apple-shared` (`QuotaPace`, `QuotaPaceCopy`), and
-  `apps/web/src/lib/format.ts`; see
+- **A pace line says whether the current rate lasts to the reset.** Glance surfaces print the
+  outcome only — **Expected to last until reset**, or **May run out about 2h before reset**. The
+  duration in *May run out* is the shared compact format (`2h`, `27m`, `1d`) and always reads
+  *about*, because it is a projection. Detail surfaces add an explanation under that headline:
+  **Using quota faster than an even pace (+70 points)**, **Using quota slower than an even pace
+  (−30 points)**, or **Using quota at an even pace**. The signed figure is percentage points off
+  an even burn rate, not percent of the window. A window the rule cannot answer for — no cadence,
+  a balance with no limit, or too little of the window elapsed or used — shows no line and takes
+  no space. *May run out* is the warning color; everything else is secondary text. The rule and
+  these phrases are `packages/protocol/fixtures/quota-pace-conformance.json`, answered by
+  `packages/quota-model`, `packages/service`, `packages/apple-shared` (`QuotaPace`,
+  `QuotaPaceCopy`), and `apps/web/src/lib/format.ts`; see
   [ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md).
 - **A pace line has a picture: the window's own samples, drawn under its meter.** A 22pt sparkline,
   solid over the readings this Mac took inside the running window, dashed from the last of them to
