@@ -6,6 +6,7 @@ import {
   dailyMaximum,
   dailyTooltip,
   dailyValue,
+  NO_USAGE_RECORDED,
   shareFraction,
   type UsageDailyRow,
 } from "$lib/usage-metrics";
@@ -22,7 +23,7 @@ let mode = $state<"tokens" | "cost">("tokens");
 let tableOpen = $state(false);
 
 const maximum = $derived(dailyMaximum(rows, mode));
-const hasUsage = $derived(rows.some((row) => row.totals.total_tokens > 0));
+const hasUsage = $derived(rows.some((row) => row.recorded && row.totals.total_tokens > 0));
 
 /** A bar's height against the tallest day, as a percentage of the plot. */
 function barPercent(row: UsageDailyRow): number {
@@ -64,7 +65,7 @@ function monthName(date: string): string {
         onclick={() => (mode = "cost")}>Cost</button
       >
     </div>
-    <span class="count-pill">UTC</span>
+    <span class="count-pill">Local</span>
   </div>
 
   {#if !hasUsage}
@@ -124,7 +125,7 @@ function monthName(date: string): string {
   {#if tableOpen}
     <div class="table-wrap" id="{id}-table">
       <table class="usage-daily-table">
-        <caption class="visually-hidden">Usage by UTC day</caption>
+        <caption class="visually-hidden">Usage by local day</caption>
         <thead>
           <tr>
             <th scope="col">Date</th>
@@ -141,13 +142,17 @@ function monthName(date: string): string {
           {#each rows as row (row.date)}
             <tr>
               <th scope="row">{row.date}</th>
-              <td>{formatCount(row.totals.total_tokens)}</td>
-              <td>{formatCount(row.totals.input_tokens)}</td>
-              <td>{formatCount(row.totals.output_tokens)}</td>
-              <td>{formatCount(row.totals.cache_read_input_tokens)}</td>
-              <td>{formatCount(row.totals.reasoning_tokens)}</td>
-              <td>{formatCount(row.totals.messages)}</td>
-              <td>{formatCost(row.cost)}</td>
+              {#if row.recorded}
+                <td>{formatCount(row.totals.total_tokens)}</td>
+                <td>{formatCount(row.totals.input_tokens)}</td>
+                <td>{formatCount(row.totals.output_tokens)}</td>
+                <td>{formatCount(row.totals.cache_read_input_tokens)}</td>
+                <td>{formatCount(row.totals.reasoning_tokens)}</td>
+                <td>{formatCount(row.totals.messages)}</td>
+                <td>{formatCost(row.cost)}</td>
+              {:else}
+                <td colspan="7">{NO_USAGE_RECORDED}</td>
+              {/if}
             </tr>
           {/each}
         </tbody>

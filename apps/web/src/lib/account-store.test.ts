@@ -2,8 +2,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
+import { USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
 import { afterEach, expect, it, vi } from "vitest";
-import { clearStoredSummary } from "./account-reads.ts";
+import {
+  browserTimezone,
+  clearStoredPeriods,
+  clearStoredSummary,
+  usagePeriodResourceKey,
+} from "./account-reads.ts";
 import { activityRangeKey, createAccountStore } from "./account-store.svelte.ts";
 
 afterEach(() => {
@@ -11,6 +17,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   clearStoredSummary();
+  clearStoredPeriods();
 });
 
 type WireCase = { accepted: boolean; payload: unknown };
@@ -54,6 +61,57 @@ function cost() {
     unpriced_rows: 0,
     assumptions: [],
     unpriced: [],
+  };
+}
+
+function nextDate(date: string): string {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + 1);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function periodBody(from: string, to: string, timezone: string, breakdown: boolean) {
+  return {
+    protocol_version: 6,
+    request: { from, to, timezone },
+    bounds: {
+      start: `${from}T00:00:00Z`,
+      end: `${nextDate(to)}T00:00:00Z`,
+      grid: USAGE_HOUR_GRID_RULE,
+    },
+    totals: totals(),
+    cost: cost(),
+    cache_saved: { amount_microusd: "0", status: "complete", unpriced_rows: 0 },
+    days: [{ date: from, totals: totals(), cost: cost(), partial: false }],
+    ...(breakdown
+      ? {
+          agents: [
+            {
+              agent: "codex",
+              providers: [
+                {
+                  provider: "openai",
+                  models: [{ model: "gpt-5", totals: totals(), cost: cost() }],
+                },
+              ],
+            },
+          ],
+        }
+      : {}),
+    coverage: {
+      partial: false,
+      daily_retained_from: null,
+      hourly_retained_from: null,
+      truncated_by_retention: false,
+    },
+    revision: {
+      usage_revision: 1,
+      device_generation: 1,
+      account_updated_at: "2026-08-12T12:00:00Z",
+      pricing_revision: "pricing_1",
+      model_catalog_revision: "models_1",
+      fold_version: 1,
+    },
   };
 }
 
@@ -264,4 +322,77 @@ it("stores activity by range and day detail by date", async () => {
   await store.ensureDay("2026-08-12");
   await store.ensureDay("2026-08-12");
   expect(store.dayDetail["2026-08-12"]?.data?.agents).toHaveLength(1);
+});
+
+it("stores a period by from, to, timezone, and breakdown", async () => {
+  const payload = acceptedSummary();
+  const { calls } = mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) {
+      const asked = new URL(url, "https://quota.test");
+      return jsonResponse(
+        periodBody(
+          asked.searchParams.get("from") ?? "2026-08-26",
+          asked.searchParams.get("to") ?? "2026-08-26",
+          asked.searchParams.get("timezone") ?? "UTC",
+          asked.searchParams.get("breakdown") === "1",
+        ),
+      );
+    }
+    return jsonResponse(activityBody());
+  });
+
+  const store = createAccountStore();
+  const range = { from: "2026-08-26", to: "2026-08-26" };
+  await store.ensurePeriod(range, { breakdown: true });
+  await store.ensurePeriod(range, { breakdown: true });
+  const key = usagePeriodResourceKey({
+    ...range,
+    timezone: browserTimezone(),
+    breakdown: true,
+  });
+  expect(store.period[key]?.status).toBe("ready");
+  expect(store.period[key]?.data?.agents).toHaveLength(1);
+  expect(store.period[key]?.data?.days.map((day) => day.date)).toEqual(["2026-08-26"]);
+  expect(calls.filter((url) => url.includes("usage/period"))).toHaveLength(1);
+  expect(calls.find((url) => url.includes("usage/period"))).toContain("breakdown=1");
+
+  await store.ensurePeriod(range, { breakdown: false });
+  expect(calls.filter((url) => url.includes("usage/period"))).toHaveLength(2);
+  const without = usagePeriodResourceKey({
+    ...range,
+    timezone: browserTimezone(),
+    breakdown: false,
+  });
+  expect(store.period[without]?.data?.agents).toBeUndefined();
+});
+
+it("keeps the last period on error", async () => {
+  const payload = acceptedSummary();
+  mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) {
+      return jsonResponse(periodBody("2026-08-26", "2026-08-26", browserTimezone(), true), 200);
+    }
+    return jsonResponse(activityBody());
+  });
+
+  const store = createAccountStore();
+  const range = { from: "2026-08-26", to: "2026-08-26" };
+  await store.ensurePeriod(range, { breakdown: true });
+  const key = usagePeriodResourceKey({
+    ...range,
+    timezone: browserTimezone(),
+    breakdown: true,
+  });
+  expect(store.period[key]?.data?.totals.messages).toBe(1);
+
+  mockFetch(() => new Response(null, { status: 500 }));
+  const returned = store.ensurePeriod(range, { breakdown: true, maxAgeMs: 0 });
+  await returned;
+  for (let i = 0; i < 20 && store.period[key]?.status !== "error"; i += 1) {
+    await Promise.resolve();
+  }
+  expect(store.period[key]?.data?.totals.messages).toBe(1);
+  expect(store.period[key]?.status).toBe("error");
 });
