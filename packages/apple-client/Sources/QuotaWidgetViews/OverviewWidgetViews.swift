@@ -731,8 +731,8 @@ public enum OverviewWidgetPreviewFixtures {
 
 public func lockScreenAccessibility(item: WidgetQuotaItem, now: Date = Date()) -> String {
   var parts = [OverviewWidgetContent.remainingAccessibility(for: item)]
-  if OverviewWidgetContent.paceRunsOut(item) {
-    parts.append("runs out")
+  if let pace = item.pace, let headline = QuotaPaceCopy.headline(pace, resetsAt: item.resetsAt) {
+    parts.append(headline)
   }
   if let state = item.stateLabel(now: now) {
     parts.append(state)

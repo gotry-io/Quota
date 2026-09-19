@@ -126,7 +126,7 @@ enum QuotaWindowPresentation {
   case overviewHero
   /// Overview secondary windows: compact remaining, 4pt meter, reset and pace as meta.
   case overviewCompact
-  /// Subscription detail: large remaining, live countdown, optional pace line.
+  /// Subscription detail: large remaining, live countdown, pace headline and detail.
   case detail
 }
 
@@ -193,11 +193,17 @@ struct QuotaWindowBlock: View {
       TimelineView(.periodic(from: .now, by: 60)) { context in
         countdownRow(now: context.date)
       }
-      if let paceLine {
-        Text(paceLine.text)
+      if let paceHeadline {
+        Text(paceHeadline)
           .font(QuotaDesign.Typography.meta)
-          .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
+          .foregroundStyle(paceWarns ? QuotaTheme.warning : Color.primary)
           .fixedSize(horizontal: false, vertical: true)
+        if let paceDetail {
+          Text(paceDetail)
+            .font(QuotaDesign.Typography.meta)
+            .foregroundStyle(QuotaTheme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
   }
@@ -236,20 +242,20 @@ struct QuotaWindowBlock: View {
   @ViewBuilder
   private var joinedMeta: some View {
     let reset = supportLine
-    if let reset, let paceLine {
-      Text("\(reset) · \(paceLine.text)")
+    if let reset, let paceHeadline {
+      Text("\(reset) · \(paceHeadline)")
         .font(QuotaDesign.Typography.meta)
-        .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
+        .foregroundStyle(paceWarns ? QuotaTheme.warning : Color.primary)
         .fixedSize(horizontal: false, vertical: true)
     } else if let reset {
       Text(reset)
         .font(QuotaDesign.Typography.meta)
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
-    } else if let paceLine {
-      Text(paceLine.text)
+    } else if let paceHeadline {
+      Text(paceHeadline)
         .font(QuotaDesign.Typography.meta)
-        .foregroundStyle(paceLine.warns ? QuotaTheme.warning : Color.primary)
+        .foregroundStyle(paceWarns ? QuotaTheme.warning : Color.primary)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -283,12 +289,22 @@ struct QuotaWindowBlock: View {
     return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
 
-  /// Whether this window's rate lasts to its reset, and whether that warns.
-  private var paceLine: (text: String, warns: Bool)? {
-    let pace = QuotaPace.evaluate(window.paceReading, now: now)
-    guard let text = QuotaPaceCopy.line(pace, resetsAt: window.resetsAt) else { return nil }
-    if case .runsOut = pace { return (text, true) }
-    return (text, false)
+  /// Whether this window's rate lasts to its reset, derived on this device.
+  private var pace: QuotaPace {
+    QuotaPace.evaluate(window.paceReading, now: now)
+  }
+
+  private var paceHeadline: String? {
+    QuotaPaceCopy.headline(pace, resetsAt: window.resetsAt)
+  }
+
+  private var paceDetail: String? {
+    QuotaPaceCopy.detail(pace)
+  }
+
+  private var paceWarns: Bool {
+    if case .runsOut = pace { return true }
+    return false
   }
 
   private var windowTone: Color {
@@ -300,8 +316,11 @@ struct QuotaWindowBlock: View {
     if let reset = window.resetsAt.flatMap({ QuotaFormat.resetTime($0) }) {
       parts.append(reset)
     }
-    if let paceLine {
-      parts.append(paceLine.text)
+    if let paceHeadline {
+      parts.append(paceHeadline)
+    }
+    if presentation == .detail, let paceDetail {
+      parts.append(paceDetail)
     }
     if let stateLabel {
       parts.append(stateLabel)

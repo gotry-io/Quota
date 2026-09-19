@@ -88,9 +88,11 @@ and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json`,
 `packages/protocol/fixtures/remaining-copy-conformance.json`, which
 `packages/apple-shared` answers in its tests. The app and its widgets compose those phrases through
 `FreshnessCopy` and `RemainingQuotaFormat` and never assemble their own. A window's pace prints under its support line in
-`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise;
-there is no Rust on iOS, so the app derives it with `QuotaPace` from the reading it already holds,
-answering `packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
+`QuotaTheme.warning` when the rate runs the window out before it resets and in secondary otherwise:
+glance surfaces print **Expected to last until reset** or **May run out about 2h before reset**, and
+subscription detail adds the even-pace explanation under that headline. There is no Rust on iOS, so
+the app derives it with `QuotaPace` from the reading it already holds, answering
+`packages/protocol/fixtures/quota-pace-conformance.json`. Widgets show no pace: the space
 belongs to the number. Local remaining-quota alerts answer
 `packages/protocol/fixtures/alert-transition-conformance.json`; both Apple apps evaluate that file
 through `QuotaAlerts`, including the pace warning Settings can turn off.

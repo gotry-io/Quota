@@ -67,7 +67,8 @@ struct QuotaReadingWindowsView: View {
           window: window,
           provider: snapshot.provider,
           isStale: isStale,
-          now: now
+          now: now,
+          showsPaceDetail: true
         )
       }
     }

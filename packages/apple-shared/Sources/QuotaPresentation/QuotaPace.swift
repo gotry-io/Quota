@@ -167,35 +167,39 @@ extension QuotaPace: Codable {
   }
 }
 
-/// The one line every Quota surface prints for a pace.
+/// The words every Quota surface prints for a pace.
 ///
+/// Glance surfaces print ``headline``; detail surfaces add ``detail`` under it.
 /// The phrases live in `apps/menubar/DESIGN.md` Shared product vocabulary, and
 /// `packages/protocol/fixtures/quota-pace-conformance.json` is the shared statement of them;
 /// `apps/web/src/lib/format.ts` answers the same file.
 public enum QuotaPaceCopy: Sendable {
-  /// `On track · lasts to reset`, `Ahead +42% · runs out ~2h before reset`, or `nil` when
+  /// `Expected to last until reset`, `May run out about 2h before reset`, or `nil` when
   /// there is no pace to state.
-  public static func line(_ pace: QuotaPace, resetsAt: Date?) -> String? {
-    guard let projection = pace.projection else { return nil }
-    let outcome: String
+  public static func headline(_ pace: QuotaPace, resetsAt: Date?) -> String? {
     switch pace {
     case .none:
       return nil
     case .lasts:
-      outcome = "lasts to reset"
+      return "Expected to last until reset"
     case .runsOut(_, let exhaustsAt):
       guard let resetsAt else { return nil }
       let ahead = CompactAgeFormat.string(since: exhaustsAt, now: resetsAt)
-      outcome = "runs out ~\(ahead) before reset"
+      return "May run out about \(ahead) before reset"
     }
-    return "\(tempo(projection)) · \(outcome)"
   }
 
-  private static func tempo(_ projection: QuotaPaceProjection) -> String {
+  /// `Using quota faster than an even pace (+70 points)`, `Using quota slower than an even
+  /// pace (−30 points)`, `Using quota at an even pace`, or `nil` when there is no pace.
+  public static func detail(_ pace: QuotaPace) -> String? {
+    guard let projection = pace.projection else { return nil }
     switch projection.tempo {
-    case .onTrack: "On track"
-    case .ahead: "Ahead +\(projection.deltaPercent)%"
-    case .behind: "Behind −\(abs(projection.deltaPercent))%"
+    case .onTrack:
+      return "Using quota at an even pace"
+    case .ahead:
+      return "Using quota faster than an even pace (+\(projection.deltaPercent) points)"
+    case .behind:
+      return "Using quota slower than an even pace (−\(abs(projection.deltaPercent)) points)"
     }
   }
 }

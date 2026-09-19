@@ -46,8 +46,10 @@ struct DashboardProvider: Equatable, Identifiable {
   /// Windows the last `quota_history` fold named for this subscription.
   let windows: [QuotaHistoryWindow]
   let currentReading: QuotaSnapshot?
-  /// The same sentence the panel prints for this reading (ADR 0035).
-  let pacePhrase: String?
+  /// The glance headline the panel prints for this reading (ADR 0035).
+  let paceHeadline: String?
+  /// The even-pace explanation, shown under the headline on this Quota page.
+  let paceDetail: String?
   let resetsAt: Date?
   /// `QuotaHistoryCopy.peak` of the current window, or of the highest window the fold named.
   let peak: String?
@@ -276,11 +278,16 @@ final class DashboardModel {
     let histories = subscriptionKey.flatMap { model.quotaHistory[$0] } ?? [:]
     let windows = histories.values.flatMap(\.windowsToday).sorted { $0.startedAt < $1.startedAt }
     let paceWindow = snapshot.flatMap { $0.primaryCadenceWindows.first ?? $0.windows.first }
-    let pacePhrase: String?
-    if let paceWindow, let pace = paceWindow.pace {
-      pacePhrase = QuotaPaceCopy.line(pace, resetsAt: paceWindow.resetsAt)
+    let paceHeadline: String?
+    let paceDetail: String?
+    if let paceWindow, let pace = paceWindow.pace,
+      let headline = QuotaPaceCopy.headline(pace, resetsAt: paceWindow.resetsAt)
+    {
+      paceHeadline = headline
+      paceDetail = QuotaPaceCopy.detail(pace)
     } else {
-      pacePhrase = nil
+      paceHeadline = nil
+      paceDetail = nil
     }
     let peakPercent =
       windows.first(where: \.isCurrent)?.peakUsedPercent
@@ -294,7 +301,8 @@ final class DashboardModel {
       accountLabel: accountLabel,
       windows: windows,
       currentReading: snapshot,
-      pacePhrase: pacePhrase,
+      paceHeadline: paceHeadline,
+      paceDetail: paceDetail,
       resetsAt: paceWindow?.resetsAt,
       peak: peakPercent.map(QuotaHistoryCopy.peak),
       remainingPercent: paceWindow?.remainingPercent,
