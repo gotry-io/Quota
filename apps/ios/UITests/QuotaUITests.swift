@@ -1077,14 +1077,17 @@ final class QuotaUITests: XCTestCase {
 
   /// Devices is a Settings destination. Restore the tab bar, open Settings, then the row.
   private func openDevicesFromSettings(_ app: XCUIApplication) throws {
-    try restoreTabBar(app)
-    let settings = app.tabBars.buttons["Settings"]
-    XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
-    settings.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
-      "settings.root"
-    )
+    let root = app.descendants(matching: .any)["settings.root"]
+    // A tap that lands while the iOS 26 tab bar is still expanding can be dropped; restore the
+    // bar and tap once more before calling the destination missing.
+    for _ in 0..<2 where !root.exists {
+      try restoreTabBar(app)
+      let settings = app.tabBars.buttons["Settings"]
+      XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
+      settings.tap()
+      _ = root.waitForExistence(timeout: 6)
+    }
+    XCTAssertTrue(root.exists, "settings.root")
     openSettingsDestination(app, link: "settings.devices", root: "devices.root")
   }
 
