@@ -9,6 +9,11 @@ services:
       PORT: "8787"
       RELAY_SQLITE_PATH: /data/relay.sqlite
       RELAY_STATIC_DIR: apps/web/.svelte-kit/output/client
+      # Unset/empty in relay.env: loopback + RFC1918 + unique-local IPv6.
+      RELAY_TRUSTED_PROXIES: ${RELAY_TRUSTED_PROXIES:-}
+      # x-forwarded-for (default if unset) or cf-connecting-ip. This Tunnel
+      # layout sets CF-Connecting-IP, so the example uses cf-connecting-ip.
+      RELAY_CLIENT_ADDRESS_HEADER: ${RELAY_CLIENT_ADDRESS_HEADER:-cf-connecting-ip}
     volumes:
       - relay-data:/data
     ports:
