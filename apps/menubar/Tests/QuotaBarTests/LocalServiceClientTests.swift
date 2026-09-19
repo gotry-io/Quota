@@ -7,9 +7,11 @@ import Testing
 struct LocalServiceClientTests {
   /// Fast enough for a test, and in the same proportions the app uses: the helper is declared
   /// dead after two unanswered pings, and killed if it does not exit within the grace period.
+  /// Two missed pings close the connection, so the ping is the tolerance a loaded runner gets
+  /// before a healthy stub helper is killed: 50 ms (100 ms of grace) relaunched one on CI.
   private static let testTimings = LocalServiceClientTimings(
     ready: .seconds(10),
-    ping: .milliseconds(50),
+    ping: .milliseconds(200),
     termination: .milliseconds(200)
   )
 
@@ -397,8 +399,8 @@ struct LocalServiceClientTests {
 
   @Test
   func keepsASlowRequestRunningWhileTheHelperAnswersPings() async throws {
-    // Two seconds against a fifty-millisecond ping is forty rounds of liveness, the same
-    // proportion as a request running for more than three minutes in the app.
+    // Two seconds against a two-hundred-millisecond ping is ten rounds of liveness, the same
+    // proportion as a request running for almost a minute against the app's five-second ping.
     let service = try TemporaryService(
       python: #"""
         import json
