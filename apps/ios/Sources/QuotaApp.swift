@@ -7,10 +7,17 @@ struct QuotaApp: App {
 
   init() {
     #if DEBUG
-      if let fixture = VisualFixture.parse(arguments: ProcessInfo.processInfo.arguments) {
-        // Anchor synthetic ages/resets to launch time so screenshots stay current. A fixture
-        // session stays offline, so it neither registers nor schedules a background refresh.
-        _model = State(initialValue: AppModel.visualFixture(fixture, now: Date()))
+      let arguments = ProcessInfo.processInfo.arguments
+      if let fixture = VisualFixture.parse(arguments: arguments) {
+        // Default: the scenario's reference date, so period titles and activity days agree.
+        // `--visual-clock wall` keeps today's clock for marketing captures.
+        let wall = VisualClock.parse(arguments: arguments) == .wall
+        let now = wall ? Date() : VisualFixture.referenceDate
+        let model = AppModel.visualFixture(fixture, now: now, clockIsFixed: !wall)
+        if let route = FixtureRoute.parse(arguments: arguments) {
+          model.applyFixtureRoute(route)
+        }
+        _model = State(initialValue: model)
         return
       }
     #endif
@@ -25,6 +32,7 @@ struct QuotaApp: App {
   var body: some Scene {
     WindowGroup {
       RootView(model: model)
+        .environment(\.displayClock, model.displayClock)
         .preferredColorScheme(appearance.colorScheme)
         .task {
           #if DEBUG

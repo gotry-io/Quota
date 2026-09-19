@@ -1,6 +1,7 @@
 import Foundation
 import QuotaPresentation
 import QuotaProviderStatus
+import QuotaRelay
 import QuotaWire
 import Testing
 
@@ -40,6 +41,8 @@ struct VisualFixtureParserTests {
       ("activity-failed", VisualFixture.activityFailed),
       ("activity-day-empty", VisualFixture.activityDayEmpty),
       ("activity-day-failed", VisualFixture.activityDayFailed),
+      ("sign-in", VisualFixture.signIn),
+      ("sign-in-methods", VisualFixture.signInMethods),
     ]
   )
   func parseRecognizesEachFixture(raw: String, expected: VisualFixture) {
@@ -331,6 +334,103 @@ struct VisualFixtureParserTests {
       #expect(model.summary?.subscriptions.isEmpty == true)
       #expect(model.providerCards.isEmpty)
       #expect(model.banner == nil)
+    }
+
+    @Test
+    func contentRouteOpensUsagePatternsAndSubscriptionDetail() {
+      let now = VisualFixture.referenceDate
+      let model = AppModel.visualFixture(.content, now: now)
+      model.applyFixtureRoute(.usagePatterns)
+      #expect(model.selectedTab == .usage)
+      #expect(model.usagePath == [.patterns])
+      model.applyFixtureRoute(.usageBreakdown)
+      #expect(model.usagePath == [.breakdown])
+      model.applyFixtureRoute(.subscriptionDetail("codex|visual_codex|global|"))
+      #expect(model.selectedTab == .quota)
+      #expect(model.overviewPath == ["codex|visual_codex|global|"])
+      model.applyFixtureRoute(.settingsDevices)
+      #expect(model.selectedTab == .settings)
+      #expect(model.settingsPath == [.devices])
+      model.applyFixtureRoute(.usageDay)
+      #expect(model.selectedTab == .usage)
+      #expect(model.usage.activityDaySheet != nil)
+    }
+
+    @Test(arguments: VisualFixture.allCases)
+    func everyScenarioStaysOfflineAndDeclaresAValidCombination(fixture: VisualFixture) {
+      let now = VisualFixture.referenceDate
+      let scenario = VisualScenario.make(fixture, now: now)
+      #expect(scenario.validationIssues == [])
+      let model = AppModel.visualFixture(fixture, now: now)
+      #expect(model.isOfflineFixture)
+      #expect(model.skipsRestore)
+      #expect(model.displayClock.isFixed)
+    }
+
+    @Test
+    func fixtureTransportRefusesNetwork() async {
+      let transport = FixtureBlockedHTTPTransport()
+      await #expect(throws: HTTPTransportError.unavailable) {
+        _ = try await transport.perform(
+          URLRequest(url: URL(string: "https://quota.gotry.io/")!))
+      }
+    }
+
+    @Test
+    func relativeAgeRollsOverOnAnAdvancingClock() {
+      let clock = AdvancingDisplayClock(VisualFixture.referenceDate)
+      let model = AppModel.visualFixture(
+        .content, now: { clock.now() }, clockIsFixed: true)
+      let fetched = model.fetchedAt!
+      let first = QuotaFormat.updated(fetched, now: clock.now())
+      clock.advance(by: 120)
+      let second = QuotaFormat.updated(fetched, now: clock.now())
+      #expect(first != second)
+      #expect(model.displayNow == clock.now())
+    }
+  }
+
+  struct FixtureRouteParserTests {
+    @Test
+    func parseRecognizesDirectDestinations() {
+      #expect(FixtureRoute.parse("usage.patterns") == .usagePatterns)
+      #expect(FixtureRoute.parse("usage.day") == .usageDay)
+      #expect(FixtureRoute.parse("usage.breakdown") == .usageBreakdown)
+      #expect(FixtureRoute.parse("usage") == .usageRoot)
+      #expect(FixtureRoute.parse("settings.devices") == .settingsDevices)
+      #expect(FixtureRoute.parse("settings.notifications") == .settingsNotifications)
+      #expect(
+        FixtureRoute.parse("subscription.detail/codex|visual_codex|global|")
+          == .subscriptionDetail("codex|visual_codex|global|"))
+      #expect(FixtureRoute.parse(arguments: ["--route", "usage.patterns"]) == .usagePatterns)
+      #expect(FixtureRoute.parse(arguments: ["Quota"]) == nil)
+    }
+
+    @Test
+    func visualClockWallIsOptIn() {
+      #expect(VisualClock.parse(arguments: ["--visual-clock", "wall"]) == .wall)
+      #expect(VisualClock.parse(arguments: ["--visual-fixture", "content"]) == nil)
+    }
+  }
+
+  final class AdvancingDisplayClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
+
+    init(_ instant: Date) {
+      self.instant = instant
+    }
+
+    func now() -> Date {
+      lock.lock()
+      defer { lock.unlock() }
+      return instant
+    }
+
+    func advance(by interval: TimeInterval) {
+      lock.lock()
+      instant += interval
+      lock.unlock()
     }
   }
 #endif

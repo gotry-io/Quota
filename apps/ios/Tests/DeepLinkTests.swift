@@ -146,7 +146,7 @@ struct DeepLinkTests {
       #expect(model.pendingSubscriptionSelection == id)
       #expect(model.overviewPath.isEmpty)
 
-      VisualFixture.content.apply(to: model, now: now)
+      VisualScenario.make(.content, now: now).apply(to: model)
       model.resolvePendingSubscriptionSelection()
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath == [subscription.key])

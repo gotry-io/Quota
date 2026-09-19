@@ -96,14 +96,16 @@ final class AppModel {
   var pendingSubscriptionSelection: String?
   /// Subscription keys on the Overview stack. A matching deep link replaces this with one key.
   var overviewPath: [String] = []
+  /// Usage stack destinations (`breakdown`, `patterns`). Empty is the Usage hub.
+  var usagePath: [UsageDestination] = []
+  /// Settings stack destinations. Empty is the Settings hub.
+  var settingsPath: [SettingsDestination] = []
   /// The validator the last applied summary was current at, when the read carried one.
   var summaryETag: String?
   /// Incremented when the account goes away so in-flight Usage reads drop their completion.
   @ObservationIgnored private(set) var accountSessionEpoch = 0
-  /// The managed Account session this device holds, and how far along it is. Not private because
-  /// a visual fixture states it the way it states `phase`: what Usage, Devices, and the Settings
-  /// account group show turns on whether there is an account, not on which phase the app is in.
-  var sessionActivation: AccountSessionActivation?
+  /// The managed Account session this device holds, and how far along it is.
+  private(set) var sessionActivation: AccountSessionActivation?
   /// The Device this phone's session speaks for, or nil when it registered none. Devices lists
   /// that row as the Account's rather than synthesizing a second one beside it.
   var sessionDeviceID: String?
@@ -135,7 +137,21 @@ final class AppModel {
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
     var skipsRestore = false
+    /// True when this model was built with blocked network and memory stores (a visual scenario).
+    private(set) var isOfflineFixture = false
+    /// True when `now` is a frozen instant (visual fixtures), not the wall clock.
+    private(set) var displayClockIsFixed = false
   #endif
+
+  /// The instant owners and views treat as "now". Fixtures inject a fixed clock.
+  var displayClock: DisplayClock {
+    #if DEBUG
+      DisplayClock(now: now, isFixed: displayClockIsFixed)
+    #else
+      DisplayClock(now: now, isFixed: false)
+    #endif
+  }
+  var displayNow: Date { now() }
 
   init(
     account: AccountClient,
@@ -1107,6 +1123,108 @@ final class AppModel {
   private func clearWidget() {
     try? widgetPublisher.clear()
   }
+
+  #if DEBUG
+    /// Test/fixture seam: set the Account session the way `restore()` would after reading Keychain.
+    func poseSession(activation: AccountSessionActivation?, deviceID: String? = nil) {
+      sessionActivation = activation
+      sessionDeviceID = deviceID
+    }
+
+    /// One coherent Account/Overview pose. Scenarios call this instead of assigning fields.
+    func pose(
+      phase: Phase,
+      sessionActivation: AccountSessionActivation?,
+      sessionDeviceID: String?,
+      summary: AccountSummary?,
+      fetchedAt: Date?,
+      fromCache: Bool,
+      isRefreshing: Bool,
+      banner: Banner?,
+      expiredMessage: String?,
+      localCollection: LocalCollection?,
+      localSamples: LocalQuotaSamples,
+      selectedTab: AppTab,
+      presentsSignIn: Bool,
+      identities: IdentitiesPhase,
+      providerStatus: [ProviderID: ProviderStatusReading],
+      skipsRestore: Bool,
+      isOfflineFixture: Bool,
+      displayClockIsFixed: Bool
+    ) {
+      self.skipsRestore = skipsRestore
+      self.isOfflineFixture = isOfflineFixture
+      self.displayClockIsFixed = displayClockIsFixed
+      self.sessionActivation = sessionActivation
+      self.sessionDeviceID = sessionDeviceID
+      self.phase = phase
+      self.summary = summary
+      self.fetchedAt = fetchedAt
+      self.fromCache = fromCache
+      self.isRefreshing = isRefreshing
+      self.banner = banner
+      self.expiredMessage = expiredMessage
+      self.localCollection = localCollection
+      self.localSamples = localSamples
+      self.selectedTab = selectedTab
+      self.presentsSignIn = presentsSignIn
+      self.identities = identities
+      self.providerStatus = providerStatus
+      usage.accountSummaryAccepted(summary, etag: nil)
+      providers.markNeedsSignIn(localCollection?.needsSignIn ?? [])
+    }
+
+    func applyFixtureRoute(_ route: FixtureRoute) {
+      switch route {
+      case .usageRoot:
+        selectedTab = .usage
+        usagePath = []
+      case .usageBreakdown:
+        selectedTab = .usage
+        usagePath = [.breakdown]
+      case .usagePatterns:
+        selectedTab = .usage
+        usagePath = [.patterns]
+      case .usageDay:
+        selectedTab = .usage
+        usagePath = []
+        if usage.activityDaySheet == nil {
+          let date = usage.activityToday
+          let headline =
+            usage.activityChart.days?.first { $0.date == date }
+            ?? UsageActivityChart.emptyDay(date: date)
+          let agents: ActivityDayAgentsPhase =
+            headline.totals.totalTokens > 0
+            ? .loaded(VisualFixtureContent.dayAgents()) : .empty
+          usage.pose(
+            daySheet: ActivityDaySheetState(
+              date: date,
+              headline: headline,
+              agents: agents
+            )
+          )
+        }
+      case .subscriptionDetail(let key):
+        selectedTab = .quota
+        overviewPath = [key]
+      case .settingsRoot:
+        selectedTab = .settings
+        settingsPath = []
+      case .settingsDevices:
+        selectedTab = .settings
+        settingsPath = [.devices]
+      case .settingsNotifications:
+        selectedTab = .settings
+        settingsPath = [.notifications]
+      case .settingsAppearance:
+        selectedTab = .settings
+        settingsPath = [.appearance]
+      case .settingsAbout:
+        selectedTab = .settings
+        settingsPath = [.about]
+      }
+    }
+  #endif
 }
 
 /// Which sides of the Overview merge answered on this phone.

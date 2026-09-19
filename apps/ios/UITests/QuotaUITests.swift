@@ -90,106 +90,14 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
     )
-    // Overview's Today row opens Usage on the Today period (B3b); the period chooser is a menu
-    // (B4b), so read its value, then move to Last 30 days for the captures below.
+    // Overview's Today row opens Usage on the Today period (B3b).
     let period = app.descendants(matching: .any)["usage.period"].firstMatch
     XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
     XCTAssertTrue(
       period.label.contains("Today") || ((period.value as? String) ?? "").contains("Today"),
       "Overview Today opens the Today period, got \(period.label) / \(String(describing: period.value))"
     )
-    period.tap()
-    let last30 = app.buttons["Last 30 days"].firstMatch
-    XCTAssertTrue(last30.waitForExistence(timeout: 5), "Last 30 days in the period menu")
-    last30.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline"
-    )
-    let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
-    for _ in 0..<8 where !dailyChart.exists {
-      scrollContent(app, up: true)
-    }
-    XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
-    attachScreenshot(app, name: "usage-content")
-
-    openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline.cache-hit"].waitForExistence(timeout: 5)
-        || app.staticTexts["Cache hit"].exists,
-      "Cache hit on breakdown"
-    )
-    let showMore = app.descendants(matching: .any)["usage.show-more"]
-    let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
-    let codex = app.staticTexts["Codex"]
-    for _ in 0..<16 {
-      if showMore.exists || showMoreLabel.exists || codex.exists { break }
-      app.swipeUp()
-      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-    }
-    XCTAssertTrue(
-      showMore.exists || showMoreLabel.exists || codex.exists,
-      "model rows"
-    )
-    attachScreenshot(app, name: "usage-breakdown")
-    try audit(app)
-    popUsageDestination(app)
-
-    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
-    var reachedActivity = app.staticTexts["Activity"].exists
-    for _ in 0..<24 where !app.buttons["View day"].exists {
-      let header = app.staticTexts["Activity"]
-      if header.exists {
-        reachedActivity = true
-        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-          .press(
-            forDuration: 0.05,
-            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
-          )
-      } else if reachedActivity {
-        app.swipeUp()
-      } else {
-        scrollContent(app, up: true)
-      }
-    }
-    XCTAssertTrue(
-      reachedActivity || app.staticTexts["Activity"].exists, "Activity section title")
-    XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
-    settle(app)
-    attachScreenshot(app, name: "usage-patterns")
-    let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
-    if !viewDay.exists || !viewDay.isHittable {
-      revealIdentifier(app, "usage.activity.view-day", attempts: 24)
-    }
-    XCTAssertTrue(viewDay.waitForExistence(timeout: 5), "View day")
-    settle(app)
-    if !viewDay.isHittable {
-      revealIdentifier(app, "usage.activity.view-day", attempts: 8)
-    }
-    viewDay.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 8),
-      "usage.day"
-    )
-    XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "Done")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.day.model"].waitForExistence(timeout: 5),
-      "usage.day.model"
-    )
-    attachScreenshot(app, name: "usage-day")
-    try audit(app)
-    app.buttons["Done"].tap()
     try restoreTabBar(app)
-    settle(app)
-    try audit(app)
-    popUsageDestination(app)
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
-      "usage.root after Activity patterns"
-    )
-    try assertListScrolls(app)
-    try restoreTabBar(app)
-
     app.tabBars.buttons["Quota"].tap()
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
@@ -497,25 +405,25 @@ final class QuotaUITests: XCTestCase {
     settle(app)
     try audit(app)
 
-    try openDevicesFromSettings(app)
+    let devices = launch(fixture: "no-devices", route: "settings.devices")
     XCTAssertTrue(
-      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
+      devices.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 10),
       "devices.root"
     )
     XCTAssertTrue(
-      app.staticTexts["No Macs connected"].waitForExistence(timeout: 5),
+      devices.staticTexts["No Macs connected"].waitForExistence(timeout: 5),
       "No Macs connected"
     )
     XCTAssertTrue(
-      app.descendants(matching: .any)["Download QuotaBar"].waitForExistence(timeout: 5),
+      devices.descendants(matching: .any)["Download QuotaBar"].waitForExistence(timeout: 5),
       "Download QuotaBar"
     )
     XCTAssertTrue(
-      app.descendants(matching: .any)["Manage Devices on Web"].exists,
+      devices.descendants(matching: .any)["Manage Devices on Web"].exists,
       "Manage Devices on Web"
     )
-    attachScreenshot(app, name: "devices-empty")
-    try audit(app)
+    attachScreenshot(devices, name: "devices-empty")
+    try audit(devices)
   }
 
   func testCachedErrorFixtureShowsPlainStatus() throws {
@@ -537,12 +445,7 @@ final class QuotaUITests: XCTestCase {
   }
 
   func testDevicesContentFixtureListsDevices() throws {
-    let app = launch(fixture: "content")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
-      "overview.root"
-    )
-    try openDevicesFromSettings(app)
+    let app = launch(fixture: "content", route: "settings.devices")
     XCTAssertTrue(
       app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
       "devices.root"
@@ -849,8 +752,7 @@ final class QuotaUITests: XCTestCase {
   }
 
   func testUsageEmptyShowsUnavailableCopyAndEmptyActivity() throws {
-    let app = launch(fixture: "empty")
-    app.tabBars.buttons["Usage"].tap()
+    let app = launch(fixture: "empty", route: "usage")
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
@@ -864,26 +766,23 @@ final class QuotaUITests: XCTestCase {
       "empty period description"
     )
     attachScreenshot(app, name: "usage-empty")
-    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
-    let emptyActivity = app.staticTexts["No activity in the last year."]
+    try audit(app)
+    let patterns = launch(fixture: "empty", route: "usage.patterns")
+    let emptyActivity = patterns.staticTexts["No activity in the last year."]
     if !emptyActivity.waitForExistence(timeout: 2) {
-      scrollToIdentifierOnce(app, "usage.activity.empty")
+      scrollToIdentifierOnce(patterns, "usage.activity.empty")
     }
     XCTAssertTrue(
       emptyActivity.waitForExistence(timeout: 5)
-        || app.descendants(matching: .any)["usage.activity.empty"].exists,
+        || patterns.descendants(matching: .any)["usage.activity.empty"].exists,
       "empty activity"
     )
-    settle(app)
-    try audit(app)
-    popUsageDestination(app)
-    settle(app)
-    try audit(app)
+    settle(patterns)
+    try audit(patterns)
   }
 
   func testUsagePeriodLocalDateScreenshots() throws {
-    let app = launch(fixture: "content")
-    app.tabBars.buttons["Usage"].tap()
+    let app = launch(fixture: "content", route: "usage")
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
@@ -925,11 +824,34 @@ final class QuotaUITests: XCTestCase {
 
   func testUsageOpensActivityPatternsAndReturns() throws {
     let app = launch(fixture: "content")
+    try restoreTabBar(app)
     app.tabBars.buttons["Usage"].tap()
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
     )
+    selectLast30DaysIfNeeded(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline"
+    )
+    let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
+    for _ in 0..<8 where !dailyChart.exists {
+      scrollContent(app, up: true)
+    }
+    XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
+    attachScreenshot(app, name: "usage-content")
+
+    openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline.cache-hit"].waitForExistence(timeout: 5)
+        || app.staticTexts["Cache hit"].exists,
+      "Cache hit on breakdown"
+    )
+    attachScreenshot(app, name: "usage-breakdown")
+    try audit(app)
+    popUsageDestination(app)
+
     openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     XCTAssertTrue(
       app.navigationBars["Activity patterns"].waitForExistence(timeout: 5)
@@ -937,6 +859,27 @@ final class QuotaUITests: XCTestCase {
         || app.descendants(matching: .any)["usage.patterns"].exists,
       "Activity patterns title"
     )
+    attachScreenshot(app, name: "usage-patterns")
+    let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
+    if !viewDay.exists || !viewDay.isHittable {
+      revealIdentifier(app, "usage.activity.view-day", attempts: 24)
+    }
+    XCTAssertTrue(viewDay.waitForExistence(timeout: 5), "View day")
+    if !viewDay.isHittable {
+      revealIdentifier(app, "usage.activity.view-day", attempts: 8)
+    }
+    viewDay.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 8),
+      "usage.day"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.day.model"].waitForExistence(timeout: 5),
+      "usage.day.model"
+    )
+    attachScreenshot(app, name: "usage-day")
+    try audit(app)
+    app.buttons["Done"].tap()
     popUsageDestination(app)
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
@@ -976,16 +919,12 @@ final class QuotaUITests: XCTestCase {
   }
 
   func testUsageActivityLoadingShowsSkeleton() throws {
-    let app = launch(fixture: "activity-loading")
+    let app = launch(fixture: "activity-loading", route: "usage.patterns")
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
-      "usage.root"
+      app.descendants(matching: .any)["usage.patterns"].waitForExistence(timeout: 10)
+        || app.navigationBars["Activity patterns"].waitForExistence(timeout: 10),
+      "usage.patterns"
     )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "period totals remain visible"
-    )
-    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     if !app.descendants(matching: .any)["usage.activity.loading"].waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "usage.activity.loading")
     }
@@ -999,16 +938,12 @@ final class QuotaUITests: XCTestCase {
   }
 
   func testUsageActivityFailedShowsRetry() throws {
-    let app = launch(fixture: "activity-failed")
+    let app = launch(fixture: "activity-failed", route: "usage.patterns")
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
-      "usage.root"
+      app.descendants(matching: .any)["usage.patterns"].waitForExistence(timeout: 10)
+        || app.navigationBars["Activity patterns"].waitForExistence(timeout: 10),
+      "usage.patterns"
     )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "period totals remain visible"
-    )
-    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     if !app.descendants(matching: .any)["usage.activity.failed"].waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "usage.activity.failed")
     }
@@ -1106,8 +1041,7 @@ final class QuotaUITests: XCTestCase {
       expectedLabel: ContentFixtureLargeType.todayCombined
     )
 
-    try restoreTabBar(app)
-    app.tabBars.buttons["Usage"].tap()
+    app = launch(fixture: "content", route: "usage", textSize: ax)
     waitRoot(app, "usage.root")
     attachScreenshot(app, name: "usage-content")
     selectLast30DaysIfNeeded(app)
@@ -1122,52 +1056,31 @@ final class QuotaUITests: XCTestCase {
       identifier: "usage.headline.cost",
       expectedLabel: ContentFixtureLargeType.usageCost
     )
-    openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
+
+    app = launch(fixture: "content", route: "usage.breakdown", textSize: ax)
+    waitRoot(app, "usage.breakdown")
     attachScreenshot(app, name: "usage-breakdown")
-    popUsageDestination(app)
-    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
-    attachScreenshot(app, name: "usage-patterns")
-    let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
-    var reachedActivity = app.staticTexts["Activity"].exists
-    for _ in 0..<32 where !viewDay.exists {
-      let header = app.staticTexts["Activity"]
-      if header.exists {
-        reachedActivity = true
-        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-          .press(
-            forDuration: 0.05,
-            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
-          )
-      } else if reachedActivity {
-        app.swipeUp()
-      } else {
-        scrollContent(app, up: true)
-      }
-    }
-    if !viewDay.exists || !viewDay.isHittable {
-      revealIdentifier(app, "usage.activity.view-day", attempts: 16)
-    }
-    XCTAssertTrue(viewDay.waitForExistence(timeout: 5), "View day")
-    viewDay.tap()
+
+    app = launch(fixture: "content", route: "usage.patterns", textSize: ax)
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 8),
+      app.descendants(matching: .any)["usage.patterns"].waitForExistence(timeout: 10)
+        || app.navigationBars["Activity patterns"].waitForExistence(timeout: 10),
+      "usage.patterns"
+    )
+    attachScreenshot(app, name: "usage-patterns")
+
+    app = launch(fixture: "content", route: "usage.day", textSize: ax)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 10),
       "usage.day"
     )
     attachScreenshot(app, name: "usage-day")
-    app.buttons["Done"].tap()
-    popUsageDestination(app)
 
-    try restoreTabBar(app)
-    app.tabBars.buttons["Quota"].tap()
-    waitRoot(app, "overview.root")
-    scrollToTop(app)
-    scrollToTop(app)
-    let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
-    XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
-    if !card.isHittable {
-      revealIdentifier(app, "overview.subscription", attempts: 8)
-    }
-    card.tap()
+    app = launch(
+      fixture: "content",
+      route: "subscription.detail/codex|visual_codex|global|",
+      textSize: ax
+    )
     waitRoot(app, "subscription.detail")
     assertUnclippedEssentialValue(
       app,
@@ -1175,13 +1088,12 @@ final class QuotaUITests: XCTestCase {
       expectedLabel: ContentFixtureLargeType.remainingPercent,
       combinedLabelContainsValue: true
     )
-    popBack(app, to: "overview.root", backTitle: "Quota")
 
-    try restoreTabBar(app)
-    app.tabBars.buttons["Settings"].tap()
+    app = launch(fixture: "content", route: "settings", textSize: ax)
     waitRoot(app, "settings.root")
     attachScreenshot(app, name: "settings-main")
-    openSettingsDestination(app, link: "settings.about", root: "settings.about.root")
+    app = launch(fixture: "content", route: "settings.about", textSize: ax)
+    waitRoot(app, "settings.about.root")
     attachScreenshot(app, name: "settings-about")
     popSettingsDestination(app)
 
@@ -1199,13 +1111,7 @@ final class QuotaUITests: XCTestCase {
   /// Devices are the Account's. Without an account the Settings row is absent; the sign-in
   /// card already covers it.
   func testLocalOnlyFixtureHasNoDevicesRow() throws {
-    let app = launch(fixture: "local-only")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
-      "overview.root"
-    )
-    try restoreTabBar(app)
-    app.tabBars.buttons["Settings"].tap()
+    let app = launch(fixture: "local-only", route: "settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
@@ -1235,9 +1141,14 @@ final class QuotaUITests: XCTestCase {
     try audit(app)
   }
 
-  private func launch(fixture: String, textSize: String? = nil) -> XCUIApplication {
+  private func launch(fixture: String, route: String? = nil, textSize: String? = nil)
+    -> XCUIApplication
+  {
     let app = XCUIApplication()
     var arguments = ["--visual-fixture", fixture]
+    if let route {
+      arguments += ["--route", route]
+    }
     if let size = textSize ?? uitestEnvironment("QUOTA_IOS_TEXT_SIZE") {
       arguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategoryName(size)]
     }

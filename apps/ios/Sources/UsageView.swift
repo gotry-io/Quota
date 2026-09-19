@@ -128,17 +128,13 @@ struct UsageView: View {
   @ViewBuilder
   private var destinations: some View {
     Section {
-      NavigationLink {
-        UsageBreakdownDestination(model: model)
-      } label: {
+      NavigationLink(value: UsageDestination.breakdown) {
         Text("By provider / By model")
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.open-breakdown")
       }
 
-      NavigationLink {
-        UsagePatternsView(model: model)
-      } label: {
+      NavigationLink(value: UsageDestination.patterns) {
         Text("Activity patterns")
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.open-patterns")

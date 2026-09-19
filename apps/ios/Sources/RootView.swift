@@ -67,13 +67,21 @@ struct RootView: View {
       }
 
       Tab(AppTab.usage.title, systemImage: AppTab.usage.systemImage, value: AppTab.usage) {
-        NavigationStack {
+        NavigationStack(path: $model.usagePath) {
           UsageView(model: model)
+            .navigationDestination(for: UsageDestination.self) { destination in
+              switch destination {
+              case .breakdown:
+                UsageBreakdownDestination(model: model)
+              case .patterns:
+                UsagePatternsView(model: model)
+              }
+            }
         }
       }
 
       Tab(AppTab.settings.title, systemImage: AppTab.settings.systemImage, value: AppTab.settings) {
-        NavigationStack {
+        NavigationStack(path: $model.settingsPath) {
           SettingsView(model: model)
         }
       }

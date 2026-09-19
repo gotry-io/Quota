@@ -136,7 +136,10 @@ struct QuotaWindowBlock: View {
   var stateLabel: String? = nil
   var presentation: QuotaWindowPresentation = .detail
   /// There is no Rust on iOS, so this app derives pace itself from the reading it was handed.
-  var now: Date = Date()
+  var now: Date? = nil
+  @Environment(\.displayClock) private var displayClock
+
+  private var currentNow: Date { now ?? displayClock.now() }
 
   var body: some View {
     Group {
@@ -186,7 +189,7 @@ struct QuotaWindowBlock: View {
       remainingValue
       meter(height: QuotaDesign.Layout.meterHeight)
       TimelineView(.periodic(from: .now, by: 60)) { context in
-        countdownRow(now: context.date)
+        countdownRow(now: now ?? (displayClock.isFixed ? displayClock.now() : context.date))
       }
       if let paceHeadline {
         Text(paceHeadline)
@@ -272,14 +275,24 @@ struct QuotaWindowBlock: View {
   private func countdownRow(now: Date) -> some View {
     switch QuotaFormat.countdown(resetsAt: window.resetsAt, now: now) {
     case .live(let end):
-      // The shared reset copy says "Resets in …"; the live timer keeps the same words.
-      (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
-        .font(QuotaDesign.Typography.meta.monospacedDigit())
-        .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier(remainingIdentifier)
-        .accessibilityLabel(
-          Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+      if displayClock.isFixed {
+        if let text = QuotaFormat.resetTime(end, now: now) {
+          Text(text)
+            .font(QuotaDesign.Typography.meta)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(remainingIdentifier)
+        }
+      } else {
+        // The shared reset copy says "Resets in …"; the live timer keeps the same words.
+        (Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+          .font(QuotaDesign.Typography.meta.monospacedDigit())
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier(remainingIdentifier)
+          .accessibilityLabel(
+            Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
+      }
     case .copy(let text):
       Text(text)
         .font(QuotaDesign.Typography.meta)
@@ -294,14 +307,14 @@ struct QuotaWindowBlock: View {
   /// A reading that is not current says so even when it still carries a reset time,
   /// because the reset it names may already have passed.
   private var supportLine: String? {
-    let reset = window.resetsAt.flatMap { QuotaFormat.resetTime($0) }
+    let reset = window.resetsAt.flatMap { QuotaFormat.resetTime($0, now: currentNow) }
     guard let stateLabel else { return reset }
     return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
 
   /// Whether this window's rate lasts to its reset, derived on this device.
   private var pace: QuotaPace {
-    QuotaPace.evaluate(window.paceReading, now: now)
+    QuotaPace.evaluate(window.paceReading, now: currentNow)
   }
 
   private var paceHeadline: String? {
