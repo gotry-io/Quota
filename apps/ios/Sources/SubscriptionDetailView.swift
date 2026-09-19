@@ -58,7 +58,7 @@ struct SubscriptionDetailContent: Equatable {
             resetsAt: window.resetsAt,
             cadenceSeconds: window.durationSeconds
           ),
-          samples: samples.samples(provider: snapshot.provider, windowID: window.id),
+          samples: samples.samples(for: subscription, windowID: window.id),
           now: now,
           utcOffsetSeconds: utcOffsetSeconds
         )

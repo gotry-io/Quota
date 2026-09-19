@@ -164,26 +164,18 @@ struct SubscriptionDetailContentTests {
     )
     var samples = LocalQuotaSamples()
     let start = now.addingTimeInterval(2_700 - 18_000)
-    for (offset, used) in [(3_600.0, 20.0), (7_200.0, 38.0), (12_540.0, 58.0)] {
-      samples.windows.append(
-        LocalQuotaSamples.Entry(
-          provider: .codex,
-          windowID: "five_hour",
-          samples: [
-            QuotaSample(
-              resetsAt: now.addingTimeInterval(2_700),
-              observedAt: start.addingTimeInterval(offset),
-              usedPercent: used
-            )
-          ]
-        )
-      )
-    }
     samples.windows = [
       LocalQuotaSamples.Entry(
+        subscriptionKey: LocalQuotaSamples.key(for: local),
         provider: .codex,
         windowID: "five_hour",
-        samples: samples.windows.flatMap(\.samples)
+        samples: [(3_600.0, 20.0), (7_200.0, 38.0), (12_540.0, 58.0)].map { offset, used in
+          QuotaSample(
+            resetsAt: now.addingTimeInterval(2_700),
+            observedAt: start.addingTimeInterval(offset),
+            usedPercent: used
+          )
+        }
       )
     ]
 

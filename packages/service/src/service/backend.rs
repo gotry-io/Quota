@@ -41,7 +41,7 @@ use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
-    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, QuotaSamplesByProvider, StateStore,
+    DiagnosticAttemptCompletion, DiagnosticAttemptHandle, QuotaSamplesBySubscription, StateStore,
     StoredUsageSession, UsageOutboxEntry, now_rfc3339,
 };
 use crate::usage::{
@@ -2621,9 +2621,12 @@ impl NativeBackend {
             ) else {
                 continue;
             };
+            let Some(key) = snapshot_subscription_key(snapshot) else {
+                continue;
+            };
             let _ = self
                 .state
-                .record_quota_samples(provider, observed_at, windows, now);
+                .record_quota_samples(&key, provider, observed_at, windows, now);
         }
     }
 
@@ -4102,15 +4105,15 @@ fn invalid_request() -> BackendError {
 }
 
 fn quota_history_result(
-    samples: QuotaSamplesByProvider,
+    samples: QuotaSamplesBySubscription,
     utc_offset_seconds: i32,
 ) -> QuotaHistoryResult {
     QuotaHistoryResult {
-        samples_by_provider: samples
+        samples_by_subscription: samples
             .into_iter()
-            .map(|(provider, windows)| {
+            .map(|(subscription_key, windows)| {
                 (
-                    provider,
+                    subscription_key,
                     windows
                         .into_iter()
                         .map(|(window_id, samples)| {
@@ -4136,6 +4139,22 @@ fn quota_history_result(
             .collect(),
         utc_offset_seconds,
     }
+}
+
+/// The local opaque key for a reading this device just took. Source-scoped snapshots use
+/// `local` because collection on this Mac is always that source.
+fn snapshot_subscription_key(snapshot: &Value) -> Option<String> {
+    let provider = snapshot.get("provider")?.as_str()?;
+    let account = snapshot.get("account")?;
+    let fingerprint = account.get("fingerprint")?.as_str()?;
+    let scope = account.get("fingerprint_scope")?.as_str()?;
+    let source_id = (scope == "source").then_some("local");
+    Some(QuotaOverviewIdentity::selector_for(
+        provider,
+        fingerprint,
+        scope,
+        source_id,
+    ))
 }
 
 /// The instant a local date begins, as the hour comparison in `usage_period_rows` reads it.
@@ -4518,12 +4537,12 @@ const LOCAL_SOURCE_DISPLAY_NAME: &str = "This Mac";
 /// (ADR 0042).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct LocalQuotaHistory {
-    pub(crate) samples: QuotaSamplesByProvider,
+    pub(crate) samples: QuotaSamplesBySubscription,
     pub(crate) utc_offset_seconds: i32,
 }
 
 impl LocalQuotaHistory {
-    pub(crate) fn new(samples: QuotaSamplesByProvider, now: DateTime<Utc>) -> Self {
+    pub(crate) fn new(samples: QuotaSamplesBySubscription, now: DateTime<Utc>) -> Self {
         let timezone = iana_time_zone::get_timezone()
             .ok()
             .and_then(|name| Tz::from_str(&name).ok())
@@ -4537,8 +4556,8 @@ impl LocalQuotaHistory {
         }
     }
 
-    fn restate(&self, snapshot: &Value, provider: &str, now: DateTime<Utc>) -> Value {
-        let Some(samples) = self.samples.get(provider) else {
+    fn restate(&self, snapshot: &Value, subscription_key: &str, now: DateTime<Utc>) -> Value {
+        let Some(samples) = self.samples.get(subscription_key) else {
             return snapshot.clone();
         };
         snapshot_with_history(snapshot, samples, now, self.utc_offset_seconds)
@@ -4561,17 +4580,22 @@ fn overview_item(
     let stale = !snapshot_is_current(snapshot, now);
     // Pace is derived from the reading, and this service is the one runtime that derives it
     // for QuotaBar: the app prints the answer it is handed rather than keeping a second rule.
+    let identity = QuotaOverviewIdentity {
+        provider,
+        fingerprint,
+        scope: scope.clone(),
+        source_id: (scope == "source").then(|| source_id.to_owned()),
+    };
     let paced = match history {
-        Some(history) => history.restate(&snapshot_with_pace(snapshot, now), &provider, now),
+        Some(history) => history.restate(
+            &snapshot_with_pace(snapshot, now),
+            &identity.selector(),
+            now,
+        ),
         None => snapshot_with_pace(snapshot, now),
     };
     Some(QuotaOverviewItem {
-        identity: QuotaOverviewIdentity {
-            provider,
-            fingerprint,
-            scope: scope.clone(),
-            source_id: (scope == "source").then(|| source_id.to_owned()),
-        },
+        identity,
         snapshot: paced.clone(),
         sources: vec![QuotaOverviewSource {
             source_id: source_id.to_owned(),
@@ -9087,8 +9111,10 @@ mod tests {
         let five_hour_reset = (now + Duration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let weekly_reset = (now + Duration::days(3)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let monthly_reset = (now + Duration::days(20)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let key = QuotaOverviewIdentity::selector_for("codex", "account_test", "global", None);
         state
             .record_quota_samples(
+                &key,
                 "codex",
                 &observed(older),
                 &[window("five_hour", 10.0, &five_hour_reset, 18_000)],
@@ -9097,6 +9123,7 @@ mod tests {
             .expect("older five_hour");
         state
             .record_quota_samples(
+                &key,
                 "codex",
                 &observed(recent),
                 &[
@@ -9109,6 +9136,7 @@ mod tests {
             .expect("recent windows");
         state
             .record_quota_samples(
+                &key,
                 "codex",
                 &observed(recent + Duration::minutes(5)),
                 &[window("five_hour", 40.0, &five_hour_reset, 18_000)],
@@ -9119,6 +9147,7 @@ mod tests {
         // prunes it; the read still cuts it.
         state
             .seed_quota_samples(std::iter::once((
+                key.clone(),
                 "codex",
                 "five_hour",
                 now + Duration::hours(2),
@@ -9135,9 +9164,9 @@ mod tests {
         );
         let since = (now - Duration::days(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let value = backend.quota_history(&since).expect("history");
-        let samples = value["samples_by_provider"]["codex"]
+        let samples = value["samples_by_subscription"][&key]
             .as_object()
-            .expect("codex");
+            .expect("subscription");
         let five_hour = samples["five_hour"].as_array().expect("five_hour");
         assert_eq!(five_hour.len(), 1);
         assert_eq!(five_hour[0]["used_percent"], 40.0);
@@ -9147,7 +9176,7 @@ mod tests {
 
         let far_past = (now - Duration::days(40)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let retained = backend.quota_history(&far_past).expect("retained");
-        let five_hour = retained["samples_by_provider"]["codex"]["five_hour"]
+        let five_hour = retained["samples_by_subscription"][&key]["five_hour"]
             .as_array()
             .expect("retained five_hour");
         assert_eq!(five_hour.len(), 2);

@@ -249,7 +249,8 @@ provider only.
 
 ### Quota
 
-One card per provider in the detail column. Each card uses `quotaCardSurface()` (glass on macOS 26,
+One card per subscription in the detail column. Several accounts of one provider each have their
+own card; the provider filter still narrows to that provider. Each card uses `quotaCardSurface()` (glass on macOS 26,
 `settingsGroupFill` otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
 the catalog brand icon and provider name as the title, with the remaining percent of the primary
 window trailing as a 28pt semibold rounded numeral and a small **remaining** caption; then the

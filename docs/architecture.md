@@ -150,9 +150,11 @@ the website derive their own, and Relay neither stores nor carries one.
 
 Drawing that rate as a line needs more than one reading, so the device that takes them keeps them
 ([ADR 0042](decisions/0042-quota-history-is-local-samples.md)). QuotaBar's service writes one
-`quota_samples` row per window per collection into `cache.sqlite`; Quota iOS keeps the same journal
-as a file in its own container. Both are kept thirty days, both are folded by one rule —
-`history` in `packages/service` and `QuotaHistory` in `packages/apple-shared`, judged by
+`quota_samples` row per subscription per window per collection into `cache.sqlite`, keyed first by
+the local opaque subscription selector so two accounts of one provider keep two histories;
+Quota iOS keeps the same journal as a file in its own container. Both are kept thirty days, both
+are folded by one rule — `history` in `packages/service` and `QuotaHistory` in
+`packages/apple-shared`, judged by
 `packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
 contract names a sample, Relay gains no route, and the website shows no history. A reading that
 arrived from another device carries no history, because this device has no samples of it.

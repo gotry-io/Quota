@@ -221,8 +221,8 @@ func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
   let data = Data(
     #"""
     {
-      "samples_by_provider": {
-        "codex": {
+      "samples_by_subscription": {
+        "ccfc96629357": {
           "five_hour": [
             {
               "resets_at": "2026-09-05T12:00:00Z",
@@ -238,8 +238,8 @@ func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
   )
   let history = try QuotaWireCodec.makeDecoder().decode(LocalServiceQuotaHistory.self, from: data)
   #expect(history.utcOffsetSeconds == -25_200)
-  #expect(history.samplesByProvider["codex"]?["five_hour"]?.count == 1)
-  #expect(history.samplesByProvider["codex"]?["five_hour"]?.first?.usedPercent == 40)
+  #expect(history.samplesBySubscription["ccfc96629357"]?["five_hour"]?.count == 1)
+  #expect(history.samplesBySubscription["ccfc96629357"]?["five_hour"]?.first?.usedPercent == 40)
 
   let extra = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(

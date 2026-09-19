@@ -349,12 +349,13 @@ struct LocalQuotaSamplesTests {
     samples.record([snapshot(usedPercent: 40, observedAt: now.addingTimeInterval(-3_600))], now: now)
     samples.record([snapshot(usedPercent: 40, observedAt: now.addingTimeInterval(-1_800))], now: now)
     samples.record([snapshot(usedPercent: 52, observedAt: now)], now: now)
+    let key = LocalQuotaSamples.key(for: snapshot(usedPercent: 52, observedAt: now))
     #expect(
-      samples.samples(provider: .codex, windowID: "five_hour").map(\.usedPercent) == [40, 52]
+      samples.samples(subscriptionKey: key, windowID: "five_hour").map(\.usedPercent) == [40, 52]
     )
 
     samples.prune(now: now.addingTimeInterval(Double(QuotaHistory.retentionDays) * 86_400 + 1))
-    #expect(samples.samples(provider: .codex, windowID: "five_hour").isEmpty)
+    #expect(samples.samples(subscriptionKey: key, windowID: "five_hour").isEmpty)
     #expect(samples.windows.isEmpty)
   }
 
@@ -365,7 +366,68 @@ struct LocalQuotaSamplesTests {
     #expect(samples.windows.isEmpty)
   }
 
+  @Test
+  func twoAccountsOfOneProviderKeepSeparateHistoriesAtEqualTimes() {
+    var samples = LocalQuotaSamples()
+    let first = snapshot(fingerprint: "account_a", usedPercent: 20, observedAt: now)
+    let second = snapshot(fingerprint: "account_b", usedPercent: 80, observedAt: now)
+    samples.record([first, second], now: now)
+    #expect(
+      samples.samples(subscriptionKey: LocalQuotaSamples.key(for: first), windowID: "five_hour")
+        .map(\.usedPercent) == [20]
+    )
+    #expect(
+      samples.samples(subscriptionKey: LocalQuotaSamples.key(for: second), windowID: "five_hour")
+        .map(\.usedPercent) == [80]
+    )
+    #expect(LocalQuotaSamples.key(for: first) != LocalQuotaSamples.key(for: second))
+  }
+
+  @Test
+  func aFileWrittenWithoutASubscriptionKeyIsDiscardedOnLoad() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("quota-samples-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = FileLocalQuotaSampleStore(directory: directory)
+    let legacy = Data(
+      #"""
+      {
+        "windows": [
+          {
+            "provider": "codex",
+            "windowID": "five_hour",
+            "samples": [
+              {
+                "resetsAt": "2026-09-05T12:00:00Z",
+                "observedAt": "2026-09-05T09:30:00Z",
+                "usedPercent": 40
+              }
+            ]
+          }
+        ]
+      }
+      """#.utf8
+    )
+    try legacy.write(to: store.fileURL)
+    #expect(try store.load() == nil)
+    #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+
+    var samples = LocalQuotaSamples()
+    samples.record([snapshot(usedPercent: 52, observedAt: now)], now: now)
+    try store.save(samples)
+    let loaded = try #require(try store.load())
+    #expect(loaded.schemaVersion == LocalQuotaSamples.schemaVersion)
+    #expect(
+      loaded.samples(
+        subscriptionKey: LocalQuotaSamples.key(for: snapshot(usedPercent: 52, observedAt: now)),
+        windowID: "five_hour"
+      ).map(\.usedPercent) == [52]
+    )
+  }
+
   private func snapshot(
+    fingerprint: String = "fp_samples",
     usedPercent: Double,
     observedAt: Date,
     resetsAt: Date? = Date(timeIntervalSince1970: 1_786_726_800)
@@ -373,7 +435,7 @@ struct LocalQuotaSamplesTests {
     QuotaSnapshot(
       provider: .codex,
       account: QuotaAccount(
-        fingerprint: "fp_samples",
+        fingerprint: fingerprint,
         label: nil,
         plan: nil,
         fingerprintScope: .global

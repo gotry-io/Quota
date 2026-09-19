@@ -41,6 +41,25 @@ struct QuotaHistoryConformanceTests {
         #expect(abs(window.peakUsedPercent - want.peakUsedPercent) < 1e-6, "\(testCase.name)")
         #expect(window.isCurrent == want.isCurrent, "\(testCase.name)")
       }
+      if let peer = testCase.peer {
+        let peerFolded = QuotaHistory.fold(
+          window: QuotaHistoryReading(
+            resetsAt: testCase.window.resetsAt,
+            cadenceSeconds: testCase.window.durationSeconds
+          ),
+          samples: peer.samples,
+          now: testCase.now,
+          utcOffsetSeconds: testCase.utcOffsetSeconds
+        )
+        let peerHistory = try #require(peerFolded, "\(testCase.name) peer")
+        #expect(peerHistory.points.map(\.usedPercent) != history.points.map(\.usedPercent))
+        if let want = peer.expected {
+          #expect(peerHistory.points.count == want.points.count, "\(testCase.name) peer")
+          for (point, expectedPoint) in zip(peerHistory.points, want.points) {
+            #expect(abs(point.usedPercent - expectedPoint.usedPercent) < 1e-6)
+          }
+        }
+      }
     }
   }
 
@@ -99,6 +118,12 @@ private struct HistoryFixture: Decodable {
     var now: Date
     var utcOffsetSeconds: Int
     var window: Window
+    var samples: [QuotaSample]
+    var expected: Expected?
+    var peer: Peer?
+  }
+
+  struct Peer: Decodable {
     var samples: [QuotaSample]
     var expected: Expected?
   }

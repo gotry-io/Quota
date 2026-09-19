@@ -273,6 +273,19 @@ mod tests {
             let offset = case["utc_offset_seconds"].as_i64().expect("offset") as i32;
             let folded = window_history(&case["window"], &samples(&case["samples"]), now, offset);
             same(&folded.unwrap_or(Value::Null), &case["expected"], name);
+            if let Some(peer) = case.get("peer") {
+                let peer_folded =
+                    window_history(&case["window"], &samples(&peer["samples"]), now, offset);
+                same(
+                    &peer_folded.unwrap_or(Value::Null),
+                    &peer["expected"],
+                    &format!("{name} peer"),
+                );
+                assert_ne!(
+                    case["samples"][0]["used_percent"], peer["samples"][0]["used_percent"],
+                    "{name}: peer values must differ"
+                );
+            }
         }
     }
 

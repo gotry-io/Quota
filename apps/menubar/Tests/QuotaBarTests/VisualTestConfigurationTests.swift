@@ -148,8 +148,8 @@
     )
     let model = configuration.makeModel()
     let samples = try #require(model.quotaHistorySamples)
-    for provider in ["codex", "claude", "grok"] {
-      let windows = try #require(samples.samplesByProvider[provider])
+    #expect(samples.samplesBySubscription.count >= 3)
+    for windows in samples.samplesBySubscription.values {
       #expect(windows.keys.count >= 2)
       for points in windows.values {
         let dates = points.map(\.observedAt)

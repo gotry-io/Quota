@@ -378,11 +378,12 @@ pub struct QuotaHistorySample {
 }
 
 /// This Mac's stored quota samples since `since`, plus the offset that places them in the
-/// reader's day. The holder of the samples folds them (ADR 0042).
+/// reader's day. The holder of the samples folds them (ADR 0042). Samples are keyed by the
+/// local subscription selector, not by provider, so two accounts of one provider stay apart.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaHistoryResult {
-    pub samples_by_provider: BTreeMap<String, BTreeMap<String, Vec<QuotaHistorySample>>>,
+    pub samples_by_subscription: BTreeMap<String, BTreeMap<String, Vec<QuotaHistorySample>>>,
     pub utc_offset_seconds: i32,
 }
 
@@ -572,6 +573,45 @@ pub struct QuotaOverviewIdentity {
     pub fingerprint: String,
     pub scope: String,
     pub source_id: Option<String>,
+}
+
+impl QuotaOverviewIdentity {
+    /// The local opaque key both Apple clients already compute as `SubscriptionSelector`.
+    ///
+    /// First 12 lowercase hex characters of SHA-256 of
+    /// `provider|fingerprint|scope|source_id`, with an empty source id when the subscription
+    /// is global. It never leaves the device: quota samples stay in `cache.sqlite` (ADR 0042).
+    pub fn selector(&self) -> String {
+        Self::selector_for(
+            &self.provider,
+            &self.fingerprint,
+            &self.scope,
+            self.source_id.as_deref(),
+        )
+    }
+
+    pub fn selector_for(
+        provider: &str,
+        fingerprint: &str,
+        scope: &str,
+        source_id: Option<&str>,
+    ) -> String {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write;
+        let preimage = format!(
+            "{}|{}|{}|{}",
+            provider,
+            fingerprint,
+            scope,
+            source_id.unwrap_or("")
+        );
+        let digest = Sha256::digest(preimage.as_bytes());
+        let mut hex = String::with_capacity(12);
+        for byte in digest.iter().take(6) {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        hex
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -942,6 +982,30 @@ mod tests {
                 "seq": 1
             }))
             .is_err()
+        );
+    }
+
+    /// The local sample key is the same 12-character selector Quota iOS and QuotaBar already
+    /// compute, so a row written here is the row those surfaces look up.
+    #[test]
+    fn subscription_selector_matches_the_apple_clients() {
+        assert_eq!(
+            QuotaOverviewIdentity::selector_for("codex", "account_test", "global", None),
+            "ccfc96629357"
+        );
+        assert_eq!(
+            QuotaOverviewIdentity::selector_for("grok", "fp-source", "source", Some("local")),
+            "bf475adb085d"
+        );
+        assert_eq!(
+            QuotaOverviewIdentity {
+                provider: "codex".into(),
+                fingerprint: "account_test".into(),
+                scope: "global".into(),
+                source_id: None,
+            }
+            .selector(),
+            QuotaOverviewIdentity::selector_for("codex", "account_test", "global", Some(""))
         );
     }
 }
