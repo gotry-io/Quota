@@ -30,6 +30,14 @@ Core rules:
 6. Widgets render only the non-secret App Group snapshot. They never authenticate, call Relay, or
    invent a second data path.
 
+## Tokens
+
+Colour roles, remaining-quota bands, spacing, and radii come from
+[`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
+`QuotaBrand`, `QuotaTone`, and `QuotaTheme` read the generated Swift. iOS maps
+`text.primary` / `text.meta` to system labels, overrides light `text.secondary` for
+contrast, and uses card radius 20.
+
 ## Design system
 
 Layout tokens, type roles, and content components live in `apps/ios/Sources/Design/`. Colors stay

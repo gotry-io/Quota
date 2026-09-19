@@ -66,6 +66,7 @@ apps/web/                 Public site and authenticated account UI
 packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, brand marks, and provider web-session and Keychain modules
 packages/apple-shared/    Foundation-only Apple presentation, alerting, alert delivery, and observation-merge semantics
 packages/provider/        Language-neutral provider catalog and JSON Schema
+packages/design-tokens/   Language-neutral colour, spacing, and radius tokens
 packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
 packages/quota-model/     Relay/Web runtime-neutral quota and pricing models
@@ -75,7 +76,8 @@ docs/                     Architecture, security, provider, and decision records
 
 Provider registration starts in `packages/provider/catalog.json`; run
 `pnpm generate:provider-catalog` after a catalog change to regenerate the Rust, Swift, and
-TypeScript provider IDs. Wire JSON uses `snake_case`. OAuth and Device control remain on v2, while
+TypeScript provider IDs. Colour, remaining-quota bands, spacing, and radii start in
+`packages/design-tokens/tokens.json`; run `pnpm generate:design-tokens` after a token change. Wire JSON uses `snake_case`. OAuth and Device control remain on v2, while
 quota, Usage, and Account summary use managed-data v6, the only data contract Relay serves. Bundled
 private IPC v1 changes atomically with QuotaBar; the local Usage report and state snapshots ride
 that version rather than naming their own. Summary totals are total, input, output, cache-read

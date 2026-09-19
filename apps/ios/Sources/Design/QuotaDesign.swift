@@ -1,8 +1,9 @@
+import QuotaPresentation
 import SwiftUI
 
 enum QuotaDesign {
   enum Layout {
-    static let cardCornerRadius: CGFloat = 20
+    static let cardCornerRadius: CGFloat = DesignTokens.Radius.card
     static let cardPadding: CGFloat = 16
     static let sectionSpacing: CGFloat = 24
     static let rowSpacing: CGFloat = 12

@@ -191,7 +191,10 @@ in the Web UI.
 
 ## Tokens
 
-Tokens are defined in `src/app.css` and must remain the source used by the implementation.
+Colour roles, remaining-quota bands, spacing, and radii come from
+[`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
+`src/app.css` imports the generated CSS custom properties; do not hand-copy those values.
+Web card radius is 16. The table below is this surface's mapping, not a second palette.
 
 ### Color
 
