@@ -5,20 +5,6 @@ import QuotaWire
 
 /// How far back Dashboard used to plot used-percent charts.
 ///
-/// Persisted as `dashboard.range`. The Quota page no longer filters remaining history by
-/// range (ADR 0042 keeps thirty days of samples). The key is left unread so a shipped value
-/// is not rewritten.
-enum DashboardRange: String, CaseIterable, Identifiable, Sendable {
-  case today
-  case sevenDays = "seven_days"
-  case thirtyDays = "thirty_days"
-
-  static let storageKey = "dashboard.range"
-  static let fallback = DashboardRange.sevenDays
-
-  var id: Self { self }
-}
-
 /// Copy the Quota workspace prints for remaining history and source provenance.
 enum DashboardQuotaCopy {
   static let remainingHistory = "Remaining history"
@@ -129,7 +115,13 @@ final class DashboardModel {
   /// chooses otherwise.
   private let preferredProvider: ProviderID?
   /// Account when an account summary is available and Usage sync is on; otherwise This Mac.
-  var usageSource: UsageSource = .account
+  var usageSource: UsageSource = .account {
+    didSet {
+      if usageSource != oldValue {
+        usage.setUsageSource(usageSource)
+      }
+    }
+  }
 
   init(
     model: MenuBarViewModel,
@@ -140,6 +132,7 @@ final class DashboardModel {
     self.model = model
     self.preferredProvider = selection
     self.usageSource = usageSource
+    usage.setUsageSource(usageSource)
   }
 
   var sidebarProviders: [ProviderID] {
@@ -173,7 +166,7 @@ final class DashboardModel {
   }
 
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
-    usage.selectUsagePeriod(selection)
+    usage.selectUsagePeriod(selection, source: usageSource)
   }
 
   func usagePeriodTitle(now: Date) -> String {
@@ -469,10 +462,18 @@ final class DashboardModel {
 
   private func usageStatusWarning(detail: LocalServiceUsageDetail?, source: UsageSource) -> String?
   {
-    guard let detail, detail.incomplete || detail.detailsTruncated else { return nil }
-    return source == .local
-      ? "Some local Usage may be incomplete."
-      : "Some account Usage may be incomplete."
+    guard let detail else { return nil }
+    var parts: [String] = []
+    if detail.coverage?.truncatedByRetention == true {
+      parts.append("This range goes past what Quota still keeps.")
+    }
+    if detail.incomplete || detail.detailsTruncated {
+      parts.append(
+        source == .local
+          ? "Some local Usage may be incomplete."
+          : "Some account Usage may be incomplete.")
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
   }
 
   /// The reader's local midnight for `now`, using the offset the samples were folded with.

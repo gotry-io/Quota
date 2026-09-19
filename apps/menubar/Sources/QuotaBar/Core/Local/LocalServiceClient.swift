@@ -175,10 +175,12 @@ actor LocalServiceClient: LocalServiceServing {
     return state
   }
 
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail {
     let detail: LocalServiceUsageDetail = try await request(
       operation: "usage_period",
-      payload: UsagePeriodPayload(from: from, to: to)
+      payload: UsagePeriodPayload(from: from, to: to, source: source, timezone: timezone)
     )
     guard detail.isValid else {
       throw LocalServiceClientError.invalidMessage
@@ -849,6 +851,8 @@ private struct SetUsageUploadPayload: Encodable { let enabled: Bool }
 private struct UsagePeriodPayload: Encodable {
   let from: String
   let to: String
+  let source: UsageSource
+  let timezone: String
 }
 private struct QuotaHistoryPayload: Encodable {
   let since: Date

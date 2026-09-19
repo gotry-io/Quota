@@ -206,14 +206,14 @@ budget copy are in
 
 Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
 changing either selector starts no collection or network work and shows no loading state when a
-snapshot already exists. Every other period is one `usage_period` request, which folds the hours
-this Mac already stored rather than collecting again; while it is in flight the page says
-**Preparing Usage…**, and a state change discards those folds and asks again because the hours
-behind them moved. The Account read hands this device four folds, not the days behind them, so on
-Account a period outside those four says **This period is folded from this Mac's own hours. Switch
-the source to this Mac to see it.** If the selected source has no snapshot yet and that
+snapshot already exists. Every other period is one `usage_period` request. On This Mac it folds
+the hours already stored; on Account it reads Relay's local-date period in this Mac's IANA zone
+([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)). While it is in
+flight the page says **Preparing Usage…**, and a state change discards those folds and asks again
+because the hours behind them moved. If the selected source has no snapshot yet and that
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
+A range retention has cut prints **This range goes past what Quota still keeps.**
 Preparing and empty Usage remain section states below the period tabs because those controls are
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.

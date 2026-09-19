@@ -253,6 +253,87 @@ func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
 }
 
 @Test
+func decodesAccountPeriodCoverageOnAUsageDetail() throws {
+  let data = Data(
+    #"""
+    {
+      "range": { "from": "2026-08-01", "to": "2026-08-03" },
+      "usage": {
+        "totals": {
+          "total_tokens": 12,
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0,
+          "messages": 1
+        },
+        "cost": {
+          "mode": "calculate",
+          "basis": "calculated",
+          "status": "complete",
+          "amount_microusd": "3138",
+          "catalog_revision": "pricing_1",
+          "calculated_rows": 1,
+          "reported_rows": 0,
+          "unpriced_rows": 0,
+          "assumptions": ["agent_default_channel"],
+          "unpriced": []
+        },
+        "cache_saved": {
+          "amount_microusd": "0",
+          "status": "complete",
+          "unpriced_rows": 0
+        },
+        "agents": [],
+        "days": [
+          {
+            "date": "2026-08-01",
+            "totals": {
+              "total_tokens": 12,
+              "input_tokens": 10,
+              "output_tokens": 2,
+              "cache_read_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "reasoning_tokens": 0,
+              "messages": 1
+            },
+            "cost": {
+              "mode": "calculate",
+              "basis": "calculated",
+              "status": "complete",
+              "amount_microusd": "3138",
+              "catalog_revision": "pricing_1",
+              "calculated_rows": 1,
+              "reported_rows": 0,
+              "unpriced_rows": 0,
+              "assumptions": ["agent_default_channel"],
+              "unpriced": []
+            }
+          }
+        ]
+      },
+      "incomplete": true,
+      "details_truncated": false,
+      "coverage": {
+        "partial": true,
+        "daily_retained_from": "2026-07-01",
+        "hourly_retained_from": null,
+        "truncated_by_retention": true
+      }
+    }
+    """#.utf8
+  )
+  let detail = try QuotaWireCodec.makeDecoder().decode(LocalServiceUsageDetail.self, from: data)
+  #expect(detail.incomplete)
+  #expect(detail.coverage?.partial == true)
+  #expect(detail.coverage?.truncatedByRetention == true)
+  #expect(detail.coverage?.dailyRetainedFrom == "2026-07-01")
+  #expect(detail.usage.days?.count == 1)
+  #expect(detail.usage.days?.first?.date == "2026-08-01")
+}
+
+@Test
 func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
