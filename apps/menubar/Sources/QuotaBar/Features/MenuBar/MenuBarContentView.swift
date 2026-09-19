@@ -43,7 +43,7 @@ struct MenuBarContentView: View {
         showsLeadingIcon: navigation.currentRoute == nil,
         trailing: headerTrailingAction,
         overflowMenuStartsExpanded: overflowMenuStartsExpanded,
-        onOpenUsage: { MainWindowController.shared.show(page: .usage) }
+        onOpenUsage: { MainWindowController.shared.showUsageToday() }
       ) {
         currentPage(
           now: context.date,

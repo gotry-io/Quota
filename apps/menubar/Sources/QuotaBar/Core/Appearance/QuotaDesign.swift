@@ -20,11 +20,11 @@ enum QuotaDesign {
     static let mainWindowMinSize = CGSize(width: 960, height: 640)
     /// Wide Visual QA capture for the Quota page.
     static let mainWindowWideSize = CGSize(width: 1280, height: 800)
-    /// Quota / Today / Usage cards.
+    /// Quota / Usage cards.
     static let cardCornerRadius: CGFloat = DesignTokens.Radius.card
-    /// Inner padding of Quota / Today / Usage cards.
+    /// Inner padding of Quota / Usage cards.
     static let cardPadding: CGFloat = 16
-    /// Centred reading column on Quota, Today, and Usage.
+    /// Centred reading column on Quota and Usage.
     static let contentMaxWidth: CGFloat = 1040
     /// Horizontal gutter around that column.
     static let contentGutter: CGFloat = 24
