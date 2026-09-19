@@ -117,31 +117,14 @@ enum AccountDisconnectReason: Equatable {
 @Observable
 final class MenuBarViewModel: BrowserAccessGrantHandling {
   private(set) var report: QuotaCollectionReport?
-  private(set) var localUsage: LocalUsageReport?
+  /// Usage, history, and the monthly budget. This coordinator hands it each accepted state.
+  let usage: UsageModel
   private(set) var accountSummary: AccountSummary?
   /// The name the sign-in gave, held until an account read carries one of its own.
   private(set) var signInDisplayLabel: String?
-  private(set) var usagePeriods: LocalServiceUsagePeriodCache?
-  /// Which period Dashboard Usage is showing.
-  private(set) var usagePeriod: UsagePeriodSelection = .today
-  /// Custom periods this Mac has folded, keyed `from|to`. Memory only: a fold is cheap and the
-  /// four `get_state` carries are the ones worth keeping.
-  private(set) var customUsagePeriods: [String: LocalServiceUsageDetail] = [:]
-  private(set) var customUsageLoading = false
-  /// Folded 30-day quota history, keyed subscription selector then window id. Empty until
-  /// ``loadQuotaHistory()``; state pushes keep the current-window slice Overview already draws.
-  private(set) var quotaHistory: [String: [String: QuotaHistory]] = [:]
-  /// The samples the last `quota_history` read returned, so a later surface can re-fold a range.
-  private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
-  /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
-  private(set) var quotaHistoryErrorMessage: String?
-  /// This Mac's monthly budget, and how far into it this month's local spend has gone.
-  private(set) var budget: UsageBudget
-  private(set) var budgetMonthDetail: LocalServiceUsageDetail?
   private(set) var errorMessage: String?
   private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
-  private(set) var usageRefreshing = false
   private(set) var accountRefreshing = false
   private(set) var isLoggingIn = false
   private(set) var isLoggingOut = false
@@ -330,15 +313,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   private let notificationDefaults: UserDefaults
 
   @ObservationIgnored
-  private let budgetStore: UsageBudgetStore
-
-  @ObservationIgnored
-  private var customUsageTask: Task<Void, Never>?
-
-  @ObservationIgnored
-  private var quotaHistoryTask: Task<Void, Never>?
-
-  @ObservationIgnored
   private let notificationCenter: any NotificationCentering
 
   @ObservationIgnored
@@ -382,8 +356,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     self.widgetPublisher = resolvedWidgetPublisher
     self.widgetPublishingStatus = resolvedWidgetPublisher.status
     let resolvedBudgetStore = budgetStore ?? UsageBudgetStore(defaults: notificationDefaults)
-    self.budgetStore = resolvedBudgetStore
-    self.budget = resolvedBudgetStore.load()
     self.browserSessionImporter = browserSessionImporter
     self.loginURLOpener = loginURLOpener
     self.accessProbe = accessProbe ?? (injectedClient
@@ -444,6 +416,14 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
         self.grantPresenter = panel
       }
     }
+    self.usage = UsageModel(
+      transport: self.client,
+      budgetStore: resolvedBudgetStore,
+      notificationSink: self.notificationSink
+    )
+    self.usage.onRequestError = { [weak self] message in
+      self?.errorMessage = message
+    }
   }
 
   #if DEBUG
@@ -465,8 +445,13 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       notificationStore = InMemoryAlertStateStore()
       notificationSink = NoOpAlertSink()
       notificationDefaults = .standard
-      budgetStore = UsageBudgetStore(defaults: .standard)
-      budget = UsageBudget(amountUSD: 50, alerts: true)
+      let usage = UsageModel(
+        transport: nil,
+        budgetStore: UsageBudgetStore(defaults: .standard),
+        notificationSink: NoOpAlertSink(),
+        budget: UsageBudget(amountUSD: 50, alerts: true)
+      )
+      self.usage = usage
       let center = NoOpNotificationCenter()
       notificationCenter = center
       resetScheduler = ResetReminderScheduler(center: center)
@@ -477,24 +462,36 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       self.lastCheckedAt = lastCheckedAt
       guard let visualTestState else { return }
       report = visualTestState.report
-      localUsage = visualTestState.localUsage
       accountSummary = visualTestState.accountSummary
-      if let usage = visualTestState.accountSummary?.usage {
+      var fixturePeriods: LocalServiceUsagePeriodCache?
+      var fixtureBudgetMonth: LocalServiceUsageDetail?
+      if let accountUsage = visualTestState.accountSummary?.usage {
         let account = LocalServiceUsagePeriodValues(
-          today: Self.periodDetail(usage.today),
-          last7Days: Self.periodDetail(usage.last7Days),
-          last30Days: Self.periodDetail(usage.last30Days),
-          all: Self.periodDetail(usage.all)
+          today: Self.periodDetail(accountUsage.today),
+          last7Days: Self.periodDetail(accountUsage.last7Days),
+          last30Days: Self.periodDetail(accountUsage.last30Days),
+          all: Self.periodDetail(accountUsage.all)
         )
         let local = LocalServiceUsagePeriodValues(
-          today: Self.localPeriodDetail(usage.today),
-          last7Days: Self.localPeriodDetail(usage.last7Days),
-          last30Days: Self.localPeriodDetail(usage.last30Days),
-          all: Self.localPeriodDetail(usage.all)
+          today: Self.localPeriodDetail(accountUsage.today),
+          last7Days: Self.localPeriodDetail(accountUsage.last7Days),
+          last30Days: Self.localPeriodDetail(accountUsage.last30Days),
+          all: Self.localPeriodDetail(accountUsage.all)
         )
-        usagePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
-        budgetMonthDetail = local.last30Days
+        fixturePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
+        fixtureBudgetMonth = local.last30Days
       }
+      usage.applyVisualFixture(
+        localUsage: visualTestState.localUsage,
+        usagePeriods: fixturePeriods,
+        budgetMonthDetail: fixtureBudgetMonth,
+        budget: UsageBudget(amountUSD: 50, alerts: true),
+        quotaHistorySamples: visualTestState.quotaHistorySamples,
+        overview: visualTestState.overview,
+        now: visualTestState.report.capturedAt,
+        usageUploadEnabled: true,
+        hasAccountSummary: visualTestState.accountSummary != nil
+      )
       authStatus = visualTestState.authStatus
       accountDeviceID = visualTestState.deviceID
       applyOverview(visualTestState.overview)
@@ -502,11 +499,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       providerStatus = Dictionary(
         uniqueKeysWithValues: visualTestState.providerStatus.map { ($0.provider, $0) }
       )
-      if let samples = visualTestState.quotaHistorySamples {
-        quotaHistorySamples = samples
-        quotaHistory = Self.foldQuotaHistory(
-          samples, overview: visualTestState.overview, now: visualTestState.report.capturedAt)
-      }
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals
@@ -786,183 +778,6 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     }
   }
 
-  func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
-    usagePeriods?.detail(source: source, period: period)
-  }
-
-  /// The selected period, read from the four a refresh folds or from the fold this Mac asked for.
-  ///
-  /// The four periods `get_state` carries are the same on both sources. Anything else is folded
-  /// out of the hours this Mac stored, so it is answered for `local` only: the Account read hands
-  /// this device four folds, not the days behind them.
-  func usageDetail(source: UsageSource, selection: UsagePeriodSelection) -> LocalServiceUsageDetail?
-  {
-    if let key = selection.summaryKey {
-      return usageDetail(source: source, period: UsagePeriod(summaryKey: key))
-    }
-    guard source == .local, let range = selection.range(today: Date()) else { return nil }
-    return customUsagePeriods[Self.periodKey(range)]
-  }
-
-  /// Whether a custom period is available on this source at all. The Account read folds four.
-  func usagePeriodIsAvailable(source: UsageSource, selection: UsagePeriodSelection) -> Bool {
-    selection.summaryKey != nil || source == .local
-  }
-
-  /// The title above the totals: the range the selected period covers.
-  func usagePeriodTitle(now: Date = Date()) -> String {
-    UsagePeriodTitle.text(for: usagePeriod, today: now)
-  }
-
-  func selectUsagePeriod(_ selection: UsagePeriodSelection) {
-    guard selection != usagePeriod else { return }
-    usagePeriod = selection
-    loadCustomUsagePeriod()
-  }
-
-  /// Asks the service for this Mac's stored samples since the retention horizon, then folds
-  /// them per provider and window. State pushes keep the current-window slice; this is the
-  /// 30-day journal Dashboard reads (ADR 0051).
-  func loadQuotaHistory() {
-    guard let client else { return }
-    quotaHistoryTask?.cancel()
-    quotaHistoryTask = Task { @MainActor [weak self] in
-      let since = Date().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
-      do {
-        let payload = try await client.quotaHistory(since: since)
-        guard !Task.isCancelled else { return }
-        self?.quotaHistorySamples = payload
-        self?.quotaHistory = Self.foldQuotaHistory(
-          payload, overview: self?.overview ?? [], now: Date())
-        self?.quotaHistoryErrorMessage = nil
-      } catch is CancellationError {
-        return
-      } catch {
-        self?.quotaHistoryErrorMessage = Self.message(for: error)
-      }
-    }
-  }
-
-  /// One fold per subscription and window id, from the samples `quota_history` returned and the
-  /// cadence the current Overview reading already names.
-  static func foldQuotaHistory(
-    _ payload: LocalServiceQuotaHistory,
-    overview: [LocalServiceOverviewItem],
-    now: Date
-  ) -> [String: [String: QuotaHistory]] {
-    var result: [String: [String: QuotaHistory]] = [:]
-    for item in overview {
-      let key = item.identity.subscriptionSelector
-      guard let byWindow = payload.samplesBySubscription[key] else { continue }
-      for window in item.snapshot.windows {
-        guard let samples = byWindow[window.id],
-          let folded = QuotaHistory.fold(
-            window: QuotaHistoryReading(
-              resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
-            samples: samples,
-            now: now,
-            utcOffsetSeconds: payload.utcOffsetSeconds
-          )
-        else { continue }
-        result[key, default: [:]][window.id] = folded
-      }
-    }
-    return result
-  }
-
-  /// Asks the service to fold the selected period when it is not one of the four already folded.
-  func loadCustomUsagePeriod() {
-    guard usagePeriod.summaryKey == nil, let client,
-      let range = usagePeriod.range(today: Date())
-    else { return }
-    let key = Self.periodKey(range)
-    guard customUsagePeriods[key] == nil else { return }
-    customUsageTask?.cancel()
-    customUsageLoading = true
-    customUsageTask = Task { @MainActor [weak self] in
-      defer { self?.customUsageLoading = false }
-      do {
-        let detail = try await client.usagePeriod(from: range.from, to: range.to)
-        guard !Task.isCancelled else { return }
-        self?.customUsagePeriods[key] = detail
-      } catch is CancellationError {
-        return
-      } catch {
-        self?.errorMessage = Self.message(for: error)
-      }
-    }
-  }
-
-  /// How far into this month's budget this Mac's own spend has gone.
-  var budgetProgress: UsageBudgetProgress? {
-    guard let amount = budget.amountUSD, let detail = budgetMonthDetail else { return nil }
-    let spent = UsageBudgetProgress.dollars(microusd: detail.usage.cost.amountMicrousd) ?? 0
-    return UsageBudgetProgress(
-      spentUSD: spent,
-      budgetUSD: amount,
-      partial: detail.usage.cost.status != .complete
-    )
-  }
-
-  func setBudget(_ next: UsageBudget) {
-    budget = budgetStore.save(next)
-    refreshBudgetMonth()
-  }
-
-  /// Folds this month once, so the bar has something to measure the budget against.
-  func refreshBudgetMonth() {
-    guard budget.isSet, let client, let range = UsagePeriodSelection.thisMonth.range(today: Date())
-    else {
-      budgetMonthDetail = nil
-      return
-    }
-    Task { @MainActor [weak self] in
-      guard let detail = try? await client.usagePeriod(from: range.from, to: range.to) else {
-        return
-      }
-      self?.budgetMonthDetail = detail
-      self?.evaluateBudgetNotifications(now: Date())
-    }
-  }
-
-  /// Says once per month that 80%, and then 100%, of the budget has been spent.
-  private func evaluateBudgetNotifications(now: Date) {
-    let previous = budgetStore.loadFired()
-    let result = BudgetAlertEvaluator.evaluate(
-      budget: budget,
-      progress: budgetProgress,
-      month: BudgetAlertEvaluator.month(containing: now),
-      previous: previous
-    )
-    if result.state != previous {
-      budgetStore.saveFired(result.state)
-    }
-    if !result.events.isEmpty {
-      notificationSink.deliver(result.events)
-    }
-  }
-
-  private static func periodKey(_ range: (from: String, to: String)) -> String {
-    "\(range.from)|\(range.to)"
-  }
-
-  /// Account answers for Usage only while it can. Everywhere the selection is honored uses
-  /// this, so Overview and Dashboard Usage never disagree about which numbers are on screen.
-  func effectiveUsageSource(_ selected: UsageSource) -> UsageSource {
-    !usageUploadEnabled || accountSummary == nil ? .local : selected
-  }
-
-  /// The bottom bar's one line of today's spend, or `nil` when there is nothing to say.
-  func todayUsageSummary(source: UsageSource) -> UsageTodaySummary? {
-    guard let detail = usageDetail(source: effectiveUsageSource(source), period: .today) else {
-      return nil
-    }
-    return UsageValueFormatter.todaySummary(
-      tokens: detail.usage.totals.totalTokens,
-      cost: detail.usage.cost
-    )
-  }
-
   /// The menu-bar item, drawn for `now` — which in the app is ``menuBarClock``, so reading the
   /// label subscribes the item to the clock as well as to the readings.
   func menuBarLabel(
@@ -989,34 +804,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
       style: style,
       layout: layout,
       now: now,
-      today: menuBarTodaySnapshot()
+      today: usage.menuBarTodaySnapshot()
     )
-  }
-
-  /// Today's spend the menu bar can show, using the same Usage source the footer would.
-  func menuBarTodaySnapshot() -> MenuBarTodaySnapshot {
-    guard let detail = usageDetail(source: effectiveUsageSource(.account), period: .today) else {
-      return .empty
-    }
-    return MenuBarTodaySnapshot(
-      total: MenuBarTodayUsage.make(
-        tokens: detail.usage.totals.totalTokens,
-        cost: detail.usage.cost
-      ),
-      byProvider: Dictionary(
-        uniqueKeysWithValues: detail.usage.agents.compactMap { agent in
-          guard let provider = agent.agent.menuBarProvider else { return nil }
-          return (
-            provider,
-            MenuBarTodayUsage.make(tokens: agent.totals.totalTokens, cost: agent.cost)
-          )
-        }
-      )
-    )
-  }
-
-  func isPreparingUsage(source: UsageSource) -> Bool {
-    source == .local ? usageRefreshing : accountRefreshing
   }
 
   func startLogin() {
@@ -1685,13 +1474,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     usageUploadEnabled = state.usageUploadEnabled
     groupUsageByProject = state.groupUsageByProject
     quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
-    usagePeriods = state.usagePeriods
-    // The hours behind a fold have moved, so the folds this Mac asked for are asked for again.
-    customUsagePeriods = [:]
-    loadCustomUsagePeriod()
-    refreshBudgetMonth()
+    usage.acceptState(state)
     report = state.quota.value
-    localUsage = state.usage.value
     accountSummary = state.account.value?.accountSummary
     signInDisplayLabel = state.account.value?.displayLabel
     accountDeviceID = state.account.value?.deviceID
@@ -1738,9 +1522,8 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     browserScanEnabled = Set(state.browserScanEnabled)
     scheduleBrowserScans(
       quotaUpdatedAt: state.quota.updatedAt, quotaRefreshing: state.quota.refreshing)
-    usageRefreshing = state.usage.refreshing
     accountRefreshing = state.account.refreshing
-    isRefreshing = state.quota.refreshing || usageRefreshing || accountRefreshing
+    isRefreshing = state.quota.refreshing || usage.usageRefreshing || accountRefreshing
     isLoggingIn = authStatus == .loggingIn || loginTask != nil
     isLoggingOut = authStatus == .logoutPending
     lastCheckedAt = [state.quota.updatedAt, state.usage.updatedAt].compactMap { $0 }.max()
@@ -1774,7 +1557,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   /// projection both Apple clients share. Publishing never fails a state update — an
   /// unentitled or unwritable App Group leaves a sentence on Diagnostics instead.
   private func publishWidgetSnapshot() {
-    let today = usageDetail(source: effectiveUsageSource(.account), period: .today)
+    let today = usage.usageDetail(source: usage.effectiveUsageSource(.account), period: .today)
     widgetPublisher.publish(
       subscriptions: widgetSubscriptions,
       today: today.map {
