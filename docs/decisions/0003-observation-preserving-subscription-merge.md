@@ -1,9 +1,9 @@
 # ADR 0003: Preserve observations and merge subscriptions for presentation
 
-- Status: accepted
+- Status: Accepted
 - Date: 2026-08-03
-- Updated: 2026-08-29
-- Updated: 2026-09-06 — Quota iOS merges two ways as well, so the rule is written in Swift too
+- Amended: 2026-08-29
+- Amended: 2026-09-06 — Quota iOS merges two ways as well, so the rule is written in Swift too
 
 ## Decision
 

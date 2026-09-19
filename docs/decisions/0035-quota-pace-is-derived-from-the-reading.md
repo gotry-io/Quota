@@ -2,13 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-09-05
-- Follows [ADR 0017](0017-derived-observation-freshness.md) and
-  [ADR 0019](0019-one-statement-per-contract.md)
-- Updated 2026-09-07 by [ADR 0042](0042-quota-history-is-local-samples.md), which keeps the
+- Amended: 2026-09-07 by [ADR 0042](0042-quota-history-is-local-samples.md), which keeps the
   readings a device takes and draws them. Pace stays a pure function of one window: what 0042
   adds is a second reader of `projected_at_reset`, the point the dashed line ends on, so the
   line and the phrase can never state two different projections.
-- Amended 2026-09-19: the printed words changed; the derivation did not.
+- Amended: 2026-09-19: the printed words changed; the derivation did not.
+- Follows [ADR 0017](0017-derived-observation-freshness.md) and
+  [ADR 0019](0019-one-statement-per-contract.md)
 
 ## Context
 

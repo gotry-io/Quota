@@ -2,13 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-08-10
-- Supersedes: [ADR 0002](./0002-relay-device-code-pairing.md),
-  [ADR 0004](./0004-anonymous-relay-owners.md), [ADR 0005](./0005-url-only-relay-enrollment.md)
-- Updated 2026-08-26 by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md),
+- Amended: 2026-08-26 by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md),
   [ADR 0025](./0025-one-session-system.md), and [ADR 0027](./0027-one-token-per-client.md), which
   left one session per client and no CLI or device grant
-- Updated 2026-09-05 by [ADR 0032](./0032-an-account-owns-its-identities.md), which made an Account
+- Amended: 2026-09-05 by [ADR 0032](./0032-an-account-owns-its-identities.md), which made an Account
   own the channels it is reached through rather than being a GitHub identity
+- Supersedes: [ADR 0002](./0002-relay-device-code-pairing.md),
+  [ADR 0004](./0004-anonymous-relay-owners.md), [ADR 0005](./0005-url-only-relay-enrollment.md)
 
 ## Decision
 

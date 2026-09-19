@@ -1,7 +1,9 @@
 # ADR 0016: Local service self-repair
 
-- Status: Superseded by [ADR 0021](./0021-identity-store-and-disposable-cache.md) on 2026-08-25
+- Status: Superseded
 - Date: 2026-08-17
+- Superseded by: 0021
+- Amended: 2026-08-25
 
 One owner-only `state.sqlite` held both identity and derived data, so a damaged image was a
 judgement call and the service owned one control plane to make it: detect, classify, repair, record,

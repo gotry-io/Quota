@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-14
-- Updated 2026-08-26 by [ADR 0025](./0025-one-session-system.md)
+- Amended: 2026-08-26 by [ADR 0025](./0025-one-session-system.md)
 
 ## Context
 
