@@ -50,6 +50,7 @@
         "main-today",
         "main-usage",
         "main-usage-local",
+        "main-usage-custom",
         "main-account",
         "main-agents",
         "main-agents-codex",
@@ -102,6 +103,7 @@
       if configuration.hostsMainWindow {
         if configuration.route == .mainUsage || configuration.route == .mainUsageLocal
           || configuration.route == .mainToday
+          || configuration.route == .mainUsageCustom
         {
           return CGSize(width: QuotaDesign.Layout.mainWindowMinSize.width, height: 2_200)
         }

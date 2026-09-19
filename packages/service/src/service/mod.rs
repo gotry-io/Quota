@@ -251,12 +251,18 @@ pub trait LocalBackend: Send + Sync {
         let _ = (cancel, updates, trigger);
         unavailable_refresh_outcome()
     }
-    /// One custom period, folded from the hours this device has stored.
+    /// One custom period: This Mac's stored hours, or Relay's Account period read.
     ///
     /// `from` and `to` are inclusive local dates. The four periods `get_state` carries are
     /// folded on every refresh; a range someone picked is folded when it is asked for.
-    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
-        let _ = (from, to);
+    fn usage_period(
+        &self,
+        from: &str,
+        to: &str,
+        source: crate::protocol::UsageSource,
+        timezone: Option<&str>,
+    ) -> Result<Value, BackendError> {
+        let _ = (from, to, source, timezone);
         Err(BackendError::unavailable())
     }
     /// This Mac's stored quota samples since `since`. Reads `cache.sqlite` only.
@@ -726,12 +732,18 @@ impl LocalService {
         Ok(PingResult { ok: true })
     }
 
-    /// Folds one custom local period, which `get_state` does not carry.
+    /// Folds one custom period, which `get_state` does not carry.
     fn usage_period(&self, request: &IpcRequest) -> Result<Value, IpcError> {
         let payload = request.decode_payload::<UsagePeriodPayload>()?;
+        payload.validate()?;
         self.inner
             .backend
-            .usage_period(&payload.from, &payload.to)
+            .usage_period(
+                &payload.from,
+                &payload.to,
+                payload.source,
+                payload.timezone.as_deref(),
+            )
             .map_err(|error| error.error)
     }
 

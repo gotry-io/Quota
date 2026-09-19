@@ -3335,8 +3335,27 @@ impl LocalBackend for NativeBackend {
         crate::provider_status::poll(&client, user_agent, &pages, checked_at)
     }
 
-    fn usage_period(&self, from: &str, to: &str) -> Result<Value, BackendError> {
-        self.custom_usage_period(from, to)
+    fn usage_period(
+        &self,
+        from: &str,
+        to: &str,
+        source: crate::protocol::UsageSource,
+        timezone: Option<&str>,
+    ) -> Result<Value, BackendError> {
+        match source {
+            crate::protocol::UsageSource::Local => self.custom_usage_period(from, to),
+            crate::protocol::UsageSource::Account => {
+                let timezone = timezone.ok_or_else(invalid_usage_period)?;
+                let body = self.account.account_usage_period(
+                    from,
+                    to,
+                    timezone,
+                    true,
+                    &AtomicBool::new(false),
+                )?;
+                account_period_detail(&body)
+            }
+        }
     }
 
     fn quota_history(&self, since: &str) -> Result<Value, BackendError> {
@@ -4177,6 +4196,74 @@ fn local_day_start(timezone: &Tz, date: NaiveDate) -> Result<String, BackendErro
             .to_rfc3339_opts(SecondsFormat::Secs, true));
     }
     Err(BackendError::unavailable())
+}
+
+/// Relay's Account period read, as the panel already draws a Usage period.
+///
+/// Totals, cost, cache saved, and the agent tree follow the four summary periods. Local `days[]`
+/// drop the per-day `partial` flag the UI does not read. Coverage is the extra the period route
+/// names (incomplete hours and whether retention cut the range).
+fn account_period_detail(value: &Value) -> Result<Value, BackendError> {
+    let object = value.as_object().ok_or_else(invalid_usage_detail)?;
+    let request = object
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid_usage_detail)?;
+    let from = request
+        .get("from")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid_usage_detail)?
+        .to_owned();
+    let to = request
+        .get("to")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid_usage_detail)?
+        .to_owned();
+    let coverage = object
+        .get("coverage")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let incomplete = coverage.get("partial").and_then(Value::as_bool) == Some(true);
+    let totals = object
+        .get("totals")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let cost = object
+        .get("cost")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let cache_saved = object
+        .get("cache_saved")
+        .cloned()
+        .ok_or_else(invalid_usage_detail)?;
+    let summary_shaped = json!({
+        "totals": totals,
+        "cost": cost,
+        "cache_saved": cache_saved,
+        "partial": incomplete,
+        "agents": object.get("agents").cloned().unwrap_or_else(|| json!([])),
+    });
+    let mut detail = account_usage_detail(&summary_shaped, &(from, to))?;
+    if let Some(days) = object.get("days").and_then(Value::as_array) {
+        let mapped = days
+            .iter()
+            .map(|day| {
+                let day = day.as_object().ok_or_else(invalid_usage_detail)?;
+                let date = day.get("date").cloned().ok_or_else(invalid_usage_detail)?;
+                let totals = day
+                    .get("totals")
+                    .cloned()
+                    .ok_or_else(invalid_usage_detail)?;
+                let cost = day.get("cost").cloned().ok_or_else(invalid_usage_detail)?;
+                Ok(json!({ "date": date, "totals": totals, "cost": cost }))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(usage) = detail.get_mut("usage") {
+            usage["days"] = Value::Array(mapped);
+        }
+    }
+    detail["coverage"] = coverage;
+    Ok(detail)
 }
 
 /// One managed period as the panel reads it.
@@ -5948,6 +6035,75 @@ mod tests {
                 "{from}..{to} is not a period"
             );
         }
+    }
+
+    #[test]
+    fn account_period_detail_maps_days_and_coverage() {
+        let totals = json!({
+            "total_tokens": 12,
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_read_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1
+        });
+        let cost = json!({
+            "mode": "calculate",
+            "basis": "none",
+            "status": "unavailable",
+            "amount_microusd": null,
+            "catalog_revision": null,
+            "calculated_rows": 0,
+            "reported_rows": 0,
+            "unpriced_rows": 1,
+            "assumptions": [],
+            "unpriced": [{
+                "billing_channel": "api",
+                "model": "a-model",
+                "reason": "unknown_model",
+                "rows": 1
+            }]
+        });
+        let body = json!({
+            "protocol_version": 6,
+            "request": {
+                "from": "2026-08-01",
+                "to": "2026-08-03",
+                "timezone": "Asia/Singapore"
+            },
+            "totals": totals,
+            "cost": cost,
+            "cache_saved": {
+                "amount_microusd": "0",
+                "status": "complete",
+                "unpriced_rows": 0
+            },
+            "days": [{
+                "date": "2026-08-01",
+                "totals": totals.clone(),
+                "cost": cost.clone(),
+                "partial": true
+            }],
+            "agents": [],
+            "coverage": {
+                "partial": true,
+                "daily_retained_from": "2026-07-01",
+                "hourly_retained_from": null,
+                "truncated_by_retention": true
+            }
+        });
+        let detail = account_period_detail(&body).expect("mapped");
+        assert_eq!(detail["range"]["from"], "2026-08-01");
+        assert_eq!(detail["range"]["to"], "2026-08-03");
+        assert_eq!(detail["incomplete"], json!(true));
+        assert_eq!(detail["coverage"]["truncated_by_retention"], json!(true));
+        assert_eq!(detail["coverage"]["partial"], json!(true));
+        assert_eq!(detail["usage"]["days"].as_array().expect("days").len(), 1);
+        assert_eq!(detail["usage"]["days"][0]["date"], "2026-08-01");
+        assert!(detail["usage"]["days"][0].get("partial").is_none());
+        assert_eq!(detail["usage"]["totals"]["total_tokens"], 12);
+        assert_eq!(detail["usage"]["cache_saved"]["status"], "complete");
     }
 
     /// A change that skips or repeats midnight still leaves the day one instant to begin at.
