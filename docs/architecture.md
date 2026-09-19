@@ -311,7 +311,7 @@ collected with
 catalog so the row-level client, vendor, and model relationship survives across Devices; clients
 never reconstruct ownership from independent breakdowns. Every billing channel Relay
 stores is reported as stored — a client that cannot represent one has to update, which is not a
-reason to rewrite facts on the way out. See [provider strategies](provider-collection.md) for the
+reason to rewrite facts on the way out. See [usage sources](usage-sources.md) for the
 provider ids that resolve each channel.
 
 ## Managed account and sync
@@ -443,7 +443,10 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 - `packages/provider/catalog.json` generates the Rust crate metadata, the Swift `ProviderID` enum in
   `packages/apple-client`, QuotaBar's app-behavior extension on that enum,
   `ProviderID.brandIconAssetName` in `QuotaBrandIcons`, and the protocol TypeScript IDs. One catalog
-  produces one Swift type, and one decoder validates for both products.
+  produces one Swift type, and one decoder validates for both products. Collection strategy is
+  [`provider-collection.md`](provider-collection.md) plus [`providers/<id>.md`](provider-collection.md#providers).
+  Local Usage parsers and the local-only attribution boundary live in
+  [`usage-sources.md`](usage-sources.md).
 - `packages/design-tokens/tokens.json` is the only hand-edited colour, remaining-quota band,
   spacing, and radius source. Generation writes web CSS custom properties, web TypeScript
   thresholds, and Foundation-only Swift in `QuotaPresentation`. Apple system-colour mappings and
