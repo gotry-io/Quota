@@ -14,13 +14,13 @@ struct UsageBudgetSection: View {
       title: "Monthly budget",
       titleIdentifier: "section.header.budget",
       trailing: {
-        Button(model.budget.isSet ? "Edit budget" : "Set budget") { editing = true }
+        Button(model.usage.budget.isSet ? "Edit budget" : "Set budget") { editing = true }
           .buttonStyle(.bordered)
           .controlSize(.small)
           .accessibilityIdentifier("usage.budget.edit")
       }
     ) {
-      if let progress = model.budgetProgress {
+      if let progress = model.usage.budgetProgress {
         VStack(alignment: .leading, spacing: 8) {
           QuotaMeter(fraction: progress.fraction, tone: Self.tone(for: progress))
           Text(progress.text)
@@ -81,7 +81,7 @@ struct UsageBudgetEditor: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Save") {
-            model.setBudget(
+            model.usage.setBudget(
               UsageBudget(
                 amountUSD: Decimal(string: amount, locale: .current),
                 alerts: alerts
@@ -94,8 +94,8 @@ struct UsageBudgetEditor: View {
       }
     }
     .onAppear {
-      amount = model.budget.amountUSD.map(UsageBudgetProgress.plain) ?? ""
-      alerts = model.budget.alerts
+      amount = model.usage.budget.amountUSD.map(UsageBudgetProgress.plain) ?? ""
+      alerts = model.usage.budget.alerts
     }
   }
 }
@@ -123,7 +123,7 @@ struct UsageRangeEditor: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Apply") {
-            model.selectUsagePeriod(
+            model.usage.selectUsagePeriod(
               .custom(
                 from: UsageDateText.date(min(from, to)),
                 to: UsageDateText.date(max(from, to))
@@ -136,15 +136,15 @@ struct UsageRangeEditor: View {
       }
     }
     .onAppear {
-      let range = model.usagePeriodRange
+      let range = model.usage.usagePeriodRange
       from = range.flatMap { UsageDateText.date(from: $0.from) } ?? bounds.upperBound
       to = range.flatMap { UsageDateText.date(from: $0.to) } ?? bounds.upperBound
     }
   }
 
   private var bounds: ClosedRange<Date> {
-    let earliest = UsageDateText.date(from: model.usageEarliestDay) ?? Date()
-    let latest = UsageDateText.date(from: model.activityToday) ?? Date()
+    let earliest = UsageDateText.date(from: model.usage.usageEarliestDay) ?? Date()
+    let latest = UsageDateText.date(from: model.usage.activityToday) ?? Date()
     return earliest...max(earliest, latest)
   }
 }
