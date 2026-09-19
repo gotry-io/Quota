@@ -150,6 +150,15 @@ struct SettingsView: View {
         } label: {
           identityCard
         }
+        NavigationLink {
+          DevicesView(model: model)
+        } label: {
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "laptopcomputer", tint: .gray)
+            Text(SettingsCopy.devices)
+          }
+        }
+        .accessibilityIdentifier("settings.devices")
       } else {
         Button(SettingsCopy.signIn) {
           model.showSignIn()
