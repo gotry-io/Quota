@@ -1,7 +1,9 @@
 # ADR 0008: Complete local data and unified diagnostics
 
-- Status: Superseded by [ADR 0022](./0022-minimal-diagnostics.md) on 2026-08-25
+- Status: Superseded
 - Date: 2026-08-11
+- Superseded by: 0022
+- Amended: 2026-08-25
 
 Provider and agent output was untrusted input, but no valid fact was to be lost because a
 neighbouring one was invalid: a malformed record was isolated to that record, an unreadable file to

@@ -1,7 +1,9 @@
 # ADR 0018: Serve one managed data contract
 
-- Status: Partially superseded by [ADR 0023](./0023-strict-writes-tolerant-reads.md) on 2026-08-25
+- Status: Partially superseded
 - Date: 2026-08-24
+- Superseded by: 0023
+- Amended: 2026-08-25
 - Supersedes the compatibility half of [ADR 0012](./0012-managed-data-v3.md)
 
 Relay serves one managed data contract and refuses a client that speaks a retired one rather than

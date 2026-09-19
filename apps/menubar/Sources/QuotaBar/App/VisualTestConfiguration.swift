@@ -254,7 +254,7 @@
         ),
         incomplete: false,
         detailsTruncated: false,
-        coverage: UsagePeriodCoverage(partial: false, truncatedByRetention: false)
+        coverage: LocalServiceUsageCoverage(partial: false, truncatedByRetention: false)
       )
       model.usage.seedCustomUsagePeriodForVisuals(
         detail,

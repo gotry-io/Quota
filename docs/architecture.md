@@ -10,8 +10,9 @@ links to it rather than restating it.
 - **Quota** is the iOS 26+ presentation product, and a collection client for itself. It signs in to
   a provider's own web session inside the app, with the reader watching, and reads that provider on
   the phone; those sessions stay in this device's Keychain and are never uploaded
-  ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). It is usable with no Quota account at
-  all: Overview then shows what the phone read for itself. With an account it also signs in with the
+  ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). Its tabs are Quota, Usage, and Settings;
+  Devices lives under Settings. It is usable with no Quota account at all: Overview then shows what
+  the phone read for itself. With an account it also signs in with the
   registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
   two are merged into one row per subscription by the rule below. Either way it publishes the
   non-secret App Group snapshot its widgets render. Signing in presents this phone's installation,
@@ -24,10 +25,12 @@ links to it rather than restating it.
   wire decoding only. Its UI has two surfaces
   ([ADR 0052](decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md),
   [ADR 0054](decisions/0054-quotabar-is-resident-in-the-menu-bar.md)): the 320×480
-  menu-bar panel (Overview and one provider's detail), and one main window (this Mac's 30-day quota
-  history, today's cost per window, Usage at width, and every preference). QuotaBar adopts Liquid
-  Glass on macOS 26, with the existing material fallback below it. QuotaBar lives in the menu bar;
-  **Show in Dock** is off by default, so a Dock icon exists only while the main window is open. A
+  menu-bar panel (Overview and one provider's detail), and one main window whose sidebar is Quota ·
+  Usage · Settings. Quota is the subscription list and the selected subscription's windows and
+  remaining history; Usage is this Mac or Account periods; Settings holds preferences. QuotaBar
+  adopts Liquid Glass on macOS 26, with the existing material fallback below it. QuotaBar lives in
+  the menu bar; **Show in Dock** is off by default, so a Dock icon exists only while the main window
+  is open. A
   Login Item launch does not show the main window. The desktop widgets read the same
   non-secret `WidgetSnapshot` as iOS
   ([ADR 0014](decisions/0014-nonsecret-ios-widget-snapshot.md)), published by QuotaBar from the
@@ -59,7 +62,8 @@ managed origin is fixed at `https://quota.gotry.io`. There is no anonymous owner
 document, or protocol v1 route. Self-hosting is that same process on Node and SQLite, not a second
 product ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
 [self-host runbook](relay-self-host.md)). The decision records
-behind each area are indexed by [`AGENTS.md`](../AGENTS.md) and linked where they apply below.
+behind each area are indexed in [`decisions/README.md`](decisions/README.md) and linked where they
+apply below.
 
 ## Local runtime and IPC
 
@@ -427,7 +431,7 @@ publishes the model catalog at `GET /api/v2/model/catalog` with ETag validation 
 max-age=300, must-revalidate`; summaries carry its revision, the Rust client stores payload and ETag
 atomically with a last-known-good cache, and a fetch failure never blocks collection, upload, totals,
 or a report. Official Statuspage v2 feeds are a separate public read, `GET /api/v2/providers/status`,
-with no principal and no cookie: the Worker polls catalog `statuspage_v2` URLs, caches last-good
+with no principal and no cookie: Relay polls catalog `statuspage_v2` URLs, caches last-good
 readings for ten minutes, and answers `unknown` when a poll fails with nothing stored
 ([ADR 0044](decisions/0044-relay-publishes-provider-status.md)).
 
@@ -539,11 +543,11 @@ query names the keys it accepts, and a key it did not name is a 400. The managed
 canonical in [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).
 
 Quota Web is a SvelteKit app whose hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
-navigations run the Relay Worker first: `apps/relay/src/cloudflare.ts` stays Wrangler `main`, Hono
-keeps `/api`, `/oauth`, `/healthz`, and `/readyz`, and every other Worker-first request is rendered
-by SvelteKit `Server.respond`. The Worker reads the `__Host-quota_session` cookie through
-`WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the QuotaBar
-`.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
+navigations run through Relay first on either runtime: Hono keeps `/api`, `/oauth`, `/healthz`, and
+`/readyz`, and every other request is rendered by SvelteKit `Server.respond`. On the Workers runtime,
+`apps/relay/src/cloudflare.ts` stays Wrangler `main`. Relay reads the `__Host-quota_session` cookie
+through `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the
+QuotaBar `.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a client-rendered dashboard: the browser requests
 `GET /api/v6/account/summary` once with its own IANA timezone. The document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
@@ -560,13 +564,14 @@ never rewritten; the Worker runtime's local D1 exists for development and the `w
 project. Production deploys are the owner action in the self-host runbook; there is no deploy
 workflow.
 
-The same Relay source also deploys as a Node process over a local SQLite file
+The same source still runs as a Worker over D1 for local development and tests
 ([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Everything that differs between the two
 runtimes lives in `apps/relay/src/platform/` — the database, the built website's files, the
 last-reading cache, the migration runner, and the caller's address — and in the two entry points,
 `src/cloudflare.ts` and `src/node.ts`; request handling itself is shared and uses only what both
 runtimes offer. The state classes take `RelayDatabase`, which is D1's own `prepare`/`bind`/`batch`
 shape, so their SQL and the migration ladder are the same on either. Both are exercised in CI.
-The Node image is published from `.github/workflows/release-relay-image.yml`, and the cutover
-runbook is [`relay-self-host.md`](relay-self-host.md). Cloudflare stays a supported production
-path — choosing Docker is an operations switch, not a product migration.
+The Node image is published from `.github/workflows/release-relay-image.yml`. Production topology,
+update, rollback, backup, and restore are [`relay-self-host.md`](relay-self-host.md). The Workers
+runtime remains for local development and tests and is not deployed
+([ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md)).

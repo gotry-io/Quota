@@ -1,7 +1,9 @@
 # ADR 0005: URL-only Relay enrollment and private QuotaBar device groups
 
-- Status: Superseded by [ADR 0006](./0006-managed-account-device-usage.md) on 2026-08-10
+- Status: Superseded
 - Date: 2026-08-04
+- Superseded by: 0006
+- Amended: 2026-08-10
 
 A user configured only a Relay URL. QuotaBar offered two remote-device operations — pair a device,
 and view or remove the devices this QuotaBar paired — and no user-facing owner, owner credential,

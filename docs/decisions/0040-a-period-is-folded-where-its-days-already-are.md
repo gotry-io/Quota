@@ -1,19 +1,20 @@
 # ADR 0040: A period is folded where its days already are, and a budget never leaves the device
 
-- Status: Accepted
+- Status: Partially superseded
 - Date: 2026-09-06
-- Extends [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md) and
-  [ADR 0031](0031-the-usage-fold-is-stored.md)
-- Updated 2026-09-19 by [ADR 0055](0055-an-account-period-is-a-local-date-range.md): Relay now
+- Superseded by: 0055
+- Amended: 2026-09-19 by [ADR 0055](0055-an-account-period-is-a-local-date-range.md): Relay now
   answers an additive local-date period read. The website reads that route for every Usage
   selection except `all`, and for the budget month. Quota iOS still folds UTC activity days until
   it switches.
-- Updated 2026-09-20 (Quota iOS Account): Quota iOS reads that route for every Usage selection
+- Amended: 2026-09-20 (Quota iOS Account): Quota iOS reads that route for every Usage selection
   except `all`, and for the budget month. The UTC-day fold is gone.
-- Updated 2026-09-19 (QuotaBar Account): QuotaBar no longer refuses a non-summary period on
+- Amended: 2026-09-19 (QuotaBar Account): QuotaBar no longer refuses a non-summary period on
   Account. `usage_period` now names `source` (`local` | `account`) and, for Account, the caller's
   IANA timezone; Account answers from Relay's period read. The monthly budget stays this Mac's
   fold. There is no alias for a request that omitted `source`.
+- Extends [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md) and
+  [ADR 0031](0031-the-usage-fold-is-stored.md)
 
 ## Context
 

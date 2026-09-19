@@ -1,8 +1,8 @@
 # ADR 0012: Managed-data v3
 
-- Status: Superseded by [ADR 0018](./0018-single-managed-data-contract.md) and
-  [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md)
+- Status: Superseded
 - Date: 2026-08-14
+- Superseded by: 0018, 0024
 
 menubar-v0.0.9 shipped network v2 with closed provider and `BillingAgent` enums, so adding Cursor —
 by then both a quota provider and a local Usage source — would have made otherwise valid Account

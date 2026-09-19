@@ -1,6 +1,6 @@
 # ADR 0017: Derive observation freshness from the reading
 
-- Status: accepted
+- Status: Accepted
 - Date: 2026-08-24
 
 ## Decision

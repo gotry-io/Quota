@@ -2,9 +2,8 @@
 
 This document is the source of truth for current provider discovery and collection strategy order.
 All implementations must also satisfy the credential, network, process, redaction, and fixture rules
-in [`security.md`](security.md). For an external baseline of CodexBar's quota, usage, and fallback
-behavior across its full provider set, see
-[`codexbar-platform-capabilities.md`](codexbar-platform-capabilities.md).
+in [`security.md`](security.md). A dated CodexBar comparison (research, not a compatibility contract) is
+[`research/codexbar-platform-capabilities-2026-09-19.md`](research/codexbar-platform-capabilities-2026-09-19.md).
 
 The shared Rust service owns provider access and emits normalized protocol models for QuotaBar.
 QuotaRelay never handles the provider-specific inputs described here. Provider collection does not

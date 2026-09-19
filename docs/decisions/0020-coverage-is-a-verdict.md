@@ -1,7 +1,9 @@
 # ADR 0020: A read states how completely it was scanned
 
-- Status: Superseded by [ADR 0024](./0024-hour-versioned-usage-and-daily-rollups.md) on 2026-08-26
+- Status: Superseded
 - Date: 2026-08-25
+- Superseded by: 0024
+- Amended: 2026-08-26
 
 A managed read carried one word for coverage — `none`, `complete`, or `partial` — decided in D1 over
 every window the range spanned, instead of the windows themselves; `coverage_truncated` and

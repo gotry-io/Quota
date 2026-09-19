@@ -840,7 +840,7 @@ extension UsagePeriodRevision {
 }
 
 /// How much of an Account period Relay still holds, as `usage_period` answers it.
-struct UsagePeriodCoverage: Decodable, Equatable, Sendable {
+struct LocalServiceUsageCoverage: Decodable, Equatable, Sendable {
   let partial: Bool
   let dailyRetainedFrom: String?
   let hourlyRetainedFrom: String?
@@ -866,7 +866,7 @@ struct UsagePeriodCoverage: Decodable, Equatable, Sendable {
   }
 }
 
-extension UsagePeriodCoverage {
+extension LocalServiceUsageCoverage {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "partial", "dailyRetainedFrom", "hourlyRetainedFrom", "truncatedByRetention",
@@ -884,7 +884,7 @@ struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
   let usage: LocalUsagePeriodSummary
   let incomplete: Bool
   let detailsTruncated: Bool
-  let coverage: UsagePeriodCoverage?
+  let coverage: LocalServiceUsageCoverage?
   let timezone: String?
   let bounds: UsagePeriodBounds?
   let revision: UsagePeriodRevision?
@@ -894,7 +894,7 @@ struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
     usage: LocalUsagePeriodSummary,
     incomplete: Bool,
     detailsTruncated: Bool,
-    coverage: UsagePeriodCoverage? = nil,
+    coverage: LocalServiceUsageCoverage? = nil,
     timezone: String? = nil,
     bounds: UsagePeriodBounds? = nil,
     revision: UsagePeriodRevision? = nil
@@ -1023,7 +1023,7 @@ extension LocalServiceUsageDetail {
     usage = try container.decode(LocalUsagePeriodSummary.self, forKey: .usage)
     incomplete = try container.decode(Bool.self, forKey: .incomplete)
     detailsTruncated = try container.decode(Bool.self, forKey: .detailsTruncated)
-    coverage = try container.decodeIfPresent(UsagePeriodCoverage.self, forKey: .coverage)
+    coverage = try container.decodeIfPresent(LocalServiceUsageCoverage.self, forKey: .coverage)
     timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
     bounds = try container.decodeIfPresent(UsagePeriodBounds.self, forKey: .bounds)
     revision = try container.decodeIfPresent(UsagePeriodRevision.self, forKey: .revision)

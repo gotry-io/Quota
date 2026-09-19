@@ -2,17 +2,17 @@
 
 - Status: Accepted
 - Date: 2026-08-14
-- Related: [ADR 0013](./0013-readonly-ios-account-client.md)
-- Updated 2026-09-04: locally salted `selection_id`; unpublished v2 shape changes in place
-- Updated 2026-09-06: the same snapshot is the widget file for every Apple WidgetKit
+- Amended: 2026-09-04: locally salted `selection_id`; unpublished v2 shape changes in place
+- Amended: 2026-09-06: the same snapshot is the widget file for every Apple WidgetKit
   surface; optional per-item `pace` joins version 2 in place
-- Updated 2026-09-07: QuotaBar now embeds that extension, so "when an extension can be embedded"
+- Amended: 2026-09-07: QuotaBar now embeds that extension, so "when an extension can be embedded"
   is no longer a condition. Its App Group is `86Y537ZF24.group.io.gotry.quota` — a Developer ID Mac
   app may only join a team-prefixed group — and the views, selection rules, and publishing
   projection are shared packages
   ([ADR 0043](./0043-one-widget-view-package-for-both-platforms.md))
-- Updated 2026-09-19: Lock Screen accessory families show remaining quota, the same primary
+- Amended: 2026-09-19: Lock Screen accessory families show remaining quota, the same primary
   value Home Screen families show. They no longer print used percent.
+- Related: [ADR 0013](./0013-readonly-ios-account-client.md)
 
 ## Context
 
