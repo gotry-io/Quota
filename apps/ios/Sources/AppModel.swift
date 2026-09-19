@@ -91,7 +91,7 @@ final class AppModel {
   var isRefreshing = false
   var banner: Banner?
   var expiredMessage: String?
-  var selectedTab: AppTab = .overview
+  var selectedTab: AppTab = .quota
   var usagePeriod: UsagePeriodSelection = .last30Days
   /// The monthly budget this device keeps, which is a preference and never leaves it.
   var budget: UsageBudget
@@ -824,7 +824,7 @@ final class AppModel {
       Task { await completeEmailedSignIn(url) }
       return
     }
-    selectedTab = .overview
+    selectedTab = .quota
     if case .subscription(let id) = link {
       pendingSubscriptionSelection = id
       resolvePendingSubscriptionSelection()
@@ -1345,7 +1345,7 @@ final class AppModel {
     identities = .idle
     linkingProvider = nil
     linkFailure = nil
-    selectedTab = .overview
+    selectedTab = .quota
     usagePeriod = .last30Days
     pendingSubscriptionSelection = nil
     overviewPath = []
