@@ -52,7 +52,7 @@ Type (`QuotaDesign.Typography`) scales with Dynamic Type:
 | `meta` | `footnote` |
 | `sectionTitle` | `title3` semibold |
 
-Supporting copy may be `.secondary` at `subheadline` and larger. `footnote` / `caption` metadata
+Supporting copy may be `QuotaTheme.secondary` at `subheadline` and larger. `footnote` / `caption` metadata
 stays `.primary`.
 
 `QuotaCard` is the content card: `secondarySystemGroupedBackground`, 20-point continuous corners,
@@ -334,8 +334,8 @@ pushed view; it renders the selected last-good subscription.
 
 Widgets use the information hierarchy inspired by Nowdex: strongest remaining label first, then
 provider and window, then reset and updated age. Do not copy Nowdex assets or layout chrome.
-Home Screen families show remaining quota. Lock Screen accessory families show the Weekly
-window's used percent (`100 − remaining`) plus **Resets in …**.
+Home Screen and Lock Screen families show remaining quota. Lock Screen accessory families show
+the Weekly window's remaining percent plus **Resets in …**.
 
 Families:
 
@@ -344,12 +344,12 @@ Families:
 | systemSmall | One subscription (most constrained, or the configured one): provider, two windows shortest-cadence first, remaining, reset, **Updated** age |
 | systemMedium | Up to three providers, one row each (most constrained window, remaining, meter, reset). A configured subscription shows that subscription's windows instead. Compact Today tokens and cost, and **Updated** age |
 | systemLarge | Up to three providers × two windows: remaining, meter, countdown, then Today tokens/cost and **Updated** age |
-| accessoryCircular | Weekly used percent in an `accessoryCircularCapacity` Gauge ring; balance-only shows the amount |
-| accessoryRectangular | Three stacked lines: Weekly used percent, its **Resets in …**, then the subscription's second window with its own reset |
-| accessoryInline | `Weekly <used>% · Resets in …` |
+| accessoryCircular | Weekly remaining percent in an `accessoryCircularCapacity` Gauge ring; balance-only shows the amount |
+| accessoryRectangular | Three stacked lines: Weekly remaining percent, its **Resets in …**, then the subscription's second window with its own remaining and reset |
+| accessoryInline | `Weekly <remaining>% · Resets in …` |
 
 A window whose snapshot carries `pace` `runs_out` uses the system orange warning color for its
-remaining or used figure. No pace means no extra color. The extension never derives pace.
+remaining figure. No pace means no extra color. The extension never derives pace.
 
 Widgets are configurable through `AppIntentConfiguration`. The parameter is an optional
 subscription (`nil` is **Automatic**: the most constrained subscription in the snapshot). Each
@@ -441,16 +441,17 @@ Body, in order:
    A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
    bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
    is one emerald fill. Tokens bars use the brand ramp: cached input
-   `QuotaTheme.emerald.opacity(0.35)`, fresh input `QuotaTheme.emerald`, output
-   `Color.primary.opacity(0.85)`. A day with nothing in it is `tertiarySystemFill`, drawn at 12%
-   rather than left out. A caption legend of three 8pt squares (Cached, Fresh, Output) sits above
-   the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
+   `QuotaTheme.cachedFill`, fresh input `QuotaTheme.emerald`, output
+   `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
+   bar** in Shared product vocabulary. A caption legend of three 8pt squares (Cached, Fresh, Output)
+   sits above the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
    as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
    section footer names the calendar: **UTC days.** The All period has no Daily section.
 6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
    and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
-   same five emerald Activity steps; 24 bars under it are the hour-of-day totals, emerald, with
-   the busiest hour at full opacity and the others scaled (minimum 0.25). The read is
+   same five emerald Activity steps and the same cell outline; 24 bars under it are the
+   hour-of-day totals in emerald (empty hours use the meter track), height scaled to the busiest
+   hour. The read is
    `detail=hours` on the period's dates in this iPhone's zone
    ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
 7. Activity section, headed **Activity**:
@@ -462,7 +463,9 @@ Body, in order:
    - Loaded with data: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
      weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
      emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
-     the same mapping the website uses. Today has a primary stroke. Weekday and month labels use
+     the same mapping the website uses. The ramp matches the website; non-text contrast is the
+     cell outline (`activityBorder` ≥ 3:1 on the card for non-empty steps), not each fill step.
+     Today has a primary stroke. Weekday and month labels use
      `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
      last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
      adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
@@ -815,25 +818,23 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Do not announce raw account, device, or token identifiers.
 - Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes. The root
   phase replacement is an explicit `.opacity` transition; Reduce Motion only shortens it.
-- Reduce Transparency is system-owned. Do not skip Connect's contrast audit in the signed-out
-  or connecting state. Confirm is inline on the signed-out screen and runs the full accessibility
-  audit with no skip.
+- Reduce Transparency is system-owned. Confirm is inline on the signed-out screen and runs the
+  full accessibility audit with no skip.
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
-  Connect (no tab bar) still runs contrast.
-- Usage runs the same app-owned audit as the other screens, including contrast. A finding gates
-  the UITest only when the same type, element key, and screen appear on two consecutive passes
-  one second apart. Contrast whose element frame intersects the tab bar or a navigation bar
-  (including the Liquid Glass bloom of those frames) is chrome overlap, not a colour, and is
-  never a finding.
-- Unnamed glass (`issue.element == nil`) is ignored. "Contrast nearly passed" is attached as
-  unconfirmed, never a gate. The iOS 26 auditor still reports Dynamic Type
+- Contrast is guaranteed by `ContrastTokenTests`, which compute the WCAG 2.x contrast ratio of
+  every text and fill pairing the tokens allow in light and dark. The XCTest accessibility audit
+  still runs on every fixture screen and gates every type except contrast: the iOS 26
+  pixel-sampling contrast pass persistently reports low contrast on system label colour, which
+  is not low contrast.
+- Unnamed glass (`issue.element == nil`) is ignored. The iOS 26 auditor still reports Dynamic Type
   "partially unsupported" twice on system list configuration and on inner text of scaling fonts
   (`section.header.` / `section.footer.`, `overview.today` / `overview.subscription` tiles,
   app-owned identifiers, Form labels, the sheet **Done** button); clipping on
-  `usage.activity.empty` also reproduces. Those stay. Unconfirmed (once-only) findings attach as
-  `audit-unconfirmed-<screen>.txt`. A contrast pass that exceeds the auditor deadline on the
-  365-day heatmap may retry without contrast; that is a deadline, not a type skip.
+  `usage.activity.empty` also reproduces. Those stay. Unconfirmed (once-only) findings and
+  contrast findings attach as `audit-unconfirmed-<screen>.txt` (contrast tagged `[contrast]`).
+  A contrast pass that exceeds the auditor deadline on the 365-day heatmap may retry without
+  contrast; that is a deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a

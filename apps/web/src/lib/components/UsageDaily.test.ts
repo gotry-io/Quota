@@ -66,3 +66,24 @@ it("says so when a period reported no Usage at all", () => {
   render(UsageDaily, { rows: usageDailyRows([], { from: "2026-08-30", to: "2026-09-05" }) });
   expect(screen.getByText("No Usage on these days.")).toBeTruthy();
 });
+
+it("draws empty days as ticks and unpriced cost as unpriced", async () => {
+  const mixed = usageDailyRows(
+    [
+      day("2026-09-04", 800, 600, 200, "40000"),
+      {
+        ...day("2026-09-05", 400, 100, 100, "20000"),
+        cost: { amount_microusd: null, status: "unavailable", basis: "none" },
+      },
+    ],
+    { from: "2026-09-04", to: "2026-09-05" },
+  );
+  const { container } = render(UsageDaily, { rows: mixed });
+  expect(container.querySelectorAll(".usage-daily-bar.is-empty")).toHaveLength(0);
+  expect(container.querySelectorAll(".usage-daily-bar.is-unpriced")).toHaveLength(0);
+
+  await fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+
+  expect(container.querySelectorAll(".usage-daily-bar.is-unpriced")).toHaveLength(1);
+  expect(screen.getByRole("img", { name: /unpriced/i })).toBeTruthy();
+});

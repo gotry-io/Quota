@@ -36,7 +36,7 @@ struct SettingsView: View {
             Text(SettingsCopy.appearance)
             Spacer(minLength: 8)
             Text(settings.appearance.title)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(QuotaTheme.secondary)
           }
         }
         .accessibilityIdentifier("settings.appearance")
@@ -228,7 +228,7 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
       Text(SettingsCopy.identityMethodLine(model.identities.identities))
         .font(QuotaDesign.Typography.support)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(QuotaTheme.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -289,7 +289,7 @@ struct SettingsView: View {
         HStack {
           Text(ProvidersCopy.refused)
             .font(QuotaDesign.Typography.support)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(QuotaTheme.secondary)
             .fixedSize(horizontal: false, vertical: true)
           Spacer(minLength: 8)
           Button(ProvidersCopy.signInAgain) {
@@ -317,7 +317,7 @@ struct SettingsView: View {
       if let label = session.accountLabel, !label.isEmpty {
         Text(label)
           .font(QuotaDesign.Typography.support)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(QuotaTheme.secondary)
           .lineLimit(1)
       }
       Circle()

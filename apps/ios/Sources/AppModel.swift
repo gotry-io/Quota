@@ -105,6 +105,13 @@ final class AppModel {
   var activityRhythm: ActivityRhythmPhase = .idle
   /// Presented day sheet, if any.
   var activityDaySheet: ActivityDaySheetState?
+  /// The validator the last applied summary was current at, when the read carried one.
+  var summaryETag: String?
+  @ObservationIgnored private var activityGeneration = 0
+  @ObservationIgnored private var rhythmGeneration = 0
+  @ObservationIgnored private var lastActivityToday: String?
+  @ObservationIgnored private var lastActivitySummaryETag: String?
+  @ObservationIgnored private var lastRhythmKey: RhythmLoadKey?
   /// The managed Account session this device holds, and how far along it is. Not private because
   /// a visual fixture states it the way it states `phase`: what Usage, Devices, and the Settings
   /// account group show turns on whether there is an account, not on which phase the app is in.
@@ -297,6 +304,7 @@ final class AppModel {
     sessionDeviceID = session?.deviceID
     summary = cached?.summary
     fetchedAt = cached?.fetchedAt
+    summaryETag = cached?.etag
     fromCache = cached != nil
     switch session?.activation {
     case .active:
@@ -559,6 +567,7 @@ final class AppModel {
     forgetSession()
     summary = nil
     fetchedAt = nil
+    summaryETag = nil
     fromCache = false
     clearWidget()
     await connectAccount(switchingAccount: true)
@@ -652,6 +661,8 @@ final class AppModel {
   func setForeground(_ isForeground: Bool) async {
     if isForeground {
       await startProviderStatusPolling()
+      await loadActivity(force: true)
+      await loadRhythm(force: true)
     } else {
       stopProviderStatusPolling()
     }
@@ -880,8 +891,7 @@ final class AppModel {
 
   /// The activity days this device has, which is what a folded period is added up from.
   var activityDays: [UsageActivityDay] {
-    if case .loaded(let days) = activityChart { return days }
-    return []
+    activityChart.days ?? []
   }
 
   /// The selected period, read from the summary when it folds it and added up here when not.
@@ -893,7 +903,7 @@ final class AppModel {
     if let key = usagePeriod.summaryKey, let usage = summary?.usage {
       return period(usage, key)
     }
-    guard let range = usagePeriodRange, case .loaded(let days) = activityChart else { return nil }
+    guard let range = usagePeriodRange, let days = activityChart.days else { return nil }
     return UsageDayFold.period(days, from: range.from, to: range.to)
   }
 
@@ -906,7 +916,7 @@ final class AppModel {
   var budgetProgress: UsageBudgetProgress? {
     guard let amount = budget.amountUSD,
       let range = UsagePeriodSelection.thisMonth.range(today: now()),
-      case .loaded(let days) = activityChart
+      let days = activityChart.days
     else { return nil }
     let month = UsageDayFold.period(days, from: range.from, to: range.to)
     let spent = UsageBudgetProgress.dollars(microusd: month.cost.amountMicrousd) ?? 0
@@ -920,6 +930,8 @@ final class AppModel {
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
     usagePeriod = selection
     activityRhythm = .idle
+    lastRhythmKey = nil
+    rhythmGeneration += 1
   }
 
   func setBudget(_ next: UsageBudget) {
@@ -941,18 +953,37 @@ final class AppModel {
     }
   }
 
-  /// First visit to Usage asks once. Retry is explicit. The answer stays in memory.
+  /// First visit to Usage asks once. Last-good stays on screen while a later read revalidates.
   func loadActivity(force: Bool = false) async {
     guard phase == .signedIn else { return }
+    #if DEBUG
+      // Visual fixtures pose loading/failed; an unforced tab task must not replace them.
+      if skipsRestore, !force {
+        switch activityChart {
+        case .loading, .failed: return
+        default: break
+        }
+      }
+    #endif
+    if force, case .idle = activityChart { return }
+    let lastGood = activityChart.days
     if !force {
       switch activityChart {
-      case .idle: break
-      case .loading, .loaded, .failed: return
+      case .idle, .failed:
+        break
+      case .loading:
+        return
+      case .loaded, .refreshing:
+        guard activityNeedsRevalidation else { return }
       }
-    } else if case .loading = activityChart {
-      return
     }
-    activityChart = .loading
+    activityGeneration += 1
+    let generation = activityGeneration
+    if let lastGood {
+      activityChart = .refreshing(lastGood)
+    } else {
+      activityChart = .loading
+    }
     let range = activityDateRange
     let result = await activity.fetchUsageActivity(
       from: range.from,
@@ -960,35 +991,61 @@ final class AppModel {
       detail: nil,
       timeZone: nil
     )
-    guard phase == .signedIn else { return }
-    applyActivity(result)
+    guard generation == activityGeneration, phase == .signedIn else { return }
+    applyActivity(result, lastGood: lastGood)
   }
 
   /// The selected period's rhythm, omitted for All, which has no first day.
   func loadRhythm(force: Bool = false) async {
+    #if DEBUG
+      if skipsRestore, !force {
+        switch activityRhythm {
+        case .loading, .failed: return
+        default: break
+        }
+      }
+    #endif
     guard phase == .signedIn, let range = usagePeriodRange else {
       activityRhythm = .idle
+      lastRhythmKey = nil
       return
     }
+    let key = RhythmLoadKey(
+      from: range.from,
+      to: range.to,
+      today: activityToday,
+      etag: summaryETag
+    )
+    let lastGood = activityRhythm.hours
+    if force, case .idle = activityRhythm, lastRhythmKey == nil { return }
     if !force {
       switch activityRhythm {
-      case .idle: break
-      case .loading, .loaded, .failed: return
+      case .failed:
+        break
+      case .loading:
+        return
+      case .idle, .loaded, .refreshing:
+        if lastRhythmKey == key { return }
       }
-    } else if case .loading = activityRhythm {
-      return
     }
-    activityRhythm = .loading
+    rhythmGeneration += 1
+    let generation = rhythmGeneration
+    if let lastGood {
+      activityRhythm = .refreshing(
+        hoursOfDay: lastGood.hoursOfDay, weekdayHours: lastGood.weekdayHours)
+    } else {
+      activityRhythm = .loading
+    }
     let result = await activity.fetchUsageActivity(
       from: range.from,
       to: range.to,
       detail: .hours,
       timeZone: TimeZone.current.identifier
     )
-    guard phase == .signedIn, usagePeriodRange?.from == range.from,
+    guard generation == rhythmGeneration, phase == .signedIn, usagePeriodRange?.from == range.from,
       usagePeriodRange?.to == range.to
     else { return }
-    applyRhythm(result)
+    applyRhythm(result, lastGood: lastGood, key: key)
   }
 
   func retryActivity() async {
@@ -1036,23 +1093,39 @@ final class AppModel {
     }
   }
 
-  private func applyActivity(_ result: AccountActivityResult) {
+  private var activityNeedsRevalidation: Bool {
+    guard lastActivityToday != nil else { return false }
+    return lastActivityToday != activityToday || lastActivitySummaryETag != summaryETag
+  }
+
+  private func applyActivity(_ result: AccountActivityResult, lastGood: [UsageActivityDay]?) {
     switch result {
     case .activity(let response):
       activityChart = .loaded(response.days)
+      lastActivityToday = activityToday
+      lastActivitySummaryETag = summaryETag
       evaluateBudgetAlerts()
     case .failure(.sessionExpired):
       applyExpired()
     case .failure(.notSignedIn):
       applySignedOut()
     case .failure:
-      activityChart = .failed
+      if let lastGood {
+        activityChart = .loaded(lastGood)
+      } else {
+        activityChart = .failed
+      }
     }
   }
 
-  private func applyRhythm(_ result: AccountActivityResult) {
+  private func applyRhythm(
+    _ result: AccountActivityResult,
+    lastGood: (hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])?,
+    key: RhythmLoadKey
+  ) {
     switch result {
     case .activity(let response):
+      lastRhythmKey = key
       if let hours = response.hoursOfDay, let weekdays = response.weekdayHours,
         hours.contains(where: { $0.totalTokens > 0 })
       {
@@ -1065,7 +1138,12 @@ final class AppModel {
     case .failure(.notSignedIn):
       applySignedOut()
     case .failure:
-      activityRhythm = .failed
+      if let lastGood {
+        activityRhythm = .loaded(
+          hoursOfDay: lastGood.hoursOfDay, weekdayHours: lastGood.weekdayHours)
+      } else {
+        activityRhythm = .failed
+      }
     }
   }
 
@@ -1082,7 +1160,7 @@ final class AppModel {
   }
 
   private func reportedDay(on date: String) -> UsageActivityDay {
-    if case .loaded(let days) = activityChart, let day = days.first(where: { $0.date == date }) {
+    if let day = activityChart.days?.first(where: { $0.date == date }) {
       return day
     }
     return UsageActivityChart.emptyDay(date: date)
@@ -1099,9 +1177,12 @@ final class AppModel {
   }
 
   private func apply(_ result: AccountRefreshResult, collected: Bool) async {
+    let previousETag = summaryETag
+    let previousSummary = summary
     summary = result.summary
     fetchedAt = result.fetchedAt
     fromCache = result.fromCache
+    summaryETag = result.etag
     if isPendingSession {
       await applyPending(result)
       return
@@ -1131,6 +1212,32 @@ final class AppModel {
     if phase == .signedIn {
       resolvePendingSubscriptionSelection()
       pruneOverviewPath()
+      revalidateActivityIfSummaryChanged(
+        previousETag: previousETag,
+        previousSummary: previousSummary,
+        result: result
+      )
+    }
+  }
+
+  /// A new summary body is new Usage behind the chart; last-good stays until the activity read
+  /// answers. An unchanged ETag (or an equal summary when no ETag was offered) is not new data.
+  private func revalidateActivityIfSummaryChanged(
+    previousETag: String?,
+    previousSummary: AccountSummary?,
+    result: AccountRefreshResult
+  ) {
+    guard result.error == nil else { return }
+    let changed: Bool
+    if let previousETag, let newETag = result.etag {
+      changed = previousETag != newETag
+    } else {
+      changed = result.summary != previousSummary
+    }
+    guard changed else { return }
+    Task { @MainActor in
+      await loadActivity(force: true)
+      await loadRhythm(force: true)
     }
   }
 
@@ -1229,6 +1336,7 @@ final class AppModel {
   private func applySignedOut() {
     summary = nil
     fetchedAt = nil
+    summaryETag = nil
     fromCache = false
     banner = nil
     expiredMessage = nil
@@ -1244,6 +1352,11 @@ final class AppModel {
     activityChart = .idle
     activityRhythm = .idle
     activityDaySheet = nil
+    lastActivityToday = nil
+    lastActivitySummaryETag = nil
+    lastRhythmKey = nil
+    activityGeneration += 1
+    rhythmGeneration += 1
     // The providers this phone signed in to are not the account's, so what it collects for
     // itself survives losing the account — and so does the background window that refreshes it.
     updateBackgroundRefreshAsk()
@@ -1342,14 +1455,39 @@ enum ActivityChartPhase: Equatable, Sendable {
   case idle
   case loading
   case loaded([UsageActivityDay])
+  case refreshing([UsageActivityDay])
   case failed
+
+  var days: [UsageActivityDay]? {
+    switch self {
+    case .loaded(let days), .refreshing(let days): return days
+    default: return nil
+    }
+  }
 }
 
 enum ActivityRhythmPhase: Equatable, Sendable {
   case idle
   case loading
   case loaded(hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])
+  case refreshing(hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])
   case failed
+
+  var hours: (hoursOfDay: [QuotaWire.UsageHourOfDay], weekdayHours: [[Int]])? {
+    switch self {
+    case .loaded(let hours, let weekdays), .refreshing(let hours, let weekdays):
+      return (hours, weekdays)
+    default:
+      return nil
+    }
+  }
+}
+
+private struct RhythmLoadKey: Equatable {
+  var from: String
+  var to: String
+  var today: String
+  var etag: String?
 }
 
 enum ActivityDayAgentsPhase: Equatable, Sendable {

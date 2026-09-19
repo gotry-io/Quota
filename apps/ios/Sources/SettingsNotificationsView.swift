@@ -57,7 +57,7 @@ struct SettingsNotificationsView: View {
       if settings.authorizationDenied {
         Text(SettingsCopy.permissionDenied)
           .font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(QuotaTheme.secondary)
           .fixedSize(horizontal: false, vertical: true)
         Link(SettingsCopy.openSettings, destination: SettingsCopy.openSettingsURL)
           .accessibilityLabel(SettingsCopy.openSettings)
@@ -65,7 +65,7 @@ struct SettingsNotificationsView: View {
 
       if notificationRows.isEmpty {
         Text(SettingsCopy.emptyAlerts)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(QuotaTheme.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
     } footer: {

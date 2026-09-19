@@ -58,7 +58,7 @@ struct UsageDailySection: View {
 
   private var legend: some View {
     HStack(spacing: 12) {
-      legendItem(QuotaTheme.emerald.opacity(0.35), "Cached")
+      legendItem(QuotaTheme.cachedFill, "Cached")
       legendItem(QuotaTheme.emerald, "Fresh")
       legendItem(Color.primary.opacity(0.85), "Output")
     }
@@ -78,7 +78,7 @@ struct UsageDailySection: View {
 
   private var chart: some View {
     GeometryReader { proxy in
-      let maximum = rows.map(value(of:)).max() ?? 0
+      let maximum = UsageDailyFold.quantitativeMaximum(rows, metric: metric)
       let spacing: CGFloat = 2
       let width = max(
         2,
@@ -96,9 +96,32 @@ struct UsageDailySection: View {
 
   @ViewBuilder
   private func bar(_ row: UsageDailyFold.Row, maximum: Int, height: CGFloat) -> some View {
-    let amount = value(of: row)
+    switch UsageDailyFold.barKind(row, metric: metric) {
+    case .amount(let amount):
+      quantitativeBar(row, amount: amount, maximum: maximum, height: height)
+    case .empty:
+      RoundedRectangle(cornerRadius: 1, style: .continuous)
+        .fill(Color(uiColor: .tertiarySystemFill))
+        .frame(height: 2)
+    case .unpriced:
+      RoundedRectangle(cornerRadius: 1, style: .continuous)
+        .strokeBorder(
+          Color(uiColor: .tertiaryLabel),
+          style: StrokeStyle(lineWidth: 1, dash: [1.5, 1])
+        )
+        .frame(height: 2)
+    }
+  }
+
+  @ViewBuilder
+  private func quantitativeBar(
+    _ row: UsageDailyFold.Row,
+    amount: Int,
+    maximum: Int,
+    height: CGFloat
+  ) -> some View {
     let scale = maximum > 0 ? CGFloat(amount) / CGFloat(maximum) : 0
-    if mode == .tokens, row.totals.totalTokens > 0 {
+    if metric == .tokens, row.totals.totalTokens > 0 {
       let barHeight = max(2, height * scale)
       VStack(spacing: 0) {
         segment(
@@ -117,19 +140,15 @@ struct UsageDailySection: View {
           row.cachedInputTokens,
           of: row.totals.totalTokens,
           height: barHeight,
-          fill: QuotaTheme.emerald.opacity(0.35)
+          fill: QuotaTheme.cachedFill
         )
       }
       .frame(height: barHeight)
       .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-    } else if amount > 0 {
+    } else {
       RoundedRectangle(cornerRadius: 2, style: .continuous)
         .fill(QuotaTheme.emerald)
         .frame(height: max(2, height * scale))
-    } else {
-      RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .fill(Color(uiColor: .tertiarySystemFill))
-        .frame(height: max(2, height * 0.12))
     }
   }
 
@@ -139,17 +158,14 @@ struct UsageDailySection: View {
       .frame(height: whole > 0 ? height * CGFloat(part) / CGFloat(whole) : 0)
   }
 
-  private func value(of row: UsageDailyFold.Row) -> Int {
-    mode == .tokens ? row.totals.totalTokens : Int(row.cost.amountMicrousd ?? "0") ?? 0
-  }
+  private var metric: UsageDailyMetric { mode == .tokens ? .tokens : .cost }
 
   private var legendCopy: String {
     mode == .tokens ? "Bars stack cached input, fresh input, and output." : "Bars are cost."
   }
 
   private var chartAccessibilityValue: String {
-    let total = rows.reduce(0) { $0 + $1.totals.totalTokens }
-    return "\(rows.count) days, \(QuotaFormat.accessibleCount(total)) tokens in total"
+    UsageDailyFold.chartAccessibilityValue(rows, metric: metric)
   }
 
   private func tableRow(_ row: UsageDailyFold.Row) -> some View {
@@ -167,10 +183,19 @@ struct UsageDailySection: View {
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(QuotaFormat.utcLongDate(row.date))
-    .accessibilityValue(
-      "\(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost)). \(detailLine(row))"
-    )
+    .accessibilityValue(tableAccessibilityValue(row))
     .accessibilityIdentifier("usage.daily.row")
+  }
+
+  private func tableAccessibilityValue(_ row: UsageDailyFold.Row) -> String {
+    switch UsageDailyFold.barKind(row, metric: metric) {
+    case .unpriced:
+      return
+        "\(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, unpriced. \(detailLine(row))"
+    default:
+      return
+        "\(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost)). \(detailLine(row))"
+    }
   }
 
   private func detailLine(_ row: UsageDailyFold.Row) -> String {

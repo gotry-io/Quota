@@ -1,6 +1,8 @@
 <script lang="ts">
 import { formatCost, formatCount } from "$lib/format";
 import {
+  dailyBarKind,
+  dailyChartSummary,
   dailyMaximum,
   dailyTooltip,
   dailyValue,
@@ -68,11 +70,22 @@ function monthName(date: string): string {
   {#if !hasUsage}
     <p class="empty-state">No Usage on these days.</p>
   {:else}
-    <div class="usage-daily-plot" role="img" aria-label="Usage by day">
+    <div
+      class="usage-daily-plot"
+      role="img"
+      aria-label="Usage by day. {dailyChartSummary(rows, mode)}"
+    >
       {#each rows as row, index (row.date)}
+        {@const kind = dailyBarKind(row, mode)}
         <div class="usage-daily-column">
-          <div class="usage-daily-bar" style:height="{barPercent(row)}%" title={dailyTooltip(row)}>
-            {#if mode === "tokens"}
+          <div
+            class="usage-daily-bar"
+            class:is-empty={kind === "empty"}
+            class:is-unpriced={kind === "unpriced"}
+            style:height={kind === "amount" ? `${barPercent(row)}%` : undefined}
+            title={dailyTooltip(row, mode)}
+          >
+            {#if mode === "tokens" && kind === "amount"}
               <i
                 class="usage-daily-segment segment-output"
                 style:height="{segmentPercent(row, row.segments.output)}%"

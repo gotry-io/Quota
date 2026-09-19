@@ -132,15 +132,49 @@ export function dailyMaximum(rows: readonly UsageDailyRow[], mode: "tokens" | "c
   return rows.reduce((maximum, row) => Math.max(maximum, dailyValue(row, mode)), 0);
 }
 
-/** What one day's bar measures, in tokens or in micro-USD. */
+/** What one day's bar measures, in tokens or in micro-USD. Unpriced cost is not a zero. */
 export function dailyValue(row: UsageDailyRow, mode: "tokens" | "cost"): number {
   if (mode === "tokens") return row.totals.total_tokens;
+  if (row.cost.status === "unavailable") return 0;
   return Number(row.cost.amount_microusd ?? "0");
 }
 
+export type DailyBarKind = "amount" | "empty" | "unpriced";
+
+/** How one UTC day is drawn: a quantitative bar, a baseline tick, or an unpriced mark. */
+export function dailyBarKind(row: UsageDailyRow, mode: "tokens" | "cost"): DailyBarKind {
+  if (mode === "tokens") return row.totals.total_tokens > 0 ? "amount" : "empty";
+  if (row.totals.total_tokens === 0) return "empty";
+  if (row.cost.status === "unavailable") return "unpriced";
+  return dailyValue(row, "cost") > 0 ? "amount" : "empty";
+}
+
 /** The one line a day's bar carries for a pointer and for a screen reader. */
-export function dailyTooltip(row: UsageDailyRow): string {
-  return `${row.date} · ${formatCount(row.totals.total_tokens)} tokens · ${formatCost(row.cost)}`;
+export function dailyTooltip(row: UsageDailyRow, mode: "tokens" | "cost" = "tokens"): string {
+  if (mode === "tokens") {
+    return `${row.date} · ${formatCount(row.totals.total_tokens)} tokens`;
+  }
+  if (dailyBarKind(row, "cost") === "unpriced") return `${row.date} · unpriced`;
+  return `${row.date} · ${formatCost(row.cost)}`;
+}
+
+/** Spoken summary of the plot, following Tokens / Cost mode. */
+export function dailyChartSummary(rows: readonly UsageDailyRow[], mode: "tokens" | "cost"): string {
+  if (mode === "tokens") {
+    const total = rows.reduce((sum, row) => sum + row.totals.total_tokens, 0);
+    return `${rows.length} days, ${formatCount(total)} tokens in total`;
+  }
+  const unpriced = rows.filter((row) => dailyBarKind(row, "cost") === "unpriced").length;
+  const priced = rows.filter((row) => dailyBarKind(row, "cost") === "amount");
+  if (priced.length === 0) {
+    return unpriced > 0
+      ? `${rows.length} days, ${unpriced} unpriced`
+      : `${rows.length} days, no cost`;
+  }
+  const amount = priced.reduce((sum, row) => sum + dailyValue(row, "cost"), 0);
+  const costText = formatCost({ amount_microusd: String(amount), status: "complete" });
+  if (unpriced === 0) return `${rows.length} days, ${costText} in total`;
+  return `${rows.length} days, ${costText} in total, ${unpriced} unpriced`;
 }
 
 function emptyTotals(): TotalsView {

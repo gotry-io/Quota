@@ -43,7 +43,7 @@ struct ConnectAccountView: View {
         .foregroundStyle(.primary)
       Text("Your AI quota, on every device.")
         .font(.title3)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(QuotaTheme.secondary)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
     }

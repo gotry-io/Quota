@@ -224,7 +224,7 @@ struct SubscriptionDetailView: View {
   private func accountLabel(_ label: String) -> some View {
     Text(label)
       .font(QuotaDesign.Typography.support)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(QuotaTheme.secondary)
       .fixedSize(horizontal: false, vertical: true)
       .accessibilityIdentifier("subscription.account")
       .accessibilityLabel("Account: \(label)")
@@ -403,7 +403,7 @@ struct SubscriptionDetailView: View {
   private func sourceSymbol(_ row: SubscriptionDetailContent.SourceRow) -> some View {
     Image(systemName: row.displayName == ThisDevice.displayName ? "iphone" : "laptopcomputer")
       .font(.body)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(QuotaTheme.secondary)
       .frame(width: QuotaDesign.Layout.markSize, alignment: .center)
       .accessibilityHidden(true)
   }

@@ -65,7 +65,7 @@ struct UsageView: View {
   ///
   /// The table covers the period's own days, bounded by the activity days this phone holds.
   private var dailyRows: [UsageDailyFold.Row] {
-    guard case .loaded(let days) = model.activityChart, let range = model.usagePeriodRange else {
+    guard let days = model.activityChart.days, let range = model.usagePeriodRange else {
       return []
     }
     let available = UsageActivityCalendar.range(endingOn: model.activityToday)
@@ -107,8 +107,8 @@ struct UsageView: View {
         if UsageDailyFold.hasUsage(dailyRows) {
           UsageDailySection(rows: dailyRows)
         }
-        if case .loaded(let hours, let weekdays) = model.activityRhythm {
-          UsageRhythmSection(hoursOfDay: hours, weekdayHours: weekdays)
+        if let hours = model.activityRhythm.hours {
+          UsageRhythmSection(hoursOfDay: hours.hoursOfDay, weekdayHours: hours.weekdayHours)
         }
         UsageActivitySection(model: model)
         UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
@@ -390,7 +390,7 @@ struct UsageTopModelsSection: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
               Text("\(index + 1)")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(QuotaTheme.secondary)
               Text(row.displayName)
                 .font(.subheadline)
                 .foregroundStyle(Color.primary)

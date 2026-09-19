@@ -49,7 +49,7 @@ struct UsageRhythmSection: View {
           ForEach(0..<7, id: \.self) { weekday in
             Text(Self.weekdayLabels[weekday])
               .font(.caption2)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(QuotaTheme.secondary)
               .frame(width: labelWidth, height: cell, alignment: .leading)
           }
         }
@@ -60,12 +60,13 @@ struct UsageRhythmSection: View {
                 let tokens = weekday < weekdayHours.count && hour < weekdayHours[weekday].count
                   ? weekdayHours[weekday][hour]
                   : 0
+                let level = UsageActivityChart.activityLevel(tokens, maximum: maximum)
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                  .fill(
-                    QuotaTheme.activityFill(
-                      UsageActivityChart.activityLevel(tokens, maximum: maximum)
-                    )
-                  )
+                  .fill(QuotaTheme.activityFill(level))
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                      .stroke(QuotaTheme.activityBorder(level), lineWidth: 1)
+                  }
                   .frame(width: cell, height: cell)
               }
             }
@@ -81,9 +82,7 @@ struct UsageRhythmSection: View {
       ForEach(hoursOfDay, id: \.hour) { hour in
         let share = maximum > 0 ? CGFloat(hour.totalTokens) / CGFloat(maximum) : 0
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(
-            QuotaTheme.emerald.opacity(hour.totalTokens > 0 ? max(0.25, share) : 0.12)
-          )
+          .fill(hour.totalTokens > 0 ? QuotaTheme.emerald : QuotaTheme.meterTrack)
           .frame(maxWidth: .infinity)
           .frame(height: max(2, 36 * share))
       }

@@ -88,7 +88,7 @@ struct ProviderQuotaRow: View {
 
   private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
     guard let tone = ProviderServiceStatusCopy.tone(indicator) else {
-      return Color.secondary
+      return QuotaTheme.secondary
     }
     return QuotaTheme.color(for: tone)
   }
@@ -96,7 +96,7 @@ struct ProviderQuotaRow: View {
   private func accountLabel(_ label: String) -> some View {
     Text(label)
       .font(QuotaDesign.Typography.support)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(QuotaTheme.secondary)
       .fixedSize(horizontal: false, vertical: true)
   }
 }
@@ -205,7 +205,7 @@ struct QuotaWindowBlock: View {
   private var windowTitle: some View {
     Text(QuotaFormat.windowTitle(window))
       .font(QuotaDesign.Typography.support)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(QuotaTheme.secondary)
       .fixedSize(horizontal: false, vertical: true)
   }
 

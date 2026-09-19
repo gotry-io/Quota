@@ -26,7 +26,7 @@ struct UsageActivitySection: View {
         .tint(.primary)
         .accessibilityLabel("Retry")
         .accessibilityIdentifier("usage.activity.retry")
-      case .loaded(let days):
+      case .loaded(let days), .refreshing(let days):
         if UsageActivityChart.hasReportedActivity(days) {
           loaded(
             UsageActivityChart.build(
