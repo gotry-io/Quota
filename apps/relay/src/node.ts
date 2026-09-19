@@ -2,7 +2,13 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { runHourlyMaintenance } from "./app.ts";
 import { type RelayPlatform, type RelaySecrets, respondAsRelay } from "./deployment.ts";
-import { recordConnectionAddress } from "./platform/client-address.ts";
+import {
+  applyNodeForwardedTrust,
+  bindTrustedProxies,
+  DEFAULT_TRUSTED_PROXIES,
+  parseClientAddressHeader,
+  parseTrustedProxies,
+} from "./platform/client-address.ts";
 import { applyMigrations } from "./platform/migrations.ts";
 import { MemoryReadingCache } from "./platform/reading-cache.ts";
 import { SqliteDatabase } from "./platform/sqlite-database.ts";
@@ -46,6 +52,17 @@ function readSecrets(environment: NodeJS.ProcessEnv): RelaySecrets {
   };
 }
 
+const trustedProxies = parseTrustedProxies(process.env.RELAY_TRUSTED_PROXIES);
+const clientAddressHeader = parseClientAddressHeader(process.env.RELAY_CLIENT_ADDRESS_HEADER);
+bindTrustedProxies(trustedProxies);
+console.log(
+  JSON.stringify({
+    event: "relay_client_address_trust",
+    trusted_proxies: process.env.RELAY_TRUSTED_PROXIES?.trim() || DEFAULT_TRUSTED_PROXIES,
+    client_address_header: clientAddressHeader,
+  }),
+);
+
 const database = new SqliteDatabase(process.env.RELAY_SQLITE_PATH ?? "/data/relay.sqlite");
 const applied = await applyMigrations(
   database,
@@ -71,7 +88,12 @@ const platform: RelayPlatform = {
 const server = serve({
   port: Number(process.env.PORT ?? 8787),
   async fetch(request, environment) {
-    recordConnectionAddress(request, environment.incoming.socket.remoteAddress);
+    applyNodeForwardedTrust(
+      request,
+      environment.incoming.socket.remoteAddress,
+      trustedProxies,
+      clientAddressHeader,
+    );
     const url = new URL(request.url);
     // Cloudflare serves the built files ahead of the Worker; here nothing is in front, so the
     // one file the build produced for this path is the answer before a document is rendered.

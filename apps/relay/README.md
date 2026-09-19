@@ -204,15 +204,20 @@ It reads the same secrets the Worker does, from the environment, plus three of i
 | `RELAY_SQLITE_PATH` | `/data/relay.sqlite` | The SQLite file. WAL, foreign keys on. |
 | `RELAY_STATIC_DIR` | `apps/web/.svelte-kit/output/client` | The built website's client files. |
 | `PORT` | `8787` | The port to listen on. |
+| `RELAY_TRUSTED_PROXIES` | loopback, RFC1918, unique-local IPv6 | CIDRs/addresses whose chosen client-address header Node will honour. Invalid values refuse to start. |
+| `RELAY_CLIENT_ADDRESS_HEADER` | `x-forwarded-for` | `x-forwarded-for` or `cf-connecting-ip`. A Cloudflare-fronted origin must set `cf-connecting-ip`. Invalid values refuse to start. |
 
 Each keyed secret must still contain at least 32 random characters. A missing value, or a
 `QUOTA_SESSION_HASH_KEY` too short to hash with, refuses to start rather than answering every
 request with a 500.
 
-Nothing terminates TLS or states the caller's address for it, so run it behind something that
-does: `CF-Connecting-IP` is read first, then the first `X-Forwarded-For` hop, then the connection's
-own address. `caches.default` has no equivalent here, so the last-good provider status readings
-live in the process and a restart re-polls them.
+Nothing terminates TLS. The Node entry trusts only `RELAY_CLIENT_ADDRESS_HEADER` from
+`RELAY_TRUSTED_PROXIES` (the socket peer otherwise). A Cloudflare-fronted deployment must set
+`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip` and restrict the origin to Cloudflare's ranges;
+otherwise Caddy overwrites `X-Forwarded-For` and inbound `CF-Connecting-IP` is ignored. The rule,
+both topologies, and the default CIDR list are in
+[the self-host runbook](../../docs/relay-self-host.md). `caches.default` has no equivalent here,
+so the last-good provider status readings live in the process and a restart re-polls them.
 
 ## Docker
 

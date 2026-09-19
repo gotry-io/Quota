@@ -248,7 +248,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   batch as everything else.
 - `GET /api/v6/public/<handle>/usage` and `GET /api/v6/public/leaderboard` are the two routes
   answered `Cache-Control: public, max-age=300`, because their answers are the same for every
-  reader. Both are rate limited by Cloudflare's trusted connecting-IP metadata, and both compute
+  reader. Both are rate limited per caller address after the Relay entry has decided what to
+  trust (Workers: Cloudflare's `CF-Connecting-IP`; Node: only `RELAY_CLIENT_ADDRESS_HEADER`
+  from `RELAY_TRUSTED_PROXIES`, otherwise the socket peer), and both compute
   their `ETag` before any Usage row is read. The leaderboard takes no principal and no handle, and
   `period` accepts only `30d`. `PUT /api/v2/account/profile` writes all five owner values, and
   requires `account:manage`, an exact same-origin `Origin` with same-origin Fetch Metadata when
@@ -410,8 +412,14 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   daily rollup, and bounded rate limits. Nothing is kept
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
-- Rate limits use fixed-window counters keyed by hashes of action and subject, and an anonymous
-  network subject may come only from Cloudflare's trusted connecting-IP metadata. Readiness probes
+- Rate limits use fixed-window counters keyed by hashes of action and subject. An anonymous
+  network subject is the caller address after the entry has decided what to trust: on Workers,
+  Cloudflare's `CF-Connecting-IP` (clients cannot forge it there) and never `X-Forwarded-For`;
+  on Node, only the one header `RELAY_CLIENT_ADDRESS_HEADER` names (`x-forwarded-for` by
+  default, or `cf-connecting-ip`) and only when the socket peer is listed in
+  `RELAY_TRUSTED_PROXIES` (loopback, RFC1918, and unique-local IPv6 when unset), taking
+  `CF-Connecting-IP` or the right-most `X-Forwarded-For` hop that is not itself a trusted
+  proxy, and the socket peer otherwise. IPv4-mapped IPv6 peers match IPv4 CIDRs. Readiness probes
   and the hourly schedule delete at most 100 expired rows per credential and observation table per
   run, and consuming a limit collects at most 100 expired counters inline; each delete addresses
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
