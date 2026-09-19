@@ -30,51 +30,22 @@ client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-r
   [`scripts/relay-sqlite-backup.sh`](../scripts/relay-sqlite-backup.sh)).
 - **Edge** Caddy (Portainer stack `caddy`, `/opt/caddy/Caddyfile`) terminates TLS
   with a Let's Encrypt certificate obtained through Cloudflare DNS-01 and proxies
-  to `quota-relay:8787` on the shared `web` network. Relay honours `CF-Connecting-IP`
-  and `X-Forwarded-For` only from peers in `RELAY_TRUSTED_PROXIES` (unset: loopback,
-  RFC1918, unique-local IPv6 — Caddy on the Docker `web` network is inside that
-  default). Caddy is the first trusted boundary, so it must not forward a
-  client-supplied chain:
-
-  **Cloudflare-proxied zone** (production: proxied A record). Set
-  `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`. Cloudflare sets
-  `CF-Connecting-IP` and clients cannot forge it there. Pass that header through
-  and *overwrite* `X-Forwarded-For` with it, rather than appending whatever the
-  client sent:
-
-  ```caddyfile
-  quota.gotry.io {
-  	import edge
-  	log {
-  		output stdout
-  		format json
-  	}
-  	reverse_proxy http://quota-relay:8787 {
-  		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
-  	}
-  }
-  ```
-
-  **Not Cloudflare-proxied** (direct origin, or a leaked origin IP). Leave
-  `RELAY_CLIENT_ADDRESS_HEADER` unset (`x-forwarded-for`). Clients can send
-  `CF-Connecting-IP` themselves. Strip it and overwrite `X-Forwarded-For` with
-  the socket client Caddy actually accepted:
-
-  ```caddyfile
-  quota.gotry.io {
-  	import edge
-  	reverse_proxy http://quota-relay:8787 {
-  		header_up -CF-Connecting-IP
-  		header_up X-Forwarded-For {remote_host}
-  	}
-  }
-  ```
-
-  The `deploy/relay/docker-compose.yml` Tunnel layout has no Caddy: `cloudflared`
-  is a Docker-network peer (trusted by the default) and sets `CF-Connecting-IP`.
-  Set `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`. An untrusted peer that can
-  reach `:8787` has its forwarding headers discarded; the rate-limit identity is
-  the socket address.
+  to `quota-relay:8787` on the shared `web` network, passing request headers
+  through unchanged (its default).
+- **Client address** Relay rate-limits per caller address, and behind Cloudflare
+  that address exists only as `CF-Connecting-IP`. The stack file fixes
+  `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`; Relay reads it only from a peer in
+  `RELAY_TRUSTED_PROXIES` (unset: loopback, RFC1918, unique-local IPv6 — Caddy on
+  the `web` network is inside that) and ignores `X-Forwarded-For`.
+  **Accepted risk (owner, 2026-09-19):** `dmit:443` also answers requests that did not
+  come through Cloudflare, and such a request can write `CF-Connecting-IP` itself.
+  The header keys only per-address rate limits — never authentication, sessions or
+  stored data — so the origin is left open rather than restricted to Cloudflare's
+  ranges or moved behind a Tunnel.
+  A deployment that is not behind Cloudflare leaves the header unset
+  (`x-forwarded-for`) and has its proxy overwrite `X-Forwarded-For` with the socket
+  client (`header_up -CF-Connecting-IP` and `header_up X-Forwarded-For {remote_host}`
+  in Caddy).
 
 - **DNS** `quota.gotry.io` is a proxied A record to the dmit address. `wrangler.jsonc`
   declares no route, so nothing can re-bind the name to a Worker by accident.
@@ -85,15 +56,10 @@ It is not what production runs.
 
 ## Secrets
 
-**Upgrade note (owner actions).** A Cloudflare-fronted deployment MUST set
-`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip` when it takes this version, or
-every client collapses into the Cloudflare edge addresses Caddy reports as
-`X-Forwarded-For`. The origin must only accept Cloudflare's ranges (Caddy
-`remote_ip` matcher or a host firewall): a request that reaches Caddy without
-going through Cloudflare can send `CF-Connecting-IP` itself. Both are owner
-actions; the process will not infer either from DNS. Unset
-`RELAY_CLIENT_ADDRESS_HEADER` is `x-forwarded-for` (Caddy overwrites that
-header; inbound `CF-Connecting-IP` is ignored).
+**Client-address header.** The stack file sets
+`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`. An image from 0.0.5 on without it
+reads `X-Forwarded-For`, which Caddy fills with the Cloudflare edge it saw, so every
+client would share a handful of rate-limit buckets.
 
 The Node process reads the same names as the Worker, plus `RELAY_SQLITE_PATH`,
 `RELAY_STATIC_DIR`, `PORT` (the stack file sets those three),

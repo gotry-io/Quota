@@ -213,10 +213,9 @@ request with a 500.
 
 Nothing terminates TLS. The Node entry trusts only `RELAY_CLIENT_ADDRESS_HEADER` from
 `RELAY_TRUSTED_PROXIES` (the socket peer otherwise). A Cloudflare-fronted deployment must set
-`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip` and restrict the origin to Cloudflare's ranges;
-otherwise Caddy overwrites `X-Forwarded-For` and inbound `CF-Connecting-IP` is ignored. The rule,
-both topologies, and the default CIDR list are in
-[the self-host runbook](../../docs/relay-self-host.md). `caches.default` has no equivalent here,
+`RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`, or every client shares the Cloudflare edge
+addresses its proxy reports. The production setting, the accepted risk of a directly reachable
+origin, and the default CIDR list are in [the self-host runbook](../../docs/relay-self-host.md). `caches.default` has no equivalent here,
 so the last-good provider status readings live in the process and a restart re-polls them.
 
 ## Docker

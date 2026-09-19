@@ -10,6 +10,11 @@ services:
       RELAY_SQLITE_PATH: /data/relay.sqlite
       RELAY_STATIC_DIR: apps/web/.svelte-kit/output/client
       NODE_OPTIONS: --max-old-space-size=64
+      # Behind Cloudflare the client exists only as CF-Connecting-IP; Relay reads it
+      # from Caddy (a private-range peer) and ignores X-Forwarded-For. The origin is
+      # reachable directly, so the header is forgeable there — accepted, since it only
+      # keys per-address rate limits (docs/relay-self-host.md, Topology).
+      RELAY_CLIENT_ADDRESS_HEADER: cf-connecting-ip
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
       APPLE_SIGNIN_TEAM_ID: ${APPLE_SIGNIN_TEAM_ID}
