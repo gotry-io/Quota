@@ -377,96 +377,105 @@ Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy
 Overview. Every other period is added up on this iPhone from the activity days it already holds,
 which is why it has totals and cost but no model breakdown. Opening Usage requests the last 365 UTC
 days of activity once (`from = today-364`, `to = today`) and keeps that answer in memory; it does
-not write it to disk. A failure stays in the Activity section and does not block the period totals
-or model sections, but it does leave a folded period and the budget bar with nothing to add up.
+not write it to disk. A failure stays in **Activity patterns** and does not block the period totals
+or the breakdown, but it does leave a folded period with nothing to add up.
 
 Header:
 
-- Title is **Usage**.
+- Title is **Usage**. Identifiers: `usage.root` on the tab, `usage.breakdown` / `usage.patterns`
+  on those destinations, `usage.budget` on the budget row when one is set, `usage.day` on the day
+  sheet.
 
 Body, in order:
 
-1. A `QuotaCard` at the top with the segmented period control and the stepper. Segments are
-   **Day**, **Week**, **Month**, **7D**, **30D**, and **All**, whose VoiceOver names are the full
-   ones in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). Default is **Last 30 days**. A custom range selects none of
-   the six, so the control shows nothing selected. The selection lives in memory for the signed-in
-   session. It is a system content filter, not a floating navigation action, and it scrolls with
-   the List. The stepper is a **Previous period** chevron, the range the period covers in
-   `support`, a **Next period** chevron, and a calendar button. Stepping applies to Day, Week, and
-   Month only, and the current unit is the last, so both chevrons are disabled on a fixed window
-   and **Next period** is disabled on the current one. The calendar button opens a **Custom range**
+1. Period chooser: a menu at every size (not a segmented control), labelled with the full period
+   names in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary) —
+   **Today**, **This week**, **This month**, **Last 7 days**, **Last 30 days**, **All**,
+   **Custom range**. Default is **Last 30 days**. The selection lives in memory for the signed-in
+   session. It is a system content filter and it scrolls with the List. `usage.period` is the
+   menu. Under it, the range the period covers and this iPhone's timezone identifier, in
+   `support`, wrapping at large type (`usage.period.title`). Stepping chevrons (**Previous
+   period** / **Next period**) show only for Today, This week, and This month; the current unit
+   is the last, so **Next period** is disabled there. The calendar button opens a **Custom range**
    sheet of two `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
-2. Totals as the hero: a `QuotaCard` with a `QuotaStatGrid` — **Cost** (`statValue`, first),
-   **Tokens**, **Cache hit** (caption: `saved $x` when the period's cache reads could be priced),
-   and **Reasoning** as `remainingValue`. `usage.headline` is on the cost tile's value. Under the grid, `{input} in ·
-   {output} out` and `{cost-basis} · Priced N of M rows` as `meta`. Complete cost is `$X.XX`,
-   partial is `≥ $X.XX`, unavailable is **— unpriced**. Cache hit is a whole percent, or **—** for
-   a period with no input. Reasoning is tokens of output. **Some hours in this period were scanned
-   incompletely.** when `partial` is true, as a `Label` with `exclamationmark.triangle` in
-   `QuotaTheme.warning`. Cache hit and its saving follow
-   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md). A period this iPhone added up
-   itself carries no cache saving, so that caption is absent there.
-3. A `QuotaCard(title: "Monthly budget")`: a `QuotaMeter`-style bar whose fill is spend, not
-   remaining — `QuotaTheme.color(for:)` healthy below 80%, warning at or above 80%, critical at or
-   above 100% — the monospaced `spent / budget · percent` line, and a trailing `.bordered` compact
-   **Set budget** / **Edit budget** button. Empty: **No budget is set for this month.** The button
-   opens a sheet with the amount in USD and a **Tell me at 80% and 100%** toggle. Both fields are
-   `UserDefaults` on this iPhone and are never uploaded. The two crossings post one local
-   notification each per calendar month.
-4. When the period was added up here rather than read from the summary, one line saying so, in
-   place of the model sections: the breakdown is on Today, Last 7 days, Last 30 days, and All.
-5. When the selected period has no agent sections: `ContentUnavailableView` titled **No usage**,
-   system image `chart.bar`, description **No usage was reported for this period.** The Activity
-   section still follows.
-6a. Daily section, headed **Daily**, for any period but All and only when those days reported
-   something. It covers the days the period covers, bounded by the activity days this phone holds.
-   A segmented **Tokens** / **Cost** control decides what the bars measure; in Tokens the
-   bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
-   is one emerald fill. Tokens bars use the brand ramp: cached input
+2. Two headline values only (`usage.headline`): **Tokens** and **API-equivalent** (`statValue`).
+   Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**. Coverage
+   (`{cost-basis} · Priced N of M rows`) sits under the pair as `meta` (`usage.headline.priced`).
+   **Some hours in this period were scanned incompletely.** when `partial` is true, as a `Label`
+   with `exclamationmark.triangle` in `QuotaTheme.warning`. Input, output, cache hit, reasoning,
+   and messages live on the breakdown destination, not here. Cache hit and its saving follow
+   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md).
+3. One daily chart, for any period but All and only when those days reported something. It covers
+   the days the period covers, bounded by the activity days this phone holds. A segmented
+   **Tokens** / **Cost** control decides what the bars measure; in Tokens the bar stacks cached
+   input, fresh input, and output, which add up to the day's total, and in Cost it is one emerald
+   fill. Y-axis: two or three value ticks including zero. X-axis: date ticks at the ends and
+   spaced through the range. Tokens bars use the brand ramp: cached input
    `QuotaTheme.cachedFill`, fresh input `QuotaTheme.emerald`, output
    `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
-   bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). A caption legend of three 8pt squares (Cached, Fresh, Output)
-   sits above the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
-   as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
-   section footer names the calendar: **UTC days.** The All period has no Daily section.
-6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All
-   and only when those hours reported something. A Sunday-first weekday × hour heatmap uses the
-   same five emerald Activity steps and the same cell outline; 24 bars under it are the
-   hour-of-day totals in emerald (empty hours use the meter track), height scaled to the busiest
-   hour. The read is
-   `detail=hours` on the period's dates in this iPhone's zone
-   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
-7. Activity section, headed **Activity**:
-   - Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
-     activity**.
-   - Failure: **Couldn't load activity.** plus a native **Retry** row.
-   - Loaded with zero reported tokens across the range: **No activity in the last year.** Do not
-     render 365 empty interactive cells.
-   - Loaded with data: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
-     weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
-     emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
-     the same mapping the website uses. The ramp matches the website; non-text contrast is the
-     cell outline (`activityBorder` ≥ 3:1 on the card for non-empty steps), not each fill step.
-     Today has a primary stroke. Weekday and month labels use
-     `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
-     last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
-     adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
-     increment/decrement changes the same selection. Under the grid, the selected-day panel is a
-     two-tile row: the long UTC date as `caption`, tokens and cost as `remainingValue`, then a
-     44-point `.borderedProminent` **View day** button that presents that day.
-7a. Top models section, headed **Top models**, when the period has more than one model leaf: the
-   three largest as ranked rows — rank numeral (`caption`, secondary, monospaced), model name,
-   trailing `{share} · {tokens}`, and a 4pt emerald bar under each proportional to its share of
-   the top model. `usage.top-model` stays.
-8. Each agent is a `QuotaCard(title: agent.displayName)` with an SF Symbol (codex `terminal`,
-   claudeCode `sparkles`, grok `bolt`, cursor `cursorarrow`, gemini `star.circle`, copilot
-   `airplane`, opencode / pi / kilo / antigravity / unknown
-   `chevron.left.forwardslash.chevron.right`). Agents are not providers; do not use
-   `ProviderMark`. Provider names are subhead rows (`InferenceProvider.displayName`) ending in
-   that provider's whole-percent share of the period, with a 4pt emerald share bar under them;
-   models keep `{tokens} · {cost} · {share}` trailing. The model `other` is **Other**. Each
-   provider shows at most five models until **Show N more** reveals the rest; **Show fewer**
-   collapses them again. Both are 44-point buttons with expanded / collapsed accessibility state.
+   bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary) — a
+   missing day keeps its slot as a gap, never a zero bar. A caption legend of three 8pt squares
+   (Cached, Fresh, Output) sits under the chart in Tokens mode. Tap or drag selects a day and
+   opens that day's sheet. `usage.daily.chart` stays. The All period has no Daily chart.
+4. Three destination rows:
+   - **By provider / By model** (`usage.open-breakdown` → `usage.breakdown`): secondary token
+     counts (input, output, cache hit with saving, reasoning, messages), then the existing top
+     models and agent/provider/model tree. When the period was added up here rather than read
+     from the summary, one line saying so in place of the model sections: the breakdown is on
+     Today, Last 7 days, Last 30 days, and All (`usage.folded`).
+   - **Activity patterns** (`usage.open-patterns` → `usage.patterns`): the rhythm heatmap and
+     year activity, with their Less/More legends and this iPhone's timezone in the section
+     footers. They are not on the Usage root.
+   - **Monthly budget** (`usage.budget`): only when a budget is set. The row shows the spend
+     meter (healthy below 80%, warning at or above 80%, critical at or above 100%) and remaining.
+     Editing is the existing amount-and-alerts sheet. **Set a monthly budget** lives in Settings.
+     Both fields are `UserDefaults` on this iPhone and are never uploaded. The two crossings post
+     one local notification each per calendar month.
+5. When the selected period reported no tokens: `ContentUnavailableView` titled **No usage**,
+   system image `chart.bar`, description **No usage was reported for this period.** Destinations
+   still follow.
+
+Rhythm (on **Activity patterns**), headed **Rhythm**, for any period but All and only when those
+hours reported something. A Sunday-first weekday × hour heatmap uses the same five emerald
+Activity steps and the same cell outline; 24 bars under it are the hour-of-day totals in emerald
+(empty hours use the meter track), height scaled to the busiest hour. The read is `detail=hours`
+on the period's dates in this iPhone's zone
+([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The day sheet has no Rhythm.
+
+Activity (on **Activity patterns**), headed **Activity**:
+
+- Loading: the redacted grid skeleton as plain section content. Accessibility value **Loading
+  activity**.
+- Failure: **Couldn't load activity.** plus a native **Retry** row.
+- Loaded with zero reported tokens across the range: **No activity in the last year.** Do not
+  render 365 empty interactive cells.
+- Loaded with data: a Sunday-first heatmap of those 365 UTC days. Columns are weeks, rows are
+  weekdays, the chart scrolls horizontally and opens on today (the trailing edge). Fill is five
+  emerald steps over tokens — empty, then four equal bands of the busiest day in the response,
+  the same mapping the website uses. The ramp matches the website; non-text contrast is the
+  cell outline (`activityBorder` ≥ 3:1 on the card for non-empty steps), not each fill step.
+  Today has a primary stroke. Weekday and month labels use
+  `caption` / `caption2`. Month abbreviations are never truncated to an ellipsis, including a
+  last month that occupies only one week. Cells are visual shapes, not buttons. The grid is one
+  adjustable control: a spatial tap or drag selects the nearest in-range day; VoiceOver
+  increment/decrement changes the same selection. Under the grid, the selected-day panel is a
+  two-tile row: the long UTC date as `caption`, tokens and cost as `remainingValue`, then a
+  44-point `.borderedProminent` **View day** button that presents that day.
+
+Top models, headed **Top models**, when the period has more than one model leaf: the three
+largest as ranked rows — rank numeral (`caption`, secondary, monospaced), model name, trailing
+`{share} · {tokens}`, and a 4pt emerald bar under each proportional to its share of the top
+model. `usage.top-model` stays.
+
+Each agent is a `QuotaCard(title: agent.displayName)` with an SF Symbol (codex `terminal`,
+claudeCode `sparkles`, grok `bolt`, cursor `cursorarrow`, gemini `star.circle`, copilot
+`airplane`, opencode / pi / kilo / antigravity / unknown
+`chevron.left.forwardslash.chevron.right`). Agents are not providers; do not use
+`ProviderMark`. Provider names are subhead rows (`InferenceProvider.displayName`) ending in
+that provider's whole-percent share of the period, with a 4pt emerald share bar under them;
+models keep `{tokens} · {cost} · {share}` trailing. The model `other` is **Other**. Each
+provider shows at most five models until **Show N more** reveals the rest; **Show fewer**
+collapses them again. Both are 44-point buttons with expanded / collapsed accessibility state.
 
 Each model row is one VoiceOver element that reads the model, tokens, and cost. Rows wrap at
 accessibility text sizes. Individual heatmap cells are not accessibility elements. The combined
@@ -474,12 +483,13 @@ chart value remains date, tokens, and cost.
 
 **View day** presents a `NavigationStack` sheet for the selected UTC day: the long UTC date as the
 inline title, system **Done** as the confirmation toolbar item, `presentationDetents` medium and
-large, and the system drag indicator. The body is an inset-grouped List of the same hero totals
-card as the period view (identifiers `usage.day.headline` etc. stay) and agent `QuotaCard`s like
-the tab, including **Some hours on this day were scanned incompletely.** when `partial` is true.
-Loading text: **Loading this day's usage…**. Failure: **Couldn't load this day's usage.** with
-**Retry**. Empty: **No usage on this day.** The sheet asks `detail=agents` for that date. There is
-no custom material.
+large, and the system drag indicator. The body is an inset-grouped List of the same four-tile
+totals card the day sheet has always used (identifiers `usage.day.headline` etc. stay) and agent
+`QuotaCard`s like the breakdown, including **Some hours on this day were scanned incompletely.**
+when `partial` is true. Loading text: **Loading this day's usage…**. Failure: **Couldn't load
+this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet asks
+`detail=agents` for that date. There is no custom material. Opening the sheet from the daily
+chart uses the same `usage.day` presentation as **View day** on Activity patterns.
 
 ### Devices
 

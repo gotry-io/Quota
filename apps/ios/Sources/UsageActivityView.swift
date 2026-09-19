@@ -49,6 +49,9 @@ struct UsageActivitySection: View {
     } header: {
       Text("Activity")
         .accessibilityIdentifier("section.header.activity")
+    } footer: {
+      Text(UsageTimeZoneCopy.name())
+        .accessibilityIdentifier("section.footer.activity")
     }
   }
 

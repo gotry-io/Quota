@@ -1,5 +1,6 @@
 import AuthenticationServices
 import QuotaBrandIcons
+import QuotaPresentation
 import QuotaProviderSessions
 import QuotaWire
 import SwiftUI
@@ -12,6 +13,7 @@ struct SettingsView: View {
   @State private var consentProvider: ProviderID?
   @State private var loginProvider: ProviderID?
   @State private var removing: StoredProviderSession?
+
   @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
@@ -38,8 +40,27 @@ struct SettingsView: View {
             Text(settings.appearance.title)
               .foregroundStyle(QuotaTheme.secondary)
           }
+          .accessibilityIdentifier("settings.appearance")
         }
-        .accessibilityIdentifier("settings.appearance")
+
+        NavigationLink {
+          UsageBudgetEditorPage(model: model)
+        } label: {
+          HStack(spacing: 12) {
+            SettingsRowIcon(symbol: "dollarsign.circle.fill", tint: .green)
+            Text(
+              model.usage.budget.isSet
+                ? SettingsCopy.monthlyBudget : SettingsCopy.setMonthlyBudget
+            )
+            Spacer(minLength: 8)
+            if let amount = model.usage.budget.amountUSD {
+              Text(UsageBudgetProgress.usd(amount))
+                .foregroundStyle(QuotaTheme.secondary)
+                .accessibilityHidden(true)
+            }
+          }
+          .accessibilityIdentifier("settings.budget")
+        }
       } header: {
         Text(SettingsCopy.preferences)
           .accessibilityIdentifier("section.header.preferences")
