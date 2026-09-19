@@ -202,11 +202,11 @@ struct UsageModelTests {
     let first = periodDetail(from: "2026-08-01", to: "2026-08-03", tokens: 11)
     let second = periodDetail(from: "2026-08-10", to: "2026-08-12", tokens: 22)
 
-    model.selectUsagePeriod(.custom(from: "2026-08-01", to: "2026-08-03"))
-    try await waitUntil { await transport.pendingCount("2026-08-01|2026-08-03") == 1 }
+    model.selectUsagePeriod(.custom(from: "2026-08-01", to: "2026-08-03"), source: .local)
+    try await waitUntil { await transport.pendingCount("local|2026-08-01|2026-08-03") == 1 }
 
-    model.selectUsagePeriod(.custom(from: "2026-08-10", to: "2026-08-12"))
-    try await waitUntil { await transport.pendingCount("2026-08-10|2026-08-12") == 1 }
+    model.selectUsagePeriod(.custom(from: "2026-08-10", to: "2026-08-12"), source: .local)
+    try await waitUntil { await transport.pendingCount("local|2026-08-10|2026-08-12") == 1 }
 
     await transport.complete(from: "2026-08-10", to: "2026-08-12", with: second)
     try await waitUntil {
@@ -292,6 +292,70 @@ struct UsageModelTests {
     await transport.complete(from: "2026-08-01", to: "2026-08-03", with: detail)
     try await waitUntil { model.customUsagePeriods[key] != nil }
   }
+
+  @Test
+  func accountCustomPeriodIsAvailableAndLoadsThroughTheNewRequest() async throws {
+    let transport = GatedUsageTransport()
+    let (model, defaults) = makeUsageModel(transport: transport)
+    defer { defaults.tearDown() }
+    model.acceptState(accountSummaryState())
+    let selection = UsagePeriodSelection.custom(from: "2026-08-01", to: "2026-08-03")
+    #expect(model.usagePeriodIsAvailable(source: .account, selection: selection))
+
+    model.selectUsagePeriod(selection, source: .account)
+    let key = UsageModel.periodKey(source: .account, ("2026-08-01", "2026-08-03"))
+    try await waitUntil { await transport.pendingCount(key) == 1 }
+
+    let coverage = UsagePeriodCoverage(
+      partial: true, truncatedByRetention: true)
+    let detail = periodDetail(
+      from: "2026-08-01", to: "2026-08-03", tokens: 40, coverage: coverage)
+    await transport.complete(
+      from: "2026-08-01", to: "2026-08-03", with: detail, source: .account)
+    try await waitUntil { model.customUsagePeriods[key] != nil }
+    #expect(
+      model.usageDetail(source: .account, selection: selection)?.usage.totals.totalTokens == 40)
+    #expect(
+      model.usageDetail(source: .account, selection: selection)?.coverage?.truncatedByRetention
+        == true)
+  }
+
+  @Test
+  func anOlderAccountCustomPeriodResultIsIgnoredAfterANewerRequest() async throws {
+    let transport = GatedUsageTransport()
+    let (model, defaults) = makeUsageModel(transport: transport)
+    defer { defaults.tearDown() }
+    model.acceptState(accountSummaryState())
+
+    let first = periodDetail(from: "2026-08-01", to: "2026-08-03", tokens: 11)
+    let second = periodDetail(from: "2026-08-10", to: "2026-08-12", tokens: 22)
+
+    model.selectUsagePeriod(.custom(from: "2026-08-01", to: "2026-08-03"), source: .account)
+    try await waitUntil { await transport.pendingCount("account|2026-08-01|2026-08-03") == 1 }
+
+    model.selectUsagePeriod(.custom(from: "2026-08-10", to: "2026-08-12"), source: .account)
+    try await waitUntil { await transport.pendingCount("account|2026-08-10|2026-08-12") == 1 }
+
+    await transport.complete(
+      from: "2026-08-10", to: "2026-08-12", with: second, source: .account)
+    try await waitUntil {
+      model.customUsagePeriods[UsageModel.periodKey(source: .account, ("2026-08-10", "2026-08-12"))]
+        != nil
+    }
+
+    await transport.complete(
+      from: "2026-08-01", to: "2026-08-03", with: first, source: .account)
+    await Task.yield()
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(
+      model.customUsagePeriods[UsageModel.periodKey(source: .account, ("2026-08-01", "2026-08-03"))]
+        == nil)
+    #expect(
+      model.customUsagePeriods[UsageModel.periodKey(source: .account, ("2026-08-10", "2026-08-12"))]?
+        .usage.totals.totalTokens == 22)
+    #expect(!model.customUsageLoading)
+  }
 }
 
 @MainActor
@@ -355,7 +419,79 @@ private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
   )
 }
 
-private func periodDetail(from: String, to: String, tokens: Int) -> LocalServiceUsageDetail {
+private func accountSummaryState() -> LocalServiceState {
+  let emptyPeriod = QuotaWire.UsagePeriod(
+    totals: UsageSummaryTotals(
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningTokens: 0,
+      messages: 0
+    ),
+    cost: UsageCostOutcome(
+      mode: .calculate,
+      basis: .none,
+      status: .unavailable,
+      amountMicrousd: nil,
+      catalogRevision: nil,
+      calculatedRows: 0,
+      reportedRows: 0,
+      unpricedRows: 1,
+      assumptions: [],
+      unpriced: []
+    ),
+    cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
+    partial: false,
+    agents: []
+  )
+  let summary = AccountSummary(
+    account: QuotaUserAccount(
+      accountID: "account_1", displayLabel: "octocat",
+      createdAt: Date(timeIntervalSince1970: 1_785_000_000)),
+    devices: [],
+    subscriptions: [],
+    usage: AccountUsage(
+      today: emptyPeriod, last7Days: emptyPeriod, last30Days: emptyPeriod, all: emptyPeriod),
+    pricingRevision: "2026-08-01",
+    modelCatalogRevision: "2026-08-01"
+  )
+  return LocalServiceState(
+    ipcVersion: 3,
+    revision: 1,
+    usageUploadEnabled: true,
+    groupUsageByProject: true,
+    quotaRefreshIntervalSeconds: 300,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .ready,
+      value: LocalServiceAccountState(
+        authStatus: .signedIn,
+        accountID: "account_1",
+        displayLabel: "octocat",
+        deviceID: "device_1",
+        deviceGeneration: 1,
+        accountSummary: summary
+      ),
+      updatedAt: nil,
+      lastError: nil,
+      refreshing: false
+    ),
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    browserScanEnabled: [],
+    overview: [],
+    cache: .settled
+  )
+}
+
+private func periodDetail(
+  from: String, to: String, tokens: Int, coverage: UsagePeriodCoverage? = nil
+) -> LocalServiceUsageDetail {
   LocalServiceUsageDetail(
     range: UsageDateRange(from: from, to: to),
     usage: LocalUsagePeriodSummary(
@@ -383,8 +519,9 @@ private func periodDetail(from: String, to: String, tokens: Int) -> LocalService
       cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
       agents: []
     ),
-    incomplete: false,
-    detailsTruncated: false
+    incomplete: coverage?.partial ?? false,
+    detailsTruncated: false,
+    coverage: coverage
   )
 }
 
@@ -406,8 +543,11 @@ private func waitUntil(
 actor GatedUsageTransport: UsageTransport {
   private var pending: [String: [CheckedContinuation<LocalServiceUsageDetail, Error>]] = [:]
 
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
-    let key = "\(from)|\(to)"
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail {
+    let _ = timezone
+    let key = "\(source.rawValue)|\(from)|\(to)"
     return try await withCheckedThrowingContinuation { continuation in
       pending[key, default: []].append(continuation)
     }
@@ -421,8 +561,10 @@ actor GatedUsageTransport: UsageTransport {
     pending[key]?.count ?? 0
   }
 
-  func complete(from: String, to: String, with detail: LocalServiceUsageDetail) {
-    let key = "\(from)|\(to)"
+  func complete(
+    from: String, to: String, with detail: LocalServiceUsageDetail, source: UsageSource = .local
+  ) {
+    let key = "\(source.rawValue)|\(from)|\(to)"
     guard var queue = pending[key], !queue.isEmpty else { return }
     let first = queue.removeFirst()
     pending[key] = queue

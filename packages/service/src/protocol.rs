@@ -5,7 +5,10 @@
 //! are validated before they cross this boundary.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
+use chrono::NaiveDate;
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -350,12 +353,64 @@ pub struct ReplaceProviderBrowserSessionsPayload {
 ///
 /// `get_state` carries the four periods every panel opens on. Anything else — a week, a month,
 /// a range someone picked — is asked for one range at a time rather than folded four more times
-/// on every refresh.
+/// on every refresh. `source` chooses This Mac's hours or Relay's Account period read; Account
+/// also names the caller's IANA timezone. There is no alias for a request that omits `source`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsagePeriodPayload {
     pub from: String,
     pub to: String,
+    pub source: UsageSource,
+    #[serde(default)]
+    pub timezone: Option<String>,
+}
+
+impl UsagePeriodPayload {
+    /// Inclusive local dates, at most a year and a leap day. Account requires a real IANA zone.
+    pub fn validate(&self) -> Result<(), IpcError> {
+        let invalid = || IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None);
+        let first = NaiveDate::parse_from_str(&self.from, "%Y-%m-%d").map_err(|_| invalid())?;
+        let last = NaiveDate::parse_from_str(&self.to, "%Y-%m-%d").map_err(|_| invalid())?;
+        let days = (last - first).num_days();
+        if days < 0 || days >= MAXIMUM_USAGE_PERIOD_DAYS {
+            return Err(invalid());
+        }
+        if self.source == UsageSource::Account {
+            let timezone = self
+                .timezone
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(invalid)?;
+            if !valid_iana_timezone(timezone) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_iana_timezone(value: &str) -> bool {
+    if value.is_empty() || value.len() > 64 {
+        return false;
+    }
+    let mut start = 0;
+    loop {
+        let rest = &value[start..];
+        let end = rest.find('/').unwrap_or(rest.len());
+        let label = &rest[..end];
+        if label.is_empty()
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+        {
+            return false;
+        }
+        if end == rest.len() {
+            break;
+        }
+        start += end + 1;
+    }
+    Tz::from_str(value).is_ok()
 }
 
 /// The start of the sample range Dashboard asks this device to read, as one RFC 3339 instant.
@@ -923,6 +978,75 @@ mod tests {
             history_extra
                 .decode_payload::<QuotaHistoryPayload>()
                 .is_err()
+        );
+    }
+
+    fn usage_period_request(payload: &str) -> IpcRequest {
+        serde_json::from_str(&format!(
+            r#"{{"type":"request","request_id":"r4","operation":"usage_period","payload":{payload}}}"#
+        ))
+        .expect("usage_period envelope")
+    }
+
+    #[test]
+    fn usage_period_payload_requires_source_and_refuses_the_old_shape() {
+        let old = usage_period_request(r#"{"from":"2026-08-01","to":"2026-08-03"}"#);
+        assert!(old.decode_payload::<UsagePeriodPayload>().is_err());
+
+        let local: UsagePeriodPayload =
+            usage_period_request(r#"{"from":"2026-08-01","to":"2026-08-03","source":"local"}"#)
+                .decode_payload()
+                .expect("local");
+        assert_eq!(local.source, UsageSource::Local);
+        assert!(local.validate().is_ok());
+
+        let account: UsagePeriodPayload = usage_period_request(
+            r#"{"from":"2026-08-01","to":"2026-08-03","source":"account","timezone":"Asia/Singapore"}"#,
+        )
+        .decode_payload()
+        .expect("account");
+        assert_eq!(account.source, UsageSource::Account);
+        assert_eq!(account.timezone.as_deref(), Some("Asia/Singapore"));
+        assert!(account.validate().is_ok());
+    }
+
+    #[test]
+    fn usage_period_payload_refuses_inverted_overwide_and_bad_account_timezone() {
+        let inverted: UsagePeriodPayload =
+            usage_period_request(r#"{"from":"2026-08-03","to":"2026-08-01","source":"local"}"#)
+                .decode_payload()
+                .expect("inverted dates still decode");
+        assert_eq!(
+            inverted.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let overwide: UsagePeriodPayload =
+            usage_period_request(r#"{"from":"2025-08-01","to":"2026-08-03","source":"local"}"#)
+                .decode_payload()
+                .expect("overwide dates still decode");
+        assert_eq!(
+            overwide.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let missing_tz: UsagePeriodPayload =
+            usage_period_request(r#"{"from":"2026-08-01","to":"2026-08-03","source":"account"}"#)
+                .decode_payload()
+                .expect("account without timezone still decodes");
+        assert_eq!(
+            missing_tz.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let bad_tz: UsagePeriodPayload = usage_period_request(
+            r#"{"from":"2026-08-01","to":"2026-08-03","source":"account","timezone":"Not/A/Zone"}"#,
+        )
+        .decode_payload()
+        .expect("unknown timezone still decodes");
+        assert_eq!(
+            bad_tz.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
         );
     }
 
