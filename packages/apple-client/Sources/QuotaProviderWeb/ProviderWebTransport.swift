@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One HTTP exchange, with the response body already bounded.
 public struct ProviderWebResponse: Equatable, Sendable {
@@ -25,37 +26,88 @@ public enum ProviderWebLimits {
   public static let bodyLimit = 1_048_576
 }
 
+/// A body the session refused to finish reading because it crossed the cap.
+/// `ProviderWebHTTP` maps this to `.error`, the one category an over-limit body has.
+enum ProviderWebTransportError: Error, Equatable, Sendable {
+  case bodyTooLarge
+}
+
 /// `URLSession` with the rules a cookie request needs: no redirect is followed, no cookie store
 /// of the process is consulted or written, and a body larger than the limit is refused rather
-/// than buffered.
-public final class URLSessionProviderWebTransport: NSObject, ProviderWebTransport,
-  URLSessionTaskDelegate, @unchecked Sendable
-{
+/// than buffered. The cap is counted while bytes arrive; the task is cancelled as soon as it is
+/// crossed, and a declared length over the limit is refused without reading.
+public final class URLSessionProviderWebTransport: ProviderWebTransport, @unchecked Sendable {
   private let session: URLSession
+  private let delegate: BodyBoundDelegate
 
-  public override init() {
-    let configuration = URLSessionConfiguration.ephemeral
+  public convenience init() {
+    self.init(configuration: .ephemeral)
+  }
+
+  init(
+    configuration: URLSessionConfiguration,
+    bodyLimit: Int = ProviderWebLimits.bodyLimit
+  ) {
+    let configuration = configuration.copy() as! URLSessionConfiguration
     configuration.httpCookieAcceptPolicy = .never
     configuration.httpShouldSetCookies = false
     configuration.httpCookieStorage = nil
     configuration.urlCache = nil
     configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-    session = URLSession(configuration: configuration)
-    super.init()
+    let delegate = BodyBoundDelegate(bodyLimit: bodyLimit)
+    self.delegate = delegate
+    session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+  }
+
+  deinit {
+    session.invalidateAndCancel()
   }
 
   public func send(_ request: URLRequest) async throws -> ProviderWebResponse {
-    let (data, response) = try await session.data(for: request, delegate: self)
-    guard let http = response as? HTTPURLResponse else {
-      throw URLError(.badServerResponse)
+    try await delegate.send(request, on: session)
+  }
+}
+
+/// Per-task running count so a large body is cancelled while it arrives, not after
+/// `URLSession` has already assembled it.
+private final class BodyBoundDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+  private struct Receive {
+    let continuation: CheckedContinuation<ProviderWebResponse, Error>
+    let bodyLimit: Int
+    var data = Data()
+    var status: Int?
+    var settled = false
+  }
+
+  private let bodyLimit: Int
+  private let lock = OSAllocatedUnfairLock<[Int: Receive]>(initialState: [:])
+
+  init(bodyLimit: Int) {
+    self.bodyLimit = bodyLimit
+  }
+
+  func send(_ request: URLRequest, on session: URLSession) async throws -> ProviderWebResponse {
+    let task = session.dataTask(with: request)
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        lock.withLock { state in
+          state[task.taskIdentifier] = Receive(
+            continuation: continuation, bodyLimit: bodyLimit)
+        }
+        task.resume()
+        if Task.isCancelled {
+          task.cancel()
+        }
+      }
+    } onCancel: {
+      task.cancel()
     }
-    return ProviderWebResponse(status: http.statusCode, body: data)
   }
 
   /// A redirect is never followed: the cookie is scoped to the host it was signed in at, and a
   /// hop this library cannot see is a hop that could spend it somewhere else. The 3xx is handed
   /// back instead, and the caller reads it the way the service does.
-  public func urlSession(
+  func urlSession(
     _ session: URLSession,
     task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse,
@@ -63,6 +115,118 @@ public final class URLSessionProviderWebTransport: NSObject, ProviderWebTranspor
     completionHandler: @escaping @Sendable (URLRequest?) -> Void
   ) {
     completionHandler(nil)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    dataTask: URLSessionDataTask,
+    didReceive response: URLResponse,
+    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
+  ) {
+    guard let http = response as? HTTPURLResponse else {
+      completionHandler(.cancel)
+      settle(dataTask, .failure(URLError(.badServerResponse)))
+      return
+    }
+    if (300..<400).contains(http.statusCode) {
+      completionHandler(.cancel)
+      settle(dataTask, .success(ProviderWebResponse(status: http.statusCode, body: Data())))
+      return
+    }
+    if exceedsBodyLimit(http) {
+      completionHandler(.cancel)
+      settle(dataTask, .failure(ProviderWebTransportError.bodyTooLarge))
+      return
+    }
+    lock.withLock { state in
+      if var receive = state[dataTask.taskIdentifier] {
+        receive.status = http.statusCode
+        let expected = http.expectedContentLength
+        if expected > 0 {
+          receive.data.reserveCapacity(min(Int(expected), receive.bodyLimit))
+        }
+        state[dataTask.taskIdentifier] = receive
+      }
+    }
+    completionHandler(.allow)
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    let overLimit = lock.withLock { state -> Bool in
+      let id = dataTask.taskIdentifier
+      guard state[id]?.settled == false else { return false }
+      state[id]!.data.append(data)
+      return state[id]!.data.count > state[id]!.bodyLimit
+    }
+    if overLimit {
+      dataTask.cancel()
+      settle(dataTask, .failure(ProviderWebTransportError.bodyTooLarge))
+    }
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didCompleteWithError error: Error?
+  ) {
+    if let error {
+      settle(task, .failure(error))
+      return
+    }
+    let response = lock.withLock { state -> ProviderWebResponse? in
+      guard let receive = state[task.taskIdentifier], !receive.settled,
+        let status = receive.status
+      else { return nil }
+      return ProviderWebResponse(status: status, body: receive.data)
+    }
+    if let response {
+      settle(task, .success(response))
+    }
+  }
+
+  private func settle(_ task: URLSessionTask, _ result: Result<ProviderWebResponse, Error>) {
+    let continuation = lock.withLock { state -> CheckedContinuation<ProviderWebResponse, Error>? in
+      guard var receive = state[task.taskIdentifier], !receive.settled else { return nil }
+      receive.settled = true
+      state[task.taskIdentifier] = receive
+      return receive.continuation
+    }
+    guard let continuation else { return }
+    continuation.resume(with: result)
+    lock.withLock { state in
+      state.removeValue(forKey: task.taskIdentifier)
+      return
+    }
+  }
+
+  private func exceedsBodyLimit(_ response: HTTPURLResponse) -> Bool {
+    if let length = declaredLength(response), length > Int64(bodyLimit) {
+      return true
+    }
+    return false
+  }
+
+  private func declaredLength(_ response: HTTPURLResponse) -> Int64? {
+    if response.expectedContentLength >= 0 {
+      return response.expectedContentLength
+    }
+    if let value = response.value(forHTTPHeaderField: "Content-Length"),
+      let length = Int64(value)
+    {
+      return length
+    }
+    switch response.allHeaderFields["Content-Length"] {
+    case let value as String:
+      return Int64(value)
+    case let value as Int:
+      return Int64(value)
+    case let value as Int64:
+      return value
+    case let value as NSNumber:
+      return value.int64Value
+    default:
+      return nil
+    }
   }
 }
 
@@ -135,14 +299,13 @@ struct ProviderWebHTTP: Sendable {
     let response: ProviderWebResponse
     do {
       response = try await transport.send(request)
+    } catch ProviderWebTransportError.bodyTooLarge {
+      throw ProviderWebError(.error, source)
     } catch {
       throw ProviderWebError(.unavailable, source)
     }
     if (300..<400).contains(response.status) {
       throw ProviderWebError(redirect, source)
-    }
-    if response.body.count > ProviderWebLimits.bodyLimit {
-      throw ProviderWebError(.error, source)
     }
     guard (200..<300).contains(response.status) else {
       throw ProviderWebError(Self.category(of: response.status), source)
