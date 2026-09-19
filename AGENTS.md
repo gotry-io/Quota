@@ -13,7 +13,7 @@ Read the relevant source before changing that area. Historical decision discover
 | Architecture | `docs/architecture.md` |
 | Security | `docs/security.md` |
 | Protocol | `packages/protocol`; [ADR 0023](docs/decisions/0023-strict-writes-tolerant-reads.md) |
-| Provider catalog and strategy | `packages/provider/catalog.json`, `docs/provider-collection.md` |
+| Provider catalog and strategy | `packages/provider/catalog.json`, `docs/provider-collection.md`, `docs/providers/<id>.md`, `docs/usage-sources.md` |
 | Design | `docs/design.md`, `packages/design-tokens/tokens.json` |
 | Local state | [ADR 0021](docs/decisions/0021-identity-store-and-disposable-cache.md) |
 | Account and sync | [ADR index](docs/decisions/README.md) (0006, 0025, 0027, 0048, 0055) |
@@ -45,8 +45,10 @@ Do not create a second description of a canonical rule. Update its source and li
   breaking change; changing the shape of a released data contract still requires a new protocol
   version. See `docs/decisions/0023-strict-writes-tolerant-reads.md`.
 - Provider changes must update `packages/provider/catalog.json`, the Rust collector, and
-  `docs/provider-collection.md`, then run `pnpm generate:provider-catalog` so protocol ids and Swift
-  `ProviderID` stay aligned. Follow `docs/security.md` for credentials and redaction.
+  `docs/providers/<id>.md` (common ladder in `docs/provider-collection.md`; local Usage parsers in
+  `docs/usage-sources.md`), then run `pnpm generate:provider-catalog` and `pnpm generate:reference`
+  so protocol ids, Swift `ProviderID`, and the generated reference stay aligned. Follow
+  `docs/security.md` for credentials and redaction.
 - Persistence changes require a new explicit migration, in the right store: D1 for Relay, and
   locally either `identity.sqlite` or the disposable `cache.sqlite`, whose migration ladders are
   separate. Do not rewrite an applied migration.
@@ -74,7 +76,7 @@ Do not create a second description of a canonical rule. Update its source and li
   requires it.
 - Provider API shape variants and documented provider-owned collection fallbacks are product input
   handling, not repository-version compatibility. Keep only the variants required by
-  `docs/provider-collection.md` and observed supported provider behavior.
+  `docs/provider-collection.md`, `docs/providers/<id>.md`, and observed supported provider behavior.
 
 ## Code conventions
 
@@ -105,7 +107,8 @@ Development commands, hooks, the merge queue, and review expectations live in
 ## Verification
 
 - The `.githooks` pre-commit and pre-push hooks are the floor, not the plan. They catch formatting,
-  a stale generated catalog, and the tiers a push touches; the entries below still apply.
+  a stale generated catalog, design tokens, ADR index, or reference, and the tiers a push touches;
+  the entries below still apply.
 - TypeScript-only change: run the affected workspace's type check and tests, plus root formatting.
 - Provider change: run shared Rust service and entry-point tests, including relevant failure and
   redaction cases.

@@ -31,11 +31,12 @@ pnpm version:bump:ios patch       # Quota iOS MARKETING_VERSION, then generate-i
 Targeted entry points live in the root `package.json` and each app README. Do not duplicate those
 command lists in new documents. After a catalog change run `pnpm generate:provider-catalog`; after
 a token change run `pnpm generate:design-tokens`; after an ADR header change run
-`pnpm generate:adr-index`.
+`pnpm generate:adr-index`; after catalog, protocol, package, or token inventory changes run
+`pnpm generate:reference`.
 
 `pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
 rejects unformatted sources and stale generated artifacts (provider catalog, design tokens, ADR
-index). Pre-push runs the tests for the areas the pushed commits touch. Bypass either with
+index, reference). Pre-push runs the tests for the areas the pushed commits touch. Bypass either with
 `QUOTA_HOOKS_SKIP=1` or `--no-verify`.
 
 Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.build/`, `.swiftpm/`,

@@ -69,6 +69,8 @@ not generated from git tags.
 - [Security](docs/security.md)
 - [Design language](docs/design.md)
 - [Provider collection](docs/provider-collection.md)
+- [Usage sources](docs/usage-sources.md)
+- [Generated reference](docs/reference.md)
 - [Self-host runbook](docs/relay-self-host.md)
 - [ADR index](docs/decisions/README.md)
 - [Agent instructions](AGENTS.md)
@@ -95,7 +97,7 @@ packages/protocol/        Runtime schemas and exported network JSON Schemas
 packages/service/         Shared Rust collection, Usage, pricing, and Relay logic
 packages/quota-model/     Relay/Web runtime-neutral quota and pricing models
 packages/relay-core/      Runtime-neutral account and Usage state contracts
-docs/                     Architecture, security, provider, design language, runbook, research, and decision records
+docs/                     Architecture, security, provider collection, usage sources, design language, generated reference, runbook, research, and decision records
 ```
 
 Provider registration starts in `packages/provider/catalog.json`. Colour, remaining-quota bands,
