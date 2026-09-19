@@ -1171,7 +1171,10 @@ struct StubLocalService: LocalServiceServing {
 
   func state() async throws -> LocalServiceState { stateValue }
 
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail {
+    let _ = (source, timezone)
     guard let customPeriod else { throw LocalServiceClientError.invalidMessage }
     return customPeriod
   }

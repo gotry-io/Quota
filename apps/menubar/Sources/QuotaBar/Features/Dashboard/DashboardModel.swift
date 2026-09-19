@@ -122,7 +122,13 @@ final class DashboardModel {
   /// `nil` is **All providers**.
   var selection: ProviderID?
   /// Account when an account summary is available and Usage sync is on; otherwise This Mac.
-  var usageSource: UsageSource = .account
+  var usageSource: UsageSource = .account {
+    didSet {
+      if usageSource != oldValue {
+        usage.setUsageSource(usageSource)
+      }
+    }
+  }
 
   @ObservationIgnored
   private let defaults: UserDefaults
@@ -137,6 +143,7 @@ final class DashboardModel {
     self.defaults = defaults
     self.selection = selection
     self.usageSource = usageSource
+    usage.setUsageSource(usageSource)
     let raw = defaults.string(forKey: DashboardRange.storageKey) ?? ""
     range = DashboardRange(rawValue: raw) ?? .fallback
   }
@@ -169,7 +176,7 @@ final class DashboardModel {
   }
 
   func selectUsagePeriod(_ selection: UsagePeriodSelection) {
-    usage.selectUsagePeriod(selection)
+    usage.selectUsagePeriod(selection, source: usageSource)
   }
 
   func usagePeriodTitle(now: Date) -> String {
@@ -510,10 +517,18 @@ final class DashboardModel {
 
   private func usageStatusWarning(detail: LocalServiceUsageDetail?, source: UsageSource) -> String?
   {
-    guard let detail, detail.incomplete || detail.detailsTruncated else { return nil }
-    return source == .local
-      ? "Some local Usage may be incomplete."
-      : "Some account Usage may be incomplete."
+    guard let detail else { return nil }
+    var parts: [String] = []
+    if detail.coverage?.truncatedByRetention == true {
+      parts.append("This range goes past what Quota still keeps.")
+    }
+    if detail.incomplete || detail.detailsTruncated {
+      parts.append(
+        source == .local
+          ? "Some local Usage may be incomplete."
+          : "Some account Usage may be incomplete.")
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
   }
 
   /// The reader's local midnight for `now`, using the offset the samples were folded with.

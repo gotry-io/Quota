@@ -8,6 +8,10 @@
   answers an additive local-date period read. The website reads that route for every Usage
   selection except `all`, and for the budget month. Quota iOS still folds UTC activity days until
   it switches.
+- Updated 2026-09-19 (QuotaBar Account): QuotaBar no longer refuses a non-summary period on
+  Account. `usage_period` now names `source` (`local` | `account`) and, for Account, the caller's
+  IANA timezone; Account answers from Relay's period read. The monthly budget stays this Mac's
+  fold. There is no alias for a request that omitted `source`.
 
 ## Context
 
@@ -31,18 +35,22 @@ not something another device of theirs needs to agree about.
 
 **A period outside the four is folded by whoever already holds its days, and no new period is
 folded for anyone who did not ask.** The website and Quota iOS add the activity days up in the
-client. QuotaBar asks the service for one range at a time over the new IPC operation
-`usage_period { from, to }` — two inclusive local dates, at most 366 days, folded against stored
-hours and the catalogs the device already holds, collecting nothing and reaching no network.
-`ipc_version` becomes 2. Relay gains no route and no named period.
+client. QuotaBar asks the service for one range at a time over the IPC operation
+`usage_period { from, to, source, timezone }` — two inclusive local dates, at most 366 days.
+This Mac folds stored hours and the catalogs the device already holds, collecting nothing and
+reaching no network. Account is the Relay period read in
+[ADR 0055](0055-an-account-period-is-a-local-date-range.md). `ipc_version` is 3. Relay's period
+route is that later amendment; this decision's original "Relay gains no route" sentence does not
+describe today's Account path.
 
 The fold is one rule with one statement, `packages/protocol/fixtures/usage-day-fold-conformance.json`:
 totals add, cost outcomes add and then reach the verdict one row reaches, two days priced against
 different catalog revisions name no revision, and a period is partial exactly when one of its days
 is. A day carries no agent tree unless it was asked for on its own, so a folded period carries
 totals and cost and says so rather than showing an empty breakdown. On Account, a period the
-summary does not carry is answered on This Mac, because the Account read hands a device four folds
-and not the days behind them.
+summary does not carry is the same Relay local-date read the website already uses; QuotaBar does
+not fold UTC activity days. The sentence that QuotaBar refuses the question on Account is
+superseded by [ADR 0055](0055-an-account-period-is-a-local-date-range.md) as of 2026-09-19.
 
 **The monthly budget is a device preference and is never uploaded.** One amount in whole US dollars
 and one alert switch, in `UserDefaults` on Apple and `localStorage` on the website. Crossing 80%

@@ -759,17 +759,73 @@ struct LocalServiceOverviewSourcePinSetting: Decodable, Sendable {
   }
 }
 
+/// How much of an Account period Relay still holds, as `usage_period` answers it.
+struct UsagePeriodCoverage: Decodable, Equatable, Sendable {
+  let partial: Bool
+  let dailyRetainedFrom: String?
+  let hourlyRetainedFrom: String?
+  let truncatedByRetention: Bool
+
+  init(
+    partial: Bool,
+    dailyRetainedFrom: String? = nil,
+    hourlyRetainedFrom: String? = nil,
+    truncatedByRetention: Bool
+  ) {
+    self.partial = partial
+    self.dailyRetainedFrom = dailyRetainedFrom
+    self.hourlyRetainedFrom = hourlyRetainedFrom
+    self.truncatedByRetention = truncatedByRetention
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case partial
+    case dailyRetainedFrom
+    case hourlyRetainedFrom
+    case truncatedByRetention
+  }
+}
+
+extension UsagePeriodCoverage {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys([
+      "partial", "dailyRetainedFrom", "hourlyRetainedFrom", "truncatedByRetention",
+    ])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    dailyRetainedFrom = try container.decode(String?.self, forKey: .dailyRetainedFrom)
+    hourlyRetainedFrom = try container.decode(String?.self, forKey: .hourlyRetainedFrom)
+    truncatedByRetention = try container.decode(Bool.self, forKey: .truncatedByRetention)
+  }
+}
+
 struct LocalServiceUsageDetail: Decodable, Equatable, Sendable {
   let range: UsageDateRange
   let usage: LocalUsagePeriodSummary
   let incomplete: Bool
   let detailsTruncated: Bool
+  let coverage: UsagePeriodCoverage?
+
+  init(
+    range: UsageDateRange,
+    usage: LocalUsagePeriodSummary,
+    incomplete: Bool,
+    detailsTruncated: Bool,
+    coverage: UsagePeriodCoverage? = nil
+  ) {
+    self.range = range
+    self.usage = usage
+    self.incomplete = incomplete
+    self.detailsTruncated = detailsTruncated
+    self.coverage = coverage
+  }
 
   private enum CodingKeys: String, CodingKey {
     case range
     case usage
     case incomplete
     case detailsTruncated
+    case coverage
   }
 
   var isValid: Bool {
@@ -867,13 +923,14 @@ extension LocalServiceQuotaHistory {
 extension LocalServiceUsageDetail {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
-      "range", "usage", "incomplete", "detailsTruncated",
+      "range", "usage", "incomplete", "detailsTruncated", "coverage",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     range = try container.decode(UsageDateRange.self, forKey: .range)
     usage = try container.decode(LocalUsagePeriodSummary.self, forKey: .usage)
     incomplete = try container.decode(Bool.self, forKey: .incomplete)
     detailsTruncated = try container.decode(Bool.self, forKey: .detailsTruncated)
+    coverage = try container.decodeIfPresent(UsagePeriodCoverage.self, forKey: .coverage)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
         forKey: .usage,

@@ -39,8 +39,10 @@ final class ScriptedLocalService: LocalServiceServing, @unchecked Sendable {
   }
 
   func state() async throws -> LocalServiceState { next() }
-  func usagePeriod(from: String, to: String) async throws -> LocalServiceUsageDetail {
-    try await base.usagePeriod(from: from, to: to)
+  func usagePeriod(
+    from: String, to: String, source: UsageSource, timezone: String
+  ) async throws -> LocalServiceUsageDetail {
+    try await base.usagePeriod(from: from, to: to, source: source, timezone: timezone)
   }
   func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
     try await base.quotaHistory(since: since)

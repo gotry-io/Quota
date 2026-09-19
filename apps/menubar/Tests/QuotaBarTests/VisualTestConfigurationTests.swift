@@ -135,6 +135,15 @@
     #expect(local.mainPage == .usage)
     #expect(local.usageSource == .local)
     #expect(local.initialPath.isEmpty)
+
+    let custom = try #require(
+      VisualTestConfiguration(arguments: ["QuotaBar", "--route", "main-usage-custom"])
+    )
+    #expect(custom.route == .mainUsageCustom)
+    #expect(custom.hostsMainWindow)
+    #expect(custom.mainPage == .usage)
+    #expect(custom.usageSource == .account)
+    #expect(custom.initialPath.isEmpty)
   }
 
   @Test @MainActor

@@ -1,5 +1,6 @@
 //! Fixed-origin QuotaRelay client and upload-boundary validation.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "macos")]
@@ -28,6 +29,9 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MAXIMUM_RESPONSE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_BYTES: usize = 1_048_576;
 const MAXIMUM_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const USAGE_HOUR_GRID_RULE: &str =
+    "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration";
+const MAXIMUM_ACCOUNT_PERIOD_CACHE: usize = 32;
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -168,6 +172,23 @@ impl RelayClient {
         etag: Option<&str>,
     ) -> Result<(Option<String>, Option<Value>), RelayError> {
         self.conditional_get_json(&format!("/api/v6/account/summary?{query}"), token, etag)
+    }
+
+    /// Inclusive local-date Account period. Offers the caller's ETag; 304 returns no body.
+    pub fn account_usage_period(
+        &self,
+        from: &str,
+        to: &str,
+        timezone: &str,
+        breakdown: bool,
+        token: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        self.conditional_get_json(
+            &account_usage_period_path(from, to, timezone, breakdown),
+            token,
+            etag,
+        )
     }
 
     /// The activity read with `detail=hours`, so Account Usage can draw the same rhythm This Mac
@@ -364,6 +385,17 @@ impl RelayClient {
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.origin, path)
     }
+}
+
+fn account_usage_period_path(from: &str, to: &str, timezone: &str, breakdown: bool) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("from", from);
+    query.append_pair("to", to);
+    query.append_pair("timezone", timezone);
+    if breakdown {
+        query.append_pair("breakdown", "1");
+    }
+    format!("/api/v6/account/usage/period?{}", query.finish())
 }
 
 fn normalize_origin(origin: &str, test_override: bool) -> Result<String, RelayError> {
@@ -946,6 +978,194 @@ fn validate_usage_period(value: &Value) -> Result<(), RelayError> {
     validate_usage_agents(object.get("agents").ok_or(RelayError::InvalidResponse)?)
 }
 
+/// `GET /api/v6/account/usage/period` as a tolerant read of the protocol write schema.
+fn validate_account_usage_period(
+    value: &Value,
+    from: &str,
+    to: &str,
+    timezone: &str,
+) -> Result<(), RelayError> {
+    require_response_fields(
+        value,
+        &[
+            "protocol_version",
+            "request",
+            "bounds",
+            "totals",
+            "cost",
+            "cache_saved",
+            "days",
+            "coverage",
+            "revision",
+        ],
+    )?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(MANAGED_DATA_PROTOCOL) {
+        return Err(RelayError::InvalidResponse);
+    }
+    let request = object
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or(RelayError::InvalidResponse)?;
+    if request.get("from").and_then(Value::as_str) != Some(from)
+        || request.get("to").and_then(Value::as_str) != Some(to)
+        || request.get("timezone").and_then(Value::as_str) != Some(timezone)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    let bounds = object
+        .get("bounds")
+        .and_then(Value::as_object)
+        .ok_or(RelayError::InvalidResponse)?;
+    let start = bounds
+        .get("start")
+        .and_then(Value::as_str)
+        .filter(|value| valid_utc_hour(value))
+        .ok_or(RelayError::InvalidResponse)?;
+    let end = bounds
+        .get("end")
+        .and_then(Value::as_str)
+        .filter(|value| valid_utc_hour(value))
+        .ok_or(RelayError::InvalidResponse)?;
+    if start >= end || bounds.get("grid").and_then(Value::as_str) != Some(USAGE_HOUR_GRID_RULE) {
+        return Err(RelayError::InvalidResponse);
+    }
+    validate_usage_summary_totals(object.get("totals").ok_or(RelayError::InvalidResponse)?)?;
+    validate_usage_cost(object.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+    validate_usage_cache_saved(
+        object
+            .get("cache_saved")
+            .ok_or(RelayError::InvalidResponse)?,
+    )?;
+    let days = object
+        .get("days")
+        .and_then(Value::as_array)
+        .filter(|days| days.len() as i64 <= crate::protocol::MAXIMUM_USAGE_PERIOD_DAYS)
+        .ok_or(RelayError::InvalidResponse)?;
+    let mut previous_date: Option<&str> = None;
+    for day in days {
+        require_response_fields(day, &["date", "totals", "cost", "partial"])?;
+        let day = day.as_object().ok_or(RelayError::InvalidResponse)?;
+        let date = day
+            .get("date")
+            .and_then(Value::as_str)
+            .filter(|value| valid_usage_date(value))
+            .ok_or(RelayError::InvalidResponse)?;
+        if previous_date.is_some_and(|previous| date <= previous)
+            || !day.get("partial").is_some_and(Value::is_boolean)
+        {
+            return Err(RelayError::InvalidResponse);
+        }
+        validate_usage_summary_totals(day.get("totals").ok_or(RelayError::InvalidResponse)?)?;
+        validate_usage_cost(day.get("cost").ok_or(RelayError::InvalidResponse)?)?;
+        previous_date = Some(date);
+    }
+    if let Some(agents) = object.get("agents") {
+        validate_usage_agents(agents)?;
+    }
+    validate_usage_period_coverage(object.get("coverage").ok_or(RelayError::InvalidResponse)?)?;
+    validate_usage_period_revision(object.get("revision").ok_or(RelayError::InvalidResponse)?)
+}
+
+fn validate_usage_cache_saved(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(value, &["amount_microusd", "status", "unpriced_rows"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    let status = object.get("status").and_then(Value::as_str);
+    if !matches!(status, Some("complete" | "partial" | "unavailable")) {
+        return Err(RelayError::InvalidResponse);
+    }
+    let amount = object
+        .get("amount_microusd")
+        .ok_or(RelayError::InvalidResponse)?;
+    let amount_null = amount.is_null();
+    if !amount_null && !amount.as_str().is_some_and(valid_decimal_integer) {
+        return Err(RelayError::InvalidResponse);
+    }
+    let unpriced = object
+        .get("unpriced_rows")
+        .and_then(safe_u64)
+        .ok_or(RelayError::InvalidResponse)?;
+    if (status == Some("unavailable")) != amount_null
+        || (status == Some("complete")) != (unpriced == 0)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn validate_usage_period_coverage(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(
+        value,
+        &[
+            "partial",
+            "daily_retained_from",
+            "hourly_retained_from",
+            "truncated_by_retention",
+        ],
+    )?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if !object.get("partial").is_some_and(Value::is_boolean)
+        || !object
+            .get("truncated_by_retention")
+            .is_some_and(Value::is_boolean)
+        || !object
+            .get("daily_retained_from")
+            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_usage_date))
+        || !object
+            .get("hourly_retained_from")
+            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_utc_hour))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn validate_usage_period_revision(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(
+        value,
+        &[
+            "usage_revision",
+            "device_generation",
+            "account_updated_at",
+            "pricing_revision",
+            "model_catalog_revision",
+            "fold_version",
+        ],
+    )?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.get("usage_revision").and_then(safe_u64).is_none()
+        || object.get("device_generation").and_then(safe_u64).is_none()
+        || object.get("fold_version").and_then(safe_u64).is_none()
+        || !object
+            .get("account_updated_at")
+            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_rfc3339))
+        || ["pricing_revision", "model_catalog_revision"]
+            .iter()
+            .any(|key| {
+                !object
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(is_opaque)
+            })
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn valid_usage_date(value: &str) -> bool {
+    value.len() == 10
+        && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .is_ok_and(|parsed| parsed.format("%Y-%m-%d").to_string() == value)
+}
+
+fn valid_utc_hour(value: &str) -> bool {
+    value.len() == 20
+        && value.as_bytes().get(13) == Some(&b':')
+        && value.ends_with(":00:00Z")
+        && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+}
+
 fn validate_usage_agents(value: &Value) -> Result<(), RelayError> {
     let agents = value
         .as_array()
@@ -1213,6 +1433,19 @@ struct PendingBrowserLogin {
     verifier: String,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct AccountPeriodCacheKey {
+    from: String,
+    to: String,
+    timezone: String,
+    account_id: String,
+}
+
+struct AccountPeriodCacheEntry {
+    etag: String,
+    body: Value,
+}
+
 pub struct AccountManager {
     client: Arc<RelayClient>,
     state: Arc<StateStore>,
@@ -1223,6 +1456,8 @@ pub struct AccountManager {
     /// Loopback listener and PKCE values for the login in flight. Set by `begin_login`, taken by
     /// `login`.
     pending_login: Mutex<Option<PendingBrowserLogin>>,
+    /// Last Account period bodies, keyed by range and session. Memory only; 304 keeps the body.
+    period_cache: Mutex<HashMap<AccountPeriodCacheKey, AccountPeriodCacheEntry>>,
 }
 
 impl AccountManager {
@@ -1234,6 +1469,7 @@ impl AccountManager {
             platform: current_platform(),
             refresh_lock: Mutex::new(()),
             pending_login: Mutex::new(None),
+            period_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1324,6 +1560,7 @@ impl AccountManager {
 
     /// Ends this device's session: one family, so one revocation.
     pub fn logout(&self, pending: &Value) -> Result<(), BackendError> {
+        self.clear_period_cache();
         let refresh_token = pending
             .as_object()
             .and_then(|object| object.get("refresh_token"))
@@ -1399,6 +1636,129 @@ impl AccountManager {
         self.client
             .account_usage_hours(&access_token, from, to, timezone)
             .map_err(|error| relay_backend_error(error, session_epoch))
+    }
+
+    /// One Account period from Relay, with an in-memory ETag cache. No session → typed refusal.
+    pub fn account_usage_period(
+        &self,
+        from: &str,
+        to: &str,
+        timezone: &str,
+        breakdown: bool,
+        cancel: &AtomicBool,
+    ) -> Result<Value, BackendError> {
+        if cancel.load(Ordering::Acquire) {
+            return Err(BackendError::cancelled());
+        }
+        let (mut session, mut session_epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(|| {
+                BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::AuthenticationRequired,
+                    crate::protocol::RecoveryAction::Login,
+                ))
+            })?;
+        if !is_active_session(&session) {
+            return Err(BackendError::new(crate::protocol::IpcError::new(
+                crate::protocol::ErrorCode::AuthenticationRequired,
+                crate::protocol::RecoveryAction::Login,
+            )));
+        }
+        let access_token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
+        let account_id = session
+            .get("account_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let key = AccountPeriodCacheKey {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            timezone: timezone.to_owned(),
+            account_id: account_id.clone(),
+        };
+        let cached = self.cached_period(&key);
+        let (next_etag, body) = self
+            .client
+            .account_usage_period(
+                from,
+                to,
+                timezone,
+                breakdown,
+                &access_token,
+                cached
+                    .as_ref()
+                    .and_then(|entry| (!entry.etag.is_empty()).then_some(entry.etag.as_str())),
+            )
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
+        match body {
+            Some(period) => {
+                validate_account_usage_period(&period, from, to, timezone).map_err(|_| {
+                    BackendError::new(crate::protocol::IpcError::new(
+                        crate::protocol::ErrorCode::InvalidResponse,
+                        crate::protocol::RecoveryAction::Retry,
+                    ))
+                })?;
+                if !account_id.is_empty()
+                    && let Some(etag) = next_etag.filter(|value| !value.is_empty())
+                {
+                    self.store_period(
+                        key,
+                        AccountPeriodCacheEntry {
+                            etag,
+                            body: period.clone(),
+                        },
+                    );
+                }
+                Ok(period)
+            }
+            None => match cached {
+                Some(entry) => {
+                    if let Some(etag) = next_etag.filter(|value| !value.is_empty()) {
+                        self.store_period(
+                            key,
+                            AccountPeriodCacheEntry {
+                                etag,
+                                body: entry.body.clone(),
+                            },
+                        );
+                    }
+                    Ok(entry.body)
+                }
+                None => Err(BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::InvalidResponse,
+                    crate::protocol::RecoveryAction::Retry,
+                ))),
+            },
+        }
+    }
+
+    fn cached_period(&self, key: &AccountPeriodCacheKey) -> Option<AccountPeriodCacheEntry> {
+        let cache = self.period_cache.lock().ok()?;
+        cache.get(key).map(|entry| AccountPeriodCacheEntry {
+            etag: entry.etag.clone(),
+            body: entry.body.clone(),
+        })
+    }
+
+    fn store_period(&self, key: AccountPeriodCacheKey, entry: AccountPeriodCacheEntry) {
+        let Ok(mut cache) = self.period_cache.lock() else {
+            return;
+        };
+        if cache.len() >= MAXIMUM_ACCOUNT_PERIOD_CACHE
+            && !cache.contains_key(&key)
+            && let Some(oldest) = cache.keys().next().cloned()
+        {
+            cache.remove(&oldest);
+        }
+        cache.insert(key, entry);
+    }
+
+    fn clear_period_cache(&self) {
+        if let Ok(mut cache) = self.period_cache.lock() {
+            cache.clear();
+        }
     }
 
     fn read_account_summary(
@@ -3607,5 +3967,255 @@ mod tests {
             "assumptions": [],
             "unpriced": []
         })
+    }
+
+    fn valid_cache_saved() -> Value {
+        serde_json::json!({
+            "amount_microusd": "0",
+            "status": "complete",
+            "unpriced_rows": 0
+        })
+    }
+
+    fn valid_account_usage_period(from: &str, to: &str, timezone: &str) -> Value {
+        serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "request": { "from": from, "to": to, "timezone": timezone },
+            "bounds": {
+                "start": "2026-08-25T16:00:00Z",
+                "end": "2026-08-26T16:00:00Z",
+                "grid": USAGE_HOUR_GRID_RULE
+            },
+            "totals": valid_totals(),
+            "cost": valid_cost(),
+            "cache_saved": valid_cache_saved(),
+            "days": [{
+                "date": from,
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "partial": false
+            }],
+            "agents": [],
+            "coverage": {
+                "partial": false,
+                "daily_retained_from": null,
+                "hourly_retained_from": null,
+                "truncated_by_retention": false
+            },
+            "revision": {
+                "usage_revision": 1,
+                "device_generation": 1,
+                "account_updated_at": "2026-08-26T00:00:00Z",
+                "pricing_revision": "2026-08-01",
+                "model_catalog_revision": "2026-08-01",
+                "fold_version": 1
+            }
+        })
+    }
+
+    #[test]
+    fn account_usage_period_shape_is_checked() {
+        let body = valid_account_usage_period("2026-08-26", "2026-08-26", "Asia/Singapore");
+        assert!(
+            validate_account_usage_period(&body, "2026-08-26", "2026-08-26", "Asia/Singapore")
+                .is_ok()
+        );
+        let mut extra = body.clone();
+        extra["unexpected"] = serde_json::json!(true);
+        assert!(
+            validate_account_usage_period(&extra, "2026-08-26", "2026-08-26", "Asia/Singapore")
+                .is_ok()
+        );
+        let mut truncated = body.clone();
+        truncated["coverage"]["truncated_by_retention"] = serde_json::json!(true);
+        truncated["coverage"]["daily_retained_from"] = serde_json::json!("2026-07-01");
+        assert!(
+            validate_account_usage_period(&truncated, "2026-08-26", "2026-08-26", "Asia/Singapore")
+                .is_ok()
+        );
+        let mut wrong_range = body.clone();
+        wrong_range["request"]["from"] = serde_json::json!("2026-08-01");
+        assert!(
+            validate_account_usage_period(
+                &wrong_range,
+                "2026-08-26",
+                "2026-08-26",
+                "Asia/Singapore"
+            )
+            .is_err()
+        );
+        let mut inverted_days = body;
+        inverted_days["days"] = serde_json::json!([
+            {
+                "date": "2026-08-26",
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "partial": false
+            },
+            {
+                "date": "2026-08-25",
+                "totals": valid_totals(),
+                "cost": valid_cost(),
+                "partial": false
+            }
+        ]);
+        assert!(
+            validate_account_usage_period(
+                &inverted_days,
+                "2026-08-26",
+                "2026-08-26",
+                "Asia/Singapore"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn account_usage_period_encodes_timezone_and_returns_body_or_304() {
+        let body = valid_account_usage_period("2026-08-26", "2026-08-26", "Asia/Singapore");
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"period-one\"", &body),
+            http_not_modified("\"period-one\""),
+            http_json(
+                400,
+                None,
+                &serde_json::json!({"error": {"code": "invalid_request"}}),
+            ),
+        ]);
+        let client = RelayClient::for_test(&origin).expect("test client");
+
+        let (etag, first) = client
+            .account_usage_period(
+                "2026-08-26",
+                "2026-08-26",
+                "Asia/Singapore",
+                true,
+                "account-token",
+                None,
+            )
+            .expect("first period");
+        assert_eq!(etag.as_deref(), Some("\"period-one\""));
+        assert_eq!(first.as_ref(), Some(&body));
+
+        let (_, second) = client
+            .account_usage_period(
+                "2026-08-26",
+                "2026-08-26",
+                "Asia/Singapore",
+                true,
+                "account-token",
+                Some("\"period-one\""),
+            )
+            .expect("304");
+        assert!(second.is_none());
+
+        let refused = client.account_usage_period(
+            "2026-08-26",
+            "2026-08-26",
+            "Asia/Singapore",
+            true,
+            "account-token",
+            None,
+        );
+        assert!(matches!(
+            refused,
+            Err(RelayError::Rejected { status: 400, .. })
+        ));
+
+        let sent = server.join().expect("mock server");
+        assert_eq!(sent.len(), 3, "{sent:?}");
+        assert!(
+            sent[0].contains(
+                "/api/v6/account/usage/period?from=2026-08-26&to=2026-08-26&timezone=Asia%2FSingapore&breakdown=1"
+            ),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"period-one\""),
+            "{}",
+            sent[1]
+        );
+    }
+
+    #[test]
+    fn account_usage_period_without_a_session_is_the_typed_refusal() {
+        let (origin, server) = spawn_mock_server(vec![]);
+        let root = std::env::temp_dir().join(format!(
+            "quota-account-period-signed-out-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            state,
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        let error = manager
+            .account_usage_period("2026-08-26", "2026-08-26", "UTC", true, &cancel)
+            .expect_err("signed out");
+        assert_eq!(
+            error.error.code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
+        drop(server);
+    }
+
+    #[test]
+    fn an_unchanged_account_period_keeps_the_cached_body() {
+        let body = valid_account_usage_period("2026-08-01", "2026-08-03", "UTC");
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"period-one\"", &body),
+            http_not_modified("\"period-one\""),
+        ]);
+        let root = std::env::temp_dir().join(format!(
+            "quota-account-period-etag-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "session": {
+                    "access_token": "qb_access",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qbr_refresh",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                }
+            }))
+            .expect("session");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            Arc::clone(&state),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        let first = manager
+            .account_usage_period("2026-08-01", "2026-08-03", "UTC", true, &cancel)
+            .expect("first");
+        let second = manager
+            .account_usage_period("2026-08-01", "2026-08-03", "UTC", true, &cancel)
+            .expect("304");
+        assert_eq!(first, second);
+        assert_eq!(first["coverage"]["truncated_by_retention"], false);
+        let sent = server.join().expect("mock server");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(!sent[0].to_ascii_lowercase().contains("if-none-match"));
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"period-one\""),
+            "{}",
+            sent[1]
+        );
     }
 }

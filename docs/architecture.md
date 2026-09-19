@@ -81,7 +81,8 @@ official provider sessions       agent JSON/JSONL logs
 QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. Requests, responses,
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
 Operations are ping, state read, diagnose/recheck, refresh, cache reset, one custom Usage period
-fold, one 30-day quota-history read (`quota_history { since }`), login/cancel, logout, provider
+(`usage_period { from, to, source, timezone }`: This Mac folds stored hours; Account is Relay's
+period read), one 30-day quota-history read (`quota_history { since }`), login/cancel, logout, provider
 configuration, provider browser-session validate/commit/remove, Usage upload configuration, and
 shutdown. The helper opens its local state first and then emits a `ready` event; it reads no request
 before that, and QuotaBar sends none. It runs every operation but `ping` on one worker thread and
@@ -274,13 +275,16 @@ periods arrive in the one Account read and commit only as a complete set; QuotaB
 
 A period outside those four — a week, a month, a range someone picked — is the same stored hours
 added up over a different window, so it is asked for one range at a time rather than folded four
-more times on every refresh. `usage_period { from, to }` takes two inclusive local dates spanning
-at most 366 days and answers with the same local report shape, folded against the catalogs this
-device already holds; it collects nothing and reaches no network. A state change discards the
-folds QuotaBar asked for, because the hours behind them moved. Relay answers the same local-date
-window for Account as `GET /api/v6/account/usage/period`
-([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). The website reads that
-route for every Usage selection except `all`, and for the budget month. Quota iOS still adds a
+more times on every refresh. `usage_period { from, to, source, timezone }` takes two inclusive
+local dates spanning at most 366 days. This Mac (`source: local`) answers with the same local
+report shape, folded against the catalogs this device already holds; it collects nothing and
+reaches no network. Account (`source: account`) is Relay's
+`GET /api/v6/account/usage/period` in the caller's IANA timezone, mapped to that same detail
+shape plus coverage
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). A state change discards the
+folds QuotaBar asked for, because the hours behind them moved. The website reads that
+route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
+for week / month / custom. Quota iOS still adds a
 custom period up from the UTC daily totals the activity read already gave it, and that fold is
 `packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
 period folded from days carries totals and cost with no model breakdown.
