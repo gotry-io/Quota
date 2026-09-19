@@ -201,7 +201,7 @@ public struct QuotaHistoryReading: Equatable, Sendable {
 /// The one line a provider group prints for the windows the reader's day holds.
 ///
 /// `Today: 3 windows · 82% / 40% / 12%`, oldest first, and `nil` when the day holds none. The
-/// phrase lives in `apps/menubar/DESIGN.md` Shared product vocabulary.
+/// phrase lives in `docs/design.md` Shared product vocabulary.
 public enum QuotaHistoryCopy: Sendable {
   public static func todayLine(_ windows: [QuotaHistoryWindow]) -> String? {
     guard !windows.isEmpty else { return nil }

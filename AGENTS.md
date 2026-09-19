@@ -14,6 +14,7 @@ Read the relevant source before changing that area:
 | Credentials, trust, redaction, transport, storage safety | `docs/security.md` |
 | Provider registration catalog (ids, defaults, config) | `packages/provider/catalog.json` |
 | Colour, remaining-quota bands, spacing, radii | `packages/design-tokens/tokens.json` |
+| Shared visual language, copy, colour and type roles | `docs/design.md` |
 | Collection strategy for all twelve providers, and every subprocess a refresh may start | `docs/provider-collection.md` |
 | CodexBar external platform capability baseline (quota/usage/fallback) | `docs/codexbar-platform-capabilities.md` |
 | Persistent Relay storage decision and rationale | `docs/decisions/0001-persistent-relay-storage.md` |
@@ -59,10 +60,10 @@ Read the relevant source before changing that area:
 | Non-secret iOS widget snapshot and background refresh | `docs/decisions/0014-nonsecret-ios-widget-snapshot.md` |
 | One widget view package for both platforms, and QuotaBar's generated Xcode project | `docs/decisions/0043-one-widget-view-package-for-both-platforms.md` |
 | One alert delivery package for both Apple apps | `docs/decisions/0053-one-alert-delivery-package-for-both-apps.md` |
-| Freshness, provider-name, and Devices copy shared by every client | `apps/menubar/DESIGN.md` (Shared product vocabulary) |
-| Website visual tokens and marketing UI | `apps/web/DESIGN.md` |
-| QuotaBar menu-panel visual tokens and UI behavior | `apps/menubar/DESIGN.md` |
-| Quota iOS visual tokens and UI behavior | `apps/ios/DESIGN.md` |
+| Freshness, provider-name, and Devices copy shared by every client | `docs/design.md` (Shared product vocabulary) |
+| Website platform deltas and marketing UI | `apps/web/DESIGN.md` |
+| QuotaBar platform deltas and UI behavior | `apps/menubar/DESIGN.md` |
+| Quota iOS platform deltas and UI behavior | `apps/ios/DESIGN.md` |
 | App-specific usage | The corresponding `apps/*/README.md` |
 
 Do not create a second description of a canonical rule. Update its source and link to it.
@@ -150,8 +151,10 @@ corrected reason is itself empirical, pin it with a test rather than a sentence.
   (`docs/decisions/0046-a-read-only-quota-command.md`). Do not give it a second one. The shared
   crate stays platform-neutral in style, but only macOS is built, tested, and released.
 - Swift code targets macOS 14+ or iOS 26+ and Swift 6.2. Keep wire decoding and Relay access separate from views.
-- Web UI follows `apps/web/DESIGN.md` and must remain keyboard-accessible and responsive.
-- QuotaBar UI follows `apps/menubar/DESIGN.md` (system material panel), not the website design file.
+- Web UI follows `docs/design.md` and `apps/web/DESIGN.md` and must remain keyboard-accessible and
+  responsive.
+- QuotaBar UI follows `docs/design.md` and `apps/menubar/DESIGN.md` (system material panel), not the
+  website design file.
 - Wire JSON uses `snake_case`. Primary quota values and meters always represent remaining quota.
 - Product names are Quota, QuotaBar, and QuotaRelay. The iOS app's product name is Quota. The
   bundled Rust *service* executable is a private QuotaBar implementation detail, never a public

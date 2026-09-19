@@ -45,7 +45,7 @@ reader is never shown two different sizes of the same overrun.
 or **May run out about 2h before reset**, where the duration is the shared compact format over
 `resets_at − exhausts_at`. Detail surfaces add **Using quota faster than an even pace (+70
 points)**, **Using quota slower than an even pace (−30 points)**, or **Using quota at an even
-pace**. The words live in `apps/menubar/DESIGN.md` Shared product vocabulary.
+pace**. The words live in `docs/design.md` Shared product vocabulary.
 
 **Each runtime owns one implementation, and `packages/protocol/fixtures/quota-pace-conformance.json`
 is the judge all of them answer** — `quotaPace` in `packages/quota-model`, `pace` in

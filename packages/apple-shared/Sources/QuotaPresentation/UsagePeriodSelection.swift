@@ -5,7 +5,7 @@ import Foundation
 /// Three of these are anchored to the device's own calendar and step: a day, a week, and a month,
 /// each an offset back from the current one. Two are the trailing windows an Account summary
 /// already folds, `all` is everything retained, and `custom` is a range someone picked. The
-/// phrases are in `apps/menubar/DESIGN.md` Shared product vocabulary.
+/// phrases are in `docs/design.md` Shared product vocabulary.
 public enum UsagePeriodSelection: Equatable, Hashable, Sendable {
   case day(offset: Int)
   case week(offset: Int)

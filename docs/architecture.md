@@ -430,7 +430,8 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 - `packages/design-tokens/tokens.json` is the only hand-edited colour, remaining-quota band,
   spacing, and radius source. Generation writes web CSS custom properties, web TypeScript
   thresholds, and Foundation-only Swift in `QuotaPresentation`. Apple system-colour mappings and
-  the card-radius 20 override live in that file; they are not a second palette.
+  the card-radius 20 override live in that file; they are not a second palette. What those
+  colours mean, and the copy every client prints, live in [`design.md`](design.md).
 - `packages/service` owns shared local I/O, provider collection, Usage parsing/aggregation/pricing,
   OAuth, managed HTTP, scheduling, merging, and SQLite state. `apps/menubar/helper` is its only
   entry point and adds only process startup and IPC lifetime around it.
