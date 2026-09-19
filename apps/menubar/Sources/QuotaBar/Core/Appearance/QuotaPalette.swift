@@ -41,8 +41,8 @@ enum QuotaPalette {
   static let accent = Color(nsColor: adaptiveAccent)
   /// Black or white, selected from the resolved accent to retain at least AA text contrast.
   static let onAccent = Color(nsColor: adaptiveOnAccent)
-  static let warning = Color(nsColor: .systemOrange)
-  static let critical = Color(nsColor: .systemRed)
+  static let warning = Color(nsColor: adaptiveWarning)
+  static let critical = Color(nsColor: adaptiveCritical)
   /// Darkened critical surface for destructive actions with a stable white label.
   static let criticalAction = Color(nsColor: adaptiveCriticalAction)
   static let onCritical = Color.white
@@ -185,18 +185,33 @@ enum QuotaPalette {
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
   }
 
-  private static let brandEmeraldNSColor = NSColor(
-    srgbRed: QuotaBrand.emerald.red,
-    green: QuotaBrand.emerald.green,
-    blue: QuotaBrand.emerald.blue,
-    alpha: 1
+  private static let adaptiveWarning = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      nsColor(
+        isDark(appearance)
+          ? DesignTokens.Color.quotaWarning.dark
+          : DesignTokens.Color.quotaWarning.light
+      )
+    }
   )
 
-  private static let brandMintNSColor = NSColor(
-    srgbRed: QuotaBrand.mint.red,
-    green: QuotaBrand.mint.green,
-    blue: QuotaBrand.mint.blue,
-    alpha: 1
+  private static let adaptiveCritical = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      nsColor(
+        isDark(appearance)
+          ? DesignTokens.Color.quotaCritical.dark
+          : DesignTokens.Color.quotaCritical.light
+      )
+    }
   )
+
+  private static let brandEmeraldNSColor = nsColor(DesignTokens.Color.brandAccent.light)
+  private static let brandMintNSColor = nsColor(DesignTokens.Color.brandAccent.dark)
+
+  private static func nsColor(_ rgb: DesignTokens.RGB) -> NSColor {
+    NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+  }
 
 }

@@ -15,8 +15,16 @@ public enum QuotaBrand {
   }
 
   /// Light-appearance brand emerald (`#087456`).
-  public static let emerald = RGB(red: 8.0 / 255.0, green: 116.0 / 255.0, blue: 86.0 / 255.0)
+  public static let emerald = RGB(
+    red: DesignTokens.Color.brandAccent.light.red,
+    green: DesignTokens.Color.brandAccent.light.green,
+    blue: DesignTokens.Color.brandAccent.light.blue
+  )
 
   /// Dark-appearance brand mint (`#82ddb8`).
-  public static let mint = RGB(red: 130.0 / 255.0, green: 221.0 / 255.0, blue: 184.0 / 255.0)
+  public static let mint = RGB(
+    red: DesignTokens.Color.brandAccent.dark.red,
+    green: DesignTokens.Color.brandAccent.dark.green,
+    blue: DesignTokens.Color.brandAccent.dark.blue
+  )
 }

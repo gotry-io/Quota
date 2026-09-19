@@ -22,7 +22,12 @@ struct QuotaPaceConformanceTests {
       )
       #expect(pace == testCase.expected, "\(testCase.name)")
       #expect(
-        QuotaPaceCopy.line(pace, resetsAt: testCase.window.resetsAt) == testCase.expectedCopy,
+        QuotaPaceCopy.headline(pace, resetsAt: testCase.window.resetsAt)
+          == testCase.expectedHeadline,
+        "\(testCase.name)"
+      )
+      #expect(
+        QuotaPaceCopy.detail(pace) == testCase.expectedDetail,
         "\(testCase.name)"
       )
     }
@@ -39,7 +44,8 @@ struct QuotaPaceConformanceTests {
       now: Date(timeIntervalSince1970: 999_000)
     )
     #expect(pace == .none)
-    #expect(QuotaPaceCopy.line(pace, resetsAt: nil) == nil)
+    #expect(QuotaPaceCopy.headline(pace, resetsAt: nil) == nil)
+    #expect(QuotaPaceCopy.detail(pace) == nil)
   }
 }
 
@@ -51,7 +57,8 @@ private struct PaceFixture: Decodable {
     var now: Date
     var window: Window
     var expected: QuotaPace
-    var expectedCopy: String?
+    var expectedHeadline: String?
+    var expectedDetail: String?
   }
 
   struct Window: Decodable {

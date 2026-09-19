@@ -33,10 +33,10 @@ final class QuotaUITests: XCTestCase {
       "overview.today"
     )
     try restoreTabBar(app)
-    assertTab(app, "Overview")
+    assertTab(app, "Quota")
     assertTab(app, "Usage")
-    assertTab(app, "Devices")
     assertTab(app, "Settings")
+    XCTAssertFalse(app.tabBars.buttons["Devices"].exists, "Devices is not a tab")
     XCTAssertFalse(
       app.navigationBars.buttons["Log Out"].exists,
       "Log Out belongs on Settings, not the Overview toolbar"
@@ -161,7 +161,7 @@ final class QuotaUITests: XCTestCase {
     try assertListScrolls(app)
     try restoreTabBar(app)
 
-    app.tabBars.buttons["Overview"].tap()
+    app.tabBars.buttons["Quota"].tap()
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
     card.tap()
@@ -207,6 +207,10 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.devices"].waitForExistence(timeout: 5),
+      "Devices"
     )
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.notifications"].exists,
@@ -448,7 +452,7 @@ final class QuotaUITests: XCTestCase {
     settle(app)
     try audit(app)
 
-    app.tabBars.buttons["Devices"].tap()
+    try openDevicesFromSettings(app)
     XCTAssertTrue(
       app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
       "devices.root"
@@ -493,7 +497,7 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    app.tabBars.buttons["Devices"].tap()
+    try openDevicesFromSettings(app)
     XCTAssertTrue(
       app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
       "devices.root"
@@ -515,6 +519,32 @@ final class QuotaUITests: XCTestCase {
     try audit(app)
   }
 
+  /// Content fixture: Settings › Devices › back.
+  func testContentFixtureOpensDevicesFromSettings() throws {
+    let app = launch(fixture: "content")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    try openDevicesFromSettings(app)
+    XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5), "Studio Mac")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["devices.row"].firstMatch.exists,
+      "devices.row"
+    )
+    let back = app.navigationBars.buttons["Settings"]
+    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to Settings")
+    back.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 5),
+      "settings.root after back"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.devices"].waitForExistence(timeout: 5),
+      "settings.devices after back"
+    )
+  }
+
   /// Signed out is not a wall: the tabs are up and the empty Overview offers both ways to get
   /// quota onto this phone.
   func testSignedOutFixtureShowsBothInvitations() throws {
@@ -527,8 +557,9 @@ final class QuotaUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
     XCTAssertTrue(app.buttons["Connect a provider"].exists, "Connect a provider")
     XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
-    assertTab(app, "Overview")
+    assertTab(app, "Quota")
     assertTab(app, "Settings")
+    XCTAssertFalse(app.tabBars.buttons["Devices"].exists, "Devices is not a tab")
     attachScreenshot(app, name: "overview-signed-out")
     try audit(app)
   }
@@ -950,28 +981,29 @@ final class QuotaUITests: XCTestCase {
     attachScreenshot(app, name: "settings-providers")
   }
 
-  /// Devices are the Account's. A phone that only reads its own providers has none to list, and
-  /// says what would change that.
-  func testLocalOnlyFixtureAsksForSignInOnDevices() throws {
+  /// Devices are the Account's. Without an account the Settings row is absent; the sign-in
+  /// card already covers it.
+  func testLocalOnlyFixtureHasNoDevicesRow() throws {
     let app = launch(fixture: "local-only")
     XCTAssertTrue(
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    app.tabBars.buttons["Devices"].tap()
+    try restoreTabBar(app)
+    app.tabBars.buttons["Settings"].tap()
     XCTAssertTrue(
-      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 5),
-      "devices.root"
-    )
-    XCTAssertTrue(
-      app.staticTexts["Sign in to see your Macs"].waitForExistence(timeout: 5),
-      "Sign in to see your Macs"
+      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
+      "settings.root"
     )
     XCTAssertFalse(
-      app.descendants(matching: .any)["devices.this-iphone"].exists,
-      "no device list without an account"
+      app.descendants(matching: .any)["settings.devices"].exists,
+      "Devices row is absent when signed out"
     )
-    attachScreenshot(app, name: "devices-signed-out")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["devices.root"].exists,
+      "Devices is not a tab"
+    )
+    attachScreenshot(app, name: "settings-local-only")
     try audit(app)
   }
 
@@ -1041,6 +1073,22 @@ final class QuotaUITests: XCTestCase {
 
   private func assertTab(_ app: XCUIApplication, _ name: String) {
     XCTAssertTrue(app.tabBars.buttons[name].exists, "\(name) tab")
+  }
+
+  /// Devices is a Settings destination. Restore the tab bar, open Settings, then the row.
+  private func openDevicesFromSettings(_ app: XCUIApplication) throws {
+    let root = app.descendants(matching: .any)["settings.root"]
+    // A tap that lands while the iOS 26 tab bar is still expanding can be dropped; restore the
+    // bar and tap once more before calling the destination missing.
+    for _ in 0..<2 where !root.exists {
+      try restoreTabBar(app)
+      let settings = app.tabBars.buttons["Settings"]
+      XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
+      settings.tap()
+      _ = root.waitForExistence(timeout: 6)
+    }
+    XCTAssertTrue(root.exists, "settings.root")
+    openSettingsDestination(app, link: "settings.devices", root: "devices.root")
   }
 
   private func openSettingsDestination(
@@ -1158,11 +1206,11 @@ final class QuotaUITests: XCTestCase {
   }
 
   /// A minimized iOS 26 tab bar exposes only the selected tab; scrolling back toward the top
-  /// re-expands it. The four named tabs are the expanded state — the bar can report more
-  /// than four Button children at accessibility sizes.
+  /// re-expands it. The three named tabs are the expanded state — the bar can report more
+  /// than three Button children at accessibility sizes.
   private func restoreTabBar(_ app: XCUIApplication) throws {
     let tabBar = app.tabBars.firstMatch
-    let names = ["Overview", "Usage", "Devices", "Settings"]
+    let names = ["Quota", "Usage", "Settings"]
     func expanded() -> Bool {
       names.allSatisfy { tabBar.buttons[$0].exists }
     }
@@ -1296,10 +1344,10 @@ final class QuotaUITests: XCTestCase {
       "settings.about.root",
       "settings.notifications.root",
       "settings.appearance.root",
+      "devices.root",
       "settings.root",
       "usage.root",
       "subscription.detail",
-      "devices.root",
       "overview.root",
       "connect.root",
       "confirm.root",

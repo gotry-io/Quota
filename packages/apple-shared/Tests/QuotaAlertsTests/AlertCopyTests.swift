@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import Testing
 
 struct AlertCopyTests {
@@ -43,5 +44,22 @@ struct AlertCopyTests {
 
   @Test func resetBodyIsTheWindowTitlePlusQuotaReset() {
     #expect(AlertCopy.resetBody(windowTitle: "Weekly") == "Weekly quota reset")
+  }
+
+  @Test func paceBodyUsesTheSharedHeadline() {
+    let resetsAt = now.addingTimeInterval(2 * 3_600)
+    let lasts = QuotaPace.lasts(
+      QuotaPaceProjection(tempo: .onTrack, deltaPercent: 0, projectedAtReset: 100)
+    )
+    #expect(AlertCopy.paceBody(pace: lasts, resetsAt: resetsAt) == "Expected to last until reset")
+    let runsOut = QuotaPace.runsOut(
+      QuotaPaceProjection(tempo: .ahead, deltaPercent: 70, projectedAtReset: 170),
+      exhaustsAt: now
+    )
+    #expect(
+      AlertCopy.paceBody(pace: runsOut, resetsAt: resetsAt)
+        == "May run out about 2h before reset"
+    )
+    #expect(AlertCopy.paceBody(pace: .none, resetsAt: resetsAt) == nil)
   }
 }
